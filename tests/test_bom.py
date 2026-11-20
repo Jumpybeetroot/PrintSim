@@ -218,14 +218,40 @@ class TestAWDAndStructuralPanelsBOM:
         assert cost_acrylic < cost_acm < cost_cf
         assert mass_acrylic < mass_acm < mass_cf
 
-        # Bolted structural panels add +48 fasteners vs +16 clip-in latches (+32 delta)
-        assert bom_acm.total_fasteners == bom_acrylic.total_fasteners + 32
+        # Bolted structural panels on fixed-gantry Trident add +48 perimeter + 24 gantry bolts vs +16 clip (+56 delta)
+        assert bom_acm.total_fasteners == bom_acrylic.total_fasteners + 56
         assert any(i.sku == "FST-PANEL-STRUCT" and i.quantity == 48 for i in bom_acm.items)
+        gantry_fasteners = next(i for i in bom_acm.items if i.sku == "FST-PANEL-GANTRY")
+        assert gantry_fasteners.category == "fasteners"
+        assert gantry_fasteners.quantity == 24
+        assert gantry_fasteners.total_cost_usd == pytest.approx(24 * 0.22, abs=0.01)
+        assert gantry_fasteners.total_mass_g == pytest.approx(24 * 4.5, abs=0.1)
         assert any(i.sku == "FST-PANEL-CLIP" and i.quantity == 16 for i in bom_acrylic.items)
+
+        # Verify Dibond sandwich areal mass (~4.75 kg/m2 for 4mm ACM) is used for ENC-LEFT
+        left_acm = next(i for i in bom_acm.items if i.sku == "ENC-LEFT")
+        expected_left_acm_g = 0.46 * 0.50 * 4.748 * 1000.0
+        assert left_acm.total_mass_g == pytest.approx(expected_left_acm_g, rel=1e-2)
+
+        # Disabling bolt_panels_to_gantry OR switching to flying gantry (belted_quad_z) omits FST-PANEL-GANTRY
+        spec_acm_nobolt = spec_acm.model_copy(deep=True)
+        spec_acm_nobolt.frame.bolt_panels_to_gantry = False
+        bom_acm_nobolt = generate_bom(spec_acm_nobolt)
+        assert all(i.sku != "FST-PANEL-GANTRY" for i in bom_acm_nobolt.items)
+        assert bom_acm_nobolt.total_fasteners == bom_acrylic.total_fasteners + 32
+
+        spec_acm_flying = spec_acm.model_copy(deep=True)
+        spec_acm_flying.bed.z_drive = "belted_quad_z"
+        spec_acm_flying.frame.bolt_panels_to_gantry = True
+        bom_acm_flying = generate_bom(spec_acm_flying)
+        assert all(i.sku != "FST-PANEL-GANTRY" for i in bom_acm_flying.items)
+        spec_acrylic_flying = spec_acrylic.model_copy(deep=True)
+        spec_acrylic_flying.bed.z_drive = "belted_quad_z"
+        bom_acrylic_flying = generate_bom(spec_acrylic_flying)
+        assert bom_acm_flying.total_fasteners == bom_acrylic_flying.total_fasteners + 32
 
         # Specifications explicitly state material name, thickness, mounting type, and cut dimensions
         left_acrylic = next(i for i in bom_acrylic.items if i.sku == "ENC-LEFT")
-        left_acm = next(i for i in bom_acm.items if i.sku == "ENC-LEFT")
         left_cf = next(i for i in bom_cf.items if i.sku == "ENC-LEFT")
 
         assert "Cast Acrylic Sheet (PMMA)" in left_acrylic.specification

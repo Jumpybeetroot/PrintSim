@@ -57,14 +57,26 @@ class AssemblyModel:
     nodes: list[StructuralNode] = field(default_factory=list)
     members: list[StructuralMember] = field(default_factory=list)
     toolhead_node_id: str = "toolhead"
+    toolhead_cog_node_id: str = "toolhead_cog"
+    nozzle_node_id: str = "nozzle_tip"
     gantry_node_ids: list[str] = field(default_factory=list)
     bed_center_m: np.ndarray = field(default_factory=lambda: np.zeros(3))
     build_origin_m: np.ndarray = field(default_factory=lambda: np.zeros(3))
     x_moving_mass_kg: float = 0.0
     y_moving_mass_kg: float = 0.0
     frame_mass_kg: float = 0.0
+    panel_mass_kg: float = 0.0
     total_mass_kg: float = 0.0
     estimated_material_cost_usd: float = 0.0
+    panel_rep_props: dict[str, float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.nodes:
+            node_ids = {n.id for n in self.nodes}
+            if self.toolhead_cog_node_id not in node_ids:
+                self.toolhead_cog_node_id = self.toolhead_node_id
+            if self.nozzle_node_id not in node_ids:
+                self.nozzle_node_id = self.toolhead_node_id
 
     @property
     def node_map(self) -> dict[str, StructuralNode]:
@@ -74,22 +86,53 @@ class AssemblyModel:
         """Serialize assembly geometry (mm) for the 3D web viewer and AI tools."""
         nmap = self.node_map
         pmat = get_material(self.spec.frame.panel_material)
-        panels_enabled = bool(
+        panels_active = bool(
             self.spec.frame.enclosed_panels and self.spec.frame.panel_mounting != "none"
         )
+        rep_props = self.panel_rep_props
+        if panels_active and rep_props is None:
+            rep_h_m = (
+                max(self.spec.frame.height_mm * 1e-3 - 0.055, 0.04)
+                if self.spec.panels_bolted_to_gantry_effective
+                else self.spec.frame.height_mm * 1e-3
+            )
+            rep_props = panel_mechanical_properties(
+                pmat,
+                self.spec.frame.panel_thickness_mm * 1e-3,
+                self.spec.frame.width_mm * 1e-3,
+                rep_h_m,
+                self.spec.frame.panel_mounting,
+                bolted_to_gantry=self.spec.panels_bolted_to_gantry_effective,
+            )
         return {
             "architecture": self.spec.architecture,
             "drive_mode": self.spec.gantry.drive_mode,
             "double_shear_pulleys": self.spec.gantry.double_shear_pulleys,
             "panels": {
-                "enabled": panels_enabled,
-                "mounting": (
-                    self.spec.frame.panel_mounting if self.spec.frame.enclosed_panels else "none"
-                ),
+                "enabled": panels_active,
+                "mounting": self.spec.frame.panel_mounting if panels_active else "none",
                 "material_id": self.spec.frame.panel_material,
                 "material_name": pmat.name,
                 "thickness_mm": self.spec.frame.panel_thickness_mm,
                 "color_hex": pmat.color_hex,
+                "bolted_to_gantry": self.spec.panels_bolted_to_gantry_effective,
+                "is_flying_gantry": self.spec.is_flying_gantry,
+                "effective_shear_gt_kn_mm": (
+                    round(rep_props["gt_eff_n_m"] * 1e-6, 3)
+                    if panels_active and rep_props is not None
+                    else 0.0
+                ),
+                "buckling_factor": (
+                    round(rep_props["psi_buckle"], 3)
+                    if panels_active and rep_props is not None
+                    else 0.0
+                ),
+                "areal_mass_kg_m2": (
+                    round(rep_props["areal_mass_kg_m2"], 2)
+                    if panels_active and rep_props is not None
+                    else 0.0
+                ),
+                "total_panel_mass_kg": round(self.panel_mass_kg, 3) if panels_active else 0.0,
             },
             "frame_dims_mm": [
                 self.spec.frame.width_mm,
@@ -101,6 +144,11 @@ class AssemblyModel:
             "bed_size_mm": list(self.spec.bed.size_mm),
             "bed_center_mm": (self.bed_center_m * 1000.0).tolist(),
             "toolhead_node_id": self.toolhead_node_id,
+            "toolhead_cog_node_id": self.toolhead_cog_node_id,
+            "nozzle_node_id": self.nozzle_node_id,
+            "cog_offset_mm": list(self.spec.toolhead.cog_offset_mm),
+            "nozzle_offset_mm": list(self.spec.toolhead.nozzle_offset_mm),
+            "mount_material": self.spec.toolhead.mount_material,
             "toolhead_envelope_mm": list(self.spec.toolhead.envelope_mm),
             "nodes": [
                 {
@@ -163,14 +211,97 @@ def _add_member(
     )
 
 
-def _panel_shear_params(spec: PrinterSpec) -> tuple[bool, float, MaterialSpec, float]:
-    """Return (active, shear_efficiency_eta, panel_material, thickness_m)."""
+def panel_mechanical_properties(
+    pmat: MaterialSpec,
+    thickness_m: float,
+    bay_w_m: float,
+    bay_h_m: float,
+    mounting: str,
+    bolted_to_gantry: bool = False,
+) -> dict[str, float]:
+    """Compute panel shear, flexural, Timoshenko buckling, and areal mass properties (SI).
+
+    - ACM / Dibond (``acm_dibond``) uses a 3-layer Aluminum/LDPE/Aluminum sandwich model
+      calibrated to 3A Composites DIBOND datasheets (0.3 mm Al skins + LDPE core).
+    - Homogeneous solid sheets use isotropic thin-plate theory.
+    - Applies Timoshenko shear-buckling knockdown ``psi_buckle in [0.50, 1.0]`` and puts
+      perimeter fastener/mount shear stiffness ``k_mount`` in series with sheet shear
+      stiffness ``k_sheet``.
+    """
+    t = max(float(thickness_m), 1e-4)
+    if pmat.id == "acm_dibond":
+        t_skin = min(0.0003, 0.25 * t)
+        e_al = 70.0e9
+        nu_al = 0.33
+        g_al = 26.3e9
+        rho_al = 2700.0
+        t_core = max(t - 2.0 * t_skin, 0.0)
+        g_core = 0.17e9
+        rho_core = 920.0
+
+        gt_0 = g_al * (2.0 * t_skin) + g_core * t_core
+        flexural_d = e_al * (t_skin * (t - t_skin) ** 2) / (2.0 * (1.0 - nu_al**2))
+        areal_mass = rho_al * (2.0 * t_skin) + rho_core * t_core
+    else:
+        gt_0 = pmat.effective_shear_modulus_pa * t
+        flexural_d = (pmat.youngs_modulus_pa * (t**3)) / (
+            12.0 * (1.0 - pmat.poisson_ratio**2)
+        )
+        areal_mass = pmat.density_kg_m3 * t
+
+    b_min = max(min(float(bay_w_m), float(bay_h_m)), 0.04)
+    b_max = max(max(float(bay_w_m), float(bay_h_m)), b_min)
+    k_s = 5.34 + 4.0 * ((b_min / b_max) ** 2)
+    n_xy_cr = k_s * (math.pi**2) * flexural_d / (b_min**2)
+    n_xy_ref = 1200.0
+    psi_buckle = 0.50 + 0.50 * (n_xy_cr / (n_xy_cr + n_xy_ref))
+
+    h_eff = max(float(bay_h_m), 0.04)
+    w_eff = max(float(bay_w_m), 0.04)
+    k_sheet = psi_buckle * gt_0 * (float(bay_w_m) / h_eff)
+
+    if mounting == "clip_enclosure":
+        k_mount = 28_000.0
+    elif mounting == "bolted_structural":
+        k_mount = 9.0e6 if bolted_to_gantry else 6.0e6
+    else:
+        k_mount = 0.0
+
+    if k_mount <= 0.0:
+        k_panel_eff = 0.0
+        gt_eff = 0.0
+        eta_mount = 0.0
+    else:
+        k_panel_eff = (k_sheet * k_mount) / max(k_sheet + k_mount, 1e-9)
+        gt_eff = k_panel_eff * (h_eff / w_eff)
+        eta_mount = k_panel_eff / max(k_sheet, 1e-9)
+
+    return {
+        "gt_0_n_m": gt_0,
+        "gt_eff_n_m": gt_eff,
+        "k_sheet_n_m": k_sheet,
+        "k_mount_n_m": k_mount,
+        "k_panel_eff_n_m": k_panel_eff,
+        "flexural_d_nm": flexural_d,
+        "psi_buckle": psi_buckle,
+        "eta_mount": eta_mount,
+        "areal_mass_kg_m2": areal_mass,
+    }
+
+
+def _panel_shear_params(spec: PrinterSpec) -> tuple[bool, str, MaterialSpec, float]:
+    """Return (active, mounting, panel_material, thickness_m)."""
     pmat = get_material(spec.frame.panel_material)
     mounting = spec.frame.panel_mounting
+    thickness_m = spec.frame.panel_thickness_mm * 1e-3
     if not spec.frame.enclosed_panels or mounting == "none":
-        return False, 0.0, pmat, spec.frame.panel_thickness_mm * 1e-3
-    eta = 0.65 if mounting == "bolted_structural" else 0.12
-    return True, eta, pmat, spec.frame.panel_thickness_mm * 1e-3
+        return False, "none", pmat, thickness_m
+    return True, mounting, pmat, thickness_m
+
+
+def _make_panel_virtual_material(pmat: MaterialSpec) -> MaterialSpec:
+    """Create a virtually massless, zero-cost stiffness copy for equivalent shear struts."""
+    return pmat.model_copy(update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0})
 
 
 def _add_shear_panel_bay(
@@ -183,22 +314,45 @@ def _add_shear_panel_bay(
     tr_id: str,
     pmat: MaterialSpec,
     thickness_m: float,
-    eta: float,
-) -> None:
-    """Model a rectangular shear panel via equivalent X-pair diagonal truss struts.
+    mounting: str,
+    bolted_to_gantry: bool = False,
+    wall_height_m: float | None = None,
+) -> tuple[float, float, dict[str, float]]:
+    """Model a rectangular shear panel via massless equivalent X-pair diagonal truss struts.
 
-    Uses the textbook diagonal shear-diaphragm equivalence:
-        A_eq = eta * (G * t * L_d^3) / (2 * E * b * h)
-    and distributes any remaining true static panel mass onto the four corner nodes.
+    Uses ``A_eq = (gt_eff * L_d^3) / (2 * E * b * h)`` with a virtually massless material
+    copy (0.000 kg phantom mass) and lumps the exact physical panel mass
+    ``b * h * areal_mass_kg_m2`` onto the corner nodes (0.35 bottom / 0.15 top on
+    vertical walls matching Rayleigh base-anchored modal mass, 0.25 each on top lid).
     """
     b = float(np.linalg.norm(node_map[br_id].position_m - node_map[bl_id].position_m))
     h = float(np.linalg.norm(node_map[tl_id].position_m - node_map[bl_id].position_m))
     if b <= 1e-6 or h <= 1e-6:
-        return
+        props = panel_mechanical_properties(
+            pmat,
+            thickness_m,
+            max(b, 0.04),
+            max(h, 0.04),
+            mounting,
+            bolted_to_gantry=bolted_to_gantry,
+        )
+        return 0.0, 0.0, props
+
+    prop_h = wall_height_m if (wall_height_m is not None and wall_height_m > h) else h
+    props = panel_mechanical_properties(
+        pmat,
+        thickness_m,
+        b,
+        prop_h,
+        mounting,
+        bolted_to_gantry=bolted_to_gantry,
+    )
+    virtual_mat = _make_panel_virtual_material(pmat)
     diag_len = math.hypot(b, h)
-    e_pa = pmat.youngs_modulus_pa
-    g_pa = pmat.effective_shear_modulus_pa
-    a_eq = max(eta * (g_pa * thickness_m * (diag_len**3)) / (2.0 * e_pa * b * h), 1e-9)
+    a_eq = max(
+        (props["gt_eff_n_m"] * (diag_len**3)) / (2.0 * virtual_mat.youngs_modulus_pa * b * h),
+        1e-10,
+    )
 
     prof = ProfileSpec.model_construct(
         id=f"panel_shear_{bay}",
@@ -217,7 +371,7 @@ def _add_shear_panel_bay(
             start_id=bl_id,
             end_id=tr_id,
             profile=prof,
-            material=pmat,
+            material=virtual_mat,
             role="brace",
             is_truss=True,
         )
@@ -228,19 +382,124 @@ def _add_shear_panel_bay(
             start_id=br_id,
             end_id=tl_id,
             profile=prof,
-            material=pmat,
+            material=virtual_mat,
             role="brace",
             is_truss=True,
         )
     )
 
-    actual_panel_mass = b * h * thickness_m * pmat.density_kg_m3
-    strut_mass = 2.0 * a_eq * diag_len * pmat.density_kg_m3
-    rem_mass = max(0.0, actual_panel_mass - strut_mass)
-    if rem_mass > 0.0:
-        per_node = 0.25 * rem_mass
+    actual_panel_mass = b * h * props["areal_mass_kg_m2"]
+    if bay == "top":
         for nid in (bl_id, br_id, tl_id, tr_id):
-            node_map[nid].lumped_mass_kg += per_node
+            node_map[nid].lumped_mass_kg += 0.25 * actual_panel_mass
+    else:
+        for nid in (bl_id, br_id):
+            node_map[nid].lumped_mass_kg += 0.35 * actual_panel_mass
+        for nid in (tl_id, tr_id):
+            node_map[nid].lumped_mass_kg += 0.15 * actual_panel_mass
+
+    return a_eq, actual_panel_mass, props
+
+
+def _attach_toolhead_cog_and_nozzle(
+    nodes: list[StructuralNode],
+    members: list[StructuralMember],
+    spec: PrinterSpec,
+    base_node_id: str = "toolhead",
+) -> None:
+    """Attach explicit 6-DOF toolhead_cog and nozzle_tip nodes via carriage mount & hotend stem."""
+    nmap = {n.id: n for n in nodes}
+    if base_node_id not in nmap:
+        return
+
+    base_node = nmap[base_node_id]
+    base_pos = base_node.position_m
+    toolhead_kg = spec.toolhead.total_mass_g * 1e-3
+
+    # Linear carriage block mass stays on X-beam centerline
+    base_node.lumped_mass_kg = 0.04
+
+    cog_offset = np.array(spec.toolhead.cog_offset_mm, dtype=float) * 1e-3
+    if float(np.linalg.norm(cog_offset)) < 0.004:
+        cog_offset = np.array([0.0, 0.0, -0.004], dtype=float)
+    cog_pos = base_pos + cog_offset
+
+    nozzle_offset = np.array(spec.toolhead.nozzle_offset_mm, dtype=float) * 1e-3
+    nozzle_pos = base_pos + nozzle_offset
+    stem_vec = nozzle_pos - cog_pos
+    stem_len = float(np.linalg.norm(stem_vec))
+    if stem_len < 0.005:
+        if stem_len > 1e-9:
+            nozzle_pos = cog_pos + (stem_vec / stem_len) * 0.005
+        else:
+            nozzle_pos = cog_pos + np.array([0.0, 0.0, -0.005], dtype=float)
+
+    nodes.append(
+        StructuralNode(
+            id="toolhead_cog",
+            position_m=cog_pos,
+            lumped_mass_kg=max(toolhead_kg - 0.06, 0.02),
+            role="cog",
+        )
+    )
+    nodes.append(
+        StructuralNode(
+            id="nozzle_tip",
+            position_m=nozzle_pos,
+            lumped_mass_kg=0.02,
+            role="nozzle",
+        )
+    )
+
+    mount_mat = get_material(spec.toolhead.mount_material).model_copy(
+        update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0}
+    )
+    mount_prof = ProfileSpec.model_construct(
+        id="toolhead_mount_profile",
+        name=f"Toolhead Carriage Mount ({spec.toolhead.mount_material})",
+        shape="solid_bar",
+        width_m=0.026,
+        height_m=0.018,
+        area_m2=2.2e-4,
+        iy_m4=1.2e-8,
+        iz_m4=1.8e-8,
+        j_m4=1.4e-8,
+    )
+    members.append(
+        StructuralMember(
+            id="toolhead_mount",
+            start_id=base_node_id,
+            end_id="toolhead_cog",
+            profile=mount_prof,
+            material=mount_mat,
+            role="toolhead",
+        )
+    )
+
+    stem_mat = get_material("aluminum_6061_t6").model_copy(
+        update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0}
+    )
+    stem_prof = ProfileSpec.model_construct(
+        id="nozzle_stem_profile",
+        name="Hotend Nozzle Stem",
+        shape="rod",
+        width_m=0.012,
+        height_m=0.012,
+        area_m2=1.2e-4,
+        iy_m4=6.0e-9,
+        iz_m4=6.0e-9,
+        j_m4=8.0e-9,
+    )
+    members.append(
+        StructuralMember(
+            id="nozzle_stem",
+            start_id="toolhead_cog",
+            end_id="nozzle_tip",
+            profile=stem_prof,
+            material=stem_mat,
+            role="toolhead",
+        )
+    )
 
 
 def build_assembly(
@@ -460,15 +719,33 @@ def _build_corexy(
     nmap = {n.id: n for n in nodes}
 
     # Enclosure / structural shear panels across rear, side, and top bays
-    panels_active, panel_eta, pmat, panel_t_m = _panel_shear_params(spec)
+    panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
+    total_panel_mass_kg = 0.0
+    rep_panel_props: dict[str, float] | None = None
     if panels_active:
-        for bay, bl_id, br_id, tl_id, tr_id in (
-            ("rear", "b_rl", "b_rr", "t_rl", "t_rr"),
-            ("left", "b_fl", "b_rl", "t_fl", "t_rl"),
-            ("right", "b_fr", "b_rr", "t_fr", "t_rr"),
-            ("top", "t_fl", "t_fr", "t_rl", "t_rr"),
-        ):
-            _add_shear_panel_bay(
+        bolted_to_gantry = spec.panels_bolted_to_gantry_effective
+        if bolted_to_gantry:
+            bays = (
+                ("rear_low", "b_rl", "b_rr", "g_rl", "g_rr"),
+                ("rear_top", "g_rl", "g_rr", "t_rl", "t_rr"),
+                ("left_low", "b_fl", "b_rl", "g_fl", "g_rl"),
+                ("left_top", "g_fl", "g_rl", "t_fl", "t_rl"),
+                ("right_low", "b_fr", "b_rr", "g_fr", "g_rr"),
+                ("right_top", "g_fr", "g_rr", "t_fr", "t_rr"),
+                ("top", "t_fl", "t_fr", "t_rl", "t_rr"),
+            )
+        else:
+            bays = (
+                ("rear", "b_rl", "b_rr", "t_rl", "t_rr"),
+                ("left", "b_fl", "b_rl", "t_fl", "t_rl"),
+                ("right", "b_fr", "b_rr", "t_fr", "t_rr"),
+                ("top", "t_fl", "t_fr", "t_rl", "t_rr"),
+            )
+
+        bay_aeq: dict[str, float] = {}
+        for bay, bl_id, br_id, tl_id, tr_id in bays:
+            is_split_wall = bolted_to_gantry and bay != "top"
+            a_eq, bay_mass, props = _add_shear_panel_bay(
                 members,
                 nmap,
                 bay,
@@ -478,8 +755,54 @@ def _build_corexy(
                 tr_id,
                 pmat,
                 panel_t_m,
-                panel_eta,
+                panel_mounting,
+                bolted_to_gantry=is_split_wall,
+                wall_height_m=h if is_split_wall else None,
             )
+            bay_aeq[bay] = a_eq
+            total_panel_mass_kg += bay_mass
+            if rep_panel_props is None and bay in ("rear_low", "rear"):
+                rep_panel_props = props
+
+        if bolted_to_gantry:
+            virtual_mat = _make_panel_virtual_material(pmat)
+            for side, f_bot, r_bot, car_id, bay_key in (
+                ("l", "b_fl", "b_rl", "y_car_l", "left_low"),
+                ("r", "b_fr", "b_rr", "y_car_r", "right_low"),
+            ):
+                yrail_prof = ProfileSpec.model_construct(
+                    id=f"panel_shear_yrail_{side}",
+                    name=f"Gantry Y-Rail Panel Tie-In ({side}, {panel_t_m * 1e3:.1f}mm {pmat.id})",
+                    shape="plate",
+                    width_m=max(panel_t_m, 0.002),
+                    height_m=max(panel_t_m, 0.004),
+                    area_m2=max(0.30 * bay_aeq[bay_key], 1e-10),
+                    iy_m4=1e-11,
+                    iz_m4=1e-11,
+                    j_m4=1e-11,
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"panel_shear_yrail_{side}_1",
+                        start_id=f_bot,
+                        end_id=car_id,
+                        profile=yrail_prof,
+                        material=virtual_mat,
+                        role="brace",
+                        is_truss=True,
+                    )
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"panel_shear_yrail_{side}_2",
+                        start_id=r_bot,
+                        end_id=car_id,
+                        profile=yrail_prof,
+                        material=virtual_mat,
+                        role="brace",
+                        is_truss=True,
+                    )
+                )
 
     # Calculate moving masses
     x_beam_mass = sum(m.mass_kg(nmap) for m in members if m.role == "gantry")
@@ -491,16 +814,22 @@ def _build_corexy(
     x_moving = toolhead_kg + 0.04  # plus belt segment
     y_moving = toolhead_kg + x_beam_mass + x_rail_mass + spec.gantry.carriage_mass_g * 1e-3
 
+    _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+
     return AssemblyModel(
         spec=spec,
         nodes=nodes,
         members=members,
         toolhead_node_id="toolhead",
+        toolhead_cog_node_id="toolhead_cog",
+        nozzle_node_id="nozzle_tip",
         gantry_node_ids=["y_car_l", "toolhead", "y_car_r"],
         bed_center_m=np.array([w * 0.5, d * 0.5, orig_z]),
         build_origin_m=np.array([orig_x, orig_y, orig_z]),
         x_moving_mass_kg=x_moving,
         y_moving_mass_kg=y_moving,
+        panel_mass_kg=total_panel_mass_kg,
+        panel_rep_props=rep_panel_props,
     )
 
 
@@ -587,11 +916,15 @@ def _build_cartesian_bedslinger(
     x_moving = toolhead_kg + 0.03
     y_moving = spec.bed.mass_g * 1e-3 + 0.35
 
+    _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+
     return AssemblyModel(
         spec=spec,
         nodes=nodes,
         members=members,
         toolhead_node_id="toolhead",
+        toolhead_cog_node_id="toolhead_cog",
+        nozzle_node_id="nozzle_tip",
         gantry_node_ids=["z_l", "toolhead", "z_r"],
         bed_center_m=np.array([w * 0.5, d * 0.5, orig_z]),
         build_origin_m=np.array([orig_x, orig_y, orig_z]),
@@ -649,12 +982,14 @@ def _build_delta(
         if spec.frame.bracing == "full_truss":
             _add_member(members, f"brace_{i}_b", f"b_{j}", f"t_{i}", bp, bm, role="brace", is_truss=True)
 
-    panels_active, panel_eta, pmat, panel_t_m = _panel_shear_params(spec)
+    panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
+    total_panel_mass_kg = 0.0
+    rep_panel_props: dict[str, float] | None = None
     if panels_active:
         nmap = {n.id: n for n in nodes}
         for i in range(3):
             j = (i + 1) % 3
-            _add_shear_panel_bay(
+            _, bay_mass, props = _add_shear_panel_bay(
                 members,
                 nmap,
                 f"bay{i}",
@@ -664,20 +999,29 @@ def _build_delta(
                 f"t_{j}",
                 pmat,
                 panel_t_m,
-                panel_eta,
+                panel_mounting,
             )
+            total_panel_mass_kg += bay_mass
+            if rep_panel_props is None:
+                rep_panel_props = props
 
     eff_mass = toolhead_kg + 0.09  # ultra-light effector + arm portion
+    _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+
     return AssemblyModel(
         spec=spec,
         nodes=nodes,
         members=members,
         toolhead_node_id="toolhead",
+        toolhead_cog_node_id="toolhead_cog",
+        nozzle_node_id="nozzle_tip",
         gantry_node_ids=["c_0", "c_1", "c_2", "toolhead"],
         bed_center_m=np.array([cx, cy, 0.06]),
         build_origin_m=np.array([cx - bx * 0.5, cy - by * 0.5, 0.06]),
         x_moving_mass_kg=eff_mass,
         y_moving_mass_kg=eff_mass,
+        panel_mass_kg=total_panel_mass_kg,
+        panel_rep_props=rep_panel_props,
     )
 
 
@@ -694,6 +1038,9 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     bed_mass = model.spec.bed.mass_g * 1e-3
     model.frame_mass_kg = frame_mass
     model.total_mass_kg = frame_mass + lumped_mass + bed_mass
+    if model.panel_mass_kg > 0.0:
+        pmat = get_material(model.spec.frame.panel_material)
+        cost += model.panel_mass_kg * pmat.cost_per_kg_usd
     # Add baseline estimate for motors, bed plate, rails, and hotend hardware
     bed_mat = get_material(model.spec.bed.plate_material)
     cost += bed_mass * bed_mat.cost_per_kg_usd + 140.0  # steppers/electronics/hotend baseline

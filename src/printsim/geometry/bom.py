@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from printsim.geometry.builder import AssemblyModel, build_assembly
+from printsim.geometry.builder import AssemblyModel, build_assembly, panel_mechanical_properties
 from printsim.schema import PrinterSpec, get_material, get_profile
 
 
@@ -382,8 +382,13 @@ def _merge_collinear_members(assembly: AssemblyModel) -> list[_MergedSegment]:
     segments: list[_MergedSegment] = []
 
     for m in assembly.members:
-        # Skip virtual enclosure shear diaphragm elements and auxiliary FEA rail duplicates
-        if m.id.startswith("panel_shear_") or m.id.startswith("x_rail_aux_"):
+        # Skip virtual enclosure shear diaphragm elements, auxiliary FEA rail duplicates, and toolhead sub-beams
+        if (
+            m.role == "toolhead"
+            or m.id.startswith("panel_shear_")
+            or m.id.startswith("x_rail_aux_")
+            or m.id.startswith(("toolhead_", "nozzle_"))
+        ):
             continue
         length_m = m.length_m(nmap)
         if length_m < 1e-6:
@@ -1231,7 +1236,14 @@ def generate_bom(
             is_door = sku == "ENC-DOOR"
             active_mat = door_mat if is_door else pmat
             area_m2 = (dim_a * 1e-3) * (dim_b * 1e-3) * area_factor
-            mass_kg = area_m2 * (pt * 1e-3) * active_mat.density_kg_m3
+            panel_props = panel_mechanical_properties(
+                active_mat,
+                pt * 1e-3,
+                dim_a * 1e-3,
+                dim_b * 1e-3,
+                spec.frame.panel_mounting,
+            )
+            mass_kg = area_m2 * panel_props["areal_mass_kg_m2"]
             mass_g = mass_kg * 1000.0
             extra_hw = 8.0 if is_door else 0.0
             # Sheet fabrication factor 1.45x (CNC/laser cutting + sheet waste) + per-panel setup floor
@@ -1360,6 +1372,20 @@ def generate_bom(
                 unit_cost_usd=0.35,
                 unit_mass_g=6.5,
             )
+            if spec.panels_bolted_to_gantry_effective:
+                _add_bom_item(
+                    items,
+                    sku="FST-PANEL-GANTRY",
+                    category="fasteners",
+                    name="Gantry Beam Structural Panel Bolts & T-Nuts",
+                    specification=(
+                        "M3/M5 bolts + roll-in T-nuts tying left/right/rear panels to fixed gantry extrusions"
+                    ),
+                    quantity=24,
+                    unit="sets",
+                    unit_cost_usd=0.22,
+                    unit_mass_g=4.5,
+                )
         else:
             _add_bom_item(
                 items,

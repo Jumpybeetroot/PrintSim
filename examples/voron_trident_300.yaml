@@ -42,6 +42,7 @@ kinematics:
     name: NEMA17-48mm (LDO 42STH48-2504AC)
     holding_torque_nm: 0.55
     rated_current_a: 2.0
+    run_current_a: 1.2
     inductance_mh: 1.5
     supply_voltage_v: 24.0
     rotor_inertia_kg_m2: 6.8e-6
@@ -58,6 +59,8 @@ toolhead:
   name: Voron StealthBurner + Clockwork 2
   total_mass_g: 380
   cog_offset_mm: [0, -18, -25]
+  nozzle_offset_mm: [0, -26, -66]
+  mount_material: abs_printed
   envelope_mm: [68, 74, 95]
   hotend:
     name: Revo Voron / Rapido Standard Flow

@@ -72,6 +72,10 @@ class FrameSpec(BaseModel):
         description="Material ID for enclosure/structural panels (acrylic_pmma, polycarbonate, acm_dibond, aluminum_5052_sheet, carbon_fiber_plate)",
     )
     panel_thickness_mm: float = Field(3.0, ge=1.0, le=12.0, description="Panel sheet thickness (mm)")
+    bolt_panels_to_gantry: bool = Field(
+        True,
+        description="On non-flying-gantry CoreXY machines, bolt structural panels directly to fixed Y-rail & rear gantry beams",
+    )
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
 
@@ -136,16 +140,130 @@ class GantrySpec(BaseModel):
 
 
 class StepperSpec(BaseModel):
-    """Stepper motor electromechanical model."""
+    """Stepper motor electromechanical model calibrated to manufacturer datasheets."""
 
-    name: str = "NEMA17-48mm (LDO 2504AC)"
+    preset_id: str = "ldo_2504ac"
+    name: str = "NEMA17-48mm (LDO 42STH48-2504AC)"
     holding_torque_nm: float = Field(0.55, gt=0)
-    rated_current_a: float = Field(2.0, gt=0)
-    inductance_mh: float = Field(1.5, gt=0)
-    supply_voltage_v: float = Field(24.0, gt=0)
+    rated_current_a: float = Field(2.5, gt=0, description="Motor datasheet rated RMS current per phase (A)")
+    run_current_a: float = Field(
+        1.2, gt=0.1, le=5.0, description="Configured driver RMS run current per phase (A)"
+    )
+    phase_resistance_ohm: float = Field(1.2, gt=0.05, description="Winding phase resistance R (Ohms)")
+    inductance_mh: float = Field(1.5, gt=0, description="Winding phase inductance L (mH)")
+    supply_voltage_v: float = Field(24.0, gt=0, le=96.0, description="Stepper driver bus voltage (V)")
     rotor_inertia_kg_m2: float = Field(6.8e-6, gt=0)
     motor_mass_g: float = Field(340.0, gt=0)
-    steps_per_rev: int = Field(200, ge=100)
+    steps_per_rev: int = Field(200, ge=100, description="200 for 1.8 deg, 400 for 0.9 deg")
+
+    @property
+    def pole_pairs(self) -> float:
+        """Electrical pole pairs p = steps_per_rev / 4 (50 for 1.8°, 100 for 0.9°)."""
+        return self.steps_per_rev / 4.0
+
+    @property
+    def effective_holding_torque_nm(self) -> float:
+        """Current-scaled static holding torque with magnetic core soft saturation above rated current."""
+        import math
+
+        ratio = max(self.run_current_a, 0.05) / max(self.rated_current_a, 0.1)
+        return self.holding_torque_nm * (math.tanh(1.1 * ratio) / math.tanh(1.1))
+
+    def dynamic_voltage_efficiency(self, rpm: float = 250.0) -> float:
+        """Inductive current-tracking efficiency eta_V in (0, 1] at speed/vibration operating point."""
+        import math
+
+        l_h = self.inductance_mh * 1e-3
+        omega_mech = max(rpm, 10.0) * (2.0 * math.pi / 60.0)
+        v_inductive = omega_mech * self.pole_pairs * l_h * self.run_current_a
+        v_res = self.run_current_a * self.phase_resistance_ohm
+        v_headroom = max(self.supply_voltage_v - v_res, 1.0)
+        return 1.0 / math.sqrt(1.0 + (v_inductive / v_headroom) ** 2)
+
+    def torsional_stiffness_nm_per_rad(self, rpm: float = 250.0) -> float:
+        """Electromagnetic torsional stiffness k_theta = p * T_hold(I) * eta_V (N·m/rad)."""
+        return self.pole_pairs * self.effective_holding_torque_nm * self.dynamic_voltage_efficiency(rpm)
+
+    @property
+    def power_dissipation_w(self) -> float:
+        """Approximate steady-state 2-phase copper heat dissipation P = 2 * I_rms^2 * R (W)."""
+        return 2.0 * (self.run_current_a**2) * self.phase_resistance_ohm
+
+
+STEPPER_CATALOG: dict[str, dict] = {
+    "ldo_2504ac": {
+        "preset_id": "ldo_2504ac",
+        "name": "LDO 42STH48-2504AC (48mm 1.8° Speedy Power)",
+        "holding_torque_nm": 0.55,
+        "rated_current_a": 2.5,
+        "run_current_a": 1.2,
+        "phase_resistance_ohm": 1.2,
+        "inductance_mh": 1.5,
+        "rotor_inertia_kg_m2": 6.8e-6,
+        "motor_mass_g": 340.0,
+        "steps_per_rev": 200,
+    },
+    "ldo_2804ah": {
+        "preset_id": "ldo_2804ah",
+        "name": "LDO 42STH48-2804AH (48mm 1.8° Ultra-Low 0.6mH)",
+        "holding_torque_nm": 0.42,
+        "rated_current_a": 2.8,
+        "run_current_a": 2.0,
+        "phase_resistance_ohm": 0.7,
+        "inductance_mh": 0.6,
+        "rotor_inertia_kg_m2": 6.2e-6,
+        "motor_mass_g": 350.0,
+        "steps_per_rev": 200,
+    },
+    "ldo_60_3004": {
+        "preset_id": "ldo_60_3004",
+        "name": "LDO 42STH60-3004MAC (60mm 1.8° Kraken High-Torque)",
+        "holding_torque_nm": 0.80,
+        "rated_current_a": 3.0,
+        "run_current_a": 2.2,
+        "phase_resistance_ohm": 0.9,
+        "inductance_mh": 1.8,
+        "rotor_inertia_kg_m2": 8.6e-6,
+        "motor_mass_g": 520.0,
+        "steps_per_rev": 200,
+    },
+    "ldo_09deg_2504": {
+        "preset_id": "ldo_09deg_2504",
+        "name": "LDO 42STH48-2504MAC (48mm 0.9° 2× Magnetic Stiffness)",
+        "holding_torque_nm": 0.50,
+        "rated_current_a": 2.5,
+        "run_current_a": 1.6,
+        "phase_resistance_ohm": 1.2,
+        "inductance_mh": 2.2,
+        "rotor_inertia_kg_m2": 6.8e-6,
+        "motor_mass_g": 340.0,
+        "steps_per_rev": 400,
+    },
+    "moons_420i": {
+        "preset_id": "moons_420i",
+        "name": "MOONS' MS17HD6P420I (48mm 1.8° Voron Standard)",
+        "holding_torque_nm": 0.65,
+        "rated_current_a": 2.0,
+        "run_current_a": 1.2,
+        "phase_resistance_ohm": 1.3,
+        "inductance_mh": 2.8,
+        "rotor_inertia_kg_m2": 7.2e-6,
+        "motor_mass_g": 360.0,
+        "steps_per_rev": 200,
+    },
+    "stepperonline_2004": {
+        "preset_id": "stepperonline_2004",
+        "name": "STEPPERONLINE 17HS19-2004S1 (48mm 1.8° Budget)",
+        "holding_torque_nm": 0.59,
+        "rated_current_a": 2.0,
+        "run_current_a": 1.0,
+        "phase_resistance_ohm": 1.4,
+        "inductance_mh": 3.0,
+        "rotor_inertia_kg_m2": 6.8e-6,
+        "motor_mass_g": 390.0,
+        "steps_per_rev": 200,
+    },
+}
 
 
 class KinematicsSpec(BaseModel):
@@ -201,14 +319,62 @@ class ExtruderSpec(BaseModel):
 
 
 class ToolheadSpec(BaseModel):
-    """Complete toolhead assembly (extruder, hotend, shroud, fans, carriage)."""
+    """Complete toolhead assembly (extruder, hotend, shroud, fans, carriage, CoG & nozzle lever arm)."""
 
+    preset_id: str = "stealthburner"
     name: str = "Stealth-Style Direct Toolhead"
     total_mass_g: float = Field(380.0, gt=20.0)
-    cog_offset_mm: tuple[float, float, float] = (0.0, -18.0, -25.0)
+    cog_offset_mm: tuple[float, float, float] = Field(
+        (0.0, -18.0, -25.0),
+        description="Toolhead center-of-mass offset [dx, dy, dz] from X-beam centerline (mm)",
+    )
+    nozzle_offset_mm: tuple[float, float, float] = Field(
+        (0.0, -22.0, -62.0),
+        description="Nozzle tip offset [dx, dy, dz] from X-beam centerline (mm)",
+    )
+    mount_material: Literal["abs_printed", "pa12_cf_printed", "aluminum_6061_t6"] = Field(
+        "abs_printed",
+        description="Toolhead carriage & XY-joint mount material affecting nozzle pitch/twist stiffness",
+    )
     envelope_mm: tuple[float, float, float] = (68.0, 74.0, 95.0)
     hotend: HotendSpec = Field(default_factory=HotendSpec)
     extruder: ExtruderSpec = Field(default_factory=ExtruderSpec)
+
+
+TOOLHEAD_PRESETS: dict[str, dict] = {
+    "stealthburner": {
+        "preset_id": "stealthburner",
+        "name": "Voron StealthBurner + CW2",
+        "total_mass_g": 380.0,
+        "cog_offset_mm": [0.0, -22.0, -28.0],
+        "nozzle_offset_mm": [0.0, -26.0, -66.0],
+        "mount_material": "abs_printed",
+    },
+    "xol_compact": {
+        "preset_id": "xol_compact",
+        "name": "XOL / A4T Compact Dual-5015",
+        "total_mass_g": 285.0,
+        "cog_offset_mm": [0.0, -15.0, -18.0],
+        "nozzle_offset_mm": [0.0, -18.0, -54.0],
+        "mount_material": "pa12_cf_printed",
+    },
+    "archetype_cpap": {
+        "preset_id": "archetype_cpap",
+        "name": "Archetype / Monolith CPAP Ultra-Low CoG",
+        "total_mass_g": 235.0,
+        "cog_offset_mm": [0.0, -11.0, -12.0],
+        "nozzle_offset_mm": [0.0, -14.0, -48.0],
+        "mount_material": "aluminum_6061_t6",
+    },
+    "heavy_uhf_long": {
+        "preset_id": "heavy_uhf_long",
+        "name": "Heavy Long-Nozzle UHF Toolhead",
+        "total_mass_g": 460.0,
+        "cog_offset_mm": [0.0, -26.0, -34.0],
+        "nozzle_offset_mm": [0.0, -28.0, -78.0],
+        "mount_material": "abs_printed",
+    },
+}
 
 
 class BedSpec(BaseModel):
@@ -236,6 +402,22 @@ class PrinterSpec(BaseModel):
     toolhead: ToolheadSpec = Field(default_factory=ToolheadSpec)
     bed: BedSpec = Field(default_factory=BedSpec)
     custom_meshes: list[CustomMeshSpec] = Field(default_factory=list)
+
+    @property
+    def is_flying_gantry(self) -> bool:
+        """True for flying-gantry CoreXY machines (e.g. Voron 2.4 quad-belted Z) where the gantry moves in Z."""
+        return self.architecture == "corexy" and self.bed.z_drive == "belted_quad_z"
+
+    @property
+    def panels_bolted_to_gantry_effective(self) -> bool:
+        """True when bolted structural panels can and do tie directly into fixed gantry beams."""
+        return (
+            self.architecture == "corexy"
+            and self.frame.enclosed_panels
+            and self.frame.panel_mounting == "bolted_structural"
+            and self.frame.bolt_panels_to_gantry
+            and not self.is_flying_gantry
+        )
 
     @model_validator(mode="after")
     def _validate_build_fits_frame(self) -> "PrinterSpec":

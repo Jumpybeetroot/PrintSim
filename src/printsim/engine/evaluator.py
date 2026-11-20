@@ -93,6 +93,24 @@ def _compute_scores_and_diagnostics(
             f"High peak deflection ({static_fea.combined_max_deflection_um:.1f} um) under acceleration: "
             "stiffen gantry beam or reduce moving toolhead mass."
         )
+    if static_fea.nozzle_twist_amplification_pct > 45.0:
+        diag.append(
+            f"High nozzle-tip lever-arm twist amplification (+{static_fea.nozzle_twist_amplification_pct:.1f}% vs X-beam center, "
+            f"{static_fea.nozzle_twist_angle_mrad:.2f} mrad): lower toolhead CoG, shorten nozzle drop, "
+            f"or upgrade carriage mount from '{spec.toolhead.mount_material}' to 'pa12_cf_printed' or 'aluminum_6061_t6'."
+        )
+    if (
+        structural < 80.0
+        and spec.is_flying_gantry
+        and spec.frame.enclosed_panels
+        and spec.frame.panel_mounting == "bolted_structural"
+        and spec.frame.bolt_panels_to_gantry
+    ):
+        diag.append(
+            "Flying-gantry CoreXY (belted_quad_z): structural panels bolt only to the outer frame perimeter "
+            "and cannot tie into the moving Z gantry beams; switch to a fixed-gantry Z drive "
+            "(e.g., leadscrew_triple) if direct gantry-to-panel bolting is desired."
+        )
 
     # 2. Dynamics score (effective resonance accel, motor torque margin, belt tension)
     rec_a = modal_fea.recommended_max_accel_mm_s2
@@ -110,6 +128,12 @@ def _compute_scores_and_diagnostics(
             f"Stepper torque margin is low ({kinematics.torque_safety_margin:.2f}x): "
             f"limit accel to <= {kinematics.max_safe_accel_motor_mm_s2:.0f} mm/s^2 or use stronger/48V steppers."
         )
+    if kinematics.motor_overcurrent_risk:
+        diag.append(
+            f"Stepper overcurrent risk (run {kinematics.motor_run_current_a:.2f} A > rated "
+            f"{spec.kinematics.xy_stepper.rated_current_a:.2f} A * 1.05, ~{kinematics.motor_heat_w_each:.1f} W/motor): "
+            "risk of coil overheating or magnet demagnetization; reduce run_current_a or use higher-current motors."
+        )
     if kinematics.belt_slip_risk:
         diag.append(
             f"Belt slack-side slip risk at {spec.kinematics.max_accel_mm_s2:.0f} mm/s^2: "
@@ -118,7 +142,17 @@ def _compute_scores_and_diagnostics(
     if kinematics.belt_overtension_risk:
         diag.append(
             f"Belt overtension risk (peak {kinematics.belt_peak_tension_n:.1f} N > rated "
-            f"{kinematics.belt_max_working_tension_n:.1f} N): upgrade to 9mm/12mm Aramid or Steel-core belts."
+            f"{kinematics.belt_max_working_tension_n:.1f} N): upgrade to 9mm/12mm EPDM Fiberglass or Aramid (Kevlar) belts."
+        )
+    if spec.gantry.belt.core == "steel" and spec.gantry.belt.pulley_teeth <= 24:
+        diag.append(
+            f"Steel-core belt fatigue warning: steel-core GT2 belts suffer rapid bend-fatigue cracking on small "
+            f"{spec.gantry.belt.pulley_teeth}T pulleys (per Monolith/Voron community testing) — use Gates EPDM Fiberglass or Rubber+Aramid instead."
+        )
+    if spec.gantry.belt.pretension_n > 50.0 and spec.toolhead.mount_material == "abs_printed":
+        diag.append(
+            f"High-tension printed mount creep warning ({spec.gantry.belt.pretension_n:.0f} N with ABS mounts): "
+            "unfilled ABS creeps under sustained high belt tension — upgrade to PA12-CF / PPA-CF or CNC Aluminum mounts."
         )
     if kinematics.shaft_bending_risk:
         diag.append(

@@ -37,7 +37,13 @@ from printsim.geometry import (
     export_part_step_bytes,
     generate_bom,
 )
-from printsim.schema import MATERIAL_CATALOG, PROFILE_CATALOG, PrinterSpec
+from printsim.schema import (
+    MATERIAL_CATALOG,
+    PROFILE_CATALOG,
+    STEPPER_CATALOG,
+    TOOLHEAD_PRESETS,
+    PrinterSpec,
+)
 from printsim.thermal import FILAMENT_CATALOG
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -150,8 +156,8 @@ def _load_presets() -> dict[str, PrinterSpec]:
 def create_app() -> FastAPI:
     api = FastAPI(
         title="PrintSim Multiphysics 3D Printer Simulator API",
-        version="0.5.0",
-        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, CoreXY AWD & structural panels, SIMP topology optimization, manufacturable BOM, modal analysis, kinematics, hotend FVM thermal, and virtual G-code API.",
+        version="0.6.0",
+        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, CoreXY AWD & structural panels, stepper electromagnetic stiffness, nozzle-tip CoG vibration, SIMP topology optimization, manufacturable BOM, modal analysis, kinematics, hotend FVM thermal, and virtual G-code API.",
     )
 
     api.add_middleware(
@@ -164,7 +170,7 @@ def create_app() -> FastAPI:
 
     @api.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "version": "0.5.0"}
+        return {"status": "ok", "version": "0.6.0"}
 
     @api.get("/api/catalog")
     def catalog() -> dict:
@@ -173,6 +179,8 @@ def create_app() -> FastAPI:
             "materials": [m.model_dump(mode="json") for m in MATERIAL_CATALOG.values()],
             "profiles": [p.model_dump(mode="json") for p in PROFILE_CATALOG.values()],
             "filaments": [f.model_dump(mode="json") for f in FILAMENT_CATALOG.values()],
+            "steppers": list(STEPPER_CATALOG.values()),
+            "toolhead_presets": list(TOOLHEAD_PRESETS.values()),
             "part_presets": [
                 {"id": "corner_gusset", "name": "40mm L-Corner Gusset Bracket"},
                 {"id": "xy_motor_mount", "name": "CoreXY NEMA17 Motor Mount Plate"},

@@ -38,6 +38,9 @@ class StaticFEAResult:
     min_safety_factor: float
     peak_inertial_force_x_n: float
     peak_inertial_force_y_n: float
+    beam_center_deflection_um: float = 0.0
+    nozzle_twist_amplification_pct: float = 0.0
+    nozzle_twist_angle_mrad: float = 0.0
     nodal_displacements_mm: dict[str, list[float]] = field(default_factory=dict)
     member_stresses: list[MemberStressResult] = field(default_factory=list)
 
@@ -47,6 +50,9 @@ class StaticFEAResult:
             "accel_deflection_x_um": round(self.accel_deflection_x_um, 2),
             "accel_deflection_y_um": round(self.accel_deflection_y_um, 2),
             "combined_max_deflection_um": round(self.combined_max_deflection_um, 2),
+            "beam_center_deflection_um": round(self.beam_center_deflection_um, 2),
+            "nozzle_twist_amplification_pct": round(self.nozzle_twist_amplification_pct, 1),
+            "nozzle_twist_angle_mrad": round(self.nozzle_twist_angle_mrad, 3),
             "toolhead_stiffness_x_n_per_mm": round(self.toolhead_stiffness_x_n_per_mm, 2),
             "toolhead_stiffness_y_n_per_mm": round(self.toolhead_stiffness_y_n_per_mm, 2),
             "toolhead_stiffness_z_n_per_mm": round(self.toolhead_stiffness_z_n_per_mm, 2),
@@ -96,57 +102,75 @@ def solve_static_fea(
     n_dof = K.shape[0]
     th_idx = node_idx[assembly.toolhead_node_id]
     th_dof = 6 * th_idx
+    cog_id = (
+        assembly.toolhead_cog_node_id
+        if assembly.toolhead_cog_node_id in node_idx
+        else assembly.toolhead_node_id
+    )
+    noz_id = (
+        assembly.nozzle_node_id
+        if assembly.nozzle_node_id in node_idx
+        else assembly.toolhead_node_id
+    )
+    cog_idx = node_idx[cog_id]
+    cog_dof = 6 * cog_idx
+    noz_idx = node_idx[noz_id]
+    noz_dof = 6 * noz_idx
+    has_explicit_cog = cog_idx != th_idx
 
     accel_m_s2 = (
         accel_mm_s2 if accel_mm_s2 is not None else assembly.spec.kinematics.max_accel_mm_s2
     ) * 1e-3
 
-    # 1. Gravity sag case
+    # 1. Gravity sag case (measured at nozzle tip)
     u_grav = _solve_linear_system(K, F_grav, free_dofs)
-    grav_sag_um = abs(float(u_grav[th_dof + 2])) * 1e6
+    grav_sag_um = abs(float(u_grav[noz_dof + 2])) * 1e6
 
-    # 2. Unit load compliance probing at toolhead (1 N in X, Y, Z)
+    # 2. Unit load compliance probing at nozzle tip (1 N in X, Y, Z)
     def _probe_stiffness(axis: int) -> float:
         f_unit = np.zeros(n_dof, dtype=float)
-        f_unit[th_dof + axis] = 1.0
+        f_unit[noz_dof + axis] = 1.0
         u_unit = _solve_linear_system(K, f_unit, free_dofs)
-        disp_mm = abs(float(u_unit[th_dof + axis])) * 1e3
+        disp_mm = abs(float(u_unit[noz_dof + axis])) * 1e3
         return 1.0 / max(disp_mm, 1e-9)
 
     stiff_x = _probe_stiffness(0)
     stiff_y = _probe_stiffness(1)
     stiff_z = _probe_stiffness(2)
 
-    # 3. Peak inertial loads at toolhead + gantry during max X and max Y acceleration
+    # 3. Peak inertial loads applied at toolhead_cog (+ gantry) during max X and max Y acceleration
     f_inertial_x = assembly.x_moving_mass_kg * accel_m_s2
     f_inertial_y = assembly.y_moving_mass_kg * accel_m_s2
 
     F_x = np.zeros(n_dof, dtype=float)
-    F_x[th_dof + 0] = f_inertial_x
-    # Add nozzle/CoG offset moment when accelerating
+    F_x[cog_dof + 0] = f_inertial_x
     cog_z_m = assembly.spec.toolhead.cog_offset_mm[2] * 1e-3
-    F_x[th_dof + 4] = f_inertial_x * cog_z_m
+    if not has_explicit_cog:
+        F_x[th_dof + 4] = f_inertial_x * cog_z_m
     u_x = _solve_linear_system(K, F_x, free_dofs)
-    defl_x_um = float(np.linalg.norm(u_x[th_dof : th_dof + 3])) * 1e6
+    defl_x_um = float(np.linalg.norm(u_x[noz_dof : noz_dof + 3])) * 1e6
 
     F_y = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "cartesian_bedslinger":
-        # Bed inertia kicks frame base/portal in Y; toolhead sees reaction vibration
-        F_y[th_dof + 1] = assembly.x_moving_mass_kg * accel_m_s2
+        # Bed inertia kicks frame base/portal in Y; toolhead CoG sees reaction inertial load
+        F_y[cog_dof + 1] = assembly.x_moving_mass_kg * accel_m_s2
+        if not has_explicit_cog:
+            F_y[th_dof + 3] = -(assembly.x_moving_mass_kg * accel_m_s2) * cog_z_m
     else:
-        # Toolhead + X gantry accelerate in Y -> load distributed on toolhead and Y carriages
+        # Toolhead + X gantry accelerate in Y -> load distributed on toolhead_cog and Y carriages
         th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
-        F_y[th_dof + 1] = f_inertial_y * th_share
-        F_y[th_dof + 3] = -f_inertial_y * th_share * cog_z_m
+        F_y[cog_dof + 1] = f_inertial_y * th_share
+        if not has_explicit_cog:
+            F_y[th_dof + 3] = -f_inertial_y * th_share * cog_z_m
         other_gantry = [gid for gid in assembly.gantry_node_ids if gid != assembly.toolhead_node_id]
         if other_gantry:
             rem = f_inertial_y * (1.0 - th_share) / len(other_gantry)
             for gid in other_gantry:
                 F_y[6 * node_idx[gid] + 1] += rem
         else:
-            F_y[th_dof + 1] = f_inertial_y
+            F_y[cog_dof + 1] = f_inertial_y
     u_y = _solve_linear_system(K, F_y, free_dofs)
-    defl_y_um = float(np.linalg.norm(u_y[th_dof : th_dof + 3])) * 1e6
+    defl_y_um = float(np.linalg.norm(u_y[noz_dof : noz_dof + 3])) * 1e6
 
     # 4. Belt-induced frame preload (CoreXY motor corners pull inward along X/Y belt runs)
     F_belt = np.zeros(n_dof, dtype=float)
@@ -189,12 +213,14 @@ def solve_static_fea(
                 u_comb = cand
 
     nodal_disp_mm: dict[str, list[float]] = {}
-    max_disp_m = 0.0
     for i, node in enumerate(assembly.nodes):
         d_vec = u_comb[6 * i : 6 * i + 3]
-        mag = float(np.linalg.norm(d_vec))
-        max_disp_m = max(max_disp_m, mag)
         nodal_disp_mm[node.id] = [round(float(v) * 1e3, 6) for v in d_vec]
+
+    combined_nozzle_um = float(np.linalg.norm(u_comb[noz_dof : noz_dof + 3])) * 1e6
+    beam_center_um = float(np.linalg.norm(u_comb[th_dof : th_dof + 3])) * 1e6
+    nozzle_twist_amp_pct = ((combined_nozzle_um / max(beam_center_um, 1e-6)) - 1.0) * 100.0
+    nozzle_twist_angle_mrad = float(np.hypot(u_comb[noz_dof + 3], u_comb[noz_dof + 4])) * 1e3
 
     # Element stress recovery
     member_stresses: list[MemberStressResult] = []
@@ -228,7 +254,10 @@ def solve_static_fea(
         gravity_sag_toolhead_um=grav_sag_um,
         accel_deflection_x_um=defl_x_um,
         accel_deflection_y_um=defl_y_um,
-        combined_max_deflection_um=max_disp_m * 1e6,
+        combined_max_deflection_um=combined_nozzle_um,
+        beam_center_deflection_um=beam_center_um,
+        nozzle_twist_amplification_pct=nozzle_twist_amp_pct,
+        nozzle_twist_angle_mrad=nozzle_twist_angle_mrad,
         toolhead_stiffness_x_n_per_mm=stiff_x,
         toolhead_stiffness_y_n_per_mm=stiff_y,
         toolhead_stiffness_z_n_per_mm=stiff_z,

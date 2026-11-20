@@ -9,6 +9,7 @@ import pytest
 from printsim.engine import evaluate_printer
 from printsim.fea import solve_modal_fea, solve_static_fea
 from printsim.geometry import build_assembly, generate_bom
+from printsim.geometry.builder import panel_mechanical_properties
 from printsim.kinematics import analyze_kinematics
 from printsim.schema import PrinterSpec, get_material
 
@@ -29,7 +30,7 @@ def _panel_corexy_spec(
 
 
 def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
-    """Verify exact A_eq = eta * G * t * L_d^3 / (2 * E * b * h), shape='plate', and metadata."""
+    """Verify exact A_eq = gt_eff * L_d^3 / (2 * E * b * h), massless struts, and metadata."""
     spec = _panel_corexy_spec(True, "bolted_structural", "aluminum_5052_sheet", 4.0)
     spec.gantry.drive_mode = "awd"
     spec.gantry.double_shear_pulleys = True
@@ -42,16 +43,19 @@ def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
     assert rear_1.profile.id == "panel_shear_rear"
     assert rear_1.profile.shape == "plate"
     assert rear_1.material.id == "aluminum_5052_sheet"
+    assert rear_1.material.density_kg_m3 == pytest.approx(1e-3, rel=1e-6)
+    assert rear_1.material.cost_per_kg_usd == 0.0
 
     b = spec.frame.width_mm * 1e-3
+    d = spec.frame.depth_mm * 1e-3
     h = spec.frame.height_mm * 1e-3
     t = spec.frame.panel_thickness_mm * 1e-3
     ld = math.hypot(b, h)
-    expected_aeq = 0.65 * (pmat.effective_shear_modulus_pa * t * (ld**3)) / (
-        2.0 * pmat.youngs_modulus_pa * b * h
-    )
+    props = panel_mechanical_properties(pmat, t, b, h, "bolted_structural")
+    expected_aeq = (props["gt_eff_n_m"] * (ld**3)) / (2.0 * pmat.youngs_modulus_pa * b * h)
     assert rear_1.profile.area_m2 == pytest.approx(expected_aeq, rel=1e-6)
 
+    expected_panel_mass = (b * h + 2.0 * d * h + b * d) * props["areal_mass_kg_m2"]
     gdict = asm.to_geometry_dict()
     assert gdict["drive_mode"] == "awd"
     assert gdict["double_shear_pulleys"] is True
@@ -62,11 +66,17 @@ def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
         "material_name": pmat.name,
         "thickness_mm": 4.0,
         "color_hex": pmat.color_hex,
+        "bolted_to_gantry": False,
+        "is_flying_gantry": True,
+        "effective_shear_gt_kn_mm": round(props["gt_eff_n_m"] * 1e-6, 3),
+        "buckling_factor": round(props["psi_buckle"], 3),
+        "areal_mass_kg_m2": round(props["areal_mass_kg_m2"], 2),
+        "total_panel_mass_kg": round(expected_panel_mass, 3),
     }
 
 
 def test_structural_panel_monotonicity_frequency_stiffness_and_mass() -> None:
-    """Verify open < clip < bolted acrylic < bolted 3mm Dibond < 6mm Dibond < 4mm Al5052."""
+    """Verify monotonic stiffness open < clip < bolted acrylic < bolted 3mm Dibond < 6mm Dibond < 4mm Al5052."""
     configs = [
         ("open", _panel_corexy_spec(False, "none", "acm_dibond", 3.0)),
         ("clip_3mm_acrylic", _panel_corexy_spec(True, "clip_enclosure", "acrylic_pmma", 3.0)),
@@ -81,20 +91,46 @@ def test_structural_panel_monotonicity_frequency_stiffness_and_mass() -> None:
         asm = build_assembly(spec)
         st = solve_static_fea(asm)
         mo = solve_modal_fea(asm)
-        results.append((label, mo.fundamental_freq_hz, st.toolhead_stiffness_x_n_per_mm, st.toolhead_stiffness_y_n_per_mm, asm.total_mass_kg))
+        results.append(
+            (
+                label,
+                mo.fundamental_freq_hz,
+                st.toolhead_stiffness_x_n_per_mm,
+                st.toolhead_stiffness_y_n_per_mm,
+                st.combined_max_deflection_um,
+                asm.total_mass_kg,
+            )
+        )
 
     for i in range(len(results) - 1):
-        curr_label, f_c, kx_c, ky_c, _ = results[i]
-        next_label, f_n, kx_n, ky_n, _ = results[i + 1]
-        assert f_n > f_c, f"Expected f1({next_label})={f_n:.3f} > f1({curr_label})={f_c:.3f}"
+        curr_label, _, kx_c, ky_c, _, _ = results[i]
+        next_label, _, kx_n, ky_n, _, _ = results[i + 1]
         assert kx_n > kx_c, f"Expected kx({next_label})={kx_n:.2f} > kx({curr_label})={kx_c:.2f}"
         assert ky_n > ky_c, f"Expected ky({next_label})={ky_n:.2f} > ky({curr_label})={ky_c:.2f}"
 
-    # Thickness increase (3mm -> 6mm Dibond) increases both stiffness and total printer mass
-    _, _, kx_3, ky_3, m_3 = results[3]
-    _, _, kx_6, ky_6, m_6 = results[4]
-    assert kx_6 > kx_3 and ky_6 > ky_3
-    assert m_6 > m_3 + 2.5
+    # Clip-in acrylic adds only realistic mild stiffening (< 25% deflection drop vs open)
+    _, f_open, kx_open, _, defl_open, _ = results[0]
+    _, f_clip, kx_clip, _, defl_clip, _ = results[1]
+    _, f_bolt_acr, _, _, defl_bolt_acr, _ = results[2]
+    _, f_bolt_3acm, _, _, _, m_3 = results[3]
+    _, f_bolt_6acm, _, _, _, m_6 = results[4]
+    _, f_bolt_4al, _, _, _, _ = results[5]
+
+    assert kx_clip < kx_open * 1.25
+    assert (defl_open - defl_clip) / defl_open < 0.25
+    assert f_clip < f_open * 1.15  # no artificial 2x jump from foam-tape/twist-clip enclosure
+
+    # Bolted structural panels dramatically outperform open & clip-in frames
+    assert f_bolt_acr > f_open * 2.0
+    assert defl_bolt_acr < defl_open * 0.55
+    assert f_bolt_3acm > f_bolt_acr > f_clip
+    assert f_bolt_6acm > f_bolt_acr and f_bolt_6acm > f_open * 2.4
+    assert f_bolt_4al > f_bolt_acr and f_bolt_4al > f_open * 2.4
+
+    # Thickness increase (3mm -> 6mm Dibond) adds 3mm LDPE core mass across the 4 bays
+    expected_core_delta = (2.0 * 0.46 * 0.50 + 0.46 * 0.50 + 0.46 * 0.46) * (0.003 * 920.0)
+    assert (m_6 - m_3) == pytest.approx(expected_core_delta, rel=1e-3)
+    assert m_6 > m_3 + 2.4
 
     # Even in clip_enclosure mode, thickness (3mm -> 6mm) and heavier material (PC -> Al 5052) increase mass
     clip_pc_3 = build_assembly(_panel_corexy_spec(True, "clip_enclosure", "polycarbonate", 3.0))
@@ -136,11 +172,16 @@ def test_delta_outer_bay_shear_panels_and_bom_exclusion() -> None:
     asm_bolt = build_assembly(spec_bolt)
 
     assert len([m for m in asm_bolt.members if m.id.startswith("panel_shear_")]) == 6
-    assert solve_modal_fea(asm_bolt).fundamental_freq_hz > solve_modal_fea(asm_clip).fundamental_freq_hz > solve_modal_fea(asm_open).fundamental_freq_hz
-    assert solve_static_fea(asm_bolt).toolhead_stiffness_x_n_per_mm > solve_static_fea(asm_clip).toolhead_stiffness_x_n_per_mm > solve_static_fea(asm_open).toolhead_stiffness_x_n_per_mm
+    assert solve_modal_fea(asm_bolt).fundamental_freq_hz > solve_modal_fea(asm_open).fundamental_freq_hz
+    assert solve_modal_fea(asm_bolt).fundamental_freq_hz > solve_modal_fea(asm_clip).fundamental_freq_hz
+    assert (
+        solve_static_fea(asm_bolt).toolhead_stiffness_x_n_per_mm
+        > solve_static_fea(asm_clip).toolhead_stiffness_x_n_per_mm
+        > solve_static_fea(asm_open).toolhead_stiffness_x_n_per_mm
+    )
 
     bom = generate_bom(spec_bolt)
-    assert all(c.role != "brace" for c in bom.cut_list)
+    assert all(c.role not in ("brace", "toolhead") for c in bom.cut_list)
 
 
 def test_belt_induced_frame_preload_and_panel_resistance() -> None:
@@ -269,3 +310,147 @@ def _with_pretension(spec: PrinterSpec, pretension_n: float) -> PrinterSpec:
     out = spec.model_copy(deep=True)
     out.gantry.belt.pretension_n = pretension_n
     return out
+
+
+def test_dibond_tds_sandwich_mechanics_and_timoshenko_buckling() -> None:
+    """Verify 3/4/6 mm ACM Dibond areal mass & flexural rigidity match 3A Composites TDS."""
+    dibond = get_material("acm_dibond")
+    tds_targets = [
+        # (thickness_mm, tds_areal_mass_kg_m2, tds_flexural_d_nm)
+        (3.0, 3.80, 86.5),
+        (4.0, 4.75, 162.0),
+        (6.0, 6.60, 384.0),
+    ]
+    for t_mm, target_mass, target_d in tds_targets:
+        props = panel_mechanical_properties(dibond, t_mm * 1e-3, 0.46, 0.50, "bolted_structural")
+        assert props["areal_mass_kg_m2"] == pytest.approx(target_mass, rel=0.02)
+        assert props["flexural_d_nm"] == pytest.approx(target_d, rel=0.05)
+        assert 0.50 <= props["psi_buckle"] <= 1.0
+        assert props["k_mount_n_m"] == pytest.approx(6.0e6, rel=1e-9)
+        expected_eta = props["k_panel_eff_n_m"] / props["k_sheet_n_m"]
+        assert props["eta_mount"] == pytest.approx(expected_eta, rel=1e-9)
+        props_gantry = panel_mechanical_properties(
+            dibond, t_mm * 1e-3, 0.46, 0.50, "bolted_structural", bolted_to_gantry=True
+        )
+        assert props_gantry["k_mount_n_m"] == pytest.approx(9.0e6, rel=1e-9)
+        assert props_gantry["gt_eff_n_m"] > props["gt_eff_n_m"]
+
+    # Timoshenko buckling factor decreases on thin flexible plastic and increases when span shortens
+    acrylic = get_material("acrylic_pmma")
+    al5052 = get_material("aluminum_5052_sheet")
+    p_2mm_acrylic = panel_mechanical_properties(acrylic, 0.002, 0.46, 0.50, "bolted_structural")
+    p_3mm_acrylic = panel_mechanical_properties(acrylic, 0.003, 0.46, 0.50, "bolted_structural")
+    p_4mm_al = panel_mechanical_properties(al5052, 0.004, 0.46, 0.50, "bolted_structural")
+    p_3mm_acrylic_gantry = panel_mechanical_properties(acrylic, 0.003, 0.46, 0.445, "bolted_structural")
+
+    assert 0.50 < p_2mm_acrylic["psi_buckle"] < p_3mm_acrylic["psi_buckle"] < p_4mm_al["psi_buckle"] <= 1.0
+    assert p_3mm_acrylic_gantry["psi_buckle"] > p_3mm_acrylic["psi_buckle"]
+    clip_props = panel_mechanical_properties(acrylic, 0.003, 0.46, 0.50, "clip_enclosure")
+    assert clip_props["k_mount_n_m"] == pytest.approx(28_000.0, rel=1e-9)
+    assert clip_props["k_panel_eff_n_m"] < 28_000.0
+    assert panel_mechanical_properties(acrylic, 0.003, 0.46, 0.50, "none")["gt_eff_n_m"] == 0.0
+
+
+@pytest.mark.parametrize("z_drive,bolt_to_gantry", [
+    ("leadscrew_triple", True),
+    ("leadscrew_triple", False),
+    ("belted_quad_z", True),
+])
+@pytest.mark.parametrize("material,thickness_mm", [
+    ("acm_dibond", 3.0),
+    ("acm_dibond", 6.0),
+    ("aluminum_5052_sheet", 4.0),
+])
+def test_zero_phantom_strut_mass_on_corexy(
+    z_drive: str,
+    bolt_to_gantry: bool,
+    material: str,
+    thickness_mm: float,
+) -> None:
+    """Equivalent X-struts add zero phantom mass even on skinny 460x55mm upper gantry strips."""
+    spec_open = _panel_corexy_spec(False, "none", material, thickness_mm)
+    spec_open.bed.z_drive = z_drive  # type: ignore[assignment]
+    spec_open.frame.bolt_panels_to_gantry = bolt_to_gantry
+
+    spec_enc = spec_open.model_copy(deep=True)
+    spec_enc.frame.enclosed_panels = True
+    spec_enc.frame.panel_mounting = "bolted_structural"
+
+    asm_open = build_assembly(spec_open)
+    asm_enc = build_assembly(spec_enc)
+
+    w = spec_enc.frame.width_mm * 1e-3
+    d = spec_enc.frame.depth_mm * 1e-3
+    h = spec_enc.frame.height_mm * 1e-3
+    pmat = get_material(material)
+    areal_mass = panel_mechanical_properties(pmat, thickness_mm * 1e-3, w, h, "bolted_structural")[
+        "areal_mass_kg_m2"
+    ]
+    expected_bay_mass_kg = (w * h + 2.0 * d * h + w * d) * areal_mass
+
+    actual_delta_kg = asm_enc.total_mass_kg - asm_open.total_mass_kg
+    assert actual_delta_kg == pytest.approx(expected_bay_mass_kg, rel=5e-3)
+    assert asm_enc.panel_mass_kg == pytest.approx(expected_bay_mass_kg, rel=1e-6)
+    assert abs(asm_enc.frame_mass_kg - asm_open.frame_mass_kg) < 1e-4
+
+
+def test_fixed_gantry_vs_flying_gantry_panel_bolting() -> None:
+    """Fixed-gantry Trident bolts panels directly to gantry beams; flying-gantry cannot."""
+    spec_trident_bolt = _panel_corexy_spec(True, "bolted_structural", "acm_dibond", 4.0)
+    spec_trident_bolt.bed.z_drive = "leadscrew_triple"
+    spec_trident_bolt.frame.bolt_panels_to_gantry = True
+
+    spec_trident_nobolt = spec_trident_bolt.model_copy(deep=True)
+    spec_trident_nobolt.frame.bolt_panels_to_gantry = False
+
+    spec_flying = spec_trident_bolt.model_copy(deep=True)
+    spec_flying.bed.z_drive = "belted_quad_z"
+
+    assert spec_trident_bolt.is_flying_gantry is False
+    assert spec_trident_bolt.panels_bolted_to_gantry_effective is True
+    assert spec_trident_nobolt.panels_bolted_to_gantry_effective is False
+    assert spec_flying.is_flying_gantry is True
+    assert spec_flying.panels_bolted_to_gantry_effective is False
+
+    asm_bolt = build_assembly(spec_trident_bolt)
+    asm_nobolt = build_assembly(spec_trident_nobolt)
+    asm_flying = build_assembly(spec_flying)
+
+    # Split gantry panel bays + Y-rail web tie-ins exist ONLY when bolted_to_gantry is effective
+    bolt_ids = {m.id for m in asm_bolt.members}
+    nobolt_ids = {m.id for m in asm_nobolt.members}
+    flying_ids = {m.id for m in asm_flying.members}
+
+    for expected_id in ("panel_shear_rear_low_1", "panel_shear_rear_top_1", "panel_shear_yrail_l_1", "panel_shear_yrail_r_2"):
+        assert expected_id in bolt_ids
+        assert expected_id not in nobolt_ids
+        assert expected_id not in flying_ids
+    assert "panel_shear_rear_1" in nobolt_ids and "panel_shear_rear_1" in flying_ids
+
+    st_bolt = solve_static_fea(asm_bolt)
+    st_nobolt = solve_static_fea(asm_nobolt)
+    st_flying = solve_static_fea(asm_flying)
+
+    mo_bolt = solve_modal_fea(asm_bolt)
+    mo_nobolt = solve_modal_fea(asm_nobolt)
+    mo_flying = solve_modal_fea(asm_flying)
+
+    # Bolting to fixed gantry beams increases stiffness, reduces deflection, and raises f1
+    assert st_bolt.toolhead_stiffness_x_n_per_mm > st_nobolt.toolhead_stiffness_x_n_per_mm
+    assert st_bolt.toolhead_stiffness_y_n_per_mm > st_nobolt.toolhead_stiffness_y_n_per_mm
+    assert st_bolt.combined_max_deflection_um < st_nobolt.combined_max_deflection_um
+    assert mo_bolt.fundamental_freq_hz > mo_nobolt.fundamental_freq_hz
+
+    assert st_bolt.toolhead_stiffness_x_n_per_mm > st_flying.toolhead_stiffness_x_n_per_mm
+    assert st_bolt.toolhead_stiffness_y_n_per_mm > st_flying.toolhead_stiffness_y_n_per_mm
+    assert st_bolt.combined_max_deflection_um < st_flying.combined_max_deflection_um
+    assert mo_bolt.fundamental_freq_hz > mo_flying.fundamental_freq_hz
+
+    # Unhealthy flying gantry (structural < 80) emits helpful gantry-bolting note
+    spec_weak_fly = _panel_corexy_spec(True, "bolted_structural", "acrylic_pmma", 2.0)
+    spec_weak_fly.bed.z_drive = "belted_quad_z"
+    spec_weak_fly.frame.bolt_panels_to_gantry = True
+    spec_weak_fly.kinematics.max_accel_mm_s2 = 22000.0
+    rep_weak_fly = evaluate_printer(spec_weak_fly)
+    assert rep_weak_fly.scores.structural < 80.0
+    assert any("flying-gantry" in d.lower() for d in rep_weak_fly.diagnostics)

@@ -34,6 +34,13 @@ class KinematicsReport:
     belt_overtension_risk: bool = False
     shaft_bending_risk: bool = False
     frame_belt_preload_n: float = 0.0
+    motor_run_current_a: float = 1.2
+    motor_stiffness_n_per_mm: float = 0.0
+    belt_stiffness_n_per_mm: float = 0.0
+    drive_stiffness_n_per_mm: float = 0.0
+    motor_voltage_efficiency_pct: float = 100.0
+    motor_heat_w_each: float = 0.0
+    motor_overcurrent_risk: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +65,13 @@ class KinematicsReport:
             "belt_overtension_risk": self.belt_overtension_risk,
             "shaft_bending_risk": self.shaft_bending_risk,
             "frame_belt_preload_n": round(self.frame_belt_preload_n, 2),
+            "motor_run_current_a": round(self.motor_run_current_a, 2),
+            "motor_stiffness_n_per_mm": round(self.motor_stiffness_n_per_mm, 1),
+            "belt_stiffness_n_per_mm": round(self.belt_stiffness_n_per_mm, 1),
+            "drive_stiffness_n_per_mm": round(self.drive_stiffness_n_per_mm, 1),
+            "motor_voltage_efficiency_pct": round(self.motor_voltage_efficiency_pct, 1),
+            "motor_heat_w_each": round(self.motor_heat_w_each, 2),
+            "motor_overcurrent_risk": self.motor_overcurrent_risk,
         }
 
 
@@ -131,17 +145,60 @@ def forward_kinematics(spec: PrinterSpec, abc_mm: tuple[float, float, float]) ->
 
 
 def stepper_available_torque_nm(stepper: StepperSpec, rpm: float) -> float:
-    """Electromagnetic pull-out torque model including L/R corner speed roll-off."""
-    # Dynamic holding-to-pull-out factor (~0.72 at low speed)
-    t0 = stepper.holding_torque_nm * 0.72
-    # Corner frequency where inductive reactance equals supply voltage drive headroom:
-    # f_corner_rps = V / (2 * pi * L * I * steps_per_rev/4)
-    l_h = stepper.inductance_mh * 1e-3
-    pole_pairs = stepper.steps_per_rev / 4.0
-    omega_corner_rad_s = stepper.supply_voltage_v / max(pole_pairs * l_h * stepper.rated_current_a, 1e-6)
-    omega_rad_s = max(rpm, 0.0) * (2.0 * math.pi / 60.0)
-    rolloff = 1.0 / math.sqrt(1.0 + (omega_rad_s / max(omega_corner_rad_s, 1.0)) ** 2)
-    return t0 * rolloff
+    """Electromagnetic pull-out torque model including current saturation and L/R voltage roll-off."""
+    # Dynamic holding-to-pull-out factor (~0.72 at low speed) scaled by current and inductive efficiency
+    return stepper.effective_holding_torque_nm * 0.72 * stepper.dynamic_voltage_efficiency(rpm)
+
+
+def compute_drive_stiffness_n_per_m(
+    assembly: AssemblyModel, axis: str = "X"
+) -> tuple[float, float, float]:
+    """Compute (k_belt_n_m, k_motor_axis_n_m, k_drive_n_m) coupling belt & motor electromagnetic spring in series."""
+    spec = assembly.spec
+    belt = spec.gantry.belt
+    kin = spec.kinematics
+    w = spec.frame.width_mm * 1e-3
+    d = spec.frame.depth_mm * 1e-3
+
+    if spec.architecture == "corexy":
+        if spec.gantry.drive_mode == "awd":
+            # 4-motor AWD halves active belt span driving the toolhead with 4 parallel driven branches
+            span_len = max(0.52 * (w + d), 0.22)
+            k_belt = 4.0 * belt.stiffness_ea_n / span_len
+        else:
+            # CoreXY belt loop spans roughly 2*W + 2*D; two parallel spans act on X or Y
+            span_len = max(w + d, 0.35)
+            k_belt = 2.0 * belt.stiffness_ea_n / span_len
+    elif spec.architecture == "delta":
+        span_len = max(spec.frame.height_mm * 1e-3, 0.45)
+        k_belt = 2.5 * belt.stiffness_ea_n / span_len
+    else:
+        span_len = w if axis.upper() == "X" else d
+        k_belt = 2.0 * belt.stiffness_ea_n / max(span_len, 0.25)
+
+    # Belt pretension stiffness coupling (Gates belt backlash/slack compliance factor)
+    tension_eff = min(1.08, 0.72 + 0.36 * min(belt.pretension_n / 45.0, 1.0))
+    k_belt *= tension_eff
+
+    r_p = belt.pitch_radius_m
+    motor_lin_v = (kin.max_velocity_mm_s * 1e-3) * (
+        1.4142 if spec.architecture == "corexy" else 1.0
+    )
+    max_rpm = (motor_lin_v / (2.0 * math.pi * r_p)) * 60.0
+    rpm_op = max(120.0, 0.35 * max_rpm)
+    k_theta = kin.xy_stepper.torsional_stiffness_nm_per_rad(rpm=rpm_op)
+    k_motor_single = k_theta / (r_p**2)
+
+    if spec.architecture == "corexy":
+        motor_factor = 4.0 if spec.gantry.drive_mode == "awd" else 2.0
+    elif spec.architecture == "delta":
+        motor_factor = 2.5
+    else:
+        motor_factor = 1.0
+
+    k_motor_axis = motor_factor * k_motor_single
+    k_drive = (k_belt * k_motor_axis) / max(k_belt + k_motor_axis, 1e-9)
+    return (k_belt, k_motor_axis, k_drive)
 
 
 def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
@@ -225,6 +282,12 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
                 except ValueError:
                     delta_ok = False
 
+    stepper = kin.xy_stepper
+    k_belt_n_m, k_motor_n_m, k_drive_n_m = compute_drive_stiffness_n_per_m(assembly, "X")
+    motor_volt_eff_pct = stepper.dynamic_voltage_efficiency(max_rpm * 0.7) * 100.0
+    motor_heat_w = stepper.power_dissipation_w
+    motor_overcurrent = stepper.run_current_a > stepper.rated_current_a * 1.05
+
     return KinematicsReport(
         architecture=spec.architecture,
         build_volume_liters=build_l,
@@ -247,4 +310,11 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         belt_overtension_risk=belt_overtension,
         shaft_bending_risk=shaft_bending,
         frame_belt_preload_n=frame_preload,
+        motor_run_current_a=stepper.run_current_a,
+        motor_stiffness_n_per_mm=k_motor_n_m * 1e-3,
+        belt_stiffness_n_per_mm=k_belt_n_m * 1e-3,
+        drive_stiffness_n_per_mm=k_drive_n_m * 1e-3,
+        motor_voltage_efficiency_pct=motor_volt_eff_pct,
+        motor_heat_w_each=motor_heat_w,
+        motor_overcurrent_risk=motor_overcurrent,
     )
