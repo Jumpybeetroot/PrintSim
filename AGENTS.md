@@ -26,6 +26,8 @@ You are working on **PrintSim**, a full-featured multiphysics 3D printer simulat
   - Any new structural, modal, kinematic, or thermal model MUST include a unit test in `tests/` verifying either a closed-form analytical solution (e.g., Euler-Bernoulli deflection/frequency, FK/IK round-trip, steady-state thermal resistance) or a monotonic physical sanity check.
 - **Real Datasheet Parameters**:
   - New materials and profiles in `schema/materials.py` and `schema/profiles.py` must cite realistic engineering values (e.g., Misumi extrusion datasheets, Gates PowerGrip belt stiffness, MatWeb material constants).
+- **Explore Existing Work & Research First** (`.agents/rules/research-and-reuse.md`):
+  - Before building custom solvers, CAD tools, or optimizers from scratch, research proven open-source libraries (`gmsh`, `scikit-fem`, `build123d`, `sectionproperties`, `pymoo`, `optuna`, Klipper `shaper_defs`/`shaper_calibrate`, `fullcontrol`, `ht`) and published engineering models; integrate existing work via clean adapters/extras whenever it improves accuracy or saves reinventing the wheel.
 
 ## 3. Verification Commands
 
