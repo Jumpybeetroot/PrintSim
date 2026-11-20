@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from printsim.engine import evaluate_printer, optimize_design
+from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.fea.solid_fem import (
     FaceName,
     PartPreset,
@@ -64,6 +64,15 @@ class OptimizeRequest(BaseModel):
     iterations: int = Field(20, ge=3, le=100)
     objective: Literal["balanced", "speed", "rigidity", "budget"] = "balanced"
     seed: int = 42
+
+
+class ParetoOptimizeRequest(BaseModel):
+    spec: PrinterSpec | None = None
+    yaml_text: str | None = None
+    population_size: int = Field(16, ge=8, le=40)
+    generations: int = Field(6, ge=2, le=20)
+    seed: int = 42
+    filament_id: str = "pla"
 
 
 class SolidPartFEARequest(BaseModel):
@@ -156,8 +165,8 @@ def _load_presets() -> dict[str, PrinterSpec]:
 def create_app() -> FastAPI:
     api = FastAPI(
         title="PrintSim Multiphysics 3D Printer Simulator API",
-        version="0.6.0",
-        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, CoreXY AWD & structural panels, stepper electromagnetic stiffness, nozzle-tip CoG vibration, SIMP topology optimization, manufacturable BOM, modal analysis, kinematics, hotend FVM thermal, and virtual G-code API.",
+        version="0.7.0",
+        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, CoreXY AWD & structural panels, stepper electromagnetic stiffness, nozzle-tip CoG vibration, Klipper ADXL345 shaper PSD, pymoo NSGA-II Pareto optimization, SIMP topology optimization, manufacturable BOM, hotend FVM thermal, and virtual G-code API.",
     )
 
     api.add_middleware(
@@ -170,7 +179,7 @@ def create_app() -> FastAPI:
 
     @api.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "version": "0.6.0"}
+        return {"status": "ok", "version": "0.7.0"}
 
     @api.get("/api/catalog")
     def catalog() -> dict:
@@ -348,6 +357,21 @@ def create_app() -> FastAPI:
             data = res.to_dict()
             data["best_yaml"] = res.best_spec.to_yaml()
             return data
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/optimize/pareto")
+    def run_pareto_optimization(req: ParetoOptimizeRequest) -> dict:
+        spec = _resolve_spec(req.spec, req.yaml_text)
+        try:
+            res = optimize_pareto_front(
+                spec,
+                population_size=req.population_size,
+                generations=req.generations,
+                seed=req.seed,
+                filament_id=req.filament_id,
+            )
+            return res.to_dict(include_specs=True)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "printsim"
-version = "0.6.0"
+version = "0.7.0"
 description = "Full-featured multiphysics 3D printer simulator for humans and AI agents (FEA, modal analysis, kinematics, thermal/hotend, G-code virtual printing)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -33,11 +33,15 @@ tetfea = [
     "scikit-fem>=10.0",
     "meshio>=5.3",
 ]
+opt = [
+    "pymoo>=0.6",
+]
 all = [
     "build123d>=0.8",
     "gmsh>=4.12",
     "scikit-fem>=10.0",
     "meshio>=5.3",
+    "pymoo>=0.6",
 ]
 
 [project.scripts]

@@ -172,24 +172,23 @@ def solve_static_fea(
     u_y = _solve_linear_system(K, F_y, free_dofs)
     defl_y_um = float(np.linalg.norm(u_y[noz_dof : noz_dof + 3])) * 1e6
 
-    # 4. Belt-induced frame preload (CoreXY motor corners pull inward along X/Y belt runs)
+    # 4. Belt-induced frame preload (self-equilibrating internal compression along X/Y belt runs: sum F = 0)
     F_belt = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "corexy":
         t0 = assembly.spec.gantry.belt.pretension_n
-        imb = 0.08  # corner mount/belt path compliance couple across frame depth
         if assembly.spec.gantry.drive_mode == "awd":
             belt_loads = [
-                ("g_rl", +t0, -(1.0 + imb) * t0),
-                ("g_rr", -t0, -(1.0 + imb) * t0),
-                ("g_fl", +t0, +(1.0 - imb) * t0),
-                ("g_fr", -t0, +(1.0 - imb) * t0),
+                ("g_rl", +t0, -t0),
+                ("g_rr", -t0, -t0),
+                ("g_fl", +t0, +t0),
+                ("g_fr", -t0, +t0),
             ]
         else:
             belt_loads = [
                 ("g_rl", +t0, -t0),
                 ("g_rr", -t0, -t0),
-                ("g_fl", 0.0, +(1.0 - imb) * t0),
-                ("g_fr", 0.0, +(1.0 - imb) * t0),
+                ("g_fl", 0.0, +t0),
+                ("g_fr", 0.0, +t0),
             ]
         for nid, fx, fy in belt_loads:
             if nid in node_idx:

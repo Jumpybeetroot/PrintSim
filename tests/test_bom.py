@@ -410,8 +410,10 @@ class TestStockNestingMath:
 
         nest_kerf = next(s for s in bom_kerf.stock_nesting if s.profile_id == "extrusion_2020")
         nest_nokerf = next(s for s in bom_nokerf.stock_nesting if s.profile_id == "extrusion_2020")
+        # 17 cuts of 500 mm: with 3 mm kerf needs 17 bars (1 per bar); with 0 mm kerf fits in 9 bars (2 per bar, 1 half-bar left)
         assert nest_nokerf.bars_required < nest_kerf.bars_required
-        assert nest_nokerf.waste_pct == pytest.approx(0.0, abs=1e-6)
+        assert nest_nokerf.bars_required == (len(nest_kerf.bar_cuts_mm) + 1) // 2
+        assert nest_nokerf.waste_pct < nest_kerf.waste_pct
 
 
 class TestSerializationAndConsistency:

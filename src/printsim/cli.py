@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from printsim.engine import evaluate_printer, optimize_design
+from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.geometry import (
     build_assembly,
     export_assembly_step,
@@ -135,6 +135,49 @@ def optimize(
     )
     if out:
         console.print(f"Saved optimized spec to [green]{out}[/green]")
+
+
+@app.command("pareto")
+def pareto_cmd(
+    spec_path: Path = typer.Argument(..., exists=True, help="Baseline printer YAML spec"),
+    pop: int = typer.Option(16, "--pop", help="NSGA-II population size"),
+    gen: int = typer.Option(6, "--gen", help="NSGA-II generations"),
+    filament: str = typer.Option("pla", "--filament", "-f", help="Filament ID"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON Pareto frontier"),
+) -> None:
+    """Run pymoo NSGA-II multi-objective Pareto optimization (Cost vs. Safe Accel vs. Nozzle Stiffness)."""
+    spec = PrinterSpec.from_yaml(spec_path)
+    res = optimize_pareto_front(spec, population_size=pop, generations=gen, filament_id=filament)
+
+    if json_out:
+        print(json.dumps(res.to_dict(include_specs=False), indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{spec.name}[/bold cyan] — {res.backend} ({res.evaluations} unique evals)\n"
+            f"Baseline: ${res.baseline.total_cost_usd:.0f} | {res.baseline.safe_max_accel_mm_s2:.0f} mm/s² | "
+            f"{res.baseline.nozzle_deflection_um:.1f} um flex | Score {res.baseline.composite_score:.1f}",
+            title="PrintSim Multi-Goal Pareto Frontier",
+        )
+    )
+    tbl = Table(show_header=True, header_style="bold magenta")
+    tbl.add_column("Label")
+    tbl.add_column("Cost ($)", justify="right")
+    tbl.add_column("Safe Accel", justify="right")
+    tbl.add_column("Nozzle Flex", justify="right")
+    tbl.add_column("Score", justify="right")
+    tbl.add_column("Key Upgrades")
+    for p in res.pareto_front:
+        tbl.add_row(
+            p.label,
+            f"${p.total_cost_usd:.0f}",
+            f"{p.safe_max_accel_mm_s2:.0f} mm/s²",
+            f"{p.nozzle_deflection_um:.1f} um",
+            f"{p.composite_score:.1f}",
+            ", ".join(p.changes[:3]) or "Stock",
+        )
+    console.print(tbl)
 
 
 @app.command("export-stl")

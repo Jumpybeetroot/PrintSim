@@ -1,5 +1,16 @@
 from .beam3d import assemble_global_matrices, element_internal_forces, local_beam_mass, local_beam_stiffness
-from .modal import ModalResult, ModeShape, solve_modal_fea
+from .klipper_shaper import (
+    SHAPER_NAMES,
+    AxisShaperGraph,
+    ShaperCandidate,
+    calibrate_axis_shapers,
+    estimate_shaper,
+    find_shaper_max_accel,
+    get_shaper_pulses,
+    get_shaper_smoothing,
+    synthesize_axis_psd,
+)
+from .modal import InputShaperRecommendation, ModalResult, ModeShape, solve_modal_fea
 from .solid_fem import (
     SolidFEAResult,
     generate_parametric_part_grid,
@@ -30,6 +41,16 @@ __all__ = [
     "element_internal_forces",
     "local_beam_mass",
     "local_beam_stiffness",
+    "SHAPER_NAMES",
+    "AxisShaperGraph",
+    "ShaperCandidate",
+    "calibrate_axis_shapers",
+    "estimate_shaper",
+    "find_shaper_max_accel",
+    "get_shaper_pulses",
+    "get_shaper_smoothing",
+    "synthesize_axis_psd",
+    "InputShaperRecommendation",
     "ModalResult",
     "ModeShape",
     "solve_modal_fea",

@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from printsim.engine import evaluate_printer, optimize_design
+from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
 from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
 from printsim.fea.topology import export_topology_stl, optimize_preset_topology
@@ -17,7 +17,7 @@ from printsim.geometry import build_assembly, export_assembly_step, export_assem
 from printsim.schema import MATERIAL_CATALOG, PROFILE_CATALOG, PrinterSpec
 from printsim.thermal import FILAMENT_CATALOG
 
-SERVER_INFO = {"name": "printsim-mcp", "version": "0.6.0"}
+SERVER_INFO = {"name": "printsim-mcp", "version": "0.7.0"}
 
 TOOLS_SCHEMA = [
     {
@@ -173,6 +173,20 @@ TOOLS_SCHEMA = [
             "required": [],
         },
     },
+    {
+        "name": "optimize_printer_pareto",
+        "description": "Run pymoo NSGA-II multi-objective Pareto optimization trading off Build Cost ($), Safe Max Acceleration (mm/s^2), and Nozzle-Tip Stiffness (um).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_text": {"type": "string"},
+                "population_size": {"type": "integer", "default": 16, "minimum": 8, "maximum": 40},
+                "generations": {"type": "integer", "default": 6, "minimum": 2, "maximum": 20},
+                "filament_id": {"type": "string", "default": "pla"},
+            },
+            "required": ["yaml_text"],
+        },
+    },
 ]
 
 
@@ -286,6 +300,16 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 fdm_anisotropic=args.get("fdm_anisotropic"),
             )
         return res.to_dict(include_surface_mesh=False)
+
+    if name == "optimize_printer_pareto":
+        spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
+        res = optimize_pareto_front(
+            spec,
+            population_size=int(args.get("population_size", 16)),
+            generations=int(args.get("generations", 6)),
+            filament_id=args.get("filament_id", "pla"),
+        )
+        return res.to_dict(include_specs=False)
 
     raise ValueError(f"Unknown MCP tool: {name}")
 

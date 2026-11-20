@@ -281,3 +281,46 @@ def test_v04_build123d_step_and_gmsh_skfem_api_and_mcp(tmp_path: Path) -> None:
     assert r_mcp_tet is not None
     assert r_mcp_tet["result"]["isError"] is False
     assert "gmsh+scikit-fem" in r_mcp_tet["result"]["content"][0]["text"]
+
+
+def test_v07_klipper_psd_and_pymoo_pareto_api_and_mcp() -> None:
+    """End-to-end check for v0.7 Klipper ADXL345 shaper PSD graphs and pymoo Pareto API & MCP."""
+    client = TestClient(create_app())
+    yaml_text = (EXAMPLES_DIR / "voron_trident_300.yaml").read_text(encoding="utf-8")
+
+    # 1. Simulate returns full Klipper shaper_graphs for X and Y
+    r_sim = client.post("/api/simulate", json={"yaml_text": yaml_text, "include_toolpath_segments": False})
+    assert r_sim.status_code == 200
+    sim = r_sim.json()
+    graphs = sim["modal_fea"]["shaper_graphs"]
+    assert len(graphs["x"]["freqs_hz"]) >= 80
+    assert max(graphs["x"]["freqs_hz"]) >= 215.0
+    assert len(graphs["x"]["candidates"]) == 5
+    assert len(graphs["y"]["candidates"]) == 5
+
+    # 2. Pareto HTTP endpoint returns non-dominated frontier with specs
+    r_par = client.post(
+        "/api/optimize/pareto",
+        json={"yaml_text": yaml_text, "population_size": 12, "generations": 4},
+    )
+    assert r_par.status_code == 200
+    par = r_par.json()
+    assert "NSGA-II" in par["backend"]
+    assert len(par["pareto_front"]) >= 3
+    assert "spec" in par["pareto_front"][0]
+
+    # 3. MCP optimize_printer_pareto tool
+    r_mcp_par = handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "tools/call",
+            "params": {
+                "name": "optimize_printer_pareto",
+                "arguments": {"yaml_text": yaml_text, "population_size": 10, "generations": 3},
+            },
+        }
+    )
+    assert r_mcp_par is not None
+    assert r_mcp_par["result"]["isError"] is False
+    assert "pareto_front" in r_mcp_par["result"]["content"][0]["text"]

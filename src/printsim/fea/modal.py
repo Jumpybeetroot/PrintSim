@@ -9,6 +9,7 @@ import numpy as np
 from scipy.linalg import eigh
 
 from printsim.fea.beam3d import assemble_global_matrices
+from printsim.fea.klipper_shaper import AxisShaperGraph, calibrate_axis_shapers
 from printsim.geometry.builder import AssemblyModel
 from printsim.kinematics.solvers import compute_drive_stiffness_n_per_m
 
@@ -41,6 +42,8 @@ class ModalResult:
     modes: list[ModeShape] = field(default_factory=list)
     shaper_x: InputShaperRecommendation | None = None
     shaper_y: InputShaperRecommendation | None = None
+    shaper_graph_x: AxisShaperGraph | None = None
+    shaper_graph_y: AxisShaperGraph | None = None
     recommended_max_accel_mm_s2: float = 0.0
     nozzle_pitch_twist_freq_hz: float = 0.0
 
@@ -51,6 +54,10 @@ class ModalResult:
             "recommended_max_accel_mm_s2": round(self.recommended_max_accel_mm_s2, 0),
             "shaper_x": _shaper_dict(self.shaper_x) if self.shaper_x else None,
             "shaper_y": _shaper_dict(self.shaper_y) if self.shaper_y else None,
+            "shaper_graphs": {
+                "x": self.shaper_graph_x.to_dict() if self.shaper_graph_x else None,
+                "y": self.shaper_graph_y.to_dict() if self.shaper_graph_y else None,
+            },
             "modes": [
                 {
                     "mode_number": m.mode_number,
@@ -103,27 +110,32 @@ def _recommend_shaper(
     drive_hz: float,
     configured_accel: float,
     shaper_choice: str,
-) -> InputShaperRecommendation:
+    scv_mm_s: float = 5.0,
+    scanned_modes: list[tuple[float, float]] | None = None,
+) -> tuple[InputShaperRecommendation, AxisShaperGraph]:
     # Effective coupled resonance of nozzle structure + drive (belt + motor in series)
     f_eff = 1.0 / math.sqrt(1.0 / max(structural_hz, 5.0) ** 2 + 1.0 / max(drive_hz, 5.0) ** 2)
 
-    # Klipper smoothing coefficients: max_accel ≈ coeff * f^2 (for smoothing <= 0.12)
-    if shaper_choice == "auto":
-        if f_eff >= 65.0:
-            shaper = "ZV"
-        elif f_eff >= 42.0:
-            shaper = "MZV"
-        else:
-            shaper = "EI"
-    else:
-        shaper = shaper_choice.upper()
+    secondary_modes = [
+        (mf, part_val)
+        for mf, part_val in (scanned_modes or [])
+        if abs(mf - structural_hz) >= 2.0 and abs(mf - f_eff) >= 2.0 and 10.0 <= mf <= 215.0 and part_val > 0.20
+    ]
 
-    coeff = {"NONE": 0.9, "ZV": 3.8, "MZV": 2.95, "EI": 1.9, "2HUMP_EI": 1.25}.get(shaper, 2.95)
-    max_accel = coeff * (f_eff**2)
+    graph = calibrate_axis_shapers(
+        axis=axis,
+        primary_freq_hz=f_eff,
+        secondary_modes=secondary_modes,
+        scv=scv_mm_s,
+        shaper_choice=shaper_choice,
+    )
+
+    shaper = graph.recommended_shaper
+    max_accel = graph.recommended_max_accel_mm_s2
 
     # Estimate residual ringing risk (0 = crisp, >1 = visible ghosting)
     ringing_ratio = configured_accel / max(max_accel, 100.0)
-    return InputShaperRecommendation(
+    rec = InputShaperRecommendation(
         axis=axis,
         effective_freq_hz=f_eff,
         structural_freq_hz=structural_hz,
@@ -134,6 +146,7 @@ def _recommend_shaper(
         max_accel_mm_s2=max_accel,
         estimated_ringing_ratio=ringing_ratio,
     )
+    return rec, graph
 
 
 def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
@@ -165,7 +178,18 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     has_nozzle = noz_idx != th_idx
 
     n_dof = K.shape[0]
+    r_x = np.zeros(n_dof, dtype=float)
+    r_y = np.zeros(n_dof, dtype=float)
+    r_x[0::6] = 1.0
+    r_y[1::6] = 1.0
+    rx_f = r_x[free_dofs]
+    ry_f = r_y[free_dofs]
+    m_tot_x = max(float(rx_f @ M_ff @ rx_f), 1e-12)
+    m_tot_y = max(float(ry_f @ M_ff @ ry_f), 1e-12)
+
     modes: list[ModeShape] = []
+    scanned_x: list[tuple[float, float]] = []
+    scanned_y: list[tuple[float, float]] = []
     best_x_freq: float | None = None
     best_y_freq: float | None = None
     nozzle_twist_freq: float | None = None
@@ -173,8 +197,15 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     for idx in range(k_scan):
         lam = max(float(eigvals[idx]), 0.0)
         freq_hz = math.sqrt(lam) / (2.0 * math.pi)
+        phi = eigvecs[:, idx]
+        m_gen = max(float(phi @ M_ff @ phi), 1e-18)
+        gamma_x = float(phi @ M_ff @ rx_f) / m_gen
+        gamma_y = float(phi @ M_ff @ ry_f) / m_gen
+        meff_ratio_x = math.sqrt(max((gamma_x * gamma_x * m_gen) / m_tot_x, 0.0))
+        meff_ratio_y = math.sqrt(max((gamma_y * gamma_y * m_gen) / m_tot_y, 0.0))
+
         full_vec = np.zeros(n_dof, dtype=float)
-        full_vec[free_dofs] = eigvecs[:, idx]
+        full_vec[free_dofs] = phi
 
         # Extract translational 3D displacements per node and normalize max translation to 1.0
         trans = np.array([full_vec[6 * i : 6 * i + 3] for i in range(len(assembly.nodes))])
@@ -186,6 +217,9 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         noz_norm = float(np.linalg.norm(noz_disp))
         th_norm = float(np.linalg.norm(trans[th_idx]))
         part = (noz_disp / noz_norm).tolist() if noz_norm > 1e-9 else [0.0, 0.0, 0.0]
+
+        scanned_x.append((freq_hz, float(noz_disp[0]) * meff_ratio_x))
+        scanned_y.append((freq_hz, float(noz_disp[1]) * meff_ratio_y))
 
         axis_energy = np.sum(trans**2, axis=0)
         dom_axis = ["X", "Y", "Z"][int(np.argmax(axis_energy))]
@@ -225,26 +259,41 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     if nozzle_twist_freq is None:
         nozzle_twist_freq = min(struct_x, struct_y)
 
+    p0_x = max([px for mf, px in scanned_x if abs(mf - struct_x) < 2.0] or [1.0])
+    p0_y = max([py for mf, py in scanned_y if abs(mf - struct_y) < 2.0] or [1.0])
+    p0_x = max(p0_x, 0.05)
+    p0_y = max(p0_y, 0.05)
+    norm_scanned_x = [(mf, min(1.0, px / p0_x)) for mf, px in scanned_x]
+    norm_scanned_y = [(mf, min(1.0, py / p0_y)) for mf, py in scanned_y]
+
     belt_x, motor_x, drive_x = _drive_axis_resonances_hz(assembly, "X")
     belt_y, motor_y, drive_y = _drive_axis_resonances_hz(assembly, "Y")
 
-    shaper_x = _recommend_shaper(
+    scv_mm_s = assembly.spec.kinematics.square_corner_velocity_mm_s
+    configured_accel = assembly.spec.kinematics.max_accel_mm_s2
+    shaper_choice = assembly.spec.kinematics.input_shaper
+
+    shaper_x, shaper_graph_x = _recommend_shaper(
         "X",
         struct_x,
         belt_x,
         motor_x,
         drive_x,
-        assembly.spec.kinematics.max_accel_mm_s2,
-        assembly.spec.kinematics.input_shaper,
+        configured_accel,
+        shaper_choice,
+        scv_mm_s=scv_mm_s,
+        scanned_modes=norm_scanned_x,
     )
-    shaper_y = _recommend_shaper(
+    shaper_y, shaper_graph_y = _recommend_shaper(
         "Y",
         struct_y,
         belt_y,
         motor_y,
         drive_y,
-        assembly.spec.kinematics.max_accel_mm_s2,
-        assembly.spec.kinematics.input_shaper,
+        configured_accel,
+        shaper_choice,
+        scv_mm_s=scv_mm_s,
+        scanned_modes=norm_scanned_y,
     )
 
     return ModalResult(
@@ -252,6 +301,8 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         modes=modes,
         shaper_x=shaper_x,
         shaper_y=shaper_y,
+        shaper_graph_x=shaper_graph_x,
+        shaper_graph_y=shaper_graph_y,
         recommended_max_accel_mm_s2=min(shaper_x.max_accel_mm_s2, shaper_y.max_accel_mm_s2),
         nozzle_pitch_twist_freq_hz=nozzle_twist_freq,
     )

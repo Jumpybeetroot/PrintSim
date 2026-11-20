@@ -663,12 +663,13 @@ def _build_corexy(
     _add_member(members, "top_left", "t_fl", "t_rl", fp, fm)
     _add_member(members, "top_right", "t_fr", "t_rr", fp, fm)
 
-    # Mid gantry frame rails (left/right split at Y carriage, plus rear motor bar)
+    # Mid gantry frame rails (closed 4-bar gantry perimeter: left/right Y rails + front/rear motor bars)
     _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
     _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
     _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
     _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
     _add_member(members, "gantry_rear_bar", "g_rl", "g_rr", fp, fm)
+    _add_member(members, "gantry_front_bar", "g_fl", "g_fr", fp, fm)
 
     # Moving X gantry beam (split at toolhead node)
     xp = spec.gantry.x_beam_profile
