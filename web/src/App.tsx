@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
+import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
 import {
   CatalogResponse,
   CompareMode,
   HistorySnapshot,
+  ParetoOptResponse,
+  ParetoPointData,
   PrinterBOMResponse,
   PrinterSpecData,
   SimulationResponse,
@@ -323,6 +326,10 @@ export default function App() {
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [optObjective, setOptObjective] = useState<"balanced" | "speed" | "rigidity" | "budget">("balanced");
   const [optMessage, setOptMessage] = useState<string | null>(null);
+  const [paretoOpen, setParetoOpen] = useState<boolean>(false);
+  const [paretoLoading, setParetoLoading] = useState<boolean>(false);
+  const [paretoData, setParetoData] = useState<ParetoOptResponse | null>(null);
+  const [paretoError, setParetoError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Baseline & change-tracking state
@@ -342,6 +349,7 @@ export default function App() {
 
   // Refs for atomic history capture & stale-request guarding
   const simReqIdRef = useRef<number>(0);
+  const paretoReqIdRef = useRef<number>(0);
   const simRef = useRef<SimulationResponse | null>(null);
   const bomRef = useRef<PrinterBOMResponse | null>(null);
   const filamentRef = useRef<string>("pla");
@@ -876,6 +884,47 @@ export default function App() {
     }
   };
 
+  const runParetoFrontier = useCallback(async () => {
+    if (!spec) return;
+    const reqId = ++paretoReqIdRef.current;
+    setParetoOpen(true);
+    setParetoLoading(true);
+    setParetoError(null);
+    try {
+      const res = await fetch("/api/optimize/pareto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spec,
+          population_size: 16,
+          generations: 6,
+          filament_id: filamentId,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(errBody.detail || "Pareto frontier optimization failed");
+      }
+      const data: ParetoOptResponse = await res.json();
+      if (reqId !== paretoReqIdRef.current) return;
+      setParetoData(data);
+    } catch (e) {
+      if (reqId === paretoReqIdRef.current) {
+        setParetoError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (reqId === paretoReqIdRef.current) {
+        setParetoLoading(false);
+      }
+    }
+  }, [spec, filamentId]);
+
+  const handleApplyParetoBuild = (point: ParetoPointData) => {
+    if (!point.spec) return;
+    setParetoOpen(false);
+    handleSpecChange(point.spec, `Applied Pareto Build: ${point.label}`);
+  };
+
   const handleExportStl = async () => {
     if (!spec) return;
     const res = await fetch("/api/export/stl", {
@@ -950,7 +999,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-badge">PrintSim 0.6</span>
+          <span className="brand-badge">PrintSim 0.7</span>
           <span>Multiphysics 3D Printer Studio</span>
           {optMessage && (
             <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
@@ -973,6 +1022,14 @@ export default function App() {
           </select>
           <button className="btn ai" disabled={optimizing || !spec} onClick={handleOptimize}>
             {optimizing ? "Optimizing..." : "AI Optimize Design"}
+          </button>
+          <button
+            className="btn pareto"
+            disabled={paretoLoading || !spec}
+            onClick={runParetoFrontier}
+            title="Explore pymoo NSGA-II multi-goal Pareto trade-off frontier (Cost vs. Safe Accel vs. Stiffness)"
+          >
+            {paretoLoading ? "Searching Frontier..." : "Trade-Off Frontier"}
           </button>
           <button className="btn" disabled={!spec} onClick={handleExportStl}>
             Export STL
@@ -1068,6 +1125,16 @@ export default function App() {
           error={error}
         />
       </main>
+
+      <ParetoModal
+        open={paretoOpen}
+        loading={paretoLoading}
+        error={paretoError}
+        data={paretoData}
+        onClose={() => setParetoOpen(false)}
+        onRerun={runParetoFrontier}
+        onApply={handleApplyParetoBuild}
+      />
     </div>
   );
 }

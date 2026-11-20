@@ -393,6 +393,52 @@ export interface ShaperData {
   estimated_ringing_ratio: number;
 }
 
+export interface KlipperShaperCandidate {
+  name: string; // "ZV" | "MZV" | "EI" | "2HUMP_EI" | "3HUMP_EI"
+  freq_hz: number;
+  vibrations_pct: number;
+  smoothing: number;
+  max_accel_mm_s2: number;
+  score: number;
+  attenuation_curve: number[];
+}
+
+export interface AxisShaperGraph {
+  axis: "X" | "Y";
+  freqs_hz: number[];
+  raw_psd: number[];
+  shaped_psd: number[];
+  peak_freq_hz: number;
+  damping_ratio: number;
+  recommended_shaper: string;
+  recommended_freq_hz: number;
+  recommended_max_accel_mm_s2: number;
+  candidates: KlipperShaperCandidate[];
+}
+
+export interface ParetoPointData {
+  id: string;
+  label: string;
+  changes: string[];
+  total_cost_usd: number;
+  safe_max_accel_mm_s2: number;
+  nozzle_deflection_um: number;
+  fundamental_freq_hz: number;
+  max_flow_mm3_s: number;
+  total_mass_kg: number;
+  composite_score: number;
+  spec?: PrinterSpecData;
+}
+
+export interface ParetoOptResponse {
+  backend: string;
+  evaluations: number;
+  population_size: number;
+  generations: number;
+  baseline: ParetoPointData;
+  pareto_front: ParetoPointData[];
+}
+
 export interface ToolpathSegment {
   index: number;
   layer_index: number;
@@ -499,6 +545,7 @@ export interface SimulationResponse {
     recommended_max_accel_mm_s2: number;
     shaper_x: ShaperData | null;
     shaper_y: ShaperData | null;
+    shaper_graphs?: { x: AxisShaperGraph; y: AxisShaperGraph };
     modes: ModeShapeData[];
   };
   kinematics: {
