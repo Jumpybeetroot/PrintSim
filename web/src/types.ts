@@ -22,10 +22,54 @@ export interface PresetItem {
   description: string;
 }
 
+export interface FilamentItem {
+  id: string;
+  name: string;
+  print_temp_c: number;
+  bed_temp_c: number;
+  glass_transition_c: number;
+}
+
+export interface PartPresetItem {
+  id: string;
+  name: string;
+}
+
 export interface CatalogResponse {
   materials: MaterialItem[];
   profiles: ProfileItem[];
+  filaments: FilamentItem[];
+  part_presets: PartPresetItem[];
   presets: PresetItem[];
+}
+
+export interface SolidVoxelData {
+  center_mm: [number, number, number];
+  disp_mm: [number, number, number];
+  von_mises_mpa: number;
+  fixed: boolean;
+  loaded: boolean;
+}
+
+export interface SolidFEAResponse {
+  part_name: string;
+  material_id: string;
+  is_fdm_anisotropic: boolean;
+  voxel_size_mm: number;
+  num_elements: number;
+  num_nodes: number;
+  num_dofs: number;
+  mass_g: number;
+  applied_force_n: [number, number, number];
+  max_displacement_um: number;
+  stiffness_n_per_mm: number;
+  max_von_mises_mpa: number;
+  max_z_tensile_mpa: number;
+  yield_strength_mpa: number;
+  z_layer_strength_mpa: number;
+  safety_factor: number;
+  failure_mode: string;
+  voxels: SolidVoxelData[];
 }
 
 export interface PrinterSpecData {
@@ -262,6 +306,9 @@ export interface SimulationResponse {
     delta_workspace_valid: boolean;
   };
   thermal: {
+    filament_id: string;
+    filament_name: string;
+    glass_transition_c: number;
     target_temp_c: number;
     heatup_time_215c_s: number;
     bed_heatup_time_100c_s: number;
@@ -273,7 +320,10 @@ export interface SimulationResponse {
     flow_limiting_factor: string;
     max_linear_speed_02x04_mm_s: number;
     extruder_pressure_margin: number;
+    max_overhang_deg: number;
+    bridge_sag_40mm_mm: number;
     heatup_curve: Array<{ time_s: number; temp_c: number }>;
+    axial_profile: Array<{ z_mm: number; temp_c: number; zone: string }>;
   };
   virtual_print: {
     total_time_s: number;
@@ -296,4 +346,4 @@ export interface SimulationResponse {
   };
 }
 
-export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath";
+export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath" | "solid_part";

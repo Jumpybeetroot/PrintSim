@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { SimulationResponse, ViewMode } from "../types";
+import { SimulationResponse, SolidFEAResponse, ViewMode } from "../types";
 
 interface Props {
   sim: SimulationResponse | null;
+  solidFea: SolidFEAResponse | null;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
   selectedModeIdx: number;
@@ -49,6 +50,7 @@ function orientBeamMesh(mesh: THREE.Mesh, p0: THREE.Vector3, p1: THREE.Vector3):
 
 export const PrinterViewport: React.FC<Props> = ({
   sim,
+  solidFea,
   viewMode,
   onViewModeChange,
   selectedModeIdx,
@@ -174,7 +176,7 @@ export const PrinterViewport: React.FC<Props> = ({
   // Rebuild 3D geometry when simulation results or visualization mode changes
   useEffect(() => {
     const group = stateRef.current.dynamicGroup;
-    if (!group || !sim) return;
+    if (!group) return;
 
     // Clear previous meshes
     while (group.children.length > 0) {
@@ -191,6 +193,55 @@ export const PrinterViewport: React.FC<Props> = ({
     stateRef.current.modalMeshes = [];
     stateRef.current.modalToolhead = undefined;
     stateRef.current.isModal = viewMode === "modal";
+
+    // Render 3D Solid Hex8 Voxel FEA mode
+    if (viewMode === "solid_part") {
+      if (!solidFea || solidFea.voxels.length === 0) return;
+      const voxels = solidFea.voxels;
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity,
+        minZ = Infinity,
+        maxZ = -Infinity;
+      for (const v of voxels) {
+        minX = Math.min(minX, v.center_mm[0]);
+        maxX = Math.max(maxX, v.center_mm[0]);
+        minY = Math.min(minY, v.center_mm[1]);
+        maxY = Math.max(maxY, v.center_mm[1]);
+        minZ = Math.min(minZ, v.center_mm[2]);
+        maxZ = Math.max(maxZ, v.center_mm[2]);
+      }
+      const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
+      const partScale = 4.2 / span; // Fit part nicely to ~4.2 scene units
+      const pcx = 0.5 * (minX + maxX);
+      const pcy = 0.5 * (minY + maxY);
+      const dispMult = feaScale * 0.08;
+
+      const boxSize = solidFea.voxel_size_mm * partScale * 0.96;
+      const boxGeo = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
+      const boxMat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.25 });
+      const inst = new THREE.InstancedMesh(boxGeo, boxMat, voxels.length);
+
+      const maxVm = Math.max(solidFea.max_von_mises_mpa, 0.05);
+      const dummy = new THREE.Object3D();
+      for (let i = 0; i < voxels.length; i++) {
+        const v = voxels[i];
+        const x = (v.center_mm[0] + v.disp_mm[0] * dispMult - pcx) * partScale;
+        const y = (v.center_mm[2] + v.disp_mm[2] * dispMult - minZ) * partScale + boxSize * 0.5 + 0.4;
+        const z = -(v.center_mm[1] + v.disp_mm[1] * dispMult - pcy) * partScale;
+        dummy.position.set(x, y, z);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+        inst.setColorAt(i, stressColor(v.von_mises_mpa / maxVm));
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      group.add(inst);
+      return;
+    }
+
+    if (!sim) return;
 
     const geom = sim.geometry;
     const cx = geom.frame_dims_mm[0] * 0.5;
@@ -391,7 +442,7 @@ export const PrinterViewport: React.FC<Props> = ({
         group.add(new THREE.LineSegments(tpGeo, tpMat));
       }
     }
-  }, [sim, viewMode, selectedModeIdx, feaScale, layerLimit]);
+  }, [sim, solidFea, viewMode, selectedModeIdx, feaScale, layerLimit]);
 
   const maxLayers = Math.max(0, (sim?.virtual_print.layer_count ?? 1) - 1);
   const activeMode = sim?.modal_fea.modes[selectedModeIdx];
@@ -405,9 +456,10 @@ export const PrinterViewport: React.FC<Props> = ({
           {(
             [
               ["assembly", "Assembly"],
-              ["fea_stress", "FEA Stress & Deflection"],
+              ["fea_stress", "Frame FEA"],
               ["modal", "Modal Vibration"],
               ["toolpath", "Virtual Print"],
+              ["solid_part", "3D Solid Part FEA"],
             ] as Array<[ViewMode, string]>
           ).map(([id, label]) => (
             <button
@@ -490,6 +542,29 @@ export const PrinterViewport: React.FC<Props> = ({
                 value={Math.min(layerLimit, maxLayers)}
                 onChange={(e) => onLayerLimitChange(Number(e.target.value))}
                 style={{ width: 110 }}
+              />
+            </label>
+          </div>
+        )}
+
+        {viewMode === "solid_part" && solidFea && (
+          <div className="hud-card">
+            <span>
+              <strong>{solidFea.part_name}</strong> ({solidFea.num_elements} Hex8)
+            </span>
+            <span>0 MPa</span>
+            <div className="legend-gradient" />
+            <span>{solidFea.max_von_mises_mpa.toFixed(2)} MPa</span>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
+              Deform ×{Math.round(feaScale * 0.08)}
+              <input
+                type="range"
+                min={50}
+                max={2500}
+                step={50}
+                value={feaScale}
+                onChange={(e) => onFeaScaleChange(Number(e.target.value))}
+                style={{ width: 90 }}
               />
             </label>
           </div>

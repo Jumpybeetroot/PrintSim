@@ -1,8 +1,9 @@
 import React from "react";
-import { SimulationResponse } from "../types";
+import { SimulationResponse, SolidFEAResponse } from "../types";
 
 interface Props {
   sim: SimulationResponse | null;
+  solidFea: SolidFEAResponse | null;
   error: string | null;
 }
 
@@ -13,7 +14,7 @@ function scoreColor(v: number): string {
   return "var(--red)";
 }
 
-export const MetricsPanel: React.FC<Props> = ({ sim, error }) => {
+export const MetricsPanel: React.FC<Props> = ({ sim, solidFea, error }) => {
   if (error) {
     return (
       <aside className="sidebar right">
@@ -43,6 +44,14 @@ export const MetricsPanel: React.FC<Props> = ({ sim, error }) => {
   const svgPoints = pts
     .map((p) => `${(p.time_s / maxT) * 260},${60 - ((p.temp_c - 20) / (maxC - 20)) * 54}`)
     .join(" ");
+
+  // 1D FVM Axial Hotend Temperature Profile SVG
+  const axPts = th.axial_profile || [];
+  const maxZ = Math.max(...axPts.map((p) => p.z_mm), 40);
+  const axSvgPoints = axPts
+    .map((p) => `${(p.z_mm / maxZ) * 260},${62 - ((p.temp_c - 20) / (maxC - 20)) * 54}`)
+    .join(" ");
+  const tgY = 62 - ((th.glass_transition_c - 20) / (maxC - 20)) * 54;
 
   return (
     <aside className="sidebar right">
@@ -166,8 +175,49 @@ export const MetricsPanel: React.FC<Props> = ({ sim, error }) => {
           </div>
         </div>
 
+        {solidFea && (
+          <div className="section-card" style={{ borderColor: "rgba(56,189,248,0.45)" }}>
+            <div className="section-title">
+              <span>3D Solid Hex8 Part FEA</span>
+              <span style={{ color: solidFea.safety_factor < 1.5 ? "var(--red)" : "var(--green)" }}>
+                SF {solidFea.safety_factor.toFixed(2)}×
+              </span>
+            </div>
+            <div className="metric-kv">
+              <span>Part / Material</span>
+              <span className="metric-val">
+                {solidFea.part_name} ({solidFea.is_fdm_anisotropic ? "FDM" : "ISO"})
+              </span>
+            </div>
+            <div className="metric-kv">
+              <span>Mesh / Mass</span>
+              <span className="metric-val">
+                {solidFea.num_elements} Hex8 ({solidFea.num_dofs} DOF) • {solidFea.mass_g}g
+              </span>
+            </div>
+            <div className="metric-kv">
+              <span>Max Disp / Stiffness</span>
+              <span className="metric-val">
+                {solidFea.max_displacement_um.toFixed(1)} µm • {solidFea.stiffness_n_per_mm.toFixed(0)} N/mm
+              </span>
+            </div>
+            <div className="metric-kv">
+              <span>Peak von Mises / Z-Layer</span>
+              <span className="metric-val">
+                {solidFea.max_von_mises_mpa.toFixed(2)} / {solidFea.max_z_tensile_mpa.toFixed(2)} MPa
+              </span>
+            </div>
+            <div className="metric-kv">
+              <span>Status</span>
+              <span className={`metric-val ${solidFea.failure_mode === "safe" ? "tag-ok" : "tag-bad"}`}>
+                {solidFea.failure_mode.replace(/_/g, " ")}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="section-card">
-          <div className="section-title">Hotend Thermal & Flow</div>
+          <div className="section-title">Hotend FVM Thermal & Cooling ({th.filament_id.toUpperCase()})</div>
           <div className="metric-kv">
             <span>Max Volumetric Flow</span>
             <span className="metric-val">{th.max_volumetric_flow_mm3_s.toFixed(1)} mm³/s</span>
@@ -181,18 +231,37 @@ export const MetricsPanel: React.FC<Props> = ({ sim, error }) => {
             <span className="metric-val">{th.max_linear_speed_02x04_mm_s.toFixed(0)} mm/s</span>
           </div>
           <div className="metric-kv">
-            <span>Heat-up (215°C) / Bed (100°C)</span>
+            <span>Heat-up ({th.target_temp_c}°C) / Bed</span>
             <span className="metric-val">
               {th.heatup_time_215c_s.toFixed(0)}s / {th.bed_heatup_time_100c_s.toFixed(0)}s
             </span>
           </div>
           <div className="metric-kv">
-            <span>Cold Throat Temp</span>
+            <span>Cold Throat / Tg Limit</span>
             <span className={`metric-val ${th.heat_creep_risk ? "tag-bad" : "tag-ok"}`}>
-              {th.cold_side_temp_c.toFixed(1)} °C {th.heat_creep_risk ? "(CREEP)" : "(OK)"}
+              {th.cold_side_temp_c.toFixed(1)}°C / {th.glass_transition_c}°C {th.heat_creep_risk ? "(CREEP)" : "(OK)"}
             </span>
           </div>
-          <svg viewBox="0 0 260 66" style={{ width: "100%", height: 64, marginTop: 4 }}>
+          <div className="metric-kv">
+            <span>Max Overhang / 40mm Bridge</span>
+            <span className="metric-val">
+              {th.max_overhang_deg.toFixed(0)}° • {th.bridge_sag_40mm_mm.toFixed(2)} mm sag
+            </span>
+          </div>
+          {axPts.length > 0 && (
+            <svg viewBox="0 0 260 68" style={{ width: "100%", height: 68, marginTop: 4 }}>
+              <rect x="0" y="0" width="260" height="68" rx="4" fill="#0d131d" />
+              <line x1="0" y1={tgY} x2="260" y2={tgY} stroke="#ef4444" strokeDasharray="3 3" strokeWidth="1" />
+              <polyline fill="none" stroke="#38bdf8" strokeWidth="2" points={axSvgPoints} />
+              <text x="6" y="13" fill="#8b9bb4" fontSize="8.5">
+                FVM Axial T(z): Nozzle → Block → Heatbreak → Sink
+              </text>
+              <text x="198" y={Math.max(22, tgY - 3)} fill="#ef4444" fontSize="8">
+                Tg {th.glass_transition_c}°C
+              </text>
+            </svg>
+          )}
+          <svg viewBox="0 0 260 66" style={{ width: "100%", height: 62, marginTop: 2 }}>
             <rect x="0" y="0" width="260" height="66" rx="4" fill="#0d131d" />
             <polyline fill="none" stroke="#f97316" strokeWidth="2" points={svgPoints} />
             <text x="6" y="14" fill="#8b9bb4" fontSize="9">

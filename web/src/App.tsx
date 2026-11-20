@@ -2,15 +2,17 @@ import React, { useCallback, useEffect, useState } from "react";
 import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { PrinterViewport } from "./components/PrinterViewport";
-import { CatalogResponse, PrinterSpecData, SimulationResponse, ViewMode } from "./types";
+import { CatalogResponse, PrinterSpecData, SimulationResponse, SolidFEAResponse, ViewMode } from "./types";
 
 export default function App() {
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<string>("corexy_voron_style");
+  const [filamentId, setFilamentId] = useState<string>("pla");
   const [spec, setSpec] = useState<PrinterSpecData | null>(null);
   const [yamlText, setYamlText] = useState<string>("");
   const [gcodeText, setGcodeText] = useState<string>("");
   const [sim, setSim] = useState<SimulationResponse | null>(null);
+  const [solidFea, setSolidFea] = useState<SolidFEAResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [optObjective, setOptObjective] = useState<"balanced" | "speed" | "rigidity" | "budget">("balanced");
@@ -23,7 +25,11 @@ export default function App() {
   const [layerLimit, setLayerLimit] = useState<number>(999);
 
   const runSimulate = useCallback(
-    async (payload: { spec?: PrinterSpecData; yaml_text?: string }, customGcode?: string) => {
+    async (
+      payload: { spec?: PrinterSpecData; yaml_text?: string },
+      customGcode?: string,
+      filOverride?: string
+    ) => {
       setLoading(true);
       setError(null);
       try {
@@ -32,6 +38,7 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...payload,
+            filament_id: filOverride ?? filamentId,
             gcode_text: customGcode && customGcode.trim().length > 0 ? customGcode : null,
           }),
         });
@@ -44,6 +51,91 @@ export default function App() {
         setSpec(data.spec);
         setYamlText(data.yaml_text);
         setLayerLimit(Math.max(0, data.virtual_print.layer_count - 1));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [filamentId]
+  );
+
+  const runPartFea = useCallback(
+    async (params: {
+      preset: string;
+      materialId: string;
+      forceN: [number, number, number];
+      fdmAnisotropic: boolean;
+    }) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/fea/solid-part", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            preset: params.preset,
+            material_id: params.materialId,
+            force_n: params.forceN,
+            fdm_anisotropic: params.fdmAnisotropic,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(errBody.detail || "Solid FEA failed");
+        }
+        const data: SolidFEAResponse = await res.json();
+        setSolidFea(data);
+        setViewMode("solid_part");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
+  const runStlFea = useCallback(
+    async (params: {
+      file: File;
+      materialId: string;
+      fixedFace: string;
+      loadFace: string;
+      forceN: [number, number, number];
+      fdmAnisotropic: boolean;
+    }) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const buf = await params.file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        const b64 = btoa(bin);
+        const ext = params.file.name.split(".").pop()?.toLowerCase() || "stl";
+
+        const res = await fetch("/api/fea/solid-stl", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            part_name: params.file.name,
+            stl_base64: b64,
+            file_type: ext,
+            material_id: params.materialId,
+            fixed_face: params.fixedFace,
+            load_face: params.loadFace,
+            force_n: params.forceN,
+            fdm_anisotropic: params.fdmAnisotropic,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(errBody.detail || "STL Solid FEA failed");
+        }
+        const data: SolidFEAResponse = await res.json();
+        setSolidFea(data);
+        setViewMode("solid_part");
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -77,17 +169,28 @@ export default function App() {
         if (firstId) {
           await loadPreset(firstId);
         }
-      } catch (e) {
+        // Preload default solid bracket FEA so switching to 3D Solid Part tab is instant
+        const pRes = await fetch("/api/fea/solid-part", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ preset: "corner_gusset", material_id: "abs_printed" }),
+        });
+        if (pRes.ok) setSolidFea(await pRes.json());
+      } catch {
         setError("Failed to connect to PrintSim backend API on /api. Is `printsim serve` running?");
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-simulate smoothly whenever parametric controls change
   const handleSpecChange = (next: PrinterSpecData) => {
     setSpec(next);
     setOptMessage(null);
     void runSimulate({ spec: next }, gcodeText);
+  };
+
+  const handleFilamentChange = (nextFil: string) => {
+    setFilamentId(nextFil);
+    if (spec) void runSimulate({ spec }, gcodeText, nextFil);
   };
 
   const handleOptimize = async () => {
@@ -138,7 +241,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-badge">PrintSim 0.1</span>
+          <span className="brand-badge">PrintSim 0.2</span>
           <span>Multiphysics 3D Printer Studio</span>
           {optMessage && (
             <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
@@ -180,6 +283,8 @@ export default function App() {
           catalog={catalog}
           selectedPreset={selectedPreset}
           onSelectPreset={loadPreset}
+          filamentId={filamentId}
+          onFilamentChange={handleFilamentChange}
           spec={spec}
           onSpecChange={handleSpecChange}
           yamlText={yamlText}
@@ -187,11 +292,14 @@ export default function App() {
           onSimulateYaml={() => runSimulate({ yaml_text: yamlText }, gcodeText)}
           gcodeText={gcodeText}
           onGcodeChange={setGcodeText}
+          onRunPartFea={runPartFea}
+          onRunStlFea={runStlFea}
           loading={loading}
         />
 
         <PrinterViewport
           sim={sim}
+          solidFea={solidFea}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           selectedModeIdx={selectedModeIdx}
@@ -202,7 +310,7 @@ export default function App() {
           onLayerLimitChange={setLayerLimit}
         />
 
-        <MetricsPanel sim={sim} error={error} />
+        <MetricsPanel sim={sim} solidFea={solidFea} error={error} />
       </main>
     </div>
   );

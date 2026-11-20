@@ -5,6 +5,8 @@ interface Props {
   catalog: CatalogResponse | null;
   selectedPreset: string;
   onSelectPreset: (id: string) => void;
+  filamentId: string;
+  onFilamentChange: (id: string) => void;
   spec: PrinterSpecData | null;
   onSpecChange: (next: PrinterSpecData) => void;
   yamlText: string;
@@ -12,6 +14,20 @@ interface Props {
   onSimulateYaml: () => void;
   gcodeText: string;
   onGcodeChange: (txt: string) => void;
+  onRunPartFea: (params: {
+    preset: string;
+    materialId: string;
+    forceN: [number, number, number];
+    fdmAnisotropic: boolean;
+  }) => void;
+  onRunStlFea: (params: {
+    file: File;
+    materialId: string;
+    fixedFace: string;
+    loadFace: string;
+    forceN: [number, number, number];
+    fdmAnisotropic: boolean;
+  }) => void;
   loading: boolean;
 }
 
@@ -19,6 +35,8 @@ export const DesignPanel: React.FC<Props> = ({
   catalog,
   selectedPreset,
   onSelectPreset,
+  filamentId,
+  onFilamentChange,
   spec,
   onSpecChange,
   yamlText,
@@ -26,9 +44,19 @@ export const DesignPanel: React.FC<Props> = ({
   onSimulateYaml,
   gcodeText,
   onGcodeChange,
+  onRunPartFea,
+  onRunStlFea,
   loading,
 }) => {
-  const [tab, setTab] = useState<"params" | "yaml" | "gcode">("params");
+  const [tab, setTab] = useState<"params" | "part_fea" | "yaml" | "gcode">("params");
+  const [partPreset, setPartPreset] = useState<string>("corner_gusset");
+  const [partMat, setPartMat] = useState<string>("abs_printed");
+  const [partFdm, setPartFdm] = useState<boolean>(true);
+  const [fx, setFx] = useState<number>(80);
+  const [fy, setFy] = useState<number>(0);
+  const [fz, setFz] = useState<number>(-40);
+  const [fixedFace, setFixedFace] = useState<string>("min_z");
+  const [loadFace, setLoadFace] = useState<string>("max_z");
 
   if (!spec || !catalog) {
     return (
@@ -48,10 +76,13 @@ export const DesignPanel: React.FC<Props> = ({
     <aside className="sidebar">
       <div className="tabs">
         <button className={`tab-btn ${tab === "params" ? "active" : ""}`} onClick={() => setTab("params")}>
-          Parametric
+          Printer
+        </button>
+        <button className={`tab-btn ${tab === "part_fea" ? "active" : ""}`} onClick={() => setTab("part_fea")}>
+          Part FEA
         </button>
         <button className={`tab-btn ${tab === "yaml" ? "active" : ""}`} onClick={() => setTab("yaml")}>
-          YAML DSL
+          YAML
         </button>
         <button className={`tab-btn ${tab === "gcode" ? "active" : ""}`} onClick={() => setTab("gcode")}>
           G-code
@@ -59,16 +90,29 @@ export const DesignPanel: React.FC<Props> = ({
       </div>
 
       <div className="sidebar-scroll">
-        {/* Preset switcher always available */}
+        {/* Preset & Filament selectors always available */}
         <div className="section-card">
-          <div className="section-title">Preset Template</div>
-          <select value={selectedPreset} onChange={(e) => onSelectPreset(e.target.value)}>
-            {catalog.presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.architecture})
-              </option>
-            ))}
-          </select>
+          <div className="section-title">Preset & Filament</div>
+          <div className="field-row">
+            <label>Printer Template</label>
+            <select value={selectedPreset} onChange={(e) => onSelectPreset(e.target.value)}>
+              {catalog.presets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.architecture})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field-row">
+            <label>Filament Material (Rheology & Tg)</label>
+            <select value={filamentId} onChange={(e) => onFilamentChange(e.target.value)}>
+              {catalog.filaments.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name} ({f.print_temp_c}°C)
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {tab === "params" && (
@@ -373,6 +417,116 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
             </div>
           </>
+        )}
+
+        {tab === "part_fea" && (
+          <div className="section-card">
+            <div className="section-title">3D Solid Hex8 Bracket & STL FEA</div>
+            <div className="field-row">
+              <label>Parametric Bracket / Mount</label>
+              <select value={partPreset} onChange={(e) => setPartPreset(e.target.value)}>
+                {catalog.part_presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field-grid-2">
+              <div className="field-row">
+                <label>Material</label>
+                <select
+                  value={partMat}
+                  onChange={(e) => {
+                    setPartMat(e.target.value);
+                    setPartFdm(e.target.value.includes("printed"));
+                  }}
+                >
+                  {catalog.materials.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row">
+                <label>FDM Z-Anisotropy</label>
+                <select value={partFdm ? "yes" : "no"} onChange={(e) => setPartFdm(e.target.value === "yes")}>
+                  <option value="yes">FDM Layer Model</option>
+                  <option value="no">Isotropic (CNC)</option>
+                </select>
+              </div>
+            </div>
+            <div className="field-grid-3">
+              <div className="field-row">
+                <label>Fx (N)</label>
+                <input type="number" value={fx} onChange={(e) => setFx(Number(e.target.value))} />
+              </div>
+              <div className="field-row">
+                <label>Fy (N)</label>
+                <input type="number" value={fy} onChange={(e) => setFy(Number(e.target.value))} />
+              </div>
+              <div className="field-row">
+                <label>Fz (N)</label>
+                <input type="number" value={fz} onChange={(e) => setFz(Number(e.target.value))} />
+              </div>
+            </div>
+            <button
+              className="btn primary"
+              disabled={loading}
+              onClick={() =>
+                onRunPartFea({
+                  preset: partPreset,
+                  materialId: partMat,
+                  forceN: [fx, fy, fz],
+                  fdmAnisotropic: partFdm,
+                })
+              }
+            >
+              Run 3D Solid FEA on Preset
+            </button>
+
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
+              <div className="section-title" style={{ marginBottom: 6 }}>
+                Or Upload Custom STL / OBJ Mesh
+              </div>
+              <div className="field-grid-2" style={{ marginBottom: 6 }}>
+                <div className="field-row">
+                  <label>Fixed Clamp Face</label>
+                  <select value={fixedFace} onChange={(e) => setFixedFace(e.target.value)}>
+                    <option value="min_z">Bottom (-Z)</option>
+                    <option value="min_x">Left (-X)</option>
+                    <option value="min_y">Front (-Y)</option>
+                  </select>
+                </div>
+                <div className="field-row">
+                  <label>Loaded Face</label>
+                  <select value={loadFace} onChange={(e) => setLoadFace(e.target.value)}>
+                    <option value="max_z">Top (+Z)</option>
+                    <option value="max_x">Right (+X)</option>
+                    <option value="max_y">Rear (+Y)</option>
+                  </select>
+                </div>
+              </div>
+              <input
+                type="file"
+                accept=".stl,.obj"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    onRunStlFea({
+                      file,
+                      materialId: partMat,
+                      fixedFace,
+                      loadFace,
+                      forceN: [fx, fy, fz],
+                      fdmAnisotropic: partFdm,
+                    });
+                  }
+                }}
+              />
+            </div>
+          </div>
         )}
 
         {tab === "yaml" && (
