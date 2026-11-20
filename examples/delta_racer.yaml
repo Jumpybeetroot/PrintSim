@@ -1,0 +1,78 @@
+name: Delta Racer 240 (3-Tower Carbon)
+description: High-speed 3-tower delta printer with ultra-light effector and carbon parallel arms
+architecture: delta
+frame:
+  width_mm: 420
+  depth_mm: 420
+  height_mm: 780
+  profile: extrusion_3030
+  material: aluminum_6063_t5
+  bracing: rear_cross
+  brace_profile: brace_rod_10mm
+  brace_material: carbon_fiber_tube
+  enclosed_panels: false
+gantry:
+  x_beam_profile: cf_tube_20x20x1_5
+  x_beam_material: carbon_fiber_tube
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 120
+  belt:
+    type: gt2_9mm
+    core: aramid
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 36.0
+kinematics:
+  build_volume_mm: [240, 240, 320]
+  max_velocity_mm_s: 600
+  max_accel_mm_s2: 12000
+  max_z_velocity_mm_s: 300
+  max_z_accel_mm_s2: 8000
+  square_corner_velocity_mm_s: 6.0
+  input_shaper: auto
+  delta_arm_length_mm: 310
+  delta_radius_mm: 165
+  xy_stepper:
+    name: NEMA17-48mm 0.9deg High-Speed
+    holding_torque_nm: 0.58
+    rated_current_a: 2.2
+    inductance_mh: 1.4
+    supply_voltage_v: 36.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 360
+toolhead:
+  name: Flying-Extruder Lightweight Effector
+  total_mass_g: 195
+  cog_offset_mm: [0, 0, -22]
+  envelope_mm: [60, 60, 80]
+  hotend:
+    name: High-Flow Copper Bi-Metal
+    heater_power_w: 80
+    block_material: copper_c110
+    block_mass_g: 14
+    nozzle_material: brass_c360
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 20
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 12
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 3.0
+    part_cooling_cfm: 11.0
+    max_temp_c: 320
+    ambient_temp_c: 25
+  extruder:
+    type: bowden
+    gear_ratio: 5.0
+    max_push_force_n: 60
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [260, 260]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 6.0
+  heater_power_w: 450
+  mass_g: 1600
+  z_drive: leadscrew_triple

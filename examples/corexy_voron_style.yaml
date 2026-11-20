@@ -1,0 +1,77 @@
+name: CoreXY 300 (Voron-Style)
+description: 300mm^3 aluminum 2020 CoreXY frame with MGN12 rails and high-flow bi-metal hotend
+architecture: corexy
+frame:
+  width_mm: 460
+  depth_mm: 460
+  height_mm: 500
+  profile: extrusion_2020
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  brace_profile: brace_rod_10mm
+  brace_material: aluminum_6063_t5
+  enclosed_panels: true
+  panel_thickness_mm: 3.0
+gantry:
+  x_beam_profile: extrusion_2020
+  x_beam_material: aluminum_6063_t5
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 145
+  belt:
+    type: gt2_6mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 28.0
+kinematics:
+  build_volume_mm: [300, 300, 300]
+  max_velocity_mm_s: 450
+  max_accel_mm_s2: 8000
+  max_z_velocity_mm_s: 25
+  max_z_accel_mm_s2: 300
+  square_corner_velocity_mm_s: 5.0
+  input_shaper: auto
+  xy_stepper:
+    name: NEMA17-48mm (LDO 2504AC)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.0
+    inductance_mh: 1.5
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+toolhead:
+  name: Stealth-Style Direct Drive
+  total_mass_g: 380
+  cog_offset_mm: [0, -18, -25]
+  envelope_mm: [68, 74, 95]
+  hotend:
+    name: Rapido-Class Bi-Metal
+    heater_power_w: 70
+    block_material: copper_c110
+    block_mass_g: 14
+    nozzle_material: brass_c360
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 18
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 12
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 3.2
+    part_cooling_cfm: 9.0
+    max_temp_c: 300
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 5.0
+    max_push_force_n: 55
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 650
+  mass_g: 2500
+  z_drive: belted_quad_z

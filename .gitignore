@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Node / Web 3D Studio
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Generated CAD / simulation artifacts
+*.stl
+*.obj
+*.glb
+*.step
+*.stp
+*.vtk
+*.vtu
+*.msh
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+*.swp

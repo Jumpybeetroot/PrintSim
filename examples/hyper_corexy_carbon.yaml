@@ -1,0 +1,77 @@
+name: HyperCoreXY 300 (Carbon Gantry + Truss)
+description: High-acceleration speedbench CoreXY with 3030 frame, full truss bracing, carbon fiber X tube, 9mm aramid belts, and UHF hotend
+architecture: corexy
+frame:
+  width_mm: 470
+  depth_mm: 470
+  height_mm: 490
+  profile: extrusion_3030
+  material: aluminum_6063_t5
+  bracing: full_truss
+  brace_profile: brace_rod_10mm
+  brace_material: carbon_fiber_tube
+  enclosed_panels: true
+  panel_thickness_mm: 3.0
+gantry:
+  x_beam_profile: cf_tube_20x20x2
+  x_beam_material: carbon_fiber_tube
+  x_rail_profile: mgn9_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 95
+  belt:
+    type: gt2_9mm
+    core: aramid
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 42.0
+kinematics:
+  build_volume_mm: [300, 300, 280]
+  max_velocity_mm_s: 650
+  max_accel_mm_s2: 15000
+  max_z_velocity_mm_s: 30
+  max_z_accel_mm_s2: 400
+  square_corner_velocity_mm_s: 8.0
+  input_shaper: auto
+  xy_stepper:
+    name: NEMA17-60mm 48V High-Speed
+    holding_torque_nm: 0.72
+    rated_current_a: 2.5
+    inductance_mh: 1.1
+    supply_voltage_v: 48.0
+    rotor_inertia_kg_m2: 8.2e-6
+    motor_mass_g: 450
+toolhead:
+  name: Ultra-Light CNC/PA12-CF Toolhead
+  total_mass_g: 225
+  cog_offset_mm: [0, -12, -18]
+  envelope_mm: [58, 62, 82]
+  hotend:
+    name: UHF 24mm Plated Copper
+    heater_power_w: 100
+    block_material: copper_c110
+    block_mass_g: 16
+    nozzle_material: copper_c110
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 24
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 13
+    heatbreak_wall_mm: 0.22
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 2.6
+    part_cooling_cfm: 14.0
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 7.5
+    max_push_force_n: 75
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 750
+  mass_g: 2400
+  z_drive: leadscrew_triple

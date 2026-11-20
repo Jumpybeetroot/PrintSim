@@ -1,0 +1,76 @@
+name: Cartesian Bedslinger 220 (i3-Style)
+description: Classic 220mm open portal Cartesian printer with 2040/2020 frame and moving Y bed
+architecture: cartesian_bedslinger
+frame:
+  width_mm: 360
+  depth_mm: 380
+  height_mm: 420
+  profile: extrusion_2040
+  material: aluminum_6063_t5
+  bracing: none
+  brace_profile: brace_rod_10mm
+  brace_material: steel_4140
+  enclosed_panels: false
+gantry:
+  x_beam_profile: extrusion_2020
+  x_beam_material: aluminum_6063_t5
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 180
+  belt:
+    type: gt2_6mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 22.0
+kinematics:
+  build_volume_mm: [220, 220, 250]
+  max_velocity_mm_s: 300
+  max_accel_mm_s2: 4500
+  max_z_velocity_mm_s: 15
+  max_z_accel_mm_s2: 150
+  square_corner_velocity_mm_s: 5.0
+  input_shaper: auto
+  xy_stepper:
+    name: NEMA17-40mm Standard
+    holding_torque_nm: 0.42
+    rated_current_a: 1.5
+    inductance_mh: 2.8
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 5.4e-6
+    motor_mass_g: 280
+toolhead:
+  name: Standard V6 Direct Drive
+  total_mass_g: 460
+  cog_offset_mm: [0, -22, -28]
+  envelope_mm: [70, 76, 98]
+  hotend:
+    name: Classic V6 Aluminum/Stainless
+    heater_power_w: 40
+    block_material: aluminum_6061_t6
+    block_mass_g: 12
+    nozzle_material: brass_c360
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 12
+    heatbreak_material: stainless_304
+    heatbreak_length_mm: 10
+    heatbreak_wall_mm: 0.45
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 4.5
+    part_cooling_cfm: 5.5
+    max_temp_c: 265
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 3.5
+    max_push_force_n: 42
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [235, 235]
+  plate_material: aluminum_6061_t6
+  plate_thickness_mm: 4.0
+  heater_power_w: 240
+  mass_g: 1350
+  z_drive: leadscrew_dual

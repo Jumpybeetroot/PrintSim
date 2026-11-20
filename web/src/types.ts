@@ -1,0 +1,299 @@
+export interface MaterialItem {
+  id: string;
+  name: string;
+  youngs_modulus_pa: number;
+  density_kg_m3: number;
+  yield_strength_pa: number;
+  color_hex: string;
+}
+
+export interface ProfileItem {
+  id: string;
+  name: string;
+  shape: string;
+  width_m: number;
+  height_m: number;
+}
+
+export interface PresetItem {
+  id: string;
+  name: string;
+  architecture: string;
+  description: string;
+}
+
+export interface CatalogResponse {
+  materials: MaterialItem[];
+  profiles: ProfileItem[];
+  presets: PresetItem[];
+}
+
+export interface PrinterSpecData {
+  name: string;
+  description: string;
+  architecture: "corexy" | "cartesian_bedslinger" | "delta";
+  frame: {
+    width_mm: number;
+    depth_mm: number;
+    height_mm: number;
+    profile: string;
+    material: string;
+    bracing: "none" | "corner_gussets" | "rear_cross" | "full_truss";
+    brace_profile: string;
+    brace_material: string;
+    enclosed_panels: boolean;
+    panel_thickness_mm: number;
+  };
+  gantry: {
+    x_beam_profile: string;
+    x_beam_material: string;
+    x_rail_profile: string;
+    y_rail_profile: string;
+    rail_material: string;
+    dual_x_rails: boolean;
+    carriage_mass_g: number;
+    belt: {
+      type: "gt2_6mm" | "gt2_9mm" | "gt2_12mm";
+      core: "fiberglass" | "steel" | "aramid";
+      pulley_teeth: number;
+      pitch_mm: number;
+      pretension_n: number;
+    };
+  };
+  kinematics: {
+    build_volume_mm: [number, number, number];
+    max_velocity_mm_s: number;
+    max_accel_mm_s2: number;
+    max_z_velocity_mm_s: number;
+    max_z_accel_mm_s2: number;
+    square_corner_velocity_mm_s: number;
+    input_shaper: "auto" | "none" | "zv" | "mzv" | "ei" | "2hump_ei";
+    delta_arm_length_mm: number;
+    delta_radius_mm: number;
+    xy_stepper: {
+      name: string;
+      holding_torque_nm: number;
+      rated_current_a: number;
+      inductance_mh: number;
+      supply_voltage_v: number;
+      rotor_inertia_kg_m2: number;
+      motor_mass_g: number;
+      steps_per_rev: number;
+    };
+  };
+  toolhead: {
+    name: string;
+    total_mass_g: number;
+    cog_offset_mm: [number, number, number];
+    envelope_mm: [number, number, number];
+    hotend: {
+      name: string;
+      heater_power_w: number;
+      block_material: string;
+      block_mass_g: number;
+      nozzle_material: string;
+      nozzle_diameter_mm: number;
+      melt_zone_length_mm: number;
+      heatbreak_material: string;
+      heatbreak_length_mm: number;
+      heatbreak_wall_mm: number;
+      heatbreak_id_mm: number;
+      heatsink_thermal_resistance_k_w: number;
+      part_cooling_cfm: number;
+      max_temp_c: number;
+      ambient_temp_c: number;
+    };
+    extruder: {
+      type: "direct_drive" | "bowden";
+      gear_ratio: number;
+      max_push_force_n: number;
+      filament_diameter_mm: number;
+    };
+  };
+  bed: {
+    size_mm: [number, number];
+    plate_material: string;
+    plate_thickness_mm: number;
+    heater_power_w: number;
+    mass_g: number;
+    z_drive: string;
+  };
+}
+
+export interface GeometryNode {
+  id: string;
+  position_mm: [number, number, number];
+  fixed: boolean;
+  lumped_mass_g: number;
+  role: string;
+}
+
+export interface GeometryMember {
+  id: string;
+  start_id: string;
+  end_id: string;
+  start_mm: [number, number, number];
+  end_mm: [number, number, number];
+  profile: string;
+  width_mm: number;
+  height_mm: number;
+  shape: string;
+  material: string;
+  color_hex: string;
+  role: string;
+  mass_g: number;
+}
+
+export interface ModeShapeData {
+  mode_number: number;
+  frequency_hz: number;
+  dominant_axis: string;
+  toolhead_participation_xyz: [number, number, number];
+  nodal_vectors: Record<string, [number, number, number]>;
+}
+
+export interface ShaperData {
+  axis: string;
+  effective_freq_hz: number;
+  structural_freq_hz: number;
+  belt_freq_hz: number;
+  recommended_shaper: string;
+  max_accel_mm_s2: number;
+  estimated_ringing_ratio: number;
+}
+
+export interface ToolpathSegment {
+  index: number;
+  layer_index: number;
+  start_mm: [number, number, number];
+  end_mm: [number, number, number];
+  is_extrusion: boolean;
+  peak_speed_mm_s: number;
+  volumetric_flow_mm3_s: number;
+  ringing_severity: number;
+  defect: "ok" | "travel" | "ringing" | "underextrusion" | "step_skip" | "cooling";
+}
+
+export interface SimulationResponse {
+  printer_name: string;
+  architecture: string;
+  spec: PrinterSpecData;
+  yaml_text: string;
+  scores: {
+    structural: number;
+    dynamics: number;
+    thermal: number;
+    print_quality: number;
+    efficiency: number;
+    composite: number;
+  };
+  diagnostics: string[];
+  geometry: {
+    architecture: string;
+    frame_dims_mm: [number, number, number];
+    build_volume_mm: [number, number, number];
+    build_origin_mm: [number, number, number];
+    bed_size_mm: [number, number];
+    bed_center_mm: [number, number, number];
+    toolhead_node_id: string;
+    toolhead_envelope_mm: [number, number, number];
+    nodes: GeometryNode[];
+    members: GeometryMember[];
+    mass_summary: {
+      frame_mass_kg: number;
+      total_mass_kg: number;
+      x_moving_mass_g: number;
+      y_moving_mass_g: number;
+      estimated_material_cost_usd: number;
+    };
+  };
+  collision: {
+    has_collision: boolean;
+    clearance_x_mm: number;
+    clearance_y_mm: number;
+    clearance_z_mm: number;
+    issues: string[];
+  };
+  static_fea: {
+    gravity_sag_toolhead_um: number;
+    accel_deflection_x_um: number;
+    accel_deflection_y_um: number;
+    combined_max_deflection_um: number;
+    toolhead_stiffness_x_n_per_mm: number;
+    toolhead_stiffness_y_n_per_mm: number;
+    toolhead_stiffness_z_n_per_mm: number;
+    max_von_mises_mpa: number;
+    min_safety_factor: number;
+    peak_inertial_force_x_n: number;
+    peak_inertial_force_y_n: number;
+    nodal_displacements_mm: Record<string, [number, number, number]>;
+    member_stresses: Array<{
+      member_id: string;
+      role: string;
+      axial_force_n: number;
+      max_bending_moment_nm: number;
+      von_mises_mpa: number;
+      yield_mpa: number;
+      safety_factor: number;
+      utilization: number;
+    }>;
+  };
+  modal_fea: {
+    fundamental_freq_hz: number;
+    recommended_max_accel_mm_s2: number;
+    shaper_x: ShaperData | null;
+    shaper_y: ShaperData | null;
+    modes: ModeShapeData[];
+  };
+  kinematics: {
+    architecture: string;
+    build_volume_liters: number;
+    frame_volume_liters: number;
+    packaging_efficiency_pct: number;
+    max_motor_rpm: number;
+    available_torque_at_vmax_nm: number;
+    required_torque_x_nm: number;
+    required_torque_y_nm: number;
+    torque_safety_margin: number;
+    max_safe_accel_motor_mm_s2: number;
+    step_skip_risk: boolean;
+    belt_peak_tension_n: number;
+    belt_slip_risk: boolean;
+    delta_workspace_valid: boolean;
+  };
+  thermal: {
+    target_temp_c: number;
+    heatup_time_215c_s: number;
+    bed_heatup_time_100c_s: number;
+    steady_heat_loss_w: number;
+    heatbreak_thermal_resistance_k_w: number;
+    cold_side_temp_c: number;
+    heat_creep_risk: boolean;
+    max_volumetric_flow_mm3_s: number;
+    flow_limiting_factor: string;
+    max_linear_speed_02x04_mm_s: number;
+    extruder_pressure_margin: number;
+    heatup_curve: Array<{ time_s: number; temp_c: number }>;
+  };
+  virtual_print: {
+    total_time_s: number;
+    total_moves: number;
+    extrusion_moves: number;
+    layer_count: number;
+    filament_used_mm: number;
+    filament_used_g: number;
+    avg_print_speed_mm_s: number;
+    peak_print_speed_mm_s: number;
+    peak_volumetric_flow_mm3_s: number;
+    max_ringing_severity: number;
+    underextrusion_segments: number;
+    ringing_segments: number;
+    step_skip_segments: number;
+    cooling_warning_layers: number;
+    out_of_bounds_issues: string[];
+    print_quality_score: number;
+    segments: ToolpathSegment[];
+  };
+}
+
+export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath";

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "printsim"
+version = "0.1.0"
+description = "Full-featured multiphysics 3D printer simulator for humans and AI agents (FEA, modal analysis, kinematics, thermal/hotend, G-code virtual printing)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "trimesh>=4.3",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "typer>=0.12",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+]
+cad = [
+    # Optional STEP/BREP kernel for future solid CAD workflows
+    # "build123d>=0.7",
+]
+
+[project.scripts]
+printsim = "printsim.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/printsim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
