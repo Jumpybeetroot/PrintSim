@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -14,8 +15,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from printsim.engine import evaluate_printer, optimize_design
+from printsim.fea.solid_fem import (
+    FaceName,
+    PartPreset,
+    solve_preset_part_fea,
+    solve_solid_voxel_fea,
+    voxelize_stl_bytes,
+)
 from printsim.geometry import build_assembly, export_assembly_stl
 from printsim.schema import MATERIAL_CATALOG, PROFILE_CATALOG, PrinterSpec
+from printsim.thermal import FILAMENT_CATALOG
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
@@ -25,6 +34,7 @@ class SimulateRequest(BaseModel):
     spec: PrinterSpec | None = None
     yaml_text: str | None = None
     gcode_text: str | None = None
+    filament_id: str = "pla"
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
     include_toolpath_segments: bool = True
 
@@ -34,6 +44,25 @@ class OptimizeRequest(BaseModel):
     iterations: int = Field(20, ge=3, le=100)
     objective: Literal["balanced", "speed", "rigidity", "budget"] = "balanced"
     seed: int = 42
+
+
+class SolidPartFEARequest(BaseModel):
+    preset: PartPreset = "corner_gusset"
+    material_id: str = "abs_printed"
+    force_n: tuple[float, float, float] | None = None
+    fdm_anisotropic: bool | None = None
+
+
+class SolidStlFEARequest(BaseModel):
+    part_name: str = "Uploaded STL Part"
+    stl_base64: str
+    file_type: str = "stl"
+    material_id: str = "pa12_cf_printed"
+    fixed_face: FaceName = "min_z"
+    load_face: FaceName = "max_z"
+    force_n: tuple[float, float, float] = (50.0, 0.0, -25.0)
+    resolution: int = Field(16, ge=8, le=22)
+    fdm_anisotropic: bool | None = None
 
 
 def _load_presets() -> dict[str, PrinterSpec]:
@@ -50,8 +79,8 @@ def _load_presets() -> dict[str, PrinterSpec]:
 def create_app() -> FastAPI:
     api = FastAPI(
         title="PrintSim Multiphysics 3D Printer Simulator API",
-        version="0.1.0",
-        description="FEA, modal analysis, kinematics, hotend thermal, and virtual G-code simulation API.",
+        version="0.2.0",
+        description="Frame & solid Hex8 FEA, modal analysis, kinematics, hotend FVM thermal, and virtual G-code API.",
     )
 
     api.add_middleware(
@@ -64,7 +93,7 @@ def create_app() -> FastAPI:
 
     @api.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": "0.2.0"}
 
     @api.get("/api/catalog")
     def catalog() -> dict:
@@ -72,6 +101,13 @@ def create_app() -> FastAPI:
         return {
             "materials": [m.model_dump(mode="json") for m in MATERIAL_CATALOG.values()],
             "profiles": [p.model_dump(mode="json") for p in PROFILE_CATALOG.values()],
+            "filaments": [f.model_dump(mode="json") for f in FILAMENT_CATALOG.values()],
+            "part_presets": [
+                {"id": "corner_gusset", "name": "40mm L-Corner Gusset Bracket"},
+                {"id": "xy_motor_mount", "name": "CoreXY NEMA17 Motor Mount Plate"},
+                {"id": "toolhead_carriage", "name": "Direct-Drive X-Carriage Plate"},
+                {"id": "cantilever_bar", "name": "60mm Solid Test Cantilever Bar"},
+            ],
             "presets": [
                 {
                     "id": pid,
@@ -113,11 +149,46 @@ def create_app() -> FastAPI:
                 spec,
                 gcode_text=req.gcode_text,
                 toolhead_rel_pos=req.toolhead_rel_pos,
+                filament_id=req.filament_id,
             )
             payload = report.to_dict(include_toolpath_segments=req.include_toolpath_segments)
             payload["spec"] = spec.model_dump(mode="json")
             payload["yaml_text"] = spec.to_yaml()
             return payload
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/fea/solid-part")
+    def run_solid_part_fea(req: SolidPartFEARequest) -> dict:
+        try:
+            res = solve_preset_part_fea(
+                preset=req.preset,
+                material_id=req.material_id,
+                force_n=req.force_n,
+                fdm_anisotropic=req.fdm_anisotropic,
+            )
+            return res.to_dict()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/fea/solid-stl")
+    def run_solid_stl_fea(req: SolidStlFEARequest) -> dict:
+        try:
+            raw = base64.b64decode(req.stl_base64)
+            grid, h_mm = voxelize_stl_bytes(
+                raw, file_type=req.file_type, target_max_dim_voxels=req.resolution
+            )
+            res = solve_solid_voxel_fea(
+                grid=grid,
+                voxel_size_mm=h_mm,
+                material_id=req.material_id,
+                fixed_face=req.fixed_face,
+                load_face=req.load_face,
+                force_n=req.force_n,
+                part_name=req.part_name,
+                fdm_anisotropic=req.fdm_anisotropic,
+            )
+            return res.to_dict()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

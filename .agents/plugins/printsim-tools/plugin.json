@@ -1,0 +1,6 @@
+{
+  "name": "printsim-tools",
+  "displayName": "PrintSim Multiphysics MCP Tools",
+  "version": "0.2.0",
+  "description": "Exposes PrintSim FEA (3D frame & Hex8 solid), modal analysis, hotend thermal, and AI optimization tools over MCP."
+}

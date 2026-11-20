@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "printsim": {
+      "command": "/Users/jumpybeetroot/.gemini/antigravity/scratch/printsim/.venv/bin/printsim",
+      "args": ["mcp"]
+    }
+  }
+}

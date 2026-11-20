@@ -186,6 +186,7 @@ def evaluate_printer(
     spec: PrinterSpec,
     gcode_text: str | None = None,
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
+    filament_id: str = "pla",
 ) -> SimulationReport:
     """Run the full multiphysics simulation suite on a PrinterSpec."""
     assembly = build_assembly(spec, toolhead_rel_pos=toolhead_rel_pos)
@@ -193,7 +194,7 @@ def evaluate_printer(
     static_fea = solve_static_fea(assembly)
     modal_fea = solve_modal_fea(assembly)
     kinematics = analyze_kinematics(assembly)
-    thermal = simulate_hotend_thermal(spec)
+    thermal = simulate_hotend_thermal(spec, filament_id=filament_id)
 
     if gcode_text is None:
         bx, by, _ = spec.kinematics.build_volume_mm

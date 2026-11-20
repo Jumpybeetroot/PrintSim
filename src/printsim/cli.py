@@ -28,13 +28,14 @@ console = Console()
 def evaluate(
     spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
     gcode: Optional[Path] = typer.Option(None, "--gcode", "-g", exists=True, help="Optional G-code file"),
+    filament: str = typer.Option("pla", "--filament", "-f", help="Filament ID (pla, petg, abs, asa, pa12_cf, tpu_95a)"),
     json_out: bool = typer.Option(False, "--json", help="Emit full machine-readable JSON report"),
     no_segments: bool = typer.Option(False, "--no-segments", help="Omit per-segment toolpath array in JSON"),
 ) -> None:
     """Run full multiphysics evaluation (FEA, modal, kinematics, thermal, virtual print)."""
     spec = PrinterSpec.from_yaml(spec_path)
     gcode_text = gcode.read_text(encoding="utf-8") if gcode else None
-    report = evaluate_printer(spec, gcode_text=gcode_text)
+    report = evaluate_printer(spec, gcode_text=gcode_text, filament_id=filament)
 
     if json_out:
         print(json.dumps(report.to_dict(include_toolpath_segments=not no_segments), indent=2))
@@ -140,6 +141,61 @@ def export_stl(
     assembly = build_assembly(spec)
     saved = export_assembly_stl(assembly, out)
     console.print(f"Exported 3D assembly mesh to [bold green]{saved}[/bold green]")
+
+
+@app.command("solid-fea")
+def solid_fea(
+    preset: str = typer.Option("corner_gusset", "--preset", "-p", help="corner_gusset | xy_motor_mount | toolhead_carriage | cantilever_bar"),
+    stl: Optional[Path] = typer.Option(None, "--stl", exists=True, help="Optional STL/OBJ mesh file to voxelize & analyze"),
+    material: str = typer.Option("abs_printed", "--material", "-m", help="Material ID"),
+    fx: float = typer.Option(50.0, "--fx", help="Applied Force X (N)"),
+    fy: float = typer.Option(0.0, "--fy", help="Applied Force Y (N)"),
+    fz: float = typer.Option(-25.0, "--fz", help="Applied Force Z (N)"),
+    fixed_face: str = typer.Option("min_z", "--fixed-face", help="min_x|max_x|min_y|max_y|min_z|max_z (STL mode)"),
+    load_face: str = typer.Option("max_z", "--load-face", help="min_x|max_x|min_y|max_y|min_z|max_z (STL mode)"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON output"),
+) -> None:
+    """Run 3D solid continuum Hex8 FEA on a printer bracket/mount preset or custom STL mesh."""
+    from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
+
+    if stl is not None:
+        grid, h_mm = voxelize_stl_file(stl)
+        res = solve_solid_voxel_fea(
+            grid=grid,
+            voxel_size_mm=h_mm,
+            material_id=material,
+            fixed_face=fixed_face,  # type: ignore[arg-type]
+            load_face=load_face,  # type: ignore[arg-type]
+            force_n=(fx, fy, fz),
+            part_name=stl.name,
+        )
+    else:
+        res = solve_preset_part_fea(preset=preset, material_id=material, force_n=(fx, fy, fz))  # type: ignore[arg-type]
+
+    if json_out:
+        d = res.to_dict()
+        d.pop("voxels", None)
+        print(json.dumps(d, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{res.part_name}[/bold cyan] ({res.material_id}, FDM anisotropic={res.is_fdm_anisotropic})\n"
+            f"Elements: {res.num_elements} Hex8 ({res.num_dofs} DOFs) | Mass: {res.mass_g:.1f} g\n"
+            f"Max Displacement: [bold]{res.max_displacement_um:.1f} um[/bold] | Stiffness: {res.stiffness_n_per_mm:.1f} N/mm\n"
+            f"Max von Mises: {res.max_von_mises_mpa:.2f} MPa | Max Z-Layer Tension: {res.max_z_tensile_mpa:.2f} MPa\n"
+            f"Safety Factor: [bold green]{res.safety_factor:.2f}x[/bold green] ({res.failure_mode})",
+            title="PrintSim 3D Solid Hex8 FEA",
+        )
+    )
+
+
+@app.command()
+def mcp() -> None:
+    """Run the stdio MCP (Model Context Protocol) JSON-RPC server for AI design agents."""
+    from printsim.mcp_server import run_stdio_server
+
+    run_stdio_server()
 
 
 @app.command()
