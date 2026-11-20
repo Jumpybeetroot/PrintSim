@@ -3,6 +3,7 @@ name: printer-designer
 description: Autonomous 3D printer hardware designer and benchmark engineer. Delegate to this agent when designing new printer frames, gantries, hotends, or custom trusses in YAML, running `printsim evaluate` / `printsim optimize` trade studies, or comparing printer architectures.
 subagent: true
 mainAgent: false
+model: inherit
 tools: [read_file, edit_file, write_file, run_command, manage_task]
 ---
 

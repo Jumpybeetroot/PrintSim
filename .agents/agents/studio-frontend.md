@@ -3,6 +3,7 @@ name: studio-frontend
 description: React, TypeScript, and Three.js interactive 3D Web Studio specialist for PrintSim (`web/`). Delegate to this agent when building 3D viewport visualizations, FEA stress/modal animations, G-code toolpath viewers, parametric editors, or dashboard charts.
 subagent: true
 mainAgent: false
+model: inherit
 tools: [read_file, edit_file, write_file, run_command, manage_task]
 ---
 

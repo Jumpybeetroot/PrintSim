@@ -3,6 +3,7 @@ name: fea-engineer
 description: Structural Finite Element Analysis (FEA), modal vibration, resonance/input-shaper modeling, and topology optimization specialist for PrintSim. Delegate to this agent when implementing or verifying 3D beam/truss/solid FEM solvers, material/profile mechanics, or structural stiffness benchmarks.
 subagent: true
 mainAgent: false
+model: pro
 tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]
 ---
 

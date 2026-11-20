@@ -3,6 +3,7 @@ name: thermal-extrusion-engineer
 description: Hotend thermal network, heat-creep, melt-zone volumetric flow, part-cooling airflow, and polymer extrusion rheology specialist for PrintSim. Delegate to this agent when developing or calibrating hotend, heater block, heatbreak, extruder, or bed thermal physics.
 subagent: true
 mainAgent: false
+model: pro
 tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]
 ---
 

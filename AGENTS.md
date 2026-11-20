@@ -40,10 +40,14 @@ Always run verification before committing or declaring a task complete:
 - Never commit `.venv/`, `web/node_modules/`, `web/dist/`, or generated `.stl`/`.msh` outputs.
 - Keep example YAML presets valid and passing `tests/test_engine_api.py`.
 
-## 5. Specialized Subagents
+## 5. Specialized Subagents, Parallel Splitting & Model Routing
 
-Delegate domain-heavy tasks to the workspace subagents in `.agents/agents/`:
-- `fea-engineer`: 3D beam/solid FEA, modal analysis, topology optimization, input shaper modeling.
-- `thermal-extrusion-engineer`: Hotend thermal networks, melt flow, heat creep, part-cooling CFD, and rheology.
-- `printer-designer`: Creating, mutating, benchmarking, and optimizing printer YAML designs via the CLI/SDK.
-- `studio-frontend`: Three.js viewport, FEA/modal/toolpath shaders and visualizations, React UI panels.
+Follow `.agents/rules/orchestration-and-models.md` automatically on every task:
+
+- **Split jobs across parallel subagents whenever possible**: If a task breaks into 2+ independent workstreams (e.g., FEA/thermal backend + `web/` frontend + YAML benchmarks + tests/research), assign non-overlapping file ownership and launch subagents concurrently in the same turn (or via `run_workflow` / `swarm`) to maximize speed.
+- **Specialized workspace subagents** (`.agents/agents/`):
+  - `fea-engineer` (`pro` / `gemini-4-neon-high`, escalate to `gemini-4-neon-xhigh` only for hard FEM/eigen math): 3D beam/solid FEA, modal analysis, topology optimization, input shaper modeling.
+  - `thermal-extrusion-engineer` (`pro` / `gemini-4-neon-high`, escalate to `gemini-4-neon-xhigh` only for tough rheology/PDE math): Hotend thermal networks, melt flow, heat creep, part-cooling CFD, and rheology.
+  - `studio-frontend` (`inherit` / `gemini-4-neon-medium`, or `gemini-4-neon-high` for complex Three.js shaders): Three.js viewport, FEA/modal/toolpath shaders and visualizations, React UI panels.
+  - `printer-designer` (`inherit` / `gemini-4-hydrogen-high` or `gemini-4-neon-medium`): Creating, mutating, benchmarking, and optimizing printer YAML designs via the CLI/SDK.
+- **Orchestrator & fallback routing**: Run the orchestrator on `Orchestrator (Neon)` or `gemini-4-neon-high` (`gemini-4-neon-medium` for pure Swarm routing). Use `claude-opus-5-5-high` for cross-family verification or separate-pool fallback. Never assign `gemini-3.8-flash-*`, `gemini-4-hydrogen-xhigh`, `gemini-4-hydrogen-medium`/`low` (for coding), `claude-sonnet-5-5-*` (for coding), `gemini-4-argon-*` (unless Neon quota is out), or `gpt-oss-120b-medium`.
