@@ -1,11 +1,21 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { SimulationResponse, SolidFEAResponse, ViewMode } from "../types";
+import {
+  SimulationResponse,
+  SolidFeaEngine,
+  SolidFEAResponse,
+  TetFEAResponse,
+  TopologyOptResponse,
+  ViewMode,
+} from "../types";
 
 interface Props {
   sim: SimulationResponse | null;
   solidFea: SolidFEAResponse | null;
+  tetFea: TetFEAResponse | null;
+  activeSolidEngine: SolidFeaEngine;
+  topoResult: TopologyOptResponse | null;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
   selectedModeIdx: number;
@@ -17,6 +27,60 @@ interface Props {
 }
 
 const SCALE = 0.01; // 100 mm = 1 Three.js unit
+
+function formatBackendLabel(backend: string): string {
+  const low = backend.toLowerCase();
+  if (low.includes("gmsh") && (low.includes("skfem") || low.includes("scikit"))) {
+    return "Gmsh + scikit-fem";
+  }
+  return backend;
+}
+
+function formatElementLabel(elementType: string): string {
+  const low = elementType.toLowerCase();
+  if (low === "tet10" || low === "p2" || low === "tet10_p2") return "Tet10 (P2)";
+  if (low === "tet4" || low === "p1" || low === "tet4_p1") return "Tet4 (P1)";
+  return elementType;
+}
+
+function disposeGroupChildren(group: THREE.Group): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  while (group.children.length > 0) {
+    const obj = group.children[0];
+    group.remove(obj);
+    obj.traverse((child) => {
+      const geo = (child as THREE.Mesh).geometry;
+      if (geo) geometries.add(geo);
+      const mat = (child as THREE.Mesh).material;
+      if (Array.isArray(mat)) {
+        mat.forEach((m) => materials.add(m));
+      } else if (mat) {
+        materials.add(mat);
+      }
+    });
+  }
+  geometries.forEach((g) => g.dispose());
+  materials.forEach((m) => m.dispose());
+}
+
+function frameCameraToBox(
+  camera: THREE.PerspectiveCamera | undefined,
+  controls: OrbitControls | undefined,
+  box: THREE.Box3
+): void {
+  if (!camera || !controls || box.isEmpty()) return;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const halfFovRad = THREE.MathUtils.degToRad(camera.fov * 0.5);
+  const dist = Math.max((sphere.radius / Math.sin(halfFovRad)) * 1.32, 3.6);
+  controls.target.copy(sphere.center);
+  camera.position.set(
+    sphere.center.x + dist * 0.64,
+    sphere.center.y + dist * 0.46,
+    sphere.center.z + dist * 0.68
+  );
+  controls.update();
+}
 
 function stressColor(t: number): THREE.Color {
   const c = Math.max(0, Math.min(1, t));
@@ -51,6 +115,9 @@ function orientBeamMesh(mesh: THREE.Mesh, p0: THREE.Vector3, p1: THREE.Vector3):
 export const PrinterViewport: React.FC<Props> = ({
   sim,
   solidFea,
+  tetFea,
+  activeSolidEngine,
+  topoResult,
   viewMode,
   onViewModeChange,
   selectedModeIdx,
@@ -61,6 +128,7 @@ export const PrinterViewport: React.FC<Props> = ({
   onLayerLimitChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(true);
   const stateRef = useRef<{
     renderer?: THREE.WebGLRenderer;
     scene?: THREE.Scene;
@@ -68,6 +136,7 @@ export const PrinterViewport: React.FC<Props> = ({
     controls?: OrbitControls;
     dynamicGroup?: THREE.Group;
     animFrame?: number;
+    lastFramedKey?: string;
     modalMeshes: Array<{
       mesh: THREE.Mesh;
       startId: string;
@@ -83,6 +152,9 @@ export const PrinterViewport: React.FC<Props> = ({
     modalVectors: {},
     isModal: false,
   });
+
+  const showTetPart = Boolean(tetFea) && (activeSolidEngine === "tet10" || !solidFea);
+  const showHexPart = !showTetPart && Boolean(solidFea);
 
   // Initialize Three.js scene once
   useEffect(() => {
@@ -167,6 +239,10 @@ export const PrinterViewport: React.FC<Props> = ({
     return () => {
       window.removeEventListener("resize", onResize);
       if (stateRef.current.animFrame) cancelAnimationFrame(stateRef.current.animFrame);
+      disposeGroupChildren(dynamicGroup);
+      grid.geometry.dispose();
+      if (Array.isArray(grid.material)) grid.material.forEach((m) => m.dispose());
+      else grid.material.dispose();
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
@@ -178,24 +254,157 @@ export const PrinterViewport: React.FC<Props> = ({
     const group = stateRef.current.dynamicGroup;
     if (!group) return;
 
-    // Clear previous meshes
-    while (group.children.length > 0) {
-      const obj = group.children[0];
-      group.remove(obj);
-      obj.traverse((child) => {
-        if ((child as THREE.Mesh).geometry) (child as THREE.Mesh).geometry.dispose();
-        const mat = (child as THREE.Mesh).material;
-        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-        else if (mat) mat.dispose();
-      });
-    }
+    // Dispose and clear previous meshes cleanly
+    disposeGroupChildren(group);
 
     stateRef.current.modalMeshes = [];
     stateRef.current.modalToolhead = undefined;
     stateRef.current.isModal = viewMode === "modal";
 
-    // Render 3D Solid Hex8 Voxel FEA mode
+    // Render 3D Solid Part FEA mode (Curved Tet10 Gmsh+scikit-fem OR Voxel Hex8)
     if (viewMode === "solid_part") {
+      if (showTetPart && tetFea) {
+        const sm = tetFea.surface_mesh;
+        const verts = sm.vertices_mm;
+        const tris = sm.triangles;
+        if (verts.length === 0 || tris.length === 0) return;
+
+        let minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity,
+          minZ = Infinity,
+          maxZ = -Infinity;
+        for (const v of verts) {
+          minX = Math.min(minX, v[0]);
+          maxX = Math.max(maxX, v[0]);
+          minY = Math.min(minY, v[1]);
+          maxY = Math.max(maxY, v[1]);
+          minZ = Math.min(minZ, v[2]);
+          maxZ = Math.max(maxZ, v[2]);
+        }
+
+        const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
+        const partScale = 4.2 / span;
+        const pcx = 0.5 * (minX + maxX);
+        const pcy = 0.5 * (minY + maxY);
+        const dispMult = feaScale * 0.08;
+        const maxVm = Math.max(tetFea.max_von_mises_mpa, 0.05);
+
+        const toPartThree = (vx: number, vy: number, vz: number): [number, number, number] => [
+          (vx - pcx) * partScale,
+          (vz - minZ) * partScale + 0.4,
+          -(vy - pcy) * partScale,
+        ];
+
+        const geo = new THREE.BufferGeometry();
+        const isPerTriangleStress =
+          sm.von_mises_mpa.length === tris.length && tris.length !== verts.length;
+
+        if (!isPerTriangleStress) {
+          // Indexed smooth surface mesh with per-vertex stress heatmap
+          const positions = new Float32Array(verts.length * 3);
+          const colors = new Float32Array(verts.length * 3);
+          for (let i = 0; i < verts.length; i++) {
+            const v = verts[i];
+            const d = sm.displacements_mm[i] || [0, 0, 0];
+            const [tx, ty, tz] = toPartThree(
+              v[0] + d[0] * dispMult,
+              v[1] + d[1] * dispMult,
+              v[2] + d[2] * dispMult
+            );
+            positions[i * 3] = tx;
+            positions[i * 3 + 1] = ty;
+            positions[i * 3 + 2] = tz;
+
+            const vm = sm.von_mises_mpa[i] ?? 0;
+            const col = stressColor(vm / maxVm);
+            colors[i * 3] = col.r;
+            colors[i * 3 + 1] = col.g;
+            colors[i * 3 + 2] = col.b;
+          }
+
+          const indices = new Uint32Array(tris.length * 3);
+          for (let t = 0; t < tris.length; t++) {
+            indices[t * 3] = tris[t][0];
+            indices[t * 3 + 1] = tris[t][1];
+            indices[t * 3 + 2] = tris[t][2];
+          }
+
+          geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+          geo.setIndex(new THREE.BufferAttribute(indices, 1));
+          geo.computeVertexNormals();
+        } else {
+          // Fallback non-indexed triangles if stress is per-triangle
+          const positions = new Float32Array(tris.length * 9);
+          const colors = new Float32Array(tris.length * 9);
+          for (let t = 0; t < tris.length; t++) {
+            const tri = tris[t];
+            const col = stressColor((sm.von_mises_mpa[t] ?? 0) / maxVm);
+            for (let k = 0; k < 3; k++) {
+              const vi = tri[k];
+              const v = verts[vi];
+              const d = sm.displacements_mm[vi] || [0, 0, 0];
+              const [tx, ty, tz] = toPartThree(
+                v[0] + d[0] * dispMult,
+                v[1] + d[1] * dispMult,
+                v[2] + d[2] * dispMult
+              );
+              const off = t * 9 + k * 3;
+              positions[off] = tx;
+              positions[off + 1] = ty;
+              positions[off + 2] = tz;
+              colors[off] = col.r;
+              colors[off + 1] = col.g;
+              colors[off + 2] = col.b;
+            }
+          }
+          geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+          geo.computeVertexNormals();
+        }
+
+        const surfaceMat = new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.32,
+          metalness: 0.18,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+        });
+        const surfaceMesh = new THREE.Mesh(geo, surfaceMat);
+        group.add(surfaceMesh);
+
+        // Subtle conformal Gmsh tetrahedral wireframe overlay
+        const wireMat = new THREE.MeshBasicMaterial({
+          color: 0x0f172a,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.18,
+          depthWrite: false,
+        });
+        const wireMesh = new THREE.Mesh(geo, wireMat);
+        group.add(wireMesh);
+
+        // Auto-frame camera nicely on undeformed part bounding box (CAD Z-up -> Three Y-up)
+        const frameKey = `tet:${tetFea.part_name}:${tetFea.num_elements}:${tetFea.num_vertices}`;
+        if (stateRef.current.lastFramedKey !== frameKey) {
+          const partBox = new THREE.Box3(
+            new THREE.Vector3((minX - pcx) * partScale, 0.4, -(maxY - pcy) * partScale),
+            new THREE.Vector3(
+              (maxX - pcx) * partScale,
+              (maxZ - minZ) * partScale + 0.4,
+              -(minY - pcy) * partScale
+            )
+          );
+          frameCameraToBox(stateRef.current.camera, stateRef.current.controls, partBox);
+          stateRef.current.lastFramedKey = frameKey;
+        }
+        return;
+      }
+
       if (!solidFea || solidFea.voxels.length === 0) return;
       const voxels = solidFea.voxels;
       let minX = Infinity,
@@ -238,10 +447,126 @@ export const PrinterViewport: React.FC<Props> = ({
       inst.instanceMatrix.needsUpdate = true;
       if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
       group.add(inst);
+
+      const frameKey = `hex:${solidFea.part_name}:${solidFea.num_elements}`;
+      if (stateRef.current.lastFramedKey !== frameKey) {
+        const halfBox = boxSize * 0.5;
+        const partBox = new THREE.Box3(
+          new THREE.Vector3((minX - pcx) * partScale - halfBox, 0.4, -(maxY - pcy) * partScale - halfBox),
+          new THREE.Vector3(
+            (maxX - pcx) * partScale + halfBox,
+            (maxZ - minZ) * partScale + boxSize + 0.4,
+            -(minY - pcy) * partScale + halfBox
+          )
+        );
+        frameCameraToBox(stateRef.current.camera, stateRef.current.controls, partBox);
+        stateRef.current.lastFramedKey = frameKey;
+      }
+      return;
+    }
+
+    // Render 3D SIMP Topology Optimization mode
+    if (viewMode === "topology") {
+      if (!topoResult || topoResult.voxels.length === 0) return;
+      const allVoxels = topoResult.voxels;
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity,
+        minZ = Infinity,
+        maxZ = -Infinity;
+      for (const v of allVoxels) {
+        minX = Math.min(minX, v.center_mm[0]);
+        maxX = Math.max(maxX, v.center_mm[0]);
+        minY = Math.min(minY, v.center_mm[1]);
+        maxY = Math.max(maxY, v.center_mm[1]);
+        minZ = Math.min(minZ, v.center_mm[2]);
+        maxZ = Math.max(maxZ, v.center_mm[2]);
+      }
+      const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
+      const partScale = 4.2 / span;
+      const pcx = 0.5 * (minX + maxX);
+      const pcy = 0.5 * (minY + maxY);
+      const dispMult = feaScale * 0.08;
+      const boxSize = topoResult.voxel_size_mm * partScale * 0.96;
+
+      const keptVoxels = allVoxels.filter((v) => v.kept);
+      const removedVoxels = allVoxels.filter((v) => !v.kept);
+      const dummy = new THREE.Object3D();
+
+      if (keptVoxels.length > 0) {
+        const keptGeo = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
+        const keptMat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.25 });
+        const keptInst = new THREE.InstancedMesh(keptGeo, keptMat, keptVoxels.length);
+        const maxVm = Math.max(topoResult.max_von_mises_mpa, 0.05);
+
+        for (let i = 0; i < keptVoxels.length; i++) {
+          const v = keptVoxels[i];
+          const x = (v.center_mm[0] + v.disp_mm[0] * dispMult - pcx) * partScale;
+          const y = (v.center_mm[2] + v.disp_mm[2] * dispMult - minZ) * partScale + boxSize * 0.5 + 0.4;
+          const z = -(v.center_mm[1] + v.disp_mm[1] * dispMult - pcy) * partScale;
+          dummy.position.set(x, y, z);
+          dummy.updateMatrix();
+          keptInst.setMatrixAt(i, dummy.matrix);
+          keptInst.setColorAt(i, stressColor(v.von_mises_mpa / maxVm));
+        }
+        keptInst.instanceMatrix.needsUpdate = true;
+        if (keptInst.instanceColor) keptInst.instanceColor.needsUpdate = true;
+        group.add(keptInst);
+      }
+
+      if (showCarvedGhost && removedVoxels.length > 0) {
+        const ghostSize = topoResult.voxel_size_mm * partScale * 0.94;
+        const ghostFillGeo = new THREE.BoxGeometry(ghostSize, ghostSize, ghostSize);
+        const ghostFillMat = new THREE.MeshBasicMaterial({
+          color: 0x94a3b8,
+          transparent: true,
+          opacity: 0.14,
+          depthWrite: false,
+        });
+        const ghostFillInst = new THREE.InstancedMesh(ghostFillGeo, ghostFillMat, removedVoxels.length);
+
+        const ghostWireGeo = new THREE.BoxGeometry(ghostSize, ghostSize, ghostSize);
+        const ghostWireMat = new THREE.MeshBasicMaterial({
+          color: 0x64748b,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.14,
+          depthWrite: false,
+        });
+        const ghostWireInst = new THREE.InstancedMesh(ghostWireGeo, ghostWireMat, removedVoxels.length);
+
+        for (let i = 0; i < removedVoxels.length; i++) {
+          const v = removedVoxels[i];
+          const x = (v.center_mm[0] - pcx) * partScale;
+          const y = (v.center_mm[2] - minZ) * partScale + boxSize * 0.5 + 0.4;
+          const z = -(v.center_mm[1] - pcy) * partScale;
+          dummy.position.set(x, y, z);
+          dummy.updateMatrix();
+          ghostFillInst.setMatrixAt(i, dummy.matrix);
+          ghostWireInst.setMatrixAt(i, dummy.matrix);
+        }
+        ghostFillInst.instanceMatrix.needsUpdate = true;
+        ghostWireInst.instanceMatrix.needsUpdate = true;
+        group.add(ghostFillInst);
+        group.add(ghostWireInst);
+      }
       return;
     }
 
     if (!sim) return;
+
+    // Restore full-printer camera framing when returning from a solid part view
+    if (stateRef.current.lastFramedKey && stateRef.current.lastFramedKey !== "printer") {
+      const cam = stateRef.current.camera;
+      const ctrl = stateRef.current.controls;
+      if (cam && ctrl) {
+        cam.position.set(7.5, 6.2, 8.2);
+        ctrl.target.set(0, 2.3, 0);
+        ctrl.update();
+      }
+      stateRef.current.lastFramedKey = "printer";
+    }
 
     const geom = sim.geometry;
     const cx = geom.frame_dims_mm[0] * 0.5;
@@ -358,6 +683,7 @@ export const PrinterViewport: React.FC<Props> = ({
     const [bx, by, bz] = geom.build_volume_mm;
     const bvBox = new THREE.BoxGeometry(bx * SCALE, bz * SCALE, by * SCALE);
     const bvEdges = new THREE.EdgesGeometry(bvBox);
+    bvBox.dispose();
     const bvLine = new THREE.LineSegments(
       bvEdges,
       new THREE.LineBasicMaterial({
@@ -442,7 +768,18 @@ export const PrinterViewport: React.FC<Props> = ({
         group.add(new THREE.LineSegments(tpGeo, tpMat));
       }
     }
-  }, [sim, solidFea, viewMode, selectedModeIdx, feaScale, layerLimit]);
+  }, [
+    sim,
+    solidFea,
+    tetFea,
+    showTetPart,
+    topoResult,
+    showCarvedGhost,
+    viewMode,
+    selectedModeIdx,
+    feaScale,
+    layerLimit,
+  ]);
 
   const maxLayers = Math.max(0, (sim?.virtual_print.layer_count ?? 1) - 1);
   const activeMode = sim?.modal_fea.modes[selectedModeIdx];
@@ -459,7 +796,8 @@ export const PrinterViewport: React.FC<Props> = ({
               ["fea_stress", "Frame FEA"],
               ["modal", "Modal Vibration"],
               ["toolpath", "Virtual Print"],
-              ["solid_part", "3D Solid Part FEA"],
+              ["solid_part", "3D Solid Part"],
+              ["topology", "Topo Opt"],
             ] as Array<[ViewMode, string]>
           ).map(([id, label]) => (
             <button
@@ -547,8 +885,56 @@ export const PrinterViewport: React.FC<Props> = ({
           </div>
         )}
 
-        {viewMode === "solid_part" && solidFea && (
+        {viewMode === "solid_part" && showTetPart && tetFea && (
+          <>
+            <div className="hud-card">
+              <span className="badge-pill tet">
+                {formatBackendLabel(tetFea.backend)} • {formatElementLabel(tetFea.element_type)}
+              </span>
+              <span>0 MPa</span>
+              <div className="legend-gradient" />
+              <span>{tetFea.max_von_mises_mpa.toFixed(2)} MPa</span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
+                Deform ×{Math.round(feaScale * 0.08)}
+                <input
+                  type="range"
+                  min={50}
+                  max={2500}
+                  step={50}
+                  value={feaScale}
+                  onChange={(e) => onFeaScaleChange(Number(e.target.value))}
+                  style={{ width: 85 }}
+                />
+              </label>
+            </div>
+            <div className="hud-card">
+              <span>
+                <strong>{tetFea.part_name}</strong>
+              </span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <span>
+                <strong>{tetFea.num_elements.toLocaleString()}</strong> els /{" "}
+                <strong>{tetFea.num_dofs.toLocaleString()}</strong> DOF
+              </span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <span>
+                Max σ: <strong>{tetFea.max_von_mises_mpa.toFixed(2)} MPa</strong>
+              </span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <span>
+                SF:{" "}
+                <strong className={tetFea.safety_factor < 1.5 ? "tag-bad" : "tag-ok"}>
+                  {tetFea.safety_factor.toFixed(2)}×
+                </strong>
+              </span>
+            </div>
+          </>
+        )}
+
+        {viewMode === "solid_part" && showHexPart && solidFea && (
           <div className="hud-card">
+            <span className="badge-pill">Voxel Hex8</span>
             <span>
               <strong>{solidFea.part_name}</strong> ({solidFea.num_elements} Hex8)
             </span>
@@ -567,6 +953,76 @@ export const PrinterViewport: React.FC<Props> = ({
                 style={{ width: 90 }}
               />
             </label>
+          </div>
+        )}
+
+        {viewMode === "solid_part" && !showTetPart && !showHexPart && (
+          <div className="hud-card" style={{ color: "var(--muted)" }}>
+            Run 3D Solid Part FEA from the <strong style={{ color: "var(--text)" }}>Parts &amp; Topo</strong> tab to
+            inspect curved Tet10 or Hex8 stress results.
+          </div>
+        )}
+
+        {viewMode === "topology" && topoResult && (
+          <>
+            <div className="hud-card">
+              <span>0 MPa</span>
+              <div className="legend-gradient" />
+              <span>{topoResult.max_von_mises_mpa.toFixed(2)} MPa</span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
+                Deform ×{Math.round(feaScale * 0.08)}
+                <input
+                  type="range"
+                  min={50}
+                  max={2500}
+                  step={50}
+                  value={feaScale}
+                  onChange={(e) => onFeaScaleChange(Number(e.target.value))}
+                  style={{ width: 85 }}
+                />
+              </label>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={showCarvedGhost}
+                  onChange={(e) => setShowCarvedGhost(e.target.checked)}
+                />
+                <span>Show Carved Ghost</span>
+              </label>
+            </div>
+            <div className="hud-card">
+              <span>
+                Mass:{" "}
+                <strong>
+                  {topoResult.baseline_mass_g.toFixed(1)}g → {topoResult.optimized_mass_g.toFixed(1)}g
+                </strong>{" "}
+                <span className="tag-ok">(-{topoResult.mass_reduction_pct.toFixed(1)}%)</span>
+              </span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <span>
+                Specific Stiffness:{" "}
+                <strong className={topoResult.specific_stiffness_gain_pct >= 0 ? "tag-ok" : "tag-warn"}>
+                  {topoResult.specific_stiffness_gain_pct >= 0 ? "+" : ""}
+                  {topoResult.specific_stiffness_gain_pct.toFixed(1)}%
+                </strong>
+              </span>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <span>
+                SF:{" "}
+                <strong className={topoResult.safety_factor < 1.5 ? "tag-bad" : "tag-ok"}>
+                  {topoResult.safety_factor.toFixed(2)}×
+                </strong>
+              </span>
+            </div>
+          </>
+        )}
+
+        {viewMode === "topology" && !topoResult && (
+          <div className="hud-card" style={{ color: "var(--muted)" }}>
+            Run 3D Topology Optimization from the <strong style={{ color: "var(--text)" }}>Parts &amp; Topo</strong> tab
+            to carve and inspect optimal material paths.
           </div>
         )}
 

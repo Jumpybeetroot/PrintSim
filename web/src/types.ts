@@ -72,6 +72,151 @@ export interface SolidFEAResponse {
   voxels: SolidVoxelData[];
 }
 
+export interface TetSurfaceMeshData {
+  vertices_mm: [number, number, number][];
+  triangles: [number, number, number][];
+  displacements_mm: [number, number, number][];
+  von_mises_mpa: number[];
+  fixed_mask: boolean[];
+  loaded_mask: boolean[];
+}
+
+export interface TetFEAResponse {
+  backend: string;
+  element_type: string;
+  part_name: string;
+  material_id: string;
+  is_fdm_anisotropic: boolean;
+  mesh_size_mm: number;
+  num_vertices: number;
+  num_elements: number;
+  num_dofs: number;
+  mass_g: number;
+  volume_mm3: number;
+  applied_force_n: [number, number, number];
+  max_displacement_um: number;
+  stiffness_n_per_mm: number;
+  max_von_mises_mpa: number;
+  max_z_tensile_mpa: number;
+  yield_strength_mpa: number;
+  z_layer_strength_mpa: number;
+  safety_factor: number;
+  failure_mode: string;
+  surface_mesh: TetSurfaceMeshData;
+}
+
+export type SolidFeaEngine = "tet10" | "hex8";
+
+export interface TopologyHistoryPoint {
+  iteration: number;
+  compliance_mj: number;
+  volume_fraction: number;
+  mass_g: number;
+  max_change: number;
+}
+
+export interface TopologyVoxelData {
+  center_mm: [number, number, number];
+  disp_mm: [number, number, number];
+  von_mises_mpa: number;
+  density: number;
+  kept: boolean;
+  fixed: boolean;
+  loaded: boolean;
+}
+
+export interface TopologyOptResponse {
+  part_name: string;
+  material_id: string;
+  is_fdm_anisotropic: boolean;
+  voxel_size_mm: number;
+  target_volume_fraction: number;
+  achieved_volume_fraction: number;
+  penalization: number;
+  filter_radius_voxels: number;
+  iterations_run: number;
+  baseline_elements: number;
+  optimized_elements: number;
+  baseline_mass_g: number;
+  optimized_mass_g: number;
+  mass_reduction_pct: number;
+  baseline_compliance_mj: number;
+  optimized_compliance_mj: number;
+  baseline_stiffness_n_per_mm: number;
+  optimized_stiffness_n_per_mm: number;
+  specific_stiffness_gain_pct: number;
+  max_displacement_um: number;
+  max_von_mises_mpa: number;
+  safety_factor: number;
+  failure_mode: string;
+  applied_force_n: [number, number, number];
+  history: TopologyHistoryPoint[];
+  voxels: TopologyVoxelData[];
+}
+
+export interface TopoOptRequestParams {
+  preset: string;
+  materialId: string;
+  forceN: [number, number, number];
+  targetVolumeFraction: number;
+  iterations: number;
+  preserveBoundaries: boolean;
+  fdmAnisotropic: boolean;
+}
+
+export interface CutListItem {
+  part_code: string;
+  name: string;
+  profile_id: string;
+  material_id: string;
+  role: string;
+  length_mm: number;
+  quantity: number;
+  total_length_mm: number;
+  unit_mass_g: number;
+  total_mass_g: number;
+  unit_cost_usd: number;
+  total_cost_usd: number;
+  notes: string;
+}
+
+export interface BOMLineItem {
+  sku: string;
+  category: string;
+  name: string;
+  specification: string;
+  quantity: number;
+  unit: string;
+  unit_cost_usd: number;
+  total_cost_usd: number;
+  total_mass_g: number;
+}
+
+export interface StockNestingSummary {
+  profile_id: string;
+  material_id: string;
+  stock_length_mm: number;
+  bars_required: number;
+  used_length_mm: number;
+  waste_length_mm: number;
+  waste_pct: number;
+  bar_cuts_mm: number[][];
+}
+
+export interface PrinterBOMResponse {
+  printer_name: string;
+  architecture: string;
+  cut_list: CutListItem[];
+  stock_nesting: StockNestingSummary[];
+  items: BOMLineItem[];
+  category_costs_usd: Record<string, number>;
+  total_cost_usd: number;
+  total_mass_kg: number;
+  total_fasteners: number;
+  total_belt_length_m: number;
+  total_extrusion_length_m: number;
+}
+
 export interface PrinterSpecData {
   name: string;
   description: string;
@@ -346,4 +491,4 @@ export interface SimulationResponse {
   };
 }
 
-export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath" | "solid_part";
+export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath" | "solid_part" | "topology";

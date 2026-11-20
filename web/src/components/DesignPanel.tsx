@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { CatalogResponse, PrinterSpecData } from "../types";
+import { CatalogResponse, PrinterSpecData, SolidFeaEngine, TopoOptRequestParams } from "../types";
 
 interface Props {
   catalog: CatalogResponse | null;
@@ -19,6 +19,7 @@ interface Props {
     materialId: string;
     forceN: [number, number, number];
     fdmAnisotropic: boolean;
+    engine: SolidFeaEngine;
   }) => void;
   onRunStlFea: (params: {
     file: File;
@@ -28,6 +29,12 @@ interface Props {
     forceN: [number, number, number];
     fdmAnisotropic: boolean;
   }) => void;
+  onDownloadPartStep: (preset: string) => void;
+  exportingStep: boolean;
+  onRunTopoOpt: (params: TopoOptRequestParams) => void;
+  onDownloadTopoStl: (params: TopoOptRequestParams) => void;
+  hasTopoResult: boolean;
+  topoLoading: boolean;
   loading: boolean;
 }
 
@@ -46,17 +53,29 @@ export const DesignPanel: React.FC<Props> = ({
   onGcodeChange,
   onRunPartFea,
   onRunStlFea,
+  onDownloadPartStep,
+  exportingStep,
+  onRunTopoOpt,
+  onDownloadTopoStl,
+  hasTopoResult,
+  topoLoading,
   loading,
 }) => {
   const [tab, setTab] = useState<"params" | "part_fea" | "yaml" | "gcode">("params");
+  const [feaEngine, setFeaEngine] = useState<SolidFeaEngine>("tet10");
   const [partPreset, setPartPreset] = useState<string>("corner_gusset");
-  const [partMat, setPartMat] = useState<string>("abs_printed");
+  const [partMat, setPartMat] = useState<string>("pa12_cf_printed");
   const [partFdm, setPartFdm] = useState<boolean>(true);
-  const [fx, setFx] = useState<number>(80);
+  const [fx, setFx] = useState<number>(60);
   const [fy, setFy] = useState<number>(0);
-  const [fz, setFz] = useState<number>(-40);
+  const [fz, setFz] = useState<number>(0);
   const [fixedFace, setFixedFace] = useState<string>("min_z");
   const [loadFace, setLoadFace] = useState<string>("max_z");
+
+  // 3D SIMP Topology Optimization state
+  const [targetVolFrac, setTargetVolFrac] = useState<number>(0.45);
+  const [topoIterations, setTopoIterations] = useState<number>(18);
+  const [preserveBoundaries, setPreserveBoundaries] = useState<boolean>(true);
 
   if (!spec || !catalog) {
     return (
@@ -79,7 +98,7 @@ export const DesignPanel: React.FC<Props> = ({
           Printer
         </button>
         <button className={`tab-btn ${tab === "part_fea" ? "active" : ""}`} onClick={() => setTab("part_fea")}>
-          Part FEA
+          Parts &amp; Topo
         </button>
         <button className={`tab-btn ${tab === "yaml" ? "active" : ""}`} onClick={() => setTab("yaml")}>
           YAML
@@ -420,113 +439,245 @@ export const DesignPanel: React.FC<Props> = ({
         )}
 
         {tab === "part_fea" && (
-          <div className="section-card">
-            <div className="section-title">3D Solid Hex8 Bracket & STL FEA</div>
-            <div className="field-row">
-              <label>Parametric Bracket / Mount</label>
-              <select value={partPreset} onChange={(e) => setPartPreset(e.target.value)}>
-                {catalog.part_presets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field-grid-2">
+          <>
+            <div className="section-card">
+              <div className="section-title">
+                <span>3D Solid Part FEA</span>
+                <span style={{ color: feaEngine === "tet10" ? "var(--accent)" : "var(--muted)", fontSize: 10 }}>
+                  {feaEngine === "tet10" ? "Tet10 (P2)" : "Voxel Hex8"}
+                </span>
+              </div>
+
               <div className="field-row">
-                <label>Material</label>
-                <select
-                  value={partMat}
-                  onChange={(e) => {
-                    setPartMat(e.target.value);
-                    setPartFdm(e.target.value.includes("printed"));
-                  }}
-                >
-                  {catalog.materials.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
+                <label>Solver Engine</label>
+                <div className="engine-toggle">
+                  <button
+                    type="button"
+                    className={`engine-toggle-btn ${feaEngine === "tet10" ? "active" : ""}`}
+                    onClick={() => setFeaEngine("tet10")}
+                  >
+                    Curved Tet10
+                    <span className="engine-toggle-sub">Gmsh + scikit-fem</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`engine-toggle-btn ${feaEngine === "hex8" ? "active" : ""}`}
+                    onClick={() => setFeaEngine("hex8")}
+                  >
+                    Fast Voxel Hex8
+                    <span className="engine-toggle-sub">Structured Grid</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="field-row">
+                <label>Parametric Bracket / Mount</label>
+                <select value={partPreset} onChange={(e) => setPartPreset(e.target.value)}>
+                  {catalog.part_presets.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
                     </option>
                   ))}
                 </select>
               </div>
-              <div className="field-row">
-                <label>FDM Z-Anisotropy</label>
-                <select value={partFdm ? "yes" : "no"} onChange={(e) => setPartFdm(e.target.value === "yes")}>
-                  <option value="yes">FDM Layer Model</option>
-                  <option value="no">Isotropic (CNC)</option>
-                </select>
-              </div>
-            </div>
-            <div className="field-grid-3">
-              <div className="field-row">
-                <label>Fx (N)</label>
-                <input type="number" value={fx} onChange={(e) => setFx(Number(e.target.value))} />
-              </div>
-              <div className="field-row">
-                <label>Fy (N)</label>
-                <input type="number" value={fy} onChange={(e) => setFy(Number(e.target.value))} />
-              </div>
-              <div className="field-row">
-                <label>Fz (N)</label>
-                <input type="number" value={fz} onChange={(e) => setFz(Number(e.target.value))} />
-              </div>
-            </div>
-            <button
-              className="btn primary"
-              disabled={loading}
-              onClick={() =>
-                onRunPartFea({
-                  preset: partPreset,
-                  materialId: partMat,
-                  forceN: [fx, fy, fz],
-                  fdmAnisotropic: partFdm,
-                })
-              }
-            >
-              Run 3D Solid FEA on Preset
-            </button>
-
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
-              <div className="section-title" style={{ marginBottom: 6 }}>
-                Or Upload Custom STL / OBJ Mesh
-              </div>
-              <div className="field-grid-2" style={{ marginBottom: 6 }}>
+              <div className="field-grid-2">
                 <div className="field-row">
-                  <label>Fixed Clamp Face</label>
-                  <select value={fixedFace} onChange={(e) => setFixedFace(e.target.value)}>
-                    <option value="min_z">Bottom (-Z)</option>
-                    <option value="min_x">Left (-X)</option>
-                    <option value="min_y">Front (-Y)</option>
+                  <label>Material</label>
+                  <select
+                    value={partMat}
+                    onChange={(e) => {
+                      setPartMat(e.target.value);
+                      setPartFdm(e.target.value.includes("printed"));
+                    }}
+                  >
+                    {catalog.materials.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div className="field-row">
-                  <label>Loaded Face</label>
-                  <select value={loadFace} onChange={(e) => setLoadFace(e.target.value)}>
-                    <option value="max_z">Top (+Z)</option>
-                    <option value="max_x">Right (+X)</option>
-                    <option value="max_y">Rear (+Y)</option>
+                  <label>FDM Z-Anisotropy</label>
+                  <select value={partFdm ? "yes" : "no"} onChange={(e) => setPartFdm(e.target.value === "yes")}>
+                    <option value="yes">FDM Layer Model</option>
+                    <option value="no">Isotropic (CNC)</option>
                   </select>
                 </div>
               </div>
-              <input
-                type="file"
-                accept=".stl,.obj"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    onRunStlFea({
-                      file,
+              <div className="field-grid-3">
+                <div className="field-row">
+                  <label>Fx (N)</label>
+                  <input type="number" value={fx} onChange={(e) => setFx(Number(e.target.value))} />
+                </div>
+                <div className="field-row">
+                  <label>Fy (N)</label>
+                  <input type="number" value={fy} onChange={(e) => setFy(Number(e.target.value))} />
+                </div>
+                <div className="field-row">
+                  <label>Fz (N)</label>
+                  <input type="number" value={fz} onChange={(e) => setFz(Number(e.target.value))} />
+                </div>
+              </div>
+              <div className="btn-row">
+                <button
+                  className="btn primary"
+                  disabled={loading || topoLoading}
+                  onClick={() =>
+                    onRunPartFea({
+                      preset: partPreset,
                       materialId: partMat,
-                      fixedFace,
-                      loadFace,
                       forceN: [fx, fy, fz],
                       fdmAnisotropic: partFdm,
-                    });
+                      engine: feaEngine,
+                    })
                   }
-                }}
-              />
+                >
+                  {loading ? "Solving..." : "Run Part FEA"}
+                </button>
+                <button
+                  className="btn"
+                  disabled={loading || topoLoading || exportingStep}
+                  onClick={() => onDownloadPartStep(partPreset)}
+                  title="Download real OpenCASCADE B-Rep STEP CAD file for this parametric bracket"
+                >
+                  {exportingStep ? "Exporting..." : "Download Bracket STEP"}
+                </button>
+              </div>
+
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
+                <div className="section-title" style={{ marginBottom: 4 }}>
+                  Or Upload Custom STEP / STL / OBJ
+                </div>
+                <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.3 }}>
+                  <code>.step</code>/<code>.stp</code> → Curved Tet10 (Gmsh) • <code>.stl</code>/<code>.obj</code> → Voxel Hex8
+                </div>
+                <div className="field-grid-2" style={{ marginBottom: 6 }}>
+                  <div className="field-row">
+                    <label>Fixed Clamp Face</label>
+                    <select value={fixedFace} onChange={(e) => setFixedFace(e.target.value)}>
+                      <option value="min_z">Bottom (-Z)</option>
+                      <option value="min_x">Left (-X)</option>
+                      <option value="min_y">Front (-Y)</option>
+                    </select>
+                  </div>
+                  <div className="field-row">
+                    <label>Loaded Face</label>
+                    <select value={loadFace} onChange={(e) => setLoadFace(e.target.value)}>
+                      <option value="max_z">Top (+Z)</option>
+                      <option value="max_x">Right (+X)</option>
+                      <option value="max_y">Rear (+Y)</option>
+                    </select>
+                  </div>
+                </div>
+                <input
+                  type="file"
+                  accept=".stl,.obj,.step,.stp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      onRunStlFea({
+                        file,
+                        materialId: partMat,
+                        fixedFace,
+                        loadFace,
+                        forceN: [fx, fy, fz],
+                        fdmAnisotropic: partFdm,
+                      });
+                      e.target.value = "";
+                    }
+                  }}
+                />
+              </div>
             </div>
-          </div>
+
+            <div className="section-card" style={{ borderColor: "rgba(168, 85, 247, 0.4)" }}>
+              <div className="section-title">
+                <span>3D Topology Optimization (SIMP)</span>
+                <span style={{ color: "var(--purple)", fontSize: 10 }}>Generative</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.35 }}>
+                Carves low-stress voxels from the selected preset &amp; load case above while maximizing
+                stiffness-to-weight ratio.
+              </div>
+
+              <div className="slider-row">
+                <label>
+                  <span>Target Volume Fraction</span>
+                  <strong style={{ color: "var(--text)" }}>{Math.round(targetVolFrac * 100)}%</strong>
+                </label>
+                <input
+                  type="range"
+                  min={0.25}
+                  max={0.8}
+                  step={0.05}
+                  value={targetVolFrac}
+                  onChange={(e) => setTargetVolFrac(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="slider-row">
+                <label>
+                  <span>SIMP Iterations</span>
+                  <strong style={{ color: "var(--text)" }}>{topoIterations}</strong>
+                </label>
+                <input
+                  type="range"
+                  min={8}
+                  max={30}
+                  step={1}
+                  value={topoIterations}
+                  onChange={(e) => setTopoIterations(Number(e.target.value))}
+                />
+              </div>
+
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={preserveBoundaries}
+                  onChange={(e) => setPreserveBoundaries(e.target.checked)}
+                />
+                <span>Preserve Mounting Faces (Fixed &amp; Loaded)</span>
+              </label>
+
+              <button
+                className="btn primary"
+                disabled={loading || topoLoading}
+                onClick={() =>
+                  onRunTopoOpt({
+                    preset: partPreset,
+                    materialId: partMat,
+                    forceN: [fx, fy, fz],
+                    targetVolumeFraction: targetVolFrac,
+                    iterations: topoIterations,
+                    preserveBoundaries,
+                    fdmAnisotropic: partFdm,
+                  })
+                }
+              >
+                {topoLoading ? "Running SIMP Optimization..." : "Run Topology Opt"}
+              </button>
+
+              <button
+                className="btn"
+                disabled={loading || topoLoading}
+                style={hasTopoResult ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                onClick={() =>
+                  onDownloadTopoStl({
+                    preset: partPreset,
+                    materialId: partMat,
+                    forceN: [fx, fy, fz],
+                    targetVolumeFraction: targetVolFrac,
+                    iterations: topoIterations,
+                    preserveBoundaries,
+                    fdmAnisotropic: partFdm,
+                  })
+                }
+              >
+                Download Optimized STL
+              </button>
+            </div>
+          </>
         )}
 
         {tab === "yaml" && (
