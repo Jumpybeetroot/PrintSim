@@ -154,7 +154,7 @@ function buildImpactMetrics(
     },
     {
       key: "flex",
-      label: "Frame Flex",
+      label: "Nozzle Flex",
       oldVal: cmp.static_fea.combined_max_deflection_um,
       newVal: cur.static_fea.combined_max_deflection_um,
       higherIsBetter: false,
@@ -789,13 +789,42 @@ export const MetricsPanel: React.FC<Props> = ({
   const structuralChanged =
     compareSim != null &&
     (Math.abs(fea.combined_max_deflection_um - compareSim.static_fea.combined_max_deflection_um) >= 0.05 ||
-      Math.abs(scores.structural - compareSim.scores.structural) >= 0.05);
+      Math.abs(
+        (fea.beam_center_deflection_um ?? 0) - (compareSim.static_fea.beam_center_deflection_um ?? 0)
+      ) >= 0.05 ||
+      Math.abs(
+        (fea.nozzle_twist_amplification_pct ?? 0) -
+          (compareSim.static_fea.nozzle_twist_amplification_pct ?? 0)
+      ) >= 0.5 ||
+      Math.abs(scores.structural - compareSim.scores.structural) >= 0.05 ||
+      Boolean(sim.geometry.panels?.bolted_to_gantry) !==
+        Boolean(compareSim.geometry.panels?.bolted_to_gantry) ||
+      Boolean(sim.geometry.panels?.is_flying_gantry) !==
+        Boolean(compareSim.geometry.panels?.is_flying_gantry) ||
+      Math.abs(
+        (sim.geometry.panels?.effective_shear_gt_kn_mm ?? 0) -
+          (compareSim.geometry.panels?.effective_shear_gt_kn_mm ?? 0)
+      ) >= 0.01);
   const modalChanged =
     compareSim != null &&
     (Math.abs(mod.fundamental_freq_hz - compareSim.modal_fea.fundamental_freq_hz) >= 0.05 ||
+      Math.abs(
+        (mod.nozzle_pitch_twist_freq_hz ?? 0) - (compareSim.modal_fea.nozzle_pitch_twist_freq_hz ?? 0)
+      ) >= 0.05 ||
       Math.abs(mod.recommended_max_accel_mm_s2 - compareSim.modal_fea.recommended_max_accel_mm_s2) >= 15 ||
       Math.abs(scores.dynamics - compareSim.scores.dynamics) >= 0.05 ||
       Math.abs(kin.torque_safety_margin - compareSim.kinematics.torque_safety_margin) >= 0.05 ||
+      Math.abs(
+        (kin.motor_stiffness_n_per_mm ?? 0) - (compareSim.kinematics.motor_stiffness_n_per_mm ?? 0)
+      ) >= 0.1 ||
+      Math.abs(
+        (kin.drive_stiffness_n_per_mm ?? 0) - (compareSim.kinematics.drive_stiffness_n_per_mm ?? 0)
+      ) >= 0.1 ||
+      Math.abs(
+        (kin.motor_voltage_efficiency_pct ?? 0) -
+          (compareSim.kinematics.motor_voltage_efficiency_pct ?? 0)
+      ) >= 0.5 ||
+      Math.abs((kin.motor_heat_w_each ?? 0) - (compareSim.kinematics.motor_heat_w_each ?? 0)) >= 0.1 ||
       (kin.drive_mode ?? "") !== (compareSim.kinematics.drive_mode ?? "") ||
       Math.abs((kin.belt_pluck_freq_150mm_hz ?? 0) - (compareSim.kinematics.belt_pluck_freq_150mm_hz ?? 0)) >= 1);
   const thermalChanged =
@@ -1017,13 +1046,17 @@ export const MetricsPanel: React.FC<Props> = ({
               {sim.diagnostics.map((d, idx) => {
                 const lower = d.toLowerCase();
                 const cls =
-                  d.startsWith("COLLISION") || lower.includes("overtension")
+                  d.startsWith("COLLISION") ||
+                  lower.includes("overtension") ||
+                  lower.includes("overcurrent") ||
+                  lower.includes("overheat")
                     ? "bad"
                     : lower.includes("risk") ||
                         lower.includes("low") ||
                         lower.includes("detected") ||
                         lower.includes("bending") ||
-                        lower.includes("double-shear")
+                        lower.includes("double-shear") ||
+                        lower.includes("twist")
                       ? "warn"
                       : "";
                 return (
@@ -1041,21 +1074,75 @@ export const MetricsPanel: React.FC<Props> = ({
                 <span>Static 3D Frame FEA</span>
                 {structuralChanged && <span className="changed-dot-label">Updated</span>}
               </div>
-              {sim.geometry.panels?.enabled && (
-                <div className="metric-kv">
-                  <span>Enclosure / Panels</span>
-                  <span className="metric-val" style={{ color: "var(--accent)" }}>
-                    {sim.geometry.panels.thickness_mm}mm {sim.geometry.panels.material_name} (
-                    {sim.geometry.panels.mounting === "bolted_structural" ? "Bolted" : "Clip-In"})
-                  </span>
-                </div>
-              )}
+              {sim.geometry.panels?.enabled && (() => {
+                const p = sim.geometry.panels;
+                const mountTag =
+                  p.mounting === "bolted_structural"
+                    ? p.bolted_to_gantry
+                      ? "Bolted + Gantry"
+                      : p.is_flying_gantry
+                        ? "Outer Frame — Flying Gantry"
+                        : "Bolted Outer Frame"
+                    : "Clip-In";
+                const metaParts: string[] = [];
+                if (p.buckling_factor != null) {
+                  metaParts.push(`ψ=${p.buckling_factor.toFixed(2)}`);
+                }
+                if (p.areal_mass_kg_m2 != null) {
+                  metaParts.push(`${p.areal_mass_kg_m2.toFixed(2)} kg/m²`);
+                }
+                const hasShearReadout =
+                  p.effective_shear_gt_kn_mm != null || metaParts.length > 0;
+                const totalMassTitle =
+                  p.total_panel_mass_kg != null
+                    ? `Total panel mass: ${p.total_panel_mass_kg.toFixed(2)} kg`
+                    : undefined;
+                return (
+                  <>
+                    <div className="metric-kv" title={totalMassTitle}>
+                      <span>Structural Panels</span>
+                      <span
+                        className="metric-val"
+                        style={{
+                          color:
+                            p.mounting === "bolted_structural"
+                              ? p.bolted_to_gantry
+                                ? "var(--accent)"
+                                : p.is_flying_gantry
+                                  ? "var(--amber)"
+                                  : "var(--text)"
+                              : "var(--muted)",
+                          textAlign: "right",
+                        }}
+                      >
+                        {p.thickness_mm}mm {p.material_name} ({mountTag})
+                      </span>
+                    </div>
+                    {hasShearReadout && (
+                      <div className="metric-kv" title={totalMassTitle}>
+                        <span>Panel Shear Gt / Buckling</span>
+                        <span className="metric-val" style={{ textAlign: "right" }}>
+                          {p.effective_shear_gt_kn_mm != null
+                            ? `${p.effective_shear_gt_kn_mm.toFixed(2)} kN/mm`
+                            : "—"}
+                          {metaParts.length > 0 && (
+                            <span style={{ color: "var(--muted)", fontWeight: 500, fontSize: 10.5 }}>
+                              {" "}
+                              ({metaParts.join(" • ")})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <div className="metric-kv">
                 <span>Gravity Sag (Nozzle)</span>
                 <span className="metric-val">{fea.gravity_sag_toolhead_um.toFixed(1)} µm</span>
               </div>
               <div className="metric-kv">
-                <span>Peak Accel Deflection</span>
+                <span>Nozzle-Tip Deflection</span>
                 <span className="metric-val metric-val-with-delta">
                   {compareSim && (
                     <InlineDeltaBadge
@@ -1068,6 +1155,56 @@ export const MetricsPanel: React.FC<Props> = ({
                   {fea.combined_max_deflection_um.toFixed(1)} µm
                 </span>
               </div>
+              {fea.beam_center_deflection_um != null && (
+                <div className="metric-kv">
+                  <span>X-Beam Center Flex</span>
+                  <span className="metric-val metric-val-with-delta">
+                    {compareSim?.static_fea.beam_center_deflection_um != null && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.static_fea.beam_center_deflection_um}
+                        newVal={fea.beam_center_deflection_um}
+                        higherIsBetter={false}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+                      />
+                    )}
+                    {fea.beam_center_deflection_um.toFixed(1)} µm
+                  </span>
+                </div>
+              )}
+              {(fea.nozzle_twist_amplification_pct != null || fea.nozzle_twist_angle_mrad != null) && (
+                <div className="metric-kv">
+                  <span>Nozzle Lever-Arm Twist</span>
+                  <span
+                    className={`metric-val metric-val-with-delta ${
+                      (fea.nozzle_twist_amplification_pct ?? 0) > 60
+                        ? "tag-bad"
+                        : (fea.nozzle_twist_amplification_pct ?? 0) > 30
+                          ? "tag-warn"
+                          : "tag-ok"
+                    }`}
+                  >
+                    {compareSim?.static_fea.nozzle_twist_amplification_pct != null &&
+                      fea.nozzle_twist_amplification_pct != null && (
+                        <InlineDeltaBadge
+                          oldVal={compareSim.static_fea.nozzle_twist_amplification_pct}
+                          newVal={fea.nozzle_twist_amplification_pct}
+                          higherIsBetter={false}
+                          eps={0.5}
+                          formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(0)}%`}
+                        />
+                      )}
+                    {fea.nozzle_twist_amplification_pct != null
+                      ? `+${fea.nozzle_twist_amplification_pct.toFixed(0)}%`
+                      : ""}
+                    {fea.nozzle_twist_amplification_pct != null && fea.nozzle_twist_angle_mrad != null
+                      ? " • "
+                      : ""}
+                    {fea.nozzle_twist_angle_mrad != null
+                      ? `${fea.nozzle_twist_angle_mrad.toFixed(2)} mrad`
+                      : ""}
+                  </span>
+                </div>
+              )}
               <div className="metric-kv">
                 <span>Toolhead Stiffness X / Y</span>
                 <span className="metric-val">
@@ -1123,6 +1260,22 @@ export const MetricsPanel: React.FC<Props> = ({
                         {mod.fundamental_freq_hz.toFixed(1)} Hz
                       </span>
                     </div>
+                    {mod.nozzle_pitch_twist_freq_hz != null && (
+                      <div className="metric-kv">
+                        <span>Nozzle Pitch/Twist Mode</span>
+                        <span className="metric-val metric-val-with-delta">
+                          {compareSim?.modal_fea.nozzle_pitch_twist_freq_hz != null && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.modal_fea.nozzle_pitch_twist_freq_hz}
+                              newVal={mod.nozzle_pitch_twist_freq_hz}
+                              higherIsBetter={true}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} Hz`}
+                            />
+                          )}
+                          {mod.nozzle_pitch_twist_freq_hz.toFixed(1)} Hz
+                        </span>
+                      </div>
+                    )}
                     {mod.shaper_x && (
                       <div className="metric-kv">
                         <span>X-Axis Shaper</span>
@@ -1138,6 +1291,39 @@ export const MetricsPanel: React.FC<Props> = ({
                           {mod.shaper_y.recommended_shaper} @ {mod.shaper_y.effective_freq_hz.toFixed(1)} Hz
                         </span>
                       </div>
+                    )}
+                    {(mod.shaper_x || mod.shaper_y) && (
+                      <>
+                        <div className="metric-kv">
+                          <span>Structural Freq (X / Y)</span>
+                          <span className="metric-val">
+                            {mod.shaper_x ? mod.shaper_x.structural_freq_hz.toFixed(0) : "—"} /{" "}
+                            {mod.shaper_y ? mod.shaper_y.structural_freq_hz.toFixed(0) : "—"} Hz
+                          </span>
+                        </div>
+                        <div className="metric-kv">
+                          <span>Belt Freq (X / Y)</span>
+                          <span className="metric-val">
+                            {mod.shaper_x ? mod.shaper_x.belt_freq_hz.toFixed(0) : "—"} /{" "}
+                            {mod.shaper_y ? mod.shaper_y.belt_freq_hz.toFixed(0) : "—"} Hz
+                          </span>
+                        </div>
+                        {(mod.shaper_x?.motor_freq_hz != null || mod.shaper_y?.motor_freq_hz != null) && (
+                          <div className="metric-kv">
+                            <span>Motor Stiffness Freq (X / Y)</span>
+                            <span className="metric-val">
+                              {mod.shaper_x?.motor_freq_hz != null
+                                ? mod.shaper_x.motor_freq_hz.toFixed(0)
+                                : "—"}{" "}
+                              /{" "}
+                              {mod.shaper_y?.motor_freq_hz != null
+                                ? mod.shaper_y.motor_freq_hz.toFixed(0)
+                                : "—"}{" "}
+                              Hz
+                            </span>
+                          </div>
+                        )}
+                      </>
                     )}
                     <div className="metric-kv">
                       <span>Rec. Max Accel</span>
@@ -1169,6 +1355,98 @@ export const MetricsPanel: React.FC<Props> = ({
                         {kin.torque_safety_margin.toFixed(2)}×
                       </span>
                     </div>
+                    {kin.motor_stiffness_n_per_mm != null && (
+                      <div className="metric-kv">
+                        <span>Motor Magnetic Stiffness</span>
+                        <span className="metric-val metric-val-with-delta">
+                          {compareSim?.kinematics.motor_stiffness_n_per_mm != null && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.kinematics.motor_stiffness_n_per_mm}
+                              newVal={kin.motor_stiffness_n_per_mm}
+                              higherIsBetter={true}
+                              eps={0.1}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                            />
+                          )}
+                          {kin.motor_stiffness_n_per_mm.toFixed(1)} N/mm
+                        </span>
+                      </div>
+                    )}
+                    {kin.belt_stiffness_n_per_mm != null && (
+                      <div className="metric-kv">
+                        <span>Belt Stiffness</span>
+                        <span className="metric-val metric-val-with-delta">
+                          {compareSim?.kinematics.belt_stiffness_n_per_mm != null && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.kinematics.belt_stiffness_n_per_mm}
+                              newVal={kin.belt_stiffness_n_per_mm}
+                              higherIsBetter={true}
+                              eps={0.1}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                            />
+                          )}
+                          {kin.belt_stiffness_n_per_mm.toFixed(1)} N/mm
+                        </span>
+                      </div>
+                    )}
+                    {kin.drive_stiffness_n_per_mm != null && (
+                      <div className="metric-kv">
+                        <span>Combined Drive Stiffness</span>
+                        <span className="metric-val metric-val-with-delta">
+                          {compareSim?.kinematics.drive_stiffness_n_per_mm != null && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.kinematics.drive_stiffness_n_per_mm}
+                              newVal={kin.drive_stiffness_n_per_mm}
+                              higherIsBetter={true}
+                              eps={0.1}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                            />
+                          )}
+                          {kin.drive_stiffness_n_per_mm.toFixed(1)} N/mm
+                        </span>
+                      </div>
+                    )}
+                    {kin.motor_voltage_efficiency_pct != null && (
+                      <div className="metric-kv">
+                        <span>Voltage Efficiency</span>
+                        <span
+                          className={`metric-val metric-val-with-delta ${
+                            kin.motor_voltage_efficiency_pct < 70
+                              ? "tag-bad"
+                              : kin.motor_voltage_efficiency_pct < 85
+                                ? "tag-warn"
+                                : "tag-ok"
+                          }`}
+                        >
+                          {compareSim?.kinematics.motor_voltage_efficiency_pct != null && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.kinematics.motor_voltage_efficiency_pct}
+                              newVal={kin.motor_voltage_efficiency_pct}
+                              higherIsBetter={true}
+                              eps={0.5}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(0)}%`}
+                            />
+                          )}
+                          {kin.motor_voltage_efficiency_pct.toFixed(0)}%
+                        </span>
+                      </div>
+                    )}
+                    {kin.motor_heat_w_each != null && (
+                      <div className="metric-kv">
+                        <span>Motor Heat</span>
+                        <span
+                          className={`metric-val ${
+                            kin.motor_overcurrent_risk
+                              ? "tag-bad"
+                              : kin.motor_heat_w_each > 8.5
+                                ? "tag-warn"
+                                : ""
+                          }`}
+                        >
+                          {kin.motor_heat_w_each.toFixed(1)} W/motor
+                        </span>
+                      </div>
+                    )}
                     {pluckHz != null && (
                       <div className="metric-kv">
                         <span>Belt Tune (150mm span)</span>
@@ -1210,8 +1488,13 @@ export const MetricsPanel: React.FC<Props> = ({
                         <span className="metric-val">{Math.round(kin.frame_belt_preload_n)} N</span>
                       </div>
                     )}
-                    {(kin.belt_overtension_risk || kin.shaft_bending_risk) && (
+                    {(kin.motor_overcurrent_risk || kin.belt_overtension_risk || kin.shaft_bending_risk) && (
                       <div className="warning-pill-stack">
+                        {kin.motor_overcurrent_risk && (
+                          <div className="warning-pill bad">
+                            ⚠ Motor run current exceeds rated Amps — overheating &amp; demagnetization risk
+                          </div>
+                        )}
                         {kin.belt_overtension_risk && (
                           <div className="warning-pill bad">
                             ⚠ Belt overtensioned — upgrade to 9mm/12mm Aramid

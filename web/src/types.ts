@@ -35,12 +35,41 @@ export interface PartPresetItem {
   name: string;
 }
 
+export interface StepperCatalogItem {
+  preset_id: string;
+  name: string;
+  holding_torque_nm: number;
+  rated_current_a: number;
+  run_current_a: number;
+  phase_resistance_ohm: number;
+  inductance_mh: number;
+  rotor_inertia_kg_m2: number;
+  motor_mass_g: number;
+  steps_per_rev: number;
+}
+
+export type ToolheadMountMaterial =
+  | "abs_printed"
+  | "pa12_cf_printed"
+  | "aluminum_6061_t6";
+
+export interface ToolheadPresetItem {
+  preset_id: string;
+  name: string;
+  total_mass_g: number;
+  cog_offset_mm: [number, number, number];
+  nozzle_offset_mm: [number, number, number];
+  mount_material: ToolheadMountMaterial;
+}
+
 export interface CatalogResponse {
   materials: MaterialItem[];
   profiles: ProfileItem[];
   filaments: FilamentItem[];
   part_presets: PartPresetItem[];
   presets: PresetItem[];
+  steppers?: StepperCatalogItem[];
+  toolhead_presets?: ToolheadPresetItem[];
 }
 
 export interface SolidVoxelData {
@@ -234,6 +263,7 @@ export interface PrinterSpecData {
     panel_mounting: "none" | "clip_enclosure" | "bolted_structural";
     panel_material: string;
     panel_thickness_mm: number;
+    bolt_panels_to_gantry?: boolean;
   };
   gantry: {
     x_beam_profile: string;
@@ -264,9 +294,12 @@ export interface PrinterSpecData {
     delta_arm_length_mm: number;
     delta_radius_mm: number;
     xy_stepper: {
+      preset_id?: string;
       name: string;
       holding_torque_nm: number;
       rated_current_a: number;
+      run_current_a?: number;
+      phase_resistance_ohm?: number;
       inductance_mh: number;
       supply_voltage_v: number;
       rotor_inertia_kg_m2: number;
@@ -275,9 +308,12 @@ export interface PrinterSpecData {
     };
   };
   toolhead: {
+    preset_id?: string;
     name: string;
     total_mass_g: number;
     cog_offset_mm: [number, number, number];
+    nozzle_offset_mm?: [number, number, number];
+    mount_material?: ToolheadMountMaterial;
     envelope_mm: [number, number, number];
     hotend: {
       name: string;
@@ -350,6 +386,8 @@ export interface ShaperData {
   effective_freq_hz: number;
   structural_freq_hz: number;
   belt_freq_hz: number;
+  motor_freq_hz?: number;
+  drive_freq_hz?: number;
   recommended_shaper: string;
   max_accel_mm_s2: number;
   estimated_ringing_ratio: number;
@@ -392,6 +430,12 @@ export interface SimulationResponse {
       material_name: string;
       thickness_mm: number;
       color_hex: string;
+      bolted_to_gantry?: boolean;
+      is_flying_gantry?: boolean;
+      effective_shear_gt_kn_mm?: number;
+      buckling_factor?: number;
+      areal_mass_kg_m2?: number;
+      total_panel_mass_kg?: number;
     };
     frame_dims_mm: [number, number, number];
     build_volume_mm: [number, number, number];
@@ -399,6 +443,11 @@ export interface SimulationResponse {
     bed_size_mm: [number, number];
     bed_center_mm: [number, number, number];
     toolhead_node_id: string;
+    nozzle_node_id?: string;
+    toolhead_cog_node_id?: string;
+    cog_offset_mm?: [number, number, number];
+    nozzle_offset_mm?: [number, number, number];
+    mount_material?: string;
     toolhead_envelope_mm: [number, number, number];
     nodes: GeometryNode[];
     members: GeometryMember[];
@@ -422,6 +471,9 @@ export interface SimulationResponse {
     accel_deflection_x_um: number;
     accel_deflection_y_um: number;
     combined_max_deflection_um: number;
+    beam_center_deflection_um?: number;
+    nozzle_twist_amplification_pct?: number;
+    nozzle_twist_angle_mrad?: number;
     toolhead_stiffness_x_n_per_mm: number;
     toolhead_stiffness_y_n_per_mm: number;
     toolhead_stiffness_z_n_per_mm: number;
@@ -443,6 +495,7 @@ export interface SimulationResponse {
   };
   modal_fea: {
     fundamental_freq_hz: number;
+    nozzle_pitch_twist_freq_hz?: number;
     recommended_max_accel_mm_s2: number;
     shaper_x: ShaperData | null;
     shaper_y: ShaperData | null;
@@ -469,6 +522,13 @@ export interface SimulationResponse {
     belt_overtension_risk?: boolean;
     shaft_bending_risk?: boolean;
     frame_belt_preload_n?: number;
+    motor_run_current_a?: number;
+    motor_stiffness_n_per_mm?: number;
+    belt_stiffness_n_per_mm?: number;
+    drive_stiffness_n_per_mm?: number;
+    motor_voltage_efficiency_pct?: number;
+    motor_heat_w_each?: number;
+    motor_overcurrent_risk?: boolean;
     delta_workspace_valid: boolean;
   };
   thermal: {

@@ -4,6 +4,7 @@ import {
   PrinterSpecData,
   SimulationResponse,
   SolidFeaEngine,
+  ToolheadMountMaterial,
   TopoOptRequestParams,
 } from "../types";
 
@@ -59,6 +60,13 @@ const ARCH_LABELS: Record<PrinterSpecData["architecture"], string> = {
   delta: "Delta",
 };
 
+const Z_DRIVE_SHORT_LABELS: Record<string, string> = {
+  leadscrew_triple: "Fixed Gantry (Trident)",
+  belted_quad_z: "Flying Gantry (Voron 2.4)",
+  leadscrew_dual: "Fixed Gantry (Dual-Z)",
+  leadscrew_single: "Fixed Gantry (Single-Z)",
+};
+
 const BELT_LABELS: Record<PrinterSpecData["gantry"]["belt"]["type"], string> = {
   gt2_6mm: "GT2 6mm",
   gt2_9mm: "GT2 9mm",
@@ -79,6 +87,26 @@ const HEATBREAK_LABELS: Record<string, string> = {
   stainless_304: "Stainless 304",
   brass_c360: "Brass C360",
 };
+
+const MOUNT_MATERIAL_OPTIONS: Array<{
+  id: ToolheadMountMaterial;
+  label: string;
+  shortLabel: string;
+}> = [
+  { id: "abs_printed", label: "Printed ABS (2.1 GPa)", shortLabel: "Printed ABS" },
+  { id: "pa12_cf_printed", label: "Printed PA12-CF (6.2 GPa)", shortLabel: "Printed PA12-CF" },
+  { id: "aluminum_6061_t6", label: "CNC Aluminum 6061 (69 GPa)", shortLabel: "CNC Aluminum 6061" },
+];
+
+const BUS_VOLTAGE_PRESETS = [24, 36, 48, 60];
+
+function mountMaterialShort(id?: string): string {
+  return MOUNT_MATERIAL_OPTIONS.find((m) => m.id === id)?.shortLabel ?? "Printed ABS";
+}
+
+function shortMotorName(name: string): string {
+  return name.split("(")[0].trim() || name;
+}
 
 const PANEL_MATERIALS: Array<{ id: string; label: string; shortLabel: string }> = [
   { id: "acrylic_pmma", label: "Cast Acrylic (PMMA)", shortLabel: "Acrylic" },
@@ -161,9 +189,29 @@ export const DesignPanel: React.FC<Props> = ({
   const [topoIterations, setTopoIterations] = useState<number>(18);
   const [preserveBoundaries, setPreserveBoundaries] = useState<boolean>(true);
 
-  // Smooth local draft for belt tension slider (avoids API spam while dragging)
+  // Smooth local drafts for sliders (avoid API spam while dragging)
   const [tensionDraft, setTensionDraft] = useState<number>(spec?.gantry.belt.pretension_n ?? 28);
   const tensionTimerRef = useRef<number | null>(null);
+
+  const [runCurrentDraft, setRunCurrentDraft] = useState<number>(
+    spec?.kinematics.xy_stepper.run_current_a ?? 1.2
+  );
+  const currentTimerRef = useRef<number | null>(null);
+
+  const [cogYDraft, setCogYDraft] = useState<number>(
+    Math.round(Math.abs(spec?.toolhead.cog_offset_mm?.[1] ?? 18))
+  );
+  const cogYTimerRef = useRef<number | null>(null);
+
+  const [cogZDraft, setCogZDraft] = useState<number>(
+    Math.round(Math.abs(spec?.toolhead.cog_offset_mm?.[2] ?? 25))
+  );
+  const cogZTimerRef = useRef<number | null>(null);
+
+  const [nozzleZDraft, setNozzleZDraft] = useState<number>(
+    Math.round(Math.abs(spec?.toolhead.nozzle_offset_mm?.[2] ?? 62))
+  );
+  const nozzleZTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (spec?.gantry.belt.pretension_n != null) {
@@ -172,8 +220,36 @@ export const DesignPanel: React.FC<Props> = ({
   }, [spec?.gantry.belt.pretension_n]);
 
   useEffect(() => {
+    if (spec?.kinematics.xy_stepper) {
+      const nextA =
+        spec.kinematics.xy_stepper.run_current_a ??
+        Math.min(spec.kinematics.xy_stepper.rated_current_a || 1.2, 1.2);
+      setRunCurrentDraft(Number(nextA.toFixed(1)));
+    }
+  }, [spec?.kinematics.xy_stepper.run_current_a, spec?.kinematics.xy_stepper.preset_id]);
+
+  useEffect(() => {
+    if (spec?.toolhead.cog_offset_mm) {
+      setCogYDraft(Math.round(Math.abs(spec.toolhead.cog_offset_mm[1] ?? 18)));
+      setCogZDraft(Math.round(Math.abs(spec.toolhead.cog_offset_mm[2] ?? 25)));
+    }
+  }, [spec?.toolhead.cog_offset_mm?.[1], spec?.toolhead.cog_offset_mm?.[2]]);
+
+  useEffect(() => {
+    if (spec?.toolhead.nozzle_offset_mm) {
+      setNozzleZDraft(Math.round(Math.abs(spec.toolhead.nozzle_offset_mm[2] ?? 62)));
+    } else if (spec) {
+      setNozzleZDraft(62);
+    }
+  }, [spec?.toolhead.nozzle_offset_mm?.[2]]);
+
+  useEffect(() => {
     return () => {
       if (tensionTimerRef.current != null) window.clearTimeout(tensionTimerRef.current);
+      if (currentTimerRef.current != null) window.clearTimeout(currentTimerRef.current);
+      if (cogYTimerRef.current != null) window.clearTimeout(cogYTimerRef.current);
+      if (cogZTimerRef.current != null) window.clearTimeout(cogZTimerRef.current);
+      if (nozzleZTimerRef.current != null) window.clearTimeout(nozzleZTimerRef.current);
     };
   }, []);
 
@@ -241,6 +317,107 @@ export const DesignPanel: React.FC<Props> = ({
     }, 220);
   };
 
+  const specRunCurrentA =
+    spec.kinematics.xy_stepper.run_current_a ??
+    Math.min(spec.kinematics.xy_stepper.rated_current_a || 1.2, 1.2);
+
+  const commitRunCurrent = (rawVal: number) => {
+    const val = Math.max(0.4, Math.min(3.2, Math.round(rawVal * 10) / 10));
+    if (currentTimerRef.current != null) {
+      window.clearTimeout(currentTimerRef.current);
+      currentTimerRef.current = null;
+    }
+    if (Math.abs(val - specRunCurrentA) < 0.01) return;
+    update(
+      (d) => {
+        d.kinematics.xy_stepper.run_current_a = val;
+      },
+      `Motor Current: ${specRunCurrentA.toFixed(1)}A → ${val.toFixed(1)}A`
+    );
+  };
+
+  const handleRunCurrentSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 10) / 10;
+    setRunCurrentDraft(rounded);
+    if (currentTimerRef.current != null) window.clearTimeout(currentTimerRef.current);
+    currentTimerRef.current = window.setTimeout(() => {
+      commitRunCurrent(rounded);
+    }, 220);
+  };
+
+  const specCogYAbs = Math.round(Math.abs(spec.toolhead.cog_offset_mm?.[1] ?? 18));
+  const specCogZAbs = Math.round(Math.abs(spec.toolhead.cog_offset_mm?.[2] ?? 25));
+  const specNozzleZAbs = Math.round(Math.abs(spec.toolhead.nozzle_offset_mm?.[2] ?? 62));
+
+  const commitCogY = (rawVal: number) => {
+    const val = Math.max(0, Math.min(45, Math.round(rawVal)));
+    if (cogYTimerRef.current != null) {
+      window.clearTimeout(cogYTimerRef.current);
+      cogYTimerRef.current = null;
+    }
+    if (val === specCogYAbs) return;
+    update(
+      (d) => {
+        const cur = d.toolhead.cog_offset_mm || [0, -18, -25];
+        d.toolhead.cog_offset_mm = [cur[0], -val, cur[2]];
+        d.toolhead.preset_id = "custom";
+      },
+      `CoG Forward Y: ${specCogYAbs}mm → ${val}mm`
+    );
+  };
+
+  const handleCogYSliderChange = (nextVal: number) => {
+    setCogYDraft(nextVal);
+    if (cogYTimerRef.current != null) window.clearTimeout(cogYTimerRef.current);
+    cogYTimerRef.current = window.setTimeout(() => commitCogY(nextVal), 220);
+  };
+
+  const commitCogZ = (rawVal: number) => {
+    const val = Math.max(0, Math.min(55, Math.round(rawVal)));
+    if (cogZTimerRef.current != null) {
+      window.clearTimeout(cogZTimerRef.current);
+      cogZTimerRef.current = null;
+    }
+    if (val === specCogZAbs) return;
+    update(
+      (d) => {
+        const cur = d.toolhead.cog_offset_mm || [0, -18, -25];
+        d.toolhead.cog_offset_mm = [cur[0], cur[1], -val];
+        d.toolhead.preset_id = "custom";
+      },
+      `CoG Drop Z: ${specCogZAbs}mm → ${val}mm`
+    );
+  };
+
+  const handleCogZSliderChange = (nextVal: number) => {
+    setCogZDraft(nextVal);
+    if (cogZTimerRef.current != null) window.clearTimeout(cogZTimerRef.current);
+    cogZTimerRef.current = window.setTimeout(() => commitCogZ(nextVal), 220);
+  };
+
+  const commitNozzleZ = (rawVal: number) => {
+    const val = Math.max(30, Math.min(95, Math.round(rawVal)));
+    if (nozzleZTimerRef.current != null) {
+      window.clearTimeout(nozzleZTimerRef.current);
+      nozzleZTimerRef.current = null;
+    }
+    if (val === specNozzleZAbs) return;
+    update(
+      (d) => {
+        const cur = d.toolhead.nozzle_offset_mm || [0, -22, -62];
+        d.toolhead.nozzle_offset_mm = [cur[0], cur[1], -val];
+        d.toolhead.preset_id = "custom";
+      },
+      `Nozzle Drop Z: ${specNozzleZAbs}mm → ${val}mm`
+    );
+  };
+
+  const handleNozzleZSliderChange = (nextVal: number) => {
+    setNozzleZDraft(nextVal);
+    if (nozzleZTimerRef.current != null) window.clearTimeout(nozzleZTimerRef.current);
+    nozzleZTimerRef.current = window.setTimeout(() => commitNozzleZ(nextVal), 220);
+  };
+
   const quickUpgrades: QuickUpgradeItem[] = [
     {
       id: "awd_4motor",
@@ -304,6 +481,7 @@ export const DesignPanel: React.FC<Props> = ({
         d.frame.panel_mounting = "bolted_structural";
         d.frame.panel_material = "acm_dibond";
         d.frame.panel_thickness_mm = 4.0;
+        d.frame.bolt_panels_to_gantry = true;
       },
       revert: (d, base) => {
         const baseWasSame =
@@ -317,6 +495,7 @@ export const DesignPanel: React.FC<Props> = ({
         d.frame.panel_mounting = useBase && base ? base.frame.panel_mounting : "none";
         d.frame.panel_material = useBase && base ? base.frame.panel_material : "acrylic_pmma";
         d.frame.panel_thickness_mm = useBase && base ? base.frame.panel_thickness_mm : 3.0;
+        d.frame.bolt_panels_to_gantry = useBase && base ? (base.frame.bolt_panels_to_gantry ?? true) : true;
       },
     },
     {
@@ -391,6 +570,8 @@ export const DesignPanel: React.FC<Props> = ({
   const panelsEnabled = spec.frame.enclosed_panels && effectivePanelMounting !== "none";
   const currentPanelMaterial = spec.frame.panel_material || "acrylic_pmma";
   const currentPanelThickness = spec.frame.panel_thickness_mm || 3;
+  const isFlyingGantry = spec.bed.z_drive === "belted_quad_z";
+  const boltPanelsToGantry = spec.frame.bolt_panels_to_gantry ?? true;
   const thicknessChoices = PANEL_THICKNESS_OPTIONS.includes(currentPanelThickness)
     ? PANEL_THICKNESS_OPTIONS
     : [...PANEL_THICKNESS_OPTIONS, currentPanelThickness].sort((a, b) => a - b);
@@ -401,6 +582,34 @@ export const DesignPanel: React.FC<Props> = ({
   const beltMaxWorkingN = sim?.kinematics.belt_max_working_tension_n;
   const beltOvertension = Boolean(sim?.kinematics.belt_overtension_risk);
   const shaftBendingRisk = Boolean(sim?.kinematics.shaft_bending_risk);
+
+  const stepperCatalog = catalog.steppers ?? [];
+  const xyStepper = spec.kinematics.xy_stepper;
+  const matchedStepper =
+    stepperCatalog.find((s) => s.preset_id === xyStepper.preset_id) ??
+    stepperCatalog.find((s) => s.name === xyStepper.name);
+  const selectedStepperValue = matchedStepper ? matchedStepper.preset_id : "__custom__";
+  const ratedCurrentA = Math.max(xyStepper.rated_current_a || 2.0, 0.1);
+  const currentPctOfRated = Math.round((runCurrentDraft / ratedCurrentA) * 100);
+  const phaseResistanceOhm = xyStepper.phase_resistance_ohm ?? 1.2;
+  const estMotorHeatW = 2.0 * runCurrentDraft * runCurrentDraft * phaseResistanceOhm;
+  const motorOvercurrentDraft = runCurrentDraft > ratedCurrentA + 1e-6 || Boolean(sim?.kinematics.motor_overcurrent_risk);
+
+  const toolheadPresets = catalog.toolhead_presets ?? [];
+  const currentMountMaterial: ToolheadMountMaterial =
+    spec.toolhead.mount_material ?? "abs_printed";
+  const matchedToolheadPreset = toolheadPresets.find(
+    (tp) =>
+      tp.preset_id === spec.toolhead.preset_id &&
+      Math.abs(tp.total_mass_g - spec.toolhead.total_mass_g) < 0.5 &&
+      Math.round(Math.abs(tp.cog_offset_mm[1])) === specCogYAbs &&
+      Math.round(Math.abs(tp.cog_offset_mm[2])) === specCogZAbs &&
+      Math.round(Math.abs(tp.nozzle_offset_mm[2])) === specNozzleZAbs &&
+      tp.mount_material === currentMountMaterial
+  );
+  const selectedToolheadPresetVal = matchedToolheadPreset
+    ? matchedToolheadPreset.preset_id
+    : "__custom__";
 
   return (
     <aside className="sidebar">
@@ -520,6 +729,46 @@ export const DesignPanel: React.FC<Props> = ({
                   <option value="delta">Delta (3-Tower)</option>
                 </select>
               </div>
+
+              {spec.architecture === "corexy" && (
+                <>
+                  <div className="field-row">
+                    <label>
+                      <span>Gantry &amp; Z Architecture</span>
+                      <span style={{ color: isFlyingGantry ? "var(--amber)" : "var(--accent)", fontWeight: 600 }}>
+                        {isFlyingGantry ? "Flying Gantry" : "Fixed Gantry"}
+                      </span>
+                    </label>
+                    <select
+                      value={spec.bed.z_drive}
+                      onChange={(e) => {
+                        const nextZ = e.target.value;
+                        const prevLabel = Z_DRIVE_SHORT_LABELS[spec.bed.z_drive] ?? spec.bed.z_drive;
+                        const nextLabel = Z_DRIVE_SHORT_LABELS[nextZ] ?? nextZ;
+                        update(
+                          (d) => {
+                            d.bed.z_drive = nextZ;
+                          },
+                          `Gantry Type: ${prevLabel} → ${nextLabel}`
+                        );
+                      }}
+                    >
+                      <option value="leadscrew_triple">Fixed Gantry — Triple-Z Bed (Trident/VzBot)</option>
+                      <option value="belted_quad_z">Flying Gantry — Quad-Belted Z (Voron 2.4)</option>
+                      <option value="leadscrew_dual">Fixed Gantry — Dual-Z Bed</option>
+                      {spec.bed.z_drive === "leadscrew_single" && (
+                        <option value="leadscrew_single">Fixed Gantry — Single-Z Bed</option>
+                      )}
+                    </select>
+                  </div>
+                  {showHints && (
+                    <div className="hint-line">
+                      Fixed gantry (bed moves Z) lets structural panels bolt straight to the Y-rail &amp; motor
+                      beams; flying gantry (Voron 2.4) moves XY in Z, so panels only stiffen the outer cube.
+                    </div>
+                  )}
+                </>
+              )}
 
               {showHints && (
                 <div className="hint-line">
@@ -754,6 +1003,52 @@ export const DesignPanel: React.FC<Props> = ({
                     </div>
                   </div>
                 )}
+
+                {spec.architecture === "corexy" &&
+                  panelsEnabled &&
+                  effectivePanelMounting === "bolted_structural" && (
+                    <div className="gantry-bolt-block">
+                      {isFlyingGantry ? (
+                        <>
+                          <label className="checkbox-row disabled">
+                            <input type="checkbox" checked={false} disabled />
+                            <span>Bolt Panels Directly to Fixed Gantry Beams</span>
+                          </label>
+                          <div className="hint-line warn">
+                            Unavailable on Flying Gantry (Voron 2.4) — the XY gantry moves up/down in Z, so
+                            panels can only bolt to the outer cube.
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <label className="checkbox-row">
+                            <input
+                              type="checkbox"
+                              checked={boltPanelsToGantry}
+                              onChange={(e) => {
+                                const nextVal = e.target.checked;
+                                update(
+                                  (d) => {
+                                    d.frame.bolt_panels_to_gantry = nextVal;
+                                  },
+                                  nextVal
+                                    ? "Panel Bolts: Outer Frame Only → Bolted to Fixed Gantry"
+                                    : "Panel Bolts: Bolted to Fixed Gantry → Outer Frame Only"
+                                );
+                              }}
+                            />
+                            <span>Bolt Panels Directly to Fixed Gantry Beams</span>
+                          </label>
+                          {showHints && (
+                            <div className="hint-line">
+                              Ties side &amp; rear panels straight into the fixed Y-rail and rear motor
+                              extrusions for a major stiffness &amp; resonance boost.
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
               </div>
             </div>
 
@@ -1004,9 +1299,172 @@ export const DesignPanel: React.FC<Props> = ({
                 )}
               </div>
 
-              {showHints && (
-                <div className="hint-line">Higher voltage keeps stepper torque strong at high speed</div>
-              )}
+              <div className="sub-block">
+                <div className="sub-block-title">
+                  <span>XY Stepper Motor &amp; Driver Power</span>
+                  <span
+                    className={`sub-block-tag ${
+                      motorOvercurrentDraft ? "danger" : currentPctOfRated > 88 ? "warn" : ""
+                    }`}
+                  >
+                    {runCurrentDraft.toFixed(1)}A @ {xyStepper.supply_voltage_v}V
+                  </span>
+                </div>
+
+                {showHints && (
+                  <div className="hint-line">
+                    Higher Amps strengthen magnetic holding stiffness (raises input-shaper Hz); higher
+                    Voltage &amp; lower mH keep torque &amp; stiffness strong at high speed.
+                  </div>
+                )}
+
+                <div className="field-row">
+                  <label>Motor Model</label>
+                  <select
+                    value={selectedStepperValue}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      const chosen = stepperCatalog.find((s) => s.preset_id === nextId);
+                      if (!chosen) return;
+                      const prevName = shortMotorName(xyStepper.name);
+                      const nextName = shortMotorName(chosen.name);
+                      update(
+                        (d) => {
+                          d.kinematics.xy_stepper.preset_id = chosen.preset_id;
+                          d.kinematics.xy_stepper.name = chosen.name;
+                          d.kinematics.xy_stepper.holding_torque_nm = chosen.holding_torque_nm;
+                          d.kinematics.xy_stepper.rated_current_a = chosen.rated_current_a;
+                          d.kinematics.xy_stepper.run_current_a = chosen.run_current_a;
+                          d.kinematics.xy_stepper.phase_resistance_ohm = chosen.phase_resistance_ohm;
+                          d.kinematics.xy_stepper.inductance_mh = chosen.inductance_mh;
+                          d.kinematics.xy_stepper.rotor_inertia_kg_m2 = chosen.rotor_inertia_kg_m2;
+                          d.kinematics.xy_stepper.motor_mass_g = chosen.motor_mass_g;
+                          d.kinematics.xy_stepper.steps_per_rev = chosen.steps_per_rev;
+                        },
+                        `XY Motor: ${prevName} → ${nextName}`
+                      );
+                    }}
+                  >
+                    {selectedStepperValue === "__custom__" && (
+                      <option value="__custom__">{xyStepper.name} (Custom)</option>
+                    )}
+                    {stepperCatalog.map((m) => (
+                      <option key={m.preset_id} value={m.preset_id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="motor-spec-strip">
+                    <span>{xyStepper.holding_torque_nm.toFixed(2)} N·m</span>
+                    <span>•</span>
+                    <span>{xyStepper.inductance_mh.toFixed(1)} mH</span>
+                    <span>•</span>
+                    <span>{ratedCurrentA.toFixed(1)}A rated</span>
+                    <span>•</span>
+                    <span>{xyStepper.steps_per_rev === 400 ? "0.9°" : "1.8°"}</span>
+                  </div>
+                </div>
+
+                <div className="slider-row">
+                  <label>
+                    <span>Run Current (Amps)</span>
+                    <span className="tension-readout">
+                      <span
+                        className={`tension-hz-pill ${
+                          motorOvercurrentDraft ? "danger" : currentPctOfRated > 88 ? "warn" : ""
+                        }`}
+                      >
+                        {currentPctOfRated}% rated • ~{estMotorHeatW.toFixed(1)} W/ea
+                      </span>
+                    </span>
+                  </label>
+                  <div className="tension-control-row">
+                    <input
+                      type="range"
+                      min={0.4}
+                      max={3.2}
+                      step={0.1}
+                      value={Math.max(0.4, Math.min(3.2, runCurrentDraft))}
+                      onChange={(e) => handleRunCurrentSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitRunCurrent(runCurrentDraft)}
+                      onKeyUp={() => commitRunCurrent(runCurrentDraft)}
+                    />
+                    <input
+                      type="number"
+                      className="tension-num-input"
+                      min={0.4}
+                      max={3.2}
+                      step={0.1}
+                      value={runCurrentDraft}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        setRunCurrentDraft(v);
+                        if (v >= 0.4 && v <= 3.2) {
+                          commitRunCurrent(v);
+                        }
+                      }}
+                      onBlur={() => commitRunCurrent(runCurrentDraft)}
+                    />
+                  </div>
+                  {motorOvercurrentDraft && (
+                    <div className="hint-line danger">
+                      Exceeds {ratedCurrentA.toFixed(1)}A motor rating — overheating &amp; torque saturation risk!
+                    </div>
+                  )}
+                </div>
+
+                <div className="field-row">
+                  <label>
+                    <span>Bus Voltage (V)</span>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                      {xyStepper.supply_voltage_v}V DC
+                    </span>
+                  </label>
+                  <div className="voltage-selector-row">
+                    <div className="voltage-preset-group">
+                      {BUS_VOLTAGE_PRESETS.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={`voltage-pill-btn ${
+                            Math.abs(xyStepper.supply_voltage_v - v) < 0.5 ? "active" : ""
+                          }`}
+                          onClick={() => {
+                            if (Math.abs(xyStepper.supply_voltage_v - v) < 0.5) return;
+                            update(
+                              (d) => {
+                                d.kinematics.xy_stepper.supply_voltage_v = v;
+                              },
+                              `Stepper Voltage: ${xyStepper.supply_voltage_v}V → ${v}V`
+                            );
+                          }}
+                        >
+                          {v}V
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="number"
+                      className="tension-num-input"
+                      min={12}
+                      max={96}
+                      step={1}
+                      value={xyStepper.supply_voltage_v}
+                      onChange={(e) =>
+                        updatePositiveNum(
+                          e.target.value,
+                          (d, v) => {
+                            d.kinematics.xy_stepper.supply_voltage_v = v;
+                          },
+                          (v) => `Stepper Voltage: ${xyStepper.supply_voltage_v}V → ${v}V`
+                        )
+                      }
+                      title="Custom stepper bus voltage (V)"
+                    />
+                  </div>
+                </div>
+              </div>
 
               <div className="field-grid-2">
                 <div className="field-row">
@@ -1045,71 +1503,246 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Input Shaper</label>
-                  <select
-                    value={spec.kinematics.input_shaper}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as PrinterSpecData["kinematics"]["input_shaper"];
-                      update(
-                        (d) => {
-                          d.kinematics.input_shaper = nextVal;
-                        },
-                        `Input Shaper: ${SHAPER_LABELS[spec.kinematics.input_shaper]} → ${SHAPER_LABELS[nextVal]}`
-                      );
-                    }}
-                  >
-                    <option value="auto">Auto (Klipper)</option>
-                    <option value="none">None</option>
-                    <option value="zv">ZV</option>
-                    <option value="mzv">MZV</option>
-                    <option value="ei">EI</option>
-                  </select>
-                </div>
-                <div className="field-row">
-                  <label>Stepper Voltage (V)</label>
-                  <input
-                    type="number"
-                    value={spec.kinematics.xy_stepper.supply_voltage_v}
-                    onChange={(e) =>
-                      updatePositiveNum(
-                        e.target.value,
-                        (d, v) => {
-                          d.kinematics.xy_stepper.supply_voltage_v = v;
-                        },
-                        (v) => `Stepper Voltage: ${spec.kinematics.xy_stepper.supply_voltage_v}V → ${v}V`
-                      )
-                    }
-                  />
-                </div>
+              <div className="field-row">
+                <label>Input Shaper</label>
+                <select
+                  value={spec.kinematics.input_shaper}
+                  onChange={(e) => {
+                    const nextVal = e.target.value as PrinterSpecData["kinematics"]["input_shaper"];
+                    update(
+                      (d) => {
+                        d.kinematics.input_shaper = nextVal;
+                      },
+                      `Input Shaper: ${SHAPER_LABELS[spec.kinematics.input_shaper]} → ${SHAPER_LABELS[nextVal]}`
+                    );
+                  }}
+                >
+                  <option value="auto">Auto (Klipper)</option>
+                  <option value="none">None</option>
+                  <option value="zv">ZV</option>
+                  <option value="mzv">MZV</option>
+                  <option value="ei">EI</option>
+                </select>
               </div>
             </div>
 
             <div className="section-card">
-              <div className="section-title">Toolhead &amp; Hotend Thermal</div>
+              <div className="section-title">
+                <span>Toolhead CoG, Nozzle &amp; Mount</span>
+                <span className="sub-block-tag">{spec.toolhead.total_mass_g}g</span>
+              </div>
 
               {showHints && (
-                <div className="hint-line">Lighter toolhead directly boosts X/Y resonance &amp; safe accel</div>
+                <div className="hint-line">
+                  We care about vibration AT THE NOZZLE TIP — lowering CoG &amp; nozzle drop and stiffening
+                  the mount stops the X-beam from twisting like a lever arm during rapid Y reversals.
+                </div>
               )}
 
+              <div className="field-row">
+                <label>Toolhead Preset</label>
+                <select
+                  value={selectedToolheadPresetVal}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    const chosen = toolheadPresets.find((tp) => tp.preset_id === nextId);
+                    if (!chosen) return;
+                    const prevName = spec.toolhead.name;
+                    update(
+                      (d) => {
+                        d.toolhead.preset_id = chosen.preset_id;
+                        d.toolhead.name = chosen.name;
+                        d.toolhead.total_mass_g = chosen.total_mass_g;
+                        d.toolhead.cog_offset_mm = [...chosen.cog_offset_mm];
+                        d.toolhead.nozzle_offset_mm = [...chosen.nozzle_offset_mm];
+                        d.toolhead.mount_material = chosen.mount_material;
+                      },
+                      `Toolhead Preset: ${prevName} → ${chosen.name}`
+                    );
+                  }}
+                >
+                  {selectedToolheadPresetVal === "__custom__" && (
+                    <option value="__custom__">
+                      {spec.toolhead.name || "Custom Toolhead"} (Custom)
+                    </option>
+                  )}
+                  {toolheadPresets.map((tp) => (
+                    <option key={tp.preset_id} value={tp.preset_id}>
+                      {tp.name} ({tp.total_mass_g}g)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="field-grid-2">
+                <div className="field-row">
+                  <label>Carriage / Mount</label>
+                  <select
+                    value={currentMountMaterial}
+                    onChange={(e) => {
+                      const nextMat = e.target.value as ToolheadMountMaterial;
+                      update(
+                        (d) => {
+                          d.toolhead.mount_material = nextMat;
+                          d.toolhead.preset_id = "custom";
+                        },
+                        `Toolhead Mount: ${mountMaterialShort(currentMountMaterial)} → ${mountMaterialShort(
+                          nextMat
+                        )}`
+                      );
+                    }}
+                  >
+                    {MOUNT_MATERIAL_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div className="field-row">
                   <label>Toolhead Mass (g)</label>
                   <input
                     type="number"
+                    min={50}
+                    max={1200}
+                    step={5}
                     value={spec.toolhead.total_mass_g}
                     onChange={(e) =>
                       updatePositiveNum(
                         e.target.value,
                         (d, v) => {
                           d.toolhead.total_mass_g = v;
+                          d.toolhead.preset_id = "custom";
                         },
                         (v) => `Toolhead Mass: ${spec.toolhead.total_mass_g}g → ${v}g`
                       )
                     }
                   />
                 </div>
+              </div>
+
+              <div className="slider-row">
+                <label>
+                  <span>CoG Forward Y (mm)</span>
+                  <span className="tension-readout">
+                    <strong>{cogYDraft} mm</strong>
+                    <span className="kpi-sub">in front of X-beam</span>
+                  </span>
+                </label>
+                <div className="tension-control-row">
+                  <input
+                    type="range"
+                    min={0}
+                    max={45}
+                    step={1}
+                    value={Math.max(0, Math.min(45, cogYDraft))}
+                    onChange={(e) => handleCogYSliderChange(Number(e.target.value))}
+                    onPointerUp={() => commitCogY(cogYDraft)}
+                    onKeyUp={() => commitCogY(cogYDraft)}
+                  />
+                  <input
+                    type="number"
+                    className="tension-num-input"
+                    min={0}
+                    max={45}
+                    step={1}
+                    value={cogYDraft}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      setCogYDraft(v);
+                      if (v >= 0 && v <= 45) commitCogY(v);
+                    }}
+                    onBlur={() => commitCogY(cogYDraft)}
+                  />
+                </div>
+              </div>
+
+              <div className="slider-row">
+                <label>
+                  <span>CoG Drop Z (mm)</span>
+                  <span className="tension-readout">
+                    <strong>{cogZDraft} mm</strong>
+                    <span className="kpi-sub">below X-beam</span>
+                  </span>
+                </label>
+                <div className="tension-control-row">
+                  <input
+                    type="range"
+                    min={0}
+                    max={55}
+                    step={1}
+                    value={Math.max(0, Math.min(55, cogZDraft))}
+                    onChange={(e) => handleCogZSliderChange(Number(e.target.value))}
+                    onPointerUp={() => commitCogZ(cogZDraft)}
+                    onKeyUp={() => commitCogZ(cogZDraft)}
+                  />
+                  <input
+                    type="number"
+                    className="tension-num-input"
+                    min={0}
+                    max={55}
+                    step={1}
+                    value={cogZDraft}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      setCogZDraft(v);
+                      if (v >= 0 && v <= 55) commitCogZ(v);
+                    }}
+                    onBlur={() => commitCogZ(cogZDraft)}
+                  />
+                </div>
+              </div>
+
+              <div className="slider-row">
+                <label>
+                  <span>Nozzle Drop Z (mm)</span>
+                  <span className="tension-readout">
+                    <strong style={{ color: "#fbbf24" }}>{nozzleZDraft} mm</strong>
+                    <span className="kpi-sub">lever arm</span>
+                  </span>
+                </label>
+                <div className="tension-control-row">
+                  <input
+                    type="range"
+                    min={30}
+                    max={95}
+                    step={1}
+                    value={Math.max(30, Math.min(95, nozzleZDraft))}
+                    onChange={(e) => handleNozzleZSliderChange(Number(e.target.value))}
+                    onPointerUp={() => commitNozzleZ(nozzleZDraft)}
+                    onKeyUp={() => commitNozzleZ(nozzleZDraft)}
+                  />
+                  <input
+                    type="number"
+                    className="tension-num-input"
+                    min={30}
+                    max={95}
+                    step={1}
+                    value={nozzleZDraft}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      setNozzleZDraft(v);
+                      if (v >= 30 && v <= 95) commitNozzleZ(v);
+                    }}
+                    onBlur={() => commitNozzleZ(nozzleZDraft)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="section-card">
+              <div className="section-title">Hotend Thermal &amp; Cooling</div>
+
+              {showHints && (
+                <div className="hint-line">
+                  Longer melt zone &amp; higher wattage unlock faster print flow (mm³/s)
+                </div>
+              )}
+
+              <div className="field-grid-2">
                 <div className="field-row">
                   <label>Heater Power (W)</label>
                   <input
@@ -1126,15 +1759,6 @@ export const DesignPanel: React.FC<Props> = ({
                     }
                   />
                 </div>
-              </div>
-
-              {showHints && (
-                <div className="hint-line">
-                  Longer melt zone &amp; higher wattage unlock faster print flow (mm³/s)
-                </div>
-              )}
-
-              <div className="field-grid-2">
                 <div className="field-row">
                   <label>Melt Zone (mm)</label>
                   <input
@@ -1151,6 +1775,9 @@ export const DesignPanel: React.FC<Props> = ({
                     }
                   />
                 </div>
+              </div>
+
+              <div className="field-grid-2">
                 <div className="field-row">
                   <label>Nozzle Dia (mm)</label>
                   <input
@@ -1167,34 +1794,6 @@ export const DesignPanel: React.FC<Props> = ({
                       )
                     }
                   />
-                </div>
-              </div>
-
-              {showHints && (
-                <div className="hint-line">
-                  Titanium stops heat-creep clogs; higher CFM improves overhangs &amp; bridges
-                </div>
-              )}
-
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Heatbreak Material</label>
-                  <select
-                    value={spec.toolhead.hotend.heatbreak_material}
-                    onChange={(e) => {
-                      const nextVal = e.target.value;
-                      update(
-                        (d) => {
-                          d.toolhead.hotend.heatbreak_material = nextVal;
-                        },
-                        `Heatbreak: ${HEATBREAK_LABELS[spec.toolhead.hotend.heatbreak_material] ?? spec.toolhead.hotend.heatbreak_material} → ${HEATBREAK_LABELS[nextVal] ?? nextVal}`
-                      );
-                    }}
-                  >
-                    <option value="titanium_grade5">Titanium Gr.5</option>
-                    <option value="stainless_304">Stainless 304</option>
-                    <option value="brass_c360">Brass C360</option>
-                  </select>
                 </div>
                 <div className="field-row">
                   <label>Cooling Fan (CFM)</label>
@@ -1213,6 +1812,32 @@ export const DesignPanel: React.FC<Props> = ({
                     }
                   />
                 </div>
+              </div>
+
+              {showHints && (
+                <div className="hint-line">
+                  Titanium stops heat-creep clogs; higher CFM improves overhangs &amp; bridges
+                </div>
+              )}
+
+              <div className="field-row">
+                <label>Heatbreak Material</label>
+                <select
+                  value={spec.toolhead.hotend.heatbreak_material}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    update(
+                      (d) => {
+                        d.toolhead.hotend.heatbreak_material = nextVal;
+                      },
+                      `Heatbreak: ${HEATBREAK_LABELS[spec.toolhead.hotend.heatbreak_material] ?? spec.toolhead.hotend.heatbreak_material} → ${HEATBREAK_LABELS[nextVal] ?? nextVal}`
+                    );
+                  }}
+                >
+                  <option value="titanium_grade5">Titanium Gr.5</option>
+                  <option value="stainless_304">Stainless 304</option>
+                  <option value="brass_c360">Brass C360</option>
+                </select>
               </div>
             </div>
           </>

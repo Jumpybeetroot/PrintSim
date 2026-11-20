@@ -449,6 +449,24 @@ textarea.code-editor {
   margin: 0;
 }
 
+.checkbox-row.disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.checkbox-row.disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.gantry-bolt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 6px;
+  margin-top: 2px;
+  border-top: 1px dashed rgba(56, 189, 248, 0.22);
+}
+
 .slider-row {
   display: flex;
   flex-direction: column;
@@ -1284,4 +1302,70 @@ textarea.code-editor {
   color: #fca5a5;
   background: rgba(239, 68, 68, 0.14);
   border-color: rgba(239, 68, 68, 0.5);
+}
+
+/* Motor spec summary, voltage quick-selector & alert pills */
+.sub-block-tag.warn,
+.tension-hz-pill.warn {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.sub-block-tag.danger,
+.tension-hz-pill.danger {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.motor-spec-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.voltage-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.voltage-preset-group {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  background: #0d131d;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.voltage-pill-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 4px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.voltage-pill-btn:hover {
+  color: var(--text);
+}
+
+.voltage-pill-btn.active {
+  background: rgba(14, 165, 233, 0.22);
+  border-color: var(--accent);
+  color: var(--accent);
 }

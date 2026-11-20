@@ -143,6 +143,12 @@ export const PrinterViewport: React.FC<Props> = ({
       endId: string;
     }>;
     modalToolhead?: THREE.Group;
+    modalToolheadNodeId?: string;
+    modalCogMarker?: THREE.Group;
+    modalCogNodeId?: string;
+    modalNozzleMarker?: THREE.Group;
+    modalNozzleNodeId?: string;
+    modalNozzleRefNodeId?: string;
     basePositions: Record<string, THREE.Vector3>;
     modalVectors: Record<string, THREE.Vector3>;
     isModal: boolean;
@@ -213,7 +219,18 @@ export const PrinterViewport: React.FC<Props> = ({
       if (stateRef.current.isModal && stateRef.current.modalMeshes.length > 0) {
         const t = clock.getElapsedTime();
         const phase = Math.sin(t * 7.5) * 0.38;
-        const { basePositions, modalVectors, modalMeshes, modalToolhead } = stateRef.current;
+        const {
+          basePositions,
+          modalVectors,
+          modalMeshes,
+          modalToolhead,
+          modalToolheadNodeId,
+          modalCogMarker,
+          modalCogNodeId,
+          modalNozzleMarker,
+          modalNozzleNodeId,
+          modalNozzleRefNodeId,
+        } = stateRef.current;
 
         const getPos = (id: string) => {
           const b = basePositions[id];
@@ -227,8 +244,26 @@ export const PrinterViewport: React.FC<Props> = ({
           orientBeamMesh(item.mesh, getPos(item.startId), getPos(item.endId));
         }
         if (modalToolhead) {
-          const thPos = getPos("toolhead");
+          const thPos = getPos(modalToolheadNodeId || "toolhead");
           modalToolhead.position.copy(thPos);
+        }
+        if (modalCogMarker && modalCogNodeId) {
+          modalCogMarker.position.copy(getPos(modalCogNodeId));
+        }
+        if (modalNozzleMarker && modalNozzleNodeId) {
+          const curNoz = getPos(modalNozzleNodeId);
+          modalNozzleMarker.position.copy(curNoz);
+          if (modalNozzleRefNodeId && basePositions[modalNozzleRefNodeId] && basePositions[modalNozzleNodeId]) {
+            const v0 = new THREE.Vector3().subVectors(
+              basePositions[modalNozzleRefNodeId],
+              basePositions[modalNozzleNodeId]
+            );
+            const curRef = getPos(modalNozzleRefNodeId);
+            const v1 = new THREE.Vector3().subVectors(curRef, curNoz);
+            if (v0.lengthSq() > 1e-6 && v1.lengthSq() > 1e-6) {
+              modalNozzleMarker.quaternion.setFromUnitVectors(v0.normalize(), v1.normalize());
+            }
+          }
         }
       }
 
@@ -259,6 +294,12 @@ export const PrinterViewport: React.FC<Props> = ({
 
     stateRef.current.modalMeshes = [];
     stateRef.current.modalToolhead = undefined;
+    stateRef.current.modalToolheadNodeId = undefined;
+    stateRef.current.modalCogMarker = undefined;
+    stateRef.current.modalCogNodeId = undefined;
+    stateRef.current.modalNozzleMarker = undefined;
+    stateRef.current.modalNozzleNodeId = undefined;
+    stateRef.current.modalNozzleRefNodeId = undefined;
     stateRef.current.isModal = viewMode === "modal";
 
     // Render 3D Solid Part FEA mode (Curved Tet10 Gmsh+scikit-fem OR Voxel Hex8)
@@ -849,6 +890,55 @@ export const PrinterViewport: React.FC<Props> = ({
           boltInst.instanceMatrix.needsUpdate = true;
           group.add(boltInst);
         }
+
+        // Bright cyan/metallic gantry-line bolt dots along the fixed gantry height (z = z_gantry)
+        // across Left, Right, and Rear panels when bolted directly to the fixed gantry beams
+        if (panels.bolted_to_gantry) {
+          const gantryNode =
+            geom.nodes.find((n) => n.id === "g_rl") ??
+            geom.nodes.find((n) => n.id === "g_rr") ??
+            geom.nodes.find((n) => n.role === "gantry");
+          if (gantryNode) {
+            const gantryY = toThree(gantryNode.position_mm, cx, cy).y;
+            const margin = 0.14;
+            const halfZ = Math.max(spanY * 0.5 - margin, 0.1);
+            const halfX = Math.max(spanX * 0.5 - margin, 0.1);
+            const gantrySteps = 6;
+            const gantryBoltCoords: THREE.Vector3[] = [];
+
+            for (let i = 0; i <= gantrySteps; i++) {
+              const frac = -1 + (2 * i) / gantrySteps;
+              // Left & Right side panels along the fixed Y-rail beams
+              gantryBoltCoords.push(new THREE.Vector3(leftPos.x, gantryY, leftPos.z + frac * halfZ));
+              gantryBoltCoords.push(new THREE.Vector3(rightPos.x, gantryY, rightPos.z + frac * halfZ));
+              // Rear panel along the fixed rear gantry / motor extrusion
+              gantryBoltCoords.push(new THREE.Vector3(rearPos.x + frac * halfX, gantryY, rearPos.z));
+            }
+
+            const gantryBoltRadius = Math.max(0.044, tScene * 0.65);
+            const gantryBoltGeo = new THREE.SphereGeometry(gantryBoltRadius, 10, 10);
+            const gantryBoltMat = new THREE.MeshStandardMaterial({
+              color: 0x38bdf8,
+              emissive: 0x0284c7,
+              emissiveIntensity: 0.45,
+              metalness: 0.78,
+              roughness: 0.2,
+            });
+            const gantryBoltInst = new THREE.InstancedMesh(
+              gantryBoltGeo,
+              gantryBoltMat,
+              gantryBoltCoords.length
+            );
+            const dummy = new THREE.Object3D();
+            for (let i = 0; i < gantryBoltCoords.length; i++) {
+              dummy.position.copy(gantryBoltCoords[i]);
+              dummy.updateMatrix();
+              gantryBoltInst.setMatrixAt(i, dummy.matrix);
+            }
+            gantryBoltInst.instanceMatrix.needsUpdate = true;
+            group.add(gantryBoltInst);
+          }
+        }
       }
     }
 
@@ -884,37 +974,211 @@ export const PrinterViewport: React.FC<Props> = ({
     bvLine.position.copy(toThree([orig[0] + bx * 0.5, orig[1] + by * 0.5, orig[2] + bz * 0.5], cx, cy));
     group.add(bvLine);
 
-    // Toolhead assembly
-    const thGroup = new THREE.Group();
-    const [ex, ey, ez] = geom.toolhead_envelope_mm;
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(ex * SCALE, ez * SCALE * 0.72, ey * SCALE),
-      new THREE.MeshStandardMaterial({
-        color: 0xe63946,
-        roughness: 0.4,
-        transparent: viewMode === "toolpath",
-        opacity: viewMode === "toolpath" ? 0.4 : 0.95,
-      })
-    );
-    body.position.y = -ez * SCALE * 0.2;
-    thGroup.add(body);
+    // Toolhead carriage, CoG marker sphere, and Nozzle-tip lever-arm assembly
+    const thNodeId = geom.toolhead_node_id || "toolhead";
+    const cogNodeId = geom.toolhead_cog_node_id || "toolhead_cog";
+    const nozNodeId = geom.nozzle_node_id || "nozzle_tip";
 
-    const nozzle = new THREE.Mesh(
-      new THREE.ConeGeometry(0.08, 0.22, 10),
-      new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.2 })
-    );
-    nozzle.rotation.x = Math.PI;
-    nozzle.position.y = -ez * SCALE * 0.65;
-    thGroup.add(nozzle);
+    // Ensure CoG and Nozzle Tip positions exist even on legacy/fallback specs
+    const thBase = basePos[thNodeId];
+    if (thBase) {
+      const cogOff = geom.cog_offset_mm ?? sim.spec.toolhead.cog_offset_mm ?? [0, -18, -25];
+      const nozOff = geom.nozzle_offset_mm ?? sim.spec.toolhead.nozzle_offset_mm ?? [0, -22, -62];
+      const cogDelta = new THREE.Vector3(cogOff[0] * SCALE, cogOff[2] * SCALE, -cogOff[1] * SCALE);
+      const nozDelta = new THREE.Vector3(nozOff[0] * SCALE, nozOff[2] * SCALE, -nozOff[1] * SCALE);
 
-    const thAnchor =
-      viewMode === "fea_stress"
-        ? deformedPos[geom.toolhead_node_id]
-        : basePos[geom.toolhead_node_id];
-    if (thAnchor) thGroup.position.copy(thAnchor);
-    group.add(thGroup);
-    if (viewMode === "modal") {
-      stateRef.current.modalToolhead = thGroup;
+      if (!basePos[cogNodeId]) {
+        basePos[cogNodeId] = thBase.clone().add(cogDelta);
+        deformedPos[cogNodeId] = (deformedPos[thNodeId] ?? thBase).clone().add(cogDelta);
+        if (mVecs[thNodeId] && !mVecs[cogNodeId]) {
+          mVecs[cogNodeId] = mVecs[thNodeId].clone();
+        }
+      }
+      if (!basePos[nozNodeId]) {
+        basePos[nozNodeId] = thBase.clone().add(nozDelta);
+        deformedPos[nozNodeId] = (deformedPos[thNodeId] ?? thBase).clone().add(nozDelta);
+        if (mVecs[thNodeId] && !mVecs[nozNodeId]) {
+          mVecs[nozNodeId] = mVecs[thNodeId].clone();
+        }
+      }
+    }
+
+    const thAnchor = viewMode === "fea_stress" ? deformedPos[thNodeId] : basePos[thNodeId];
+    const cogAnchor = viewMode === "fea_stress" ? deformedPos[cogNodeId] : basePos[cogNodeId];
+    const nozAnchor = viewMode === "fea_stress" ? deformedPos[nozNodeId] : basePos[nozNodeId];
+
+    const isCogNozMode =
+      viewMode === "assembly" || viewMode === "fea_stress" || viewMode === "modal";
+
+    if (isCogNozMode && thAnchor && cogAnchor && nozAnchor) {
+      const mountMatId = geom.mount_material ?? sim.spec.toolhead.mount_material ?? "abs_printed";
+      const carriageColor =
+        mountMatId === "aluminum_6061_t6"
+          ? 0xcbd5e1
+          : mountMatId === "pa12_cf_printed"
+            ? 0x475569
+            : 0xe63946;
+      const strutColor =
+        viewMode === "assembly"
+          ? mountMatId === "aluminum_6061_t6"
+            ? 0xe2e8f0
+            : mountMatId === "pa12_cf_printed"
+              ? 0x64748b
+              : 0x94a3b8
+          : 0x38bdf8;
+
+      // Compact carriage block mounted on the X-beam centerline
+      const thGroup = new THREE.Group();
+      const carriageBody = new THREE.Mesh(
+        new THREE.BoxGeometry(0.42, 0.28, 0.30),
+        new THREE.MeshStandardMaterial({
+          color: carriageColor,
+          metalness: mountMatId === "aluminum_6061_t6" ? 0.72 : 0.28,
+          roughness: mountMatId === "aluminum_6061_t6" ? 0.26 : 0.45,
+          transparent: viewMode !== "assembly",
+          opacity: viewMode === "assembly" ? 0.92 : 0.55,
+        })
+      );
+      thGroup.add(carriageBody);
+      thGroup.position.copy(thAnchor);
+      group.add(thGroup);
+
+      // Sleek lever-arm struts connecting X-beam carriage -> CoG -> Nozzle tip
+      const strutGeo1 = new THREE.CylinderGeometry(0.032, 0.032, 1, 10);
+      const strutMat1 = new THREE.MeshStandardMaterial({
+        color: strutColor,
+        metalness: 0.7,
+        roughness: 0.28,
+      });
+      const strutToCog = new THREE.Mesh(strutGeo1, strutMat1);
+      orientBeamMesh(strutToCog, thAnchor, cogAnchor);
+      group.add(strutToCog);
+
+      const strutGeo2 = new THREE.CylinderGeometry(0.026, 0.022, 1, 10);
+      const strutMat2 = new THREE.MeshStandardMaterial({
+        color: 0xd97706,
+        metalness: 0.75,
+        roughness: 0.25,
+      });
+      const strutToNoz = new THREE.Mesh(strutGeo2, strutMat2);
+      orientBeamMesh(strutToNoz, cogAnchor, nozAnchor);
+      group.add(strutToNoz);
+
+      // Undeformed lever-arm ghost reference in FEA & Modal modes
+      if ((viewMode === "fea_stress" || viewMode === "modal") && basePos[thNodeId] && basePos[cogNodeId] && basePos[nozNodeId]) {
+        const ghostGeo = new THREE.BufferGeometry().setFromPoints([
+          basePos[thNodeId],
+          basePos[cogNodeId],
+          basePos[nozNodeId],
+        ]);
+        const ghostMat = new THREE.LineBasicMaterial({
+          color: 0x94a3b8,
+          transparent: true,
+          opacity: 0.45,
+        });
+        group.add(new THREE.Line(ghostGeo, ghostMat));
+      }
+
+      // Glowing amber CoG marker sphere + equatorial target ring
+      const cogGroup = new THREE.Group();
+      const cogSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.13, 18, 18),
+        new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          emissive: 0xd97706,
+          emissiveIntensity: 0.65,
+          roughness: 0.22,
+          metalness: 0.18,
+        })
+      );
+      cogGroup.add(cogSphere);
+      const cogRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.19, 0.016, 10, 24),
+        new THREE.MeshBasicMaterial({
+          color: 0xfde68a,
+          transparent: true,
+          opacity: 0.88,
+        })
+      );
+      cogRing.rotation.x = Math.PI * 0.5;
+      cogGroup.add(cogRing);
+      cogGroup.position.copy(cogAnchor);
+      group.add(cogGroup);
+
+      // Sharp brass/gold inverted cone whose apex sits exactly at nozzle_tip
+      const nozzleGroup = new THREE.Group();
+      const nozzleCone = new THREE.Mesh(
+        new THREE.ConeGeometry(0.09, 0.24, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0xfbbf24,
+          emissive: 0xb45309,
+          emissiveIntensity: 0.28,
+          metalness: 0.88,
+          roughness: 0.18,
+        })
+      );
+      nozzleCone.rotation.x = Math.PI;
+      nozzleCone.position.y = 0.12; // tip at local (0, 0, 0)
+      nozzleGroup.add(nozzleCone);
+
+      const nozzleCollar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.095, 0.095, 0.08, 14),
+        new THREE.MeshStandardMaterial({
+          color: 0xd97706,
+          metalness: 0.82,
+          roughness: 0.24,
+        })
+      );
+      nozzleCollar.position.y = 0.27;
+      nozzleGroup.add(nozzleCollar);
+
+      nozzleGroup.position.copy(nozAnchor);
+      if (viewMode === "fea_stress" && basePos[cogNodeId] && basePos[nozNodeId]) {
+        const v0 = new THREE.Vector3().subVectors(basePos[cogNodeId], basePos[nozNodeId]);
+        const v1 = new THREE.Vector3().subVectors(cogAnchor, nozAnchor);
+        if (v0.lengthSq() > 1e-6 && v1.lengthSq() > 1e-6) {
+          nozzleGroup.quaternion.setFromUnitVectors(v0.normalize(), v1.normalize());
+        }
+      }
+      group.add(nozzleGroup);
+
+      if (viewMode === "modal") {
+        stateRef.current.modalToolhead = thGroup;
+        stateRef.current.modalToolheadNodeId = thNodeId;
+        stateRef.current.modalCogMarker = cogGroup;
+        stateRef.current.modalCogNodeId = cogNodeId;
+        stateRef.current.modalNozzleMarker = nozzleGroup;
+        stateRef.current.modalNozzleNodeId = nozNodeId;
+        stateRef.current.modalNozzleRefNodeId = cogNodeId;
+        stateRef.current.modalMeshes.push({ mesh: strutToCog, startId: thNodeId, endId: cogNodeId });
+        stateRef.current.modalMeshes.push({ mesh: strutToNoz, startId: cogNodeId, endId: nozNodeId });
+      }
+    } else if (thAnchor) {
+      // Translucent toolhead reference in Virtual Print (toolpath) mode
+      const thGroup = new THREE.Group();
+      const [ex, ey, ez] = geom.toolhead_envelope_mm;
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(ex * SCALE, ez * SCALE * 0.72, ey * SCALE),
+        new THREE.MeshStandardMaterial({
+          color: 0xe63946,
+          roughness: 0.4,
+          transparent: true,
+          opacity: 0.35,
+        })
+      );
+      body.position.y = -ez * SCALE * 0.2;
+      thGroup.add(body);
+
+      const nozzle = new THREE.Mesh(
+        new THREE.ConeGeometry(0.08, 0.22, 10),
+        new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.85, roughness: 0.2 })
+      );
+      nozzle.rotation.x = Math.PI;
+      nozzle.position.y = -ez * SCALE * 0.65;
+      thGroup.add(nozzle);
+
+      thGroup.position.copy(thAnchor);
+      group.add(thGroup);
     }
 
     // Virtual Print Toolpath overlay
@@ -1216,14 +1480,26 @@ export const PrinterViewport: React.FC<Props> = ({
 
         {viewMode === "assembly" && (
           <div className="hud-card" style={{ color: "var(--muted)" }}>
-            Drag to orbit • Scroll to zoom • Right-drag to pan
+            <span>
+              <strong style={{ color: "#f59e0b" }}>●</strong> Toolhead CoG
+            </span>
+            <span>
+              <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle Tip
+            </span>
+            <span>|</span>
+            <span>Drag to orbit • Scroll to zoom</span>
           </div>
         )}
 
         {viewMode === "modal" && activeMode && (
           <div className="hud-card">
             <span>
-              Toolhead Participation XYZ:{" "}
+              <strong style={{ color: "#f59e0b" }}>●</strong> CoG &amp;{" "}
+              <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle Pitch
+            </span>
+            <span style={{ color: "var(--muted)" }}>|</span>
+            <span>
+              Participation XYZ:{" "}
               <strong>
                 {activeMode.toolhead_participation_xyz.map((v) => `${Math.round(v * 100)}%`).join(" / ")}
               </strong>

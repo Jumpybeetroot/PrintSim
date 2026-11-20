@@ -46,6 +46,13 @@ const ARCH_LABELS: Record<string, string> = {
   delta: "Delta",
 };
 
+const Z_DRIVE_LABELS: Record<string, string> = {
+  leadscrew_triple: "Fixed Gantry (Trident)",
+  belted_quad_z: "Flying Gantry (Voron 2.4)",
+  leadscrew_dual: "Fixed Gantry (Dual-Z)",
+  leadscrew_single: "Fixed Gantry (Single-Z)",
+};
+
 const PANEL_MATERIAL_LABELS: Record<string, string> = {
   acrylic_pmma: "Acrylic",
   polycarbonate: "Polycarbonate",
@@ -58,6 +65,12 @@ const PANEL_MOUNTING_LABELS: Record<string, string> = {
   none: "Open",
   clip_enclosure: "Clip-In",
   bolted_structural: "Bolted Structural",
+};
+
+const MOUNT_MATERIAL_LABELS: Record<string, string> = {
+  abs_printed: "Printed ABS",
+  pa12_cf_printed: "Printed PA12-CF",
+  aluminum_6061_t6: "CNC Aluminum 6061",
 };
 
 function formatPanelDesc(frame: PrinterSpecData["frame"]): string {
@@ -128,6 +141,13 @@ function describeSpecDiff(
       }`
     );
   }
+  if (prev.bed.z_drive !== next.bed.z_drive) {
+    diffs.push(
+      `Gantry Type: ${Z_DRIVE_LABELS[prev.bed.z_drive] ?? prev.bed.z_drive} → ${
+        Z_DRIVE_LABELS[next.bed.z_drive] ?? next.bed.z_drive
+      }`
+    );
+  }
   if (
     prev.frame.enclosed_panels !== next.frame.enclosed_panels ||
     prev.frame.panel_mounting !== next.frame.panel_mounting ||
@@ -135,6 +155,18 @@ function describeSpecDiff(
     prev.frame.panel_thickness_mm !== next.frame.panel_thickness_mm
   ) {
     diffs.push(`Panels: ${formatPanelDesc(prev.frame)} → ${formatPanelDesc(next.frame)}`);
+  }
+  if (
+    Boolean(prev.frame.bolt_panels_to_gantry ?? true) !==
+    Boolean(next.frame.bolt_panels_to_gantry ?? true)
+  ) {
+    const prevGantryBolts = (prev.frame.bolt_panels_to_gantry ?? true)
+      ? "Bolted to Fixed Gantry"
+      : "Outer Frame Only";
+    const nextGantryBolts = (next.frame.bolt_panels_to_gantry ?? true)
+      ? "Bolted to Fixed Gantry"
+      : "Outer Frame Only";
+    diffs.push(`Panel Bolts: ${prevGantryBolts} → ${nextGantryBolts}`);
   }
   if ((prev.gantry.drive_mode ?? "2wd") !== (next.gantry.drive_mode ?? "2wd")) {
     diffs.push(
@@ -188,13 +220,57 @@ function describeSpecDiff(
   if (prev.kinematics.input_shaper !== next.kinematics.input_shaper) {
     diffs.push(`Input Shaper: ${prev.kinematics.input_shaper.toUpperCase()} → ${next.kinematics.input_shaper.toUpperCase()}`);
   }
+  if (
+    (prev.kinematics.xy_stepper.preset_id ?? "") !== (next.kinematics.xy_stepper.preset_id ?? "") ||
+    prev.kinematics.xy_stepper.name !== next.kinematics.xy_stepper.name
+  ) {
+    const prevM = prev.kinematics.xy_stepper.name.split("(")[0].trim() || prev.kinematics.xy_stepper.name;
+    const nextM = next.kinematics.xy_stepper.name.split("(")[0].trim() || next.kinematics.xy_stepper.name;
+    diffs.push(`XY Motor: ${prevM} → ${nextM}`);
+  }
+  const prevRunA = prev.kinematics.xy_stepper.run_current_a ?? Math.min(prev.kinematics.xy_stepper.rated_current_a, 1.2);
+  const nextRunA = next.kinematics.xy_stepper.run_current_a ?? Math.min(next.kinematics.xy_stepper.rated_current_a, 1.2);
+  if (Math.abs(prevRunA - nextRunA) >= 0.05) {
+    diffs.push(`Motor Current: ${prevRunA.toFixed(1)}A → ${nextRunA.toFixed(1)}A`);
+  }
   if (prev.kinematics.xy_stepper.supply_voltage_v !== next.kinematics.xy_stepper.supply_voltage_v) {
     diffs.push(
       `Stepper Voltage: ${prev.kinematics.xy_stepper.supply_voltage_v}V → ${next.kinematics.xy_stepper.supply_voltage_v}V`
     );
   }
+  if (
+    prev.toolhead.preset_id !== next.toolhead.preset_id &&
+    next.toolhead.preset_id &&
+    next.toolhead.preset_id !== "custom"
+  ) {
+    diffs.push(`Toolhead: ${prev.toolhead.name} → ${next.toolhead.name}`);
+  }
+  const prevMount = prev.toolhead.mount_material ?? "abs_printed";
+  const nextMount = next.toolhead.mount_material ?? "abs_printed";
+  if (prevMount !== nextMount) {
+    diffs.push(
+      `Toolhead Mount: ${MOUNT_MATERIAL_LABELS[prevMount] ?? prevMount} → ${
+        MOUNT_MATERIAL_LABELS[nextMount] ?? nextMount
+      }`
+    );
+  }
   if (prev.toolhead.total_mass_g !== next.toolhead.total_mass_g) {
     diffs.push(`Toolhead Mass: ${prev.toolhead.total_mass_g}g → ${next.toolhead.total_mass_g}g`);
+  }
+  const prevCogY = Math.round(Math.abs(prev.toolhead.cog_offset_mm?.[1] ?? 18));
+  const nextCogY = Math.round(Math.abs(next.toolhead.cog_offset_mm?.[1] ?? 18));
+  if (prevCogY !== nextCogY) {
+    diffs.push(`CoG Forward Y: ${prevCogY}mm → ${nextCogY}mm`);
+  }
+  const prevCogZ = Math.round(Math.abs(prev.toolhead.cog_offset_mm?.[2] ?? 25));
+  const nextCogZ = Math.round(Math.abs(next.toolhead.cog_offset_mm?.[2] ?? 25));
+  if (prevCogZ !== nextCogZ) {
+    diffs.push(`CoG Drop Z: ${prevCogZ}mm → ${nextCogZ}mm`);
+  }
+  const prevNozZ = Math.round(Math.abs(prev.toolhead.nozzle_offset_mm?.[2] ?? 62));
+  const nextNozZ = Math.round(Math.abs(next.toolhead.nozzle_offset_mm?.[2] ?? 62));
+  if (prevNozZ !== nextNozZ) {
+    diffs.push(`Nozzle Drop Z: ${prevNozZ}mm → ${nextNozZ}mm`);
   }
   if (prev.toolhead.hotend.heater_power_w !== next.toolhead.hotend.heater_power_w) {
     diffs.push(`Heater Power: ${prev.toolhead.hotend.heater_power_w}W → ${next.toolhead.hotend.heater_power_w}W`);
@@ -874,7 +950,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-badge">PrintSim 0.5</span>
+          <span className="brand-badge">PrintSim 0.6</span>
           <span>Multiphysics 3D Printer Studio</span>
           {optMessage && (
             <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
