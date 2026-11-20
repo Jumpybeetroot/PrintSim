@@ -148,8 +148,45 @@ def solve_static_fea(
     u_y = _solve_linear_system(K, F_y, free_dofs)
     defl_y_um = float(np.linalg.norm(u_y[th_dof : th_dof + 3])) * 1e6
 
-    # 4. Combined worst-case envelope (gravity + 0.707*Fx + 0.707*Fy diagonal jerk)
-    u_comb = u_grav + 0.7071 * u_x + 0.7071 * u_y
+    # 4. Belt-induced frame preload (CoreXY motor corners pull inward along X/Y belt runs)
+    F_belt = np.zeros(n_dof, dtype=float)
+    if assembly.spec.architecture == "corexy":
+        t0 = assembly.spec.gantry.belt.pretension_n
+        imb = 0.08  # corner mount/belt path compliance couple across frame depth
+        if assembly.spec.gantry.drive_mode == "awd":
+            belt_loads = [
+                ("g_rl", +t0, -(1.0 + imb) * t0),
+                ("g_rr", -t0, -(1.0 + imb) * t0),
+                ("g_fl", +t0, +(1.0 - imb) * t0),
+                ("g_fr", -t0, +(1.0 - imb) * t0),
+            ]
+        else:
+            belt_loads = [
+                ("g_rl", +t0, -t0),
+                ("g_rr", -t0, -t0),
+                ("g_fl", 0.0, +(1.0 - imb) * t0),
+                ("g_fr", 0.0, +(1.0 - imb) * t0),
+            ]
+        for nid, fx, fy in belt_loads:
+            if nid in node_idx:
+                bi = 6 * node_idx[nid]
+                F_belt[bi + 0] += fx
+                F_belt[bi + 1] += fy
+    u_belt = _solve_linear_system(K, F_belt, free_dofs)
+
+    # 5. Combined worst-case envelope (gravity + belt preload + 0.707*(+-ux) + 0.707*(+-uy))
+    u_base = u_grav + u_belt
+    u_comb = u_base + 0.7071 * u_x + 0.7071 * u_y
+    best_peak = -1.0
+    n_nodes = len(assembly.nodes)
+    for sx in (1.0, -1.0):
+        for sy in (1.0, -1.0):
+            cand = u_base + sx * 0.7071 * u_x + sy * 0.7071 * u_y
+            trans = cand.reshape(n_nodes, 6)[:, :3]
+            peak = float(np.max(np.linalg.norm(trans, axis=1))) if n_nodes > 0 else 0.0
+            if peak > best_peak:
+                best_peak = peak
+                u_comb = cand
 
     nodal_disp_mm: dict[str, list[float]] = {}
     max_disp_m = 0.0

@@ -99,7 +99,12 @@ def _compute_scores_and_diagnostics(
     accel_score = min(55.0, (rec_a / 12000.0) * 55.0)
     torque_score = min(30.0, kinematics.torque_safety_margin * 15.0)
     belt_score = 0.0 if kinematics.belt_slip_risk else 15.0
-    dynamics = max(0.0, min(100.0, accel_score + torque_score + belt_score))
+    belt_overtension_pen = 8.0 if kinematics.belt_overtension_risk else 0.0
+    shaft_bend_pen = 6.0 if kinematics.shaft_bending_risk else 0.0
+    dynamics = max(
+        0.0,
+        min(100.0, accel_score + torque_score + belt_score - belt_overtension_pen - shaft_bend_pen),
+    )
     if kinematics.step_skip_risk:
         diag.append(
             f"Stepper torque margin is low ({kinematics.torque_safety_margin:.2f}x): "
@@ -109,6 +114,16 @@ def _compute_scores_and_diagnostics(
         diag.append(
             f"Belt slack-side slip risk at {spec.kinematics.max_accel_mm_s2:.0f} mm/s^2: "
             "increase belt pretension or upgrade to 9mm/12mm GT2 belt."
+        )
+    if kinematics.belt_overtension_risk:
+        diag.append(
+            f"Belt overtension risk (peak {kinematics.belt_peak_tension_n:.1f} N > rated "
+            f"{kinematics.belt_max_working_tension_n:.1f} N): upgrade to 9mm/12mm Aramid or Steel-core belts."
+        )
+    if kinematics.shaft_bending_risk:
+        diag.append(
+            f"Stepper shaft bending risk at {spec.gantry.belt.pretension_n:.0f} N belt pretension (> 45 N) "
+            "on cantilevered single-shear motor shafts: enable Double-Shear Pulley Supports."
         )
     if not kinematics.delta_workspace_valid:
         diag.append("Delta arm length cannot reach full build volume corners; increase delta_arm_length_mm.")

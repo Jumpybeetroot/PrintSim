@@ -119,6 +119,139 @@ class TestCoreXYBOM:
         assert all(c.profile_id != spec_dual.gantry.x_rail_profile for c in bom_dual.cut_list)
 
 
+class TestAWDAndStructuralPanelsBOM:
+    """Verify v0.5 CoreXY AWD, double-shear pulley kits, and structural panel BOM."""
+
+    def test_awd_corexy_monolith_vs_2wd_trident(self) -> None:
+        trident_spec = _load_example("voron_trident_300.yaml")
+        monolith_spec = _load_example("voron_monolith_awd.yaml")
+
+        bom_trident = generate_bom(trident_spec)
+        bom_monolith = generate_bom(monolith_spec)
+
+        # Stock Voron Trident 300 is 2WD without double-shear kit, clip-in acrylic panels
+        trident_xy_motors = next(i for i in bom_trident.items if i.sku == "MTR-XY")
+        trident_pulleys = next(i for i in bom_trident.items if i.sku == "MOT-PULLEY-DRV")
+        trident_idlers = next(i for i in bom_trident.items if i.sku == "MOT-IDLER")
+        assert trident_xy_motors.quantity == 2
+        assert trident_pulleys.quantity == 2
+        assert trident_idlers.quantity == 8
+        assert all(i.sku != "MOT-DBL-SHEAR" for i in bom_trident.items)
+
+        # Voron Monolith AWD 300 has 4 XY steppers, 4 drive pulleys, 12 idlers, 4 double-shear sets
+        monolith_xy_motors = next(i for i in bom_monolith.items if i.sku == "MTR-XY")
+        monolith_pulleys = next(i for i in bom_monolith.items if i.sku == "MOT-PULLEY-DRV")
+        monolith_idlers = next(i for i in bom_monolith.items if i.sku == "MOT-IDLER")
+        monolith_ds = next(i for i in bom_monolith.items if i.sku == "MOT-DBL-SHEAR")
+        monolith_belt = next(i for i in bom_monolith.items if i.sku == "MOT-BELT-XY")
+
+        assert monolith_xy_motors.quantity == 4
+        assert monolith_pulleys.quantity == 4
+        assert monolith_idlers.quantity == 12
+        assert monolith_ds.category == "motion"
+        assert monolith_ds.quantity == 4
+        assert monolith_ds.total_cost_usd > 0
+        assert monolith_ds.total_mass_g > 0
+
+        expected_awd_belt_m = (
+            2.0 * (2.0 * (monolith_spec.frame.width_mm + monolith_spec.frame.depth_mm) + 500.0)
+            / 1000.0
+        )
+        assert monolith_belt.quantity == pytest.approx(expected_awd_belt_m, abs=0.01)
+        assert "AWD" in monolith_belt.specification
+        assert "GT2_9MM" in monolith_belt.name and "aramid" in monolith_belt.name
+
+        # 4 XY + 3 Z (leadscrew_triple) + 1 extruder = 8 motors
+        monolith_motor_qty = sum(i.quantity for i in bom_monolith.items if i.category == "motors")
+        assert monolith_motor_qty == 8
+
+        # Monolith AWD with 48V motors, 9mm aramid belts, double-shear, CF beam & ACM panels costs more
+        assert bom_monolith.total_cost_usd > bom_trident.total_cost_usd
+        assert bom_monolith.category_costs_usd["motors"] > bom_trident.category_costs_usd["motors"]
+        assert bom_monolith.category_costs_usd["motion"] > bom_trident.category_costs_usd["motion"]
+
+        # Enabling double-shear on 2WD Trident adds 2 sets
+        trident_ds_spec = trident_spec.model_copy(deep=True)
+        trident_ds_spec.gantry.double_shear_pulleys = True
+        bom_trident_ds = generate_bom(trident_ds_spec)
+        ds_2wd = next(i for i in bom_trident_ds.items if i.sku == "MOT-DBL-SHEAR")
+        assert ds_2wd.quantity == 2
+        assert bom_trident_ds.total_cost_usd > bom_trident.total_cost_usd
+
+    def test_structural_panel_materials_thickness_and_fasteners(self) -> None:
+        base = _load_example("voron_trident_300.yaml")
+
+        # 1) 3mm Cast Acrylic (clip_enclosure)
+        spec_acrylic = base.model_copy(deep=True)
+        spec_acrylic.frame.enclosed_panels = True
+        spec_acrylic.frame.panel_mounting = "clip_enclosure"
+        spec_acrylic.frame.panel_material = "acrylic_pmma"
+        spec_acrylic.frame.panel_thickness_mm = 3.0
+
+        # 2) 4mm ACM Dibond (bolted_structural)
+        spec_acm = base.model_copy(deep=True)
+        spec_acm.frame.enclosed_panels = True
+        spec_acm.frame.panel_mounting = "bolted_structural"
+        spec_acm.frame.panel_material = "acm_dibond"
+        spec_acm.frame.panel_thickness_mm = 4.0
+
+        # 3) 4mm Carbon Fiber 3K Sheet (bolted_structural)
+        spec_cf = base.model_copy(deep=True)
+        spec_cf.frame.enclosed_panels = True
+        spec_cf.frame.panel_mounting = "bolted_structural"
+        spec_cf.frame.panel_material = "carbon_fiber_plate"
+        spec_cf.frame.panel_thickness_mm = 4.0
+
+        bom_acrylic = generate_bom(spec_acrylic)
+        bom_acm = generate_bom(spec_acm)
+        bom_cf = generate_bom(spec_cf)
+
+        def _enc_totals(bom: PrinterBOM) -> tuple[float, float]:
+            enc = [i for i in bom.items if i.category == "enclosure"]
+            return sum(i.total_cost_usd for i in enc), sum(i.total_mass_g for i in enc)
+
+        cost_acrylic, mass_acrylic = _enc_totals(bom_acrylic)
+        cost_acm, mass_acm = _enc_totals(bom_acm)
+        cost_cf, mass_cf = _enc_totals(bom_cf)
+
+        # Monotonic increase in panel cost and mass: 3mm acrylic < 4mm ACM < 4mm CF sheet
+        assert cost_acrylic < cost_acm < cost_cf
+        assert mass_acrylic < mass_acm < mass_cf
+
+        # Bolted structural panels add +48 fasteners vs +16 clip-in latches (+32 delta)
+        assert bom_acm.total_fasteners == bom_acrylic.total_fasteners + 32
+        assert any(i.sku == "FST-PANEL-STRUCT" and i.quantity == 48 for i in bom_acm.items)
+        assert any(i.sku == "FST-PANEL-CLIP" and i.quantity == 16 for i in bom_acrylic.items)
+
+        # Specifications explicitly state material name, thickness, mounting type, and cut dimensions
+        left_acrylic = next(i for i in bom_acrylic.items if i.sku == "ENC-LEFT")
+        left_acm = next(i for i in bom_acm.items if i.sku == "ENC-LEFT")
+        left_cf = next(i for i in bom_cf.items if i.sku == "ENC-LEFT")
+
+        assert "Cast Acrylic Sheet (PMMA)" in left_acrylic.specification
+        assert "3.0 mm" in left_acrylic.specification
+        assert "Clip-In Enclosure" in left_acrylic.specification
+        assert "460x500 mm" in left_acrylic.specification
+
+        assert "ACM / Dibond" in left_acm.specification
+        assert "4.0 mm" in left_acm.specification
+        assert "Bolted Structural" in left_acm.specification
+        assert "460x500 mm" in left_acm.specification
+
+        assert "Carbon Fiber 3K Structural Sheet" in left_cf.specification
+        assert "4.0 mm" in left_cf.specification
+        assert "Bolted Structural" in left_cf.specification
+
+        # panel_mounting == "none" disables enclosure panels even if enclosed_panels is True
+        spec_none = base.model_copy(deep=True)
+        spec_none.frame.enclosed_panels = True
+        spec_none.frame.panel_mounting = "none"
+        bom_none = generate_bom(spec_none)
+        assert [i for i in bom_none.items if i.category == "enclosure"] == []
+        assert "enclosure" not in bom_none.category_costs_usd
+        assert bom_none.total_fasteners < bom_acrylic.total_fasteners
+
+
 class TestCartesianAndDeltaBOM:
     """Verify Cartesian bedslinger and Delta architectures."""
 
@@ -198,6 +331,8 @@ class TestStockNestingMath:
         "yaml_file",
         [
             "corexy_voron_style.yaml",
+            "voron_trident_300.yaml",
+            "voron_monolith_awd.yaml",
             "cartesian_bedslinger.yaml",
             "delta_racer.yaml",
         ],
@@ -260,6 +395,8 @@ class TestSerializationAndConsistency:
         "yaml_file",
         [
             "corexy_voron_style.yaml",
+            "voron_trident_300.yaml",
+            "voron_monolith_awd.yaml",
             "cartesian_bedslinger.yaml",
             "delta_racer.yaml",
         ],

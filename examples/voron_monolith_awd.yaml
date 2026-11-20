@@ -1,0 +1,89 @@
+name: Voron Monolith AWD 300
+description: High-speed 4-motor AWD CoreXY with 9mm aramid high-tension belts, double-shear pulleys, 4mm ACM structural panels, carbon X-beam, 48V steppers, and UHF hotend
+architecture: corexy
+frame:
+  width_mm: 460
+  depth_mm: 460
+  height_mm: 500
+  profile: extrusion_2020
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  brace_profile: brace_rod_10mm
+  brace_material: aluminum_6063_t5
+  enclosed_panels: true
+  panel_mounting: bolted_structural
+  panel_material: acm_dibond
+  panel_thickness_mm: 4.0
+gantry:
+  drive_mode: awd
+  double_shear_pulleys: true
+  x_beam_profile: cf_tube_20x20x2
+  x_beam_material: carbon_fiber_tube
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 115
+  belt:
+    type: gt2_9mm
+    core: aramid
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 65.0
+kinematics:
+  build_volume_mm: [300, 300, 250]
+  max_velocity_mm_s: 700
+  max_accel_mm_s2: 24000
+  max_z_velocity_mm_s: 20
+  max_z_accel_mm_s2: 250
+  square_corner_velocity_mm_s: 8.0
+  input_shaper: auto
+  xy_stepper:
+    name: LDO 2804AC 48V
+    holding_torque_nm: 0.65
+    rated_current_a: 2.5
+    inductance_mh: 1.2
+    supply_voltage_v: 48.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 360
+  z_stepper:
+    name: NEMA17-42mm Integrated TR8x4
+    holding_torque_nm: 0.45
+    rated_current_a: 1.5
+    inductance_mh: 3.0
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 5.4e-6
+    motor_mass_g: 290
+toolhead:
+  name: Monolith / XOL Carbon Direct + CPAP
+  total_mass_g: 290
+  cog_offset_mm: [0, -14, -22]
+  envelope_mm: [58, 62, 85]
+  hotend:
+    name: Rapido 2 UHF / Goliath-Class
+    heater_power_w: 100
+    block_material: copper_c110
+    block_mass_g: 16
+    nozzle_material: copper_c110
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 26
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 12
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 2.8
+    part_cooling_cfm: 18.0
+    max_temp_c: 320
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 6.25
+    max_push_force_n: 75
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 650
+  mass_g: 2500
+  z_drive: leadscrew_triple

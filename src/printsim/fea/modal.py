@@ -78,15 +78,24 @@ def _belt_axis_resonance_hz(assembly: AssemblyModel, axis: str) -> float:
     d = assembly.spec.frame.depth_mm * 1e-3
 
     if assembly.spec.architecture == "corexy":
-        # CoreXY belt loop spans roughly 2*W + 2*D; two parallel spans act on X or Y
-        span_len = max(w + d, 0.35)
-        k_belt = 2.0 * belt.stiffness_ea_n / span_len
+        if assembly.spec.gantry.drive_mode == "awd":
+            # 4-motor AWD halves active belt span driving the toolhead with 4 parallel driven branches
+            span_len = max(0.52 * (w + d), 0.22)
+            k_belt = 4.0 * belt.stiffness_ea_n / span_len
+        else:
+            # CoreXY belt loop spans roughly 2*W + 2*D; two parallel spans act on X or Y
+            span_len = max(w + d, 0.35)
+            k_belt = 2.0 * belt.stiffness_ea_n / span_len
     elif assembly.spec.architecture == "delta":
         span_len = max(assembly.spec.frame.height_mm * 1e-3, 0.45)
         k_belt = 2.5 * belt.stiffness_ea_n / span_len
     else:
         span_len = w if axis == "X" else d
         k_belt = 2.0 * belt.stiffness_ea_n / max(span_len, 0.25)
+
+    # Belt pretension stiffness coupling (Gates belt backlash/slack compliance factor)
+    tension_eff = min(1.08, 0.72 + 0.36 * min(belt.pretension_n / 45.0, 1.0))
+    k_belt *= tension_eff
 
     mass = assembly.x_moving_mass_kg if axis == "X" else assembly.y_moving_mass_kg
     return (1.0 / (2.0 * math.pi)) * math.sqrt(k_belt / max(mass, 0.05))

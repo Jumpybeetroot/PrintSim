@@ -27,6 +27,13 @@ class KinematicsReport:
     belt_peak_tension_n: float
     belt_slip_risk: bool
     delta_workspace_valid: bool = True
+    drive_mode: str = "2wd"
+    xy_motor_count: int = 2
+    belt_pluck_freq_150mm_hz: float = 0.0
+    belt_max_working_tension_n: float = 58.0
+    belt_overtension_risk: bool = False
+    shaft_bending_risk: bool = False
+    frame_belt_preload_n: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +51,13 @@ class KinematicsReport:
             "belt_peak_tension_n": round(self.belt_peak_tension_n, 2),
             "belt_slip_risk": self.belt_slip_risk,
             "delta_workspace_valid": self.delta_workspace_valid,
+            "drive_mode": self.drive_mode,
+            "xy_motor_count": self.xy_motor_count,
+            "belt_pluck_freq_150mm_hz": round(self.belt_pluck_freq_150mm_hz, 2),
+            "belt_max_working_tension_n": round(self.belt_max_working_tension_n, 2),
+            "belt_overtension_risk": self.belt_overtension_risk,
+            "shaft_bending_risk": self.shaft_bending_risk,
+            "frame_belt_preload_n": round(self.frame_belt_preload_n, 2),
         }
 
 
@@ -154,18 +168,23 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     # Available torque at 70% peak speed (typical accel-to-cruise knee)
     t_avail = stepper_available_torque_nm(kin.xy_stepper, max_rpm * 0.7)
 
-    # Linear friction estimate (linear rails + belt idlers ~ 2.5 N)
-    f_fric = 2.5
+    is_awd = spec.architecture == "corexy" and spec.gantry.drive_mode == "awd"
+    drive_mode = "awd" if is_awd else "2wd"
+    xy_motor_count = 4 if is_awd else (3 if spec.architecture == "delta" else 2)
+
+    # Linear friction estimate (extra AWD idlers/motors add modest drag: 3.6 N vs 2.5 N)
+    f_fric = 3.6 if is_awd else 2.5
     j_rot = kin.xy_stepper.rotor_inertia_kg_m2
     alpha_max = a_max_m_s2 / r_p
 
     if spec.architecture == "corexy":
-        # Two motors share pure X or pure Y force (1/2 each), plus rotor inertia
+        # 2WD shares pure X/Y load across 2 motors (0.5 each); AWD shares across 4 motors (0.25 each)
         f_x = assembly.x_moving_mass_kg * a_max_m_s2 + f_fric
         f_y = assembly.y_moving_mass_kg * a_max_m_s2 + f_fric
-        t_req_x = (0.5 * f_x) * r_p + j_rot * alpha_max
-        t_req_y = (0.5 * f_y) * r_p + j_rot * alpha_max
-        peak_belt_force = max(f_x, f_y) * 0.5
+        share = 0.25 if is_awd else 0.5
+        t_req_x = (share * f_x) * r_p + j_rot * alpha_max
+        t_req_y = (share * f_y) * r_p + j_rot * alpha_max
+        peak_belt_force = max(f_x, f_y) * share
     elif spec.architecture == "delta":
         # 3 motors share XY load (~0.65 peak factor for worst-case arm angle)
         f_eff = assembly.x_moving_mass_kg * a_max_m_s2 + f_fric
@@ -189,6 +208,12 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     peak_tension = belt.pretension_n + 0.5 * peak_belt_force
     slack_tension = belt.pretension_n - 0.5 * peak_belt_force
     belt_slip = slack_tension < 2.0
+
+    belt_pluck_150 = belt.pluck_freq_hz(150.0)
+    belt_max_t = belt.max_working_tension_n
+    belt_overtension = peak_tension > belt_max_t
+    shaft_bending = (belt.pretension_n > 45.0) and (not spec.gantry.double_shear_pulleys)
+    frame_preload = 2.0 * belt.pretension_n * (2.0 if is_awd else 1.0)
 
     # Validate Delta reachability at perimeter corners if Delta
     delta_ok = True
@@ -215,4 +240,11 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         belt_peak_tension_n=peak_tension,
         belt_slip_risk=belt_slip,
         delta_workspace_valid=delta_ok,
+        drive_mode=drive_mode,
+        xy_motor_count=xy_motor_count,
+        belt_pluck_freq_150mm_hz=belt_pluck_150,
+        belt_max_working_tension_n=belt_max_t,
+        belt_overtension_risk=belt_overtension,
+        shaft_bending_risk=shaft_bending,
+        frame_belt_preload_n=frame_preload,
     )

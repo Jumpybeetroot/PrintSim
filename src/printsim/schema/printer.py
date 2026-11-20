@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, model_validator
 
 Architecture = Literal["corexy", "cartesian_bedslinger", "delta"]
 BracingType = Literal["none", "corner_gussets", "rear_cross", "full_truss"]
+PanelMountingType = Literal["none", "clip_enclosure", "bolted_structural"]
+DriveModeType = Literal["2wd", "awd"]
 InputShaperType = Literal["auto", "none", "zv", "mzv", "ei", "2hump_ei"]
 
 
@@ -59,21 +61,29 @@ class FrameSpec(BaseModel):
     brace_profile: str = Field("brace_rod_10mm", description="Profile for diagonal braces")
     brace_material: str = Field("aluminum_6063_t5", description="Material for diagonal braces")
     enclosed_panels: bool = Field(
-        False, description="Whether bolted side/rear panels add shear stiffness to the frame"
+        False, description="Whether side/rear/top panels are installed on the frame"
     )
-    panel_thickness_mm: float = Field(3.0, gt=0)
+    panel_mounting: PanelMountingType = Field(
+        "bolted_structural",
+        description="Panel attachment stiffness: none, clip_enclosure (loose), or bolted_structural (shear diaphragm)",
+    )
+    panel_material: str = Field(
+        "acm_dibond",
+        description="Material ID for enclosure/structural panels (acrylic_pmma, polycarbonate, acm_dibond, aluminum_5052_sheet, carbon_fiber_plate)",
+    )
+    panel_thickness_mm: float = Field(3.0, ge=1.0, le=12.0, description="Panel sheet thickness (mm)")
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
 
 
 class BeltSpec(BaseModel):
-    """Drive belt specification."""
+    """Drive belt specification calibrated to Gates PowerGrip 2GT datasheets."""
 
     type: Literal["gt2_6mm", "gt2_9mm", "gt2_12mm"] = "gt2_6mm"
     core: Literal["fiberglass", "steel", "aramid"] = "fiberglass"
     pulley_teeth: int = Field(20, ge=12, le=40)
     pitch_mm: float = Field(2.0, gt=0)
-    pretension_n: float = Field(25.0, gt=0)
+    pretension_n: float = Field(25.0, gt=0, le=200.0)
 
     @property
     def stiffness_ea_n(self) -> float:
@@ -83,13 +93,38 @@ class BeltSpec(BaseModel):
         return core_base * width_scale
 
     @property
+    def linear_mass_kg_m(self) -> float:
+        """Belt linear mass density mu (kg/m) for transverse pluck frequency f = (1/2L)*sqrt(T/mu)."""
+        width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.5, "gt2_12mm": 2.0}[self.type]
+        core_density_scale = {"fiberglass": 1.0, "aramid": 0.94, "steel": 1.35}[self.core]
+        return 0.0115 * width_scale * core_density_scale
+
+    @property
+    def max_working_tension_n(self) -> float:
+        """Safe continuous peak working tension (N) per Gates 2GT engineering ratings."""
+        width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.6, "gt2_12mm": 2.2}[self.type]
+        core_limit = {"fiberglass": 58.0, "aramid": 85.0, "steel": 105.0}[self.core]
+        return core_limit * width_scale
+
+    def pluck_freq_hz(self, span_mm: float = 150.0) -> float:
+        """Transverse acoustic belt pluck frequency at given free span (standard Voron/VzBot 150 mm)."""
+        span_m = max(span_mm * 1e-3, 0.05)
+        return (1.0 / (2.0 * span_m)) * ((self.pretension_n / self.linear_mass_kg_m) ** 0.5)
+
+    @property
     def pitch_radius_m(self) -> float:
         return (self.pulley_teeth * self.pitch_mm * 1e-3) / (2.0 * 3.141592653589793)
 
 
 class GantrySpec(BaseModel):
-    """X/Y gantry beam, rails, and drive belt parameters."""
+    """X/Y gantry beam, rails, drive architecture (2WD/AWD), and belt parameters."""
 
+    drive_mode: DriveModeType = Field(
+        "2wd", description="XY drive layout: 2wd (2-motor CoreXY) or awd (4-motor All-Wheel Drive)"
+    )
+    double_shear_pulleys: bool = Field(
+        False, description="Double-shear bearing supports on XY motor shafts & idlers for high belt tension"
+    )
     x_beam_profile: str = "extrusion_2020"
     x_beam_material: str = "aluminum_6063_t5"
     x_rail_profile: str = "mgn12_rail"

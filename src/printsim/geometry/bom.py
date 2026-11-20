@@ -841,13 +841,21 @@ def generate_bom(
 
     # Drive belts, pulleys, idlers (architecture-specific exact formulas)
     belt = spec.gantry.belt
+    is_awd = arch == "corexy" and spec.gantry.drive_mode == "awd"
     belt_cost_m = _BELT_COST_USD_PER_M.get((belt.type, belt.core), 6.0)
-    belt_mass_g_m = _BELT_MASS_G_PER_M.get(belt.type, 14.0)
+    belt_mass_g_m = round(belt.linear_mass_kg_m * 1000.0, 2)
+    belt_width_hw_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.3, "gt2_12mm": 1.6}.get(belt.type, 1.0)
 
     if arch == "corexy":
-        drive_belt_m = round(2.0 * (2.0 * (w + d) + 400.0) / 1000.0, 2)
-        pulley_qty = 2
-        idler_qty = 8
+        if is_awd:
+            # AWD CoreXY uses dual shorter loops routing around 4 corner motors & 12 idlers
+            drive_belt_m = round(2.0 * (2.0 * (w + d) + 500.0) / 1000.0, 2)
+            pulley_qty = 4
+            idler_qty = 12
+        else:
+            drive_belt_m = round(2.0 * (2.0 * (w + d) + 400.0) / 1000.0, 2)
+            pulley_qty = 2
+            idler_qty = 8
     elif arch == "cartesian_bedslinger":
         drive_belt_m = round((2.0 * w + 150.0 + 2.0 * d + 150.0) / 1000.0, 2)
         pulley_qty = 2
@@ -861,12 +869,13 @@ def generate_bom(
         pulley_qty = 2
         idler_qty = 4
 
+    belt_layout_prefix = "AWD dual-loop, " if is_awd else ""
     _add_bom_item(
         items,
         sku="MOT-BELT-XY",
         category="motion",
         name=f"Drive Belt ({belt.type.upper()}, {belt.core} core)",
-        specification=f"Pitch {belt.pitch_mm:.1f}mm, pretension {belt.pretension_n:.0f}N",
+        specification=f"{belt_layout_prefix}Pitch {belt.pitch_mm:.1f}mm, pretension {belt.pretension_n:.0f}N",
         quantity=drive_belt_m,
         unit="m",
         unit_cost_usd=belt_cost_m,
@@ -880,8 +889,8 @@ def generate_bom(
         specification=f"5mm bore, aluminum, matches {belt.type}",
         quantity=pulley_qty,
         unit="pcs",
-        unit_cost_usd=4.50,
-        unit_mass_g=12.0,
+        unit_cost_usd=4.50 * belt_width_hw_scale,
+        unit_mass_g=12.0 * belt_width_hw_scale,
     )
     _add_bom_item(
         items,
@@ -891,9 +900,27 @@ def generate_bom(
         specification=f"Dual-bearing idler for {belt.type}",
         quantity=idler_qty,
         unit="pcs",
-        unit_cost_usd=3.50,
-        unit_mass_g=10.0,
+        unit_cost_usd=3.50 * belt_width_hw_scale,
+        unit_mass_g=10.0 * belt_width_hw_scale,
     )
+
+    ds_qty = 0
+    if spec.gantry.double_shear_pulleys:
+        ds_qty = 4 if is_awd else (3 if arch == "delta" else 2)
+        _add_bom_item(
+            items,
+            sku="MOT-DBL-SHEAR",
+            category="motion",
+            name="Double-Shear Bearing & Shaft Support Kit",
+            specification=(
+                f"F695-2RS/625 flanged bearings, extended 5mm shaft support & "
+                f"CNC/rigid double-shear motor mount ({'AWD 4-corner' if is_awd else f'{ds_qty}-corner'})"
+            ),
+            quantity=ds_qty,
+            unit="sets",
+            unit_cost_usd=14.00,
+            unit_mass_g=35.0,
+        )
 
     if arch == "delta":
         arm_len_mm = spec.kinematics.delta_arm_length_mm
@@ -973,15 +1000,16 @@ def generate_bom(
     # ------------------------------------------------------------------
     xy_stepper = spec.kinematics.xy_stepper
     z_stepper = spec.kinematics.z_stepper
-    xy_motor_qty = 3 if arch == "delta" else 2
+    xy_motor_qty = 3 if arch == "delta" else (4 if is_awd else 2)
     z_motor_qty = _z_motor_count(arch, spec.bed.z_drive)
 
     xy_unit_cost = 12.0 + xy_stepper.holding_torque_nm * 18.0
+    xy_motor_label = "Tower" if arch == "delta" else ("XY AWD" if is_awd else "XY")
     _add_bom_item(
         items,
         sku="MTR-XY",
         category="motors",
-        name=f"{'Tower' if arch == 'delta' else 'XY'} Stepper Motor — {xy_stepper.name}",
+        name=f"{xy_motor_label} Stepper Motor — {xy_stepper.name}",
         specification=(
             f"{xy_stepper.holding_torque_nm:.2f} N·m, {xy_stepper.rated_current_a:.1f}A, "
             f"{xy_stepper.inductance_mh:.1f}mH, {xy_stepper.supply_voltage_v:.0f}V"
@@ -1167,43 +1195,68 @@ def generate_bom(
     )
 
     # ------------------------------------------------------------------
-    # 6. ENCLOSURE (5 cut panels when enclosed_panels is True)
+    # 6. ENCLOSURE / STRUCTURAL PANELS (material, thickness & mounting)
     # ------------------------------------------------------------------
-    if spec.frame.enclosed_panels:
+    has_panels = spec.frame.enclosed_panels and spec.frame.panel_mounting != "none"
+    if has_panels:
         pt = spec.frame.panel_thickness_mm
-        # Polycarbonate / cast acrylic: rho = 1200 kg/m^3, ~$48/m^2 at 3mm scaled by thickness
-        panel_rho = 1200.0
-        panel_usd_m2 = 48.0 * (pt / 3.0)
+        pmat = get_material(spec.frame.panel_material)
+        is_structural_panels = spec.frame.panel_mounting == "bolted_structural"
+        mount_label = "Bolted Structural" if is_structural_panels else "Clip-In Enclosure"
+        wall_suffix = "Structural Panel" if is_structural_panels else "Enclosure Panel"
+
+        # Opaque structural walls pair with a clear polycarbonate hinged front viewing door
+        is_transparent_panel = pmat.id in ("acrylic_pmma", "polycarbonate")
+        door_mat = pmat if is_transparent_panel else get_material("polycarbonate")
 
         if arch == "delta":
             side_w = round(max(w, d) * 0.5 * math.sqrt(3.0), 0)
             panel_defs = [
-                ("ENC-LEFT", "Left Side Enclosure Panel", side_w, h, 1.0),
-                ("ENC-RIGHT", "Right Side Enclosure Panel", side_w, h, 1.0),
-                ("ENC-REAR", "Rear Enclosure Panel", side_w, h, 1.0),
-                ("ENC-TOP", "Top Enclosure Panel", side_w, round(side_w * 0.866, 0), 0.5),
+                ("ENC-LEFT", f"Left Side {wall_suffix}", side_w, h, 1.0),
+                ("ENC-RIGHT", f"Right Side {wall_suffix}", side_w, h, 1.0),
+                ("ENC-REAR", f"Rear {wall_suffix}", side_w, h, 1.0),
+                ("ENC-TOP", f"Top {wall_suffix}", side_w, round(side_w * 0.866, 0), 0.5),
                 ("ENC-DOOR", "Front Door Enclosure Panel (w/ Hinges & Latch)", side_w, h, 1.0),
             ]
         else:
             panel_defs = [
-                ("ENC-LEFT", "Left Side Enclosure Panel", d, h, 1.0),
-                ("ENC-RIGHT", "Right Side Enclosure Panel", d, h, 1.0),
-                ("ENC-REAR", "Rear Enclosure Panel", w, h, 1.0),
-                ("ENC-TOP", "Top Enclosure Panel", w, d, 1.0),
+                ("ENC-LEFT", f"Left Side {wall_suffix}", d, h, 1.0),
+                ("ENC-RIGHT", f"Right Side {wall_suffix}", d, h, 1.0),
+                ("ENC-REAR", f"Rear {wall_suffix}", w, h, 1.0),
+                ("ENC-TOP", f"Top {wall_suffix}", w, d, 1.0),
                 ("ENC-DOOR", "Front Door Enclosure Panel (w/ Hinges & Latch)", w, h, 1.0),
             ]
 
         for sku, pname, dim_a, dim_b, area_factor in panel_defs:
+            is_door = sku == "ENC-DOOR"
+            active_mat = door_mat if is_door else pmat
             area_m2 = (dim_a * 1e-3) * (dim_b * 1e-3) * area_factor
-            mass_g = area_m2 * (pt * 1e-3) * panel_rho * 1000.0
-            extra_hw = 8.0 if sku == "ENC-DOOR" else 0.0
-            cost = max(6.0, area_m2 * panel_usd_m2 + 2.5) + extra_hw
+            mass_kg = area_m2 * (pt * 1e-3) * active_mat.density_kg_m3
+            mass_g = mass_kg * 1000.0
+            extra_hw = 8.0 if is_door else 0.0
+            # Sheet fabrication factor 1.45x (CNC/laser cutting + sheet waste) + per-panel setup floor
+            cost = max(8.0, mass_kg * active_mat.cost_per_kg_usd * 1.45 + 3.0) + extra_hw
+            if is_door:
+                door_note = (
+                    f"Hinged Viewing Door ({mount_label})"
+                    if not is_transparent_panel
+                    else f"{mount_label} / Hinged Door"
+                )
+                panel_spec = (
+                    f"{active_mat.name}, {pt:.1f} mm, {door_note}, "
+                    f"{dim_a:.0f}x{dim_b:.0f} mm"
+                )
+            else:
+                panel_spec = (
+                    f"{active_mat.name}, {pt:.1f} mm, {mount_label}, "
+                    f"{dim_a:.0f}x{dim_b:.0f} mm"
+                )
             _add_bom_item(
                 items,
                 sku=sku,
                 category="enclosure",
                 name=pname,
-                specification=f"Clear Polycarbonate/Acrylic, {dim_a:.0f}x{dim_b:.0f}x{pt:.1f} mm",
+                specification=panel_spec,
                 quantity=1,
                 unit="pcs",
                 unit_cost_usd=cost,
@@ -1231,8 +1284,8 @@ def generate_bom(
     m3_motor_toolhead_qty = (
         total_motors * 4
         + total_carriages * 4
+        + ds_qty * 4  # double-shear motor mount bearing cap fasteners
         + 16  # toolhead, extruder, bed mounts
-        + (24 if spec.frame.enclosed_panels else 0)
     )
 
     _add_bom_item(
@@ -1285,12 +1338,40 @@ def generate_bom(
         sku="FST-M3-HW",
         category="fasteners",
         name="M3 Stepper, Carriage & Toolhead Hardware Pack",
-        specification="Assorted M3x6–M3x30 SHCS, washers, heat-set inserts & panel clips",
+        specification="Assorted M3x6–M3x30 SHCS, washers & heat-set inserts",
         quantity=m3_motor_toolhead_qty,
         unit="pcs",
         unit_cost_usd=0.12,
         unit_mass_g=1.8,
     )
+    if has_panels:
+        if spec.frame.panel_mounting == "bolted_structural":
+            _add_bom_item(
+                items,
+                sku="FST-PANEL-STRUCT",
+                category="fasteners",
+                name="Structural Panel Perimeter Bolts & Roll-In T-Nuts (M5/M3)",
+                specification=(
+                    f"12x perimeter BHCS bolts + roll-in T-nuts per structural wall (4 walls) "
+                    f"for {spec.frame.profile} shear diaphragm"
+                ),
+                quantity=48,
+                unit="sets",
+                unit_cost_usd=0.35,
+                unit_mass_g=6.5,
+            )
+        else:
+            _add_bom_item(
+                items,
+                sku="FST-PANEL-CLIP",
+                category="fasteners",
+                name="Clip-In Enclosure Panel Latches & Gasket Clips",
+                specification="4x quick-release perimeter panel clips per wall (4 walls) w/ foam seal",
+                quantity=16,
+                unit="pcs",
+                unit_cost_usd=0.65,
+                unit_mass_g=4.5,
+            )
 
     # ------------------------------------------------------------------
     # Totals & Summaries

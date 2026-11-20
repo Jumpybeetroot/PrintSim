@@ -150,8 +150,8 @@ def _load_presets() -> dict[str, PrinterSpec]:
 def create_app() -> FastAPI:
     api = FastAPI(
         title="PrintSim Multiphysics 3D Printer Simulator API",
-        version="0.4.0",
-        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, SIMP topology optimization, manufacturable BOM, modal analysis, kinematics, hotend FVM thermal, and virtual G-code API.",
+        version="0.5.0",
+        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, CoreXY AWD & structural panels, SIMP topology optimization, manufacturable BOM, modal analysis, kinematics, hotend FVM thermal, and virtual G-code API.",
     )
 
     api.add_middleware(
@@ -164,7 +164,7 @@ def create_app() -> FastAPI:
 
     @api.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "version": "0.4.0"}
+        return {"status": "ok", "version": "0.5.0"}
 
     @api.get("/api/catalog")
     def catalog() -> dict:

@@ -73,8 +73,24 @@ class AssemblyModel:
     def to_geometry_dict(self) -> dict:
         """Serialize assembly geometry (mm) for the 3D web viewer and AI tools."""
         nmap = self.node_map
+        pmat = get_material(self.spec.frame.panel_material)
+        panels_enabled = bool(
+            self.spec.frame.enclosed_panels and self.spec.frame.panel_mounting != "none"
+        )
         return {
             "architecture": self.spec.architecture,
+            "drive_mode": self.spec.gantry.drive_mode,
+            "double_shear_pulleys": self.spec.gantry.double_shear_pulleys,
+            "panels": {
+                "enabled": panels_enabled,
+                "mounting": (
+                    self.spec.frame.panel_mounting if self.spec.frame.enclosed_panels else "none"
+                ),
+                "material_id": self.spec.frame.panel_material,
+                "material_name": pmat.name,
+                "thickness_mm": self.spec.frame.panel_thickness_mm,
+                "color_hex": pmat.color_hex,
+            },
             "frame_dims_mm": [
                 self.spec.frame.width_mm,
                 self.spec.frame.depth_mm,
@@ -145,6 +161,86 @@ def _add_member(
             is_truss=is_truss,
         )
     )
+
+
+def _panel_shear_params(spec: PrinterSpec) -> tuple[bool, float, MaterialSpec, float]:
+    """Return (active, shear_efficiency_eta, panel_material, thickness_m)."""
+    pmat = get_material(spec.frame.panel_material)
+    mounting = spec.frame.panel_mounting
+    if not spec.frame.enclosed_panels or mounting == "none":
+        return False, 0.0, pmat, spec.frame.panel_thickness_mm * 1e-3
+    eta = 0.65 if mounting == "bolted_structural" else 0.12
+    return True, eta, pmat, spec.frame.panel_thickness_mm * 1e-3
+
+
+def _add_shear_panel_bay(
+    members: list[StructuralMember],
+    node_map: dict[str, StructuralNode],
+    bay: str,
+    bl_id: str,
+    br_id: str,
+    tl_id: str,
+    tr_id: str,
+    pmat: MaterialSpec,
+    thickness_m: float,
+    eta: float,
+) -> None:
+    """Model a rectangular shear panel via equivalent X-pair diagonal truss struts.
+
+    Uses the textbook diagonal shear-diaphragm equivalence:
+        A_eq = eta * (G * t * L_d^3) / (2 * E * b * h)
+    and distributes any remaining true static panel mass onto the four corner nodes.
+    """
+    b = float(np.linalg.norm(node_map[br_id].position_m - node_map[bl_id].position_m))
+    h = float(np.linalg.norm(node_map[tl_id].position_m - node_map[bl_id].position_m))
+    if b <= 1e-6 or h <= 1e-6:
+        return
+    diag_len = math.hypot(b, h)
+    e_pa = pmat.youngs_modulus_pa
+    g_pa = pmat.effective_shear_modulus_pa
+    a_eq = max(eta * (g_pa * thickness_m * (diag_len**3)) / (2.0 * e_pa * b * h), 1e-9)
+
+    prof = ProfileSpec.model_construct(
+        id=f"panel_shear_{bay}",
+        name=f"Equivalent Shear Panel ({bay}, {thickness_m * 1e3:.1f}mm {pmat.id})",
+        shape="plate",
+        width_m=max(thickness_m, 0.002),
+        height_m=max(thickness_m, 0.004),
+        area_m2=a_eq,
+        iy_m4=1e-11,
+        iz_m4=1e-11,
+        j_m4=1e-11,
+    )
+    members.append(
+        StructuralMember(
+            id=f"panel_shear_{bay}_1",
+            start_id=bl_id,
+            end_id=tr_id,
+            profile=prof,
+            material=pmat,
+            role="brace",
+            is_truss=True,
+        )
+    )
+    members.append(
+        StructuralMember(
+            id=f"panel_shear_{bay}_2",
+            start_id=br_id,
+            end_id=tl_id,
+            profile=prof,
+            material=pmat,
+            role="brace",
+            is_truss=True,
+        )
+    )
+
+    actual_panel_mass = b * h * thickness_m * pmat.density_kg_m3
+    strut_mass = 2.0 * a_eq * diag_len * pmat.density_kg_m3
+    rem_mass = max(0.0, actual_panel_mass - strut_mass)
+    if rem_mass > 0.0:
+        per_node = 0.25 * rem_mass
+        for nid in (bl_id, br_id, tl_id, tr_id):
+            node_map[nid].lumped_mass_kg += per_node
 
 
 def build_assembly(
@@ -258,6 +354,10 @@ def _build_corexy(
     y_gantry = orig_y + v * by
     x_tool = orig_x + u * bx
 
+    is_awd = spec.gantry.drive_mode == "awd"
+    front_motor_kg = (xy_motor_kg + 0.03) if is_awd else 0.0
+    front_role = "mount" if is_awd else "frame"
+
     nodes = [
         # Bottom 4 corner feet (fixed to table)
         StructuralNode("b_fl", np.array([0.0, 0.0, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="foot"),
@@ -265,8 +365,8 @@ def _build_corexy(
         StructuralNode("b_rl", np.array([0.0, d, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="foot"),
         StructuralNode("b_rr", np.array([w, d, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="foot"),
         # Gantry elevation nodes on the 4 vertical columns
-        StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), role="frame"),
-        StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), role="frame"),
+        StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
+        StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
         StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
         StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
         # Top 4 corners
@@ -357,18 +457,31 @@ def _build_corexy(
         _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_top_2", "t_fr", "t_rl", bp, bm, role="brace", is_truss=True)
 
-    # Bolted enclosure panels act as shear diaphragms across rear & side bays
-    if spec.frame.enclosed_panels:
-        panel_mat = "aluminum_6063_t5"
-        panel_prof = "brace_rod_10mm"
-        if bracing not in ("rear_cross", "full_truss"):
-            _add_member(members, "panel_shear_rear", "b_rl", "t_rr", panel_prof, panel_mat, role="brace", is_truss=True)
-        if bracing != "full_truss":
-            _add_member(members, "panel_shear_l", "b_fl", "t_rl", panel_prof, panel_mat, role="brace", is_truss=True)
-            _add_member(members, "panel_shear_r", "b_fr", "t_rr", panel_prof, panel_mat, role="brace", is_truss=True)
+    nmap = {n.id: n for n in nodes}
+
+    # Enclosure / structural shear panels across rear, side, and top bays
+    panels_active, panel_eta, pmat, panel_t_m = _panel_shear_params(spec)
+    if panels_active:
+        for bay, bl_id, br_id, tl_id, tr_id in (
+            ("rear", "b_rl", "b_rr", "t_rl", "t_rr"),
+            ("left", "b_fl", "b_rl", "t_fl", "t_rl"),
+            ("right", "b_fr", "b_rr", "t_fr", "t_rr"),
+            ("top", "t_fl", "t_fr", "t_rl", "t_rr"),
+        ):
+            _add_shear_panel_bay(
+                members,
+                nmap,
+                bay,
+                bl_id,
+                br_id,
+                tl_id,
+                tr_id,
+                pmat,
+                panel_t_m,
+                panel_eta,
+            )
 
     # Calculate moving masses
-    nmap = {n.id: n for n in nodes}
     x_beam_mass = sum(m.mass_kg(nmap) for m in members if m.role == "gantry")
     x_rail_mass = get_profile(spec.gantry.x_rail_profile).area_m2 * w * get_material(spec.gantry.rail_material).density_kg_m3
     if spec.gantry.dual_x_rails:
@@ -535,6 +648,24 @@ def _build_delta(
             _add_member(members, f"brace_{i}_a", f"b_{i}", f"t_{j}", bp, bm, role="brace", is_truss=True)
         if spec.frame.bracing == "full_truss":
             _add_member(members, f"brace_{i}_b", f"b_{j}", f"t_{i}", bp, bm, role="brace", is_truss=True)
+
+    panels_active, panel_eta, pmat, panel_t_m = _panel_shear_params(spec)
+    if panels_active:
+        nmap = {n.id: n for n in nodes}
+        for i in range(3):
+            j = (i + 1) % 3
+            _add_shear_panel_bay(
+                members,
+                nmap,
+                f"bay{i}",
+                f"b_{i}",
+                f"b_{j}",
+                f"t_{i}",
+                f"t_{j}",
+                pmat,
+                panel_t_m,
+                panel_eta,
+            )
 
     eff_mass = toolhead_kg + 0.09  # ultra-light effector + arm portion
     return AssemblyModel(

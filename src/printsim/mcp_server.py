@@ -17,7 +17,7 @@ from printsim.geometry import build_assembly, export_assembly_step, export_assem
 from printsim.schema import MATERIAL_CATALOG, PROFILE_CATALOG, PrinterSpec
 from printsim.thermal import FILAMENT_CATALOG
 
-SERVER_INFO = {"name": "printsim-mcp", "version": "0.4.0"}
+SERVER_INFO = {"name": "printsim-mcp", "version": "0.5.0"}
 
 TOOLS_SCHEMA = [
     {
