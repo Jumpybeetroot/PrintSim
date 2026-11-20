@@ -49,14 +49,13 @@
 - G-code lookahead motion planner & per-segment virtual print defect simulator.
 - Interactive Three.js Web Studio + CLI + REST API + STL export + evolutionary AI optimizer.
 
-### Phase 2 — Solid 3D Tetrahedral FEA & Custom Part Meshes
-- Integrate **Gmsh + CalculiX / FEniCSx / SfePy** as a pluggable `SolidFEABackend` for 3D printed toolhead mounts, XY motor brackets, and CNC gantry plates imported from STEP/STL.
-- Orthotropic material models for FDM-printed parts (weak Z inter-layer tensile strength vs XY strength, infill density).
-- Contact stiffness modeling for bolted extrusion corner joints and linear rail preload.
+### Phase 2 — Implemented (v0.2–v0.4) & Remaining Extensions
+- **Implemented**: Conformal 3D tetrahedral continuum FEA (**Gmsh + scikit-fem** `Tet10 P2` / `Tet4 P1` in `tet_fem.py` with direct OpenCASCADE STEP meshing, transversely isotropic FDM Z-layer delamination, smooth surface stress mesh, and ParaView `.vtu` export), plus fast voxel Hex8 FEA (`solid_fem.py`) for arbitrary STL/OBJ uploads.
+- **Next**: Semi-rigid bolted extrusion corner joint compliance, linear rail carriage preload stiffness, and optional nonlinear CalculiX (`pygccx`) contact backend.
 
-### Phase 3 — Parametric Manufacturable CAD & Topology Optimization
-- Full **build123d / OpenCASCADE (OCP)** export of cut-list BOM, drilled extrusion drawings, and ready-to-print STL/STEP brackets.
-- SIMP / truss topology optimization driven directly by the FEA compliance & modal frequency gradients.
+### Phase 3 — Implemented (v0.3–v0.4) & Remaining Extensions
+- **Implemented**: OpenCASCADE B-Rep parametric CAD & STEP export via **`build123d`** (`cad_b3d.py`) for full printer assemblies and brackets with real fillets, M5/M3 holes, and NEMA17 patterns; 3D SIMP compliance topology optimization (`topology.py`) with watertight printable STL export; manufacturable extrusion cut-list with collinear bar merging, 1D stock bar nesting, and full hardware BOM generator (`bom.py`).
+- **Next**: Exact T-slot cross-section property derivation via `sectionproperties` and CNC drawing / DXF panel export.
 
 ### Phase 4 — Coupled Thermal-Fluid (Hotend & Part Cooling CFD) & Polymer Viscoelasticity
 - 2D/3D finite-volume heat transfer inside heater blocks, bi-metal heatbreaks, and CHT multi-channel nozzles.

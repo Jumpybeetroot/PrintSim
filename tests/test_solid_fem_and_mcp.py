@@ -115,3 +115,169 @@ def test_mcp_jsonrpc_server_dispatch() -> None:
     assert call_resp is not None
     assert call_resp["result"]["isError"] is False
     assert "safety_factor" in call_resp["result"]["content"][0]["text"]
+
+
+def test_v03_topology_and_bom_api_and_mcp(tmp_path: Path) -> None:
+    """End-to-end check for v0.3 topology optimization, STL export, BOM API, and MCP tools."""
+    client = TestClient(create_app())
+
+    # 1. Topology optimization HTTP API
+    r_topo = client.post(
+        "/api/fea/topology-optimize",
+        json={
+            "preset": "cantilever_bar",
+            "material_id": "pa12_cf_printed",
+            "target_volume_fraction": 0.5,
+            "iterations": 10,
+        },
+    )
+    assert r_topo.status_code == 200
+    topo = r_topo.json()
+    assert topo["optimized_mass_g"] < topo["baseline_mass_g"]
+    assert topo["mass_reduction_pct"] > 20.0
+    assert len(topo["history"]) >= 5
+    assert len(topo["voxels"]) == topo["baseline_elements"]
+
+    # 2. Topology STL download HTTP API
+    r_stl = client.post(
+        "/api/fea/topology-optimize/stl",
+        json={
+            "preset": "cantilever_bar",
+            "material_id": "pa12_cf_printed",
+            "target_volume_fraction": 0.5,
+            "iterations": 8,
+        },
+    )
+    assert r_stl.status_code == 200
+    assert len(r_stl.content) > 500
+
+    # 3. BOM JSON & CSV HTTP API
+    yaml_text = (EXAMPLES_DIR / "corexy_voron_style.yaml").read_text(encoding="utf-8")
+    r_bom = client.post("/api/bom", json={"yaml_text": yaml_text, "stock_length_mm": 1000.0})
+    assert r_bom.status_code == 200
+    bom = r_bom.json()
+    assert bom["total_cost_usd"] > 100.0
+    assert len(bom["cut_list"]) >= 3
+    assert len(bom["stock_nesting"]) >= 1
+
+    r_csv = client.post("/api/bom/csv", json={"yaml_text": yaml_text, "stock_length_mm": 1000.0})
+    assert r_csv.status_code == 200
+    assert "text/csv" in r_csv.headers["content-type"]
+    assert "2020" in r_csv.text or "extrusion" in r_csv.text.lower()
+
+    # 4. MCP tools: optimize_part_topology + generate_printer_bom
+    out_stl = tmp_path / "mcp_opt.stl"
+    r_mcp_topo = handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "optimize_part_topology",
+                "arguments": {
+                    "preset": "cantilever_bar",
+                    "target_volume_fraction": 0.5,
+                    "iterations": 8,
+                    "output_stl_path": str(out_stl),
+                },
+            },
+        }
+    )
+    assert r_mcp_topo is not None
+    assert r_mcp_topo["result"]["isError"] is False
+    assert out_stl.exists() and out_stl.stat().st_size > 500
+
+    r_mcp_bom = handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "generate_printer_bom",
+                "arguments": {"yaml_text": yaml_text, "stock_length_mm": 1000.0},
+            },
+        }
+    )
+    assert r_mcp_bom is not None
+    assert r_mcp_bom["result"]["isError"] is False
+    assert "total_cost_usd" in r_mcp_bom["result"]["content"][0]["text"]
+
+
+def test_v04_build123d_step_and_gmsh_skfem_api_and_mcp(tmp_path: Path) -> None:
+    """End-to-end check for v0.4 build123d STEP export and Gmsh + scikit-fem Tet10 FEA API & MCP."""
+    client = TestClient(create_app())
+
+    # 1. Bracket STEP download
+    r_part_step = client.post("/api/export/part-step", json={"preset": "corner_gusset"})
+    assert r_part_step.status_code == 200
+    assert b"ISO-10303-21" in r_part_step.content
+
+    # 2. Full printer assembly STEP download
+    r_preset = client.get("/api/presets/corexy_voron_style")
+    assert r_preset.status_code == 200
+    spec_json = r_preset.json()["spec"]
+    r_asm_step = client.post("/api/export/step", json=spec_json)
+    assert r_asm_step.status_code == 200
+    assert b"ISO-10303-21" in r_asm_step.content
+
+    # 3. Curved Tet10 FEA on preset bracket
+    r_tet = client.post(
+        "/api/fea/tet-part",
+        json={"preset": "corner_gusset", "material_id": "pa12_cf_printed", "order": 2},
+    )
+    assert r_tet.status_code == 200
+    tet = r_tet.json()
+    assert tet["backend"] == "gmsh+scikit-fem"
+    assert tet["num_elements"] > 50
+    assert tet["safety_factor"] > 1.0
+    assert len(tet["surface_mesh"]["triangles"]) > 50
+
+    # 4. Upload STEP bytes directly to /api/fea/tet-step
+    b64_step = base64.b64encode(r_part_step.content).decode("ascii")
+    r_tet_step = client.post(
+        "/api/fea/tet-step",
+        json={
+            "part_name": "uploaded_gusset.step",
+            "step_base64": b64_step,
+            "material_id": "aluminum_6061_t6",
+            "fixed_face": "min_y",
+            "load_face": "max_y",
+            "force_n": [60.0, 0.0, 0.0],
+            "order": 2,
+        },
+    )
+    assert r_tet_step.status_code == 200
+    assert r_tet_step.json()["stiffness_n_per_mm"] > tet["stiffness_n_per_mm"] * 5.0
+
+    # 5. MCP tools: export_printer_step + run_tet_part_fea
+    yaml_text = (EXAMPLES_DIR / "corexy_voron_style.yaml").read_text(encoding="utf-8")
+    out_step = tmp_path / "mcp_corexy.step"
+    r_mcp_step = handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "export_printer_step",
+                "arguments": {"yaml_text": yaml_text, "output_path": str(out_step)},
+            },
+        }
+    )
+    assert r_mcp_step is not None
+    assert r_mcp_step["result"]["isError"] is False
+    assert out_step.exists() and b"ISO-10303-21" in out_step.read_bytes()
+
+    r_mcp_tet = handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "run_tet_part_fea",
+                "arguments": {"preset": "xy_motor_mount", "material_id": "pa12_cf_printed", "order": 2},
+            },
+        }
+    )
+    assert r_mcp_tet is not None
+    assert r_mcp_tet["result"]["isError"] is False
+    assert "gmsh+scikit-fem" in r_mcp_tet["result"]["content"][0]["text"]

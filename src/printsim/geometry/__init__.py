@@ -1,11 +1,43 @@
+from .bom import (
+    BOMLineItem,
+    CutListItem,
+    PrinterBOM,
+    StockNestingSummary,
+    generate_bom,
+)
 from .builder import AssemblyModel, StructuralMember, StructuralNode, build_assembly
+from .cad_b3d import (
+    build_assembly_brep,
+    build_part_brep,
+    export_assembly_step,
+    export_assembly_step_bytes,
+    export_part_step,
+    export_part_step_bytes,
+    export_part_stl_bytes,
+    get_part_default_bcs,
+    is_cad_available,
+)
 from .cad_io import export_assembly_stl, inspect_custom_mesh
 
 __all__ = [
     "AssemblyModel",
+    "BOMLineItem",
+    "CutListItem",
+    "PrinterBOM",
+    "StockNestingSummary",
     "StructuralMember",
     "StructuralNode",
     "build_assembly",
+    "build_assembly_brep",
+    "build_part_brep",
+    "export_assembly_step",
+    "export_assembly_step_bytes",
     "export_assembly_stl",
+    "export_part_step",
+    "export_part_step_bytes",
+    "export_part_stl_bytes",
+    "generate_bom",
+    "get_part_default_bcs",
     "inspect_custom_mesh",
+    "is_cad_available",
 ]

@@ -9,6 +9,21 @@ from .solid_fem import (
     voxelize_stl_file,
 )
 from .solver import MemberStressResult, StaticFEAResult, solve_static_fea
+from .tet_fem import (
+    TetFEAResult,
+    is_tet_fea_available,
+    solve_preset_tet_fea,
+    solve_step_bytes_tet_fea,
+    solve_step_tet_fea,
+)
+from .topology import (
+    TopologyOptResult,
+    export_topology_stl,
+    optimize_preset_topology,
+    optimize_solid_topology,
+    topology_result_to_stl_bytes,
+    voxel_grid_to_trimesh,
+)
 
 __all__ = [
     "assemble_global_matrices",
@@ -27,4 +42,15 @@ __all__ = [
     "MemberStressResult",
     "StaticFEAResult",
     "solve_static_fea",
+    "TetFEAResult",
+    "is_tet_fea_available",
+    "solve_preset_tet_fea",
+    "solve_step_bytes_tet_fea",
+    "solve_step_tet_fea",
+    "TopologyOptResult",
+    "export_topology_stl",
+    "optimize_preset_topology",
+    "optimize_solid_topology",
+    "topology_result_to_stl_bytes",
+    "voxel_grid_to_trimesh",
 ]

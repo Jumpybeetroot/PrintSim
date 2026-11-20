@@ -13,7 +13,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from printsim.engine import evaluate_printer, optimize_design
-from printsim.geometry import build_assembly, export_assembly_stl
+from printsim.geometry import (
+    build_assembly,
+    export_assembly_step,
+    export_assembly_stl,
+    export_part_step,
+    generate_bom,
+)
 from printsim.schema import PrinterSpec
 
 app = typer.Typer(
@@ -143,6 +149,84 @@ def export_stl(
     console.print(f"Exported 3D assembly mesh to [bold green]{saved}[/bold green]")
 
 
+@app.command("export-step")
+def export_step_cmd(
+    spec_path: Optional[Path] = typer.Argument(None, help="Printer YAML spec (omit when using --preset)"),
+    preset: Optional[str] = typer.Option(None, "--preset", "-p", help="Export a single parametric B-Rep bracket preset instead of full printer (corner_gusset | xy_motor_mount | toolhead_carriage | cantilever_bar)"),
+    out: Path = typer.Option(Path("printer_assembly.step"), "--out", "-o", help="Output OpenCASCADE STEP path"),
+) -> None:
+    """Export exact OpenCASCADE B-Rep STEP CAD (build123d) for a full printer assembly or parametric bracket."""
+    if preset is not None:
+        saved = export_part_step(preset, out)  # type: ignore[arg-type]
+        console.print(f"Exported parametric B-Rep bracket STEP to [bold green]{saved}[/bold green]")
+        return
+    if spec_path is None or not spec_path.exists():
+        raise typer.BadParameter("Provide a valid printer YAML spec path or --preset.")
+    spec = PrinterSpec.from_yaml(spec_path)
+    assembly = build_assembly(spec)
+    saved = export_assembly_step(assembly, out)
+    console.print(f"Exported full printer B-Rep STEP assembly to [bold green]{saved}[/bold green]")
+
+
+@app.command("tet-fea")
+def tet_fea_cmd(
+    preset: str = typer.Option("corner_gusset", "--preset", "-p", help="corner_gusset | xy_motor_mount | toolhead_carriage | cantilever_bar"),
+    step: Optional[Path] = typer.Option(None, "--step", exists=True, help="Optional STEP CAD file to mesh with Gmsh & solve with scikit-fem"),
+    material: str = typer.Option("pa12_cf_printed", "--material", "-m", help="Material ID"),
+    order: int = typer.Option(2, "--order", help="Element order: 1 (Tet4 P1) or 2 (Tet10 P2)"),
+    mesh_size: Optional[float] = typer.Option(None, "--mesh-size", help="Target tetrahedral edge size (mm)"),
+    fx: Optional[float] = typer.Option(None, "--fx", help="Override Force X (N)"),
+    fy: Optional[float] = typer.Option(None, "--fy", help="Override Force Y (N)"),
+    fz: Optional[float] = typer.Option(None, "--fz", help="Override Force Z (N)"),
+    fixed_face: str = typer.Option("min_z", "--fixed-face", help="Fixed face for --step mode"),
+    load_face: str = typer.Option("max_z", "--load-face", help="Loaded face for --step mode"),
+    vtu_out: Optional[Path] = typer.Option(None, "--vtu", help="Optional ParaView .vtu/.vtk output path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON output"),
+) -> None:
+    """Run conformal 3D tetrahedral continuum FEA (Gmsh + scikit-fem) on a B-Rep bracket or STEP file."""
+    from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
+
+    force_override = None
+    if fx is not None or fy is not None or fz is not None:
+        force_override = (fx or 0.0, fy or 0.0, fz or 0.0)
+
+    if step is not None:
+        res = solve_step_tet_fea(
+            step_path=step,
+            material_id=material,
+            fixed_face=fixed_face,  # type: ignore[arg-type]
+            load_face=load_face,  # type: ignore[arg-type]
+            force_n=force_override or (50.0, 0.0, -25.0),
+            mesh_size_mm=mesh_size,
+            order=2 if order >= 2 else 1,
+            export_vtu_path=vtu_out,
+        )
+    else:
+        res = solve_preset_tet_fea(
+            preset=preset,  # type: ignore[arg-type]
+            material_id=material,
+            force_n=force_override,
+            mesh_size_mm=mesh_size,
+            order=2 if order >= 2 else 1,
+        )
+
+    if json_out:
+        print(json.dumps(res.to_dict(include_surface_mesh=False), indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{res.part_name}[/bold cyan] ({res.backend} • {res.element_type})\n"
+            f"Material: {res.material_id} (FDM anisotropic={res.is_fdm_anisotropic})\n"
+            f"Mesh: {res.num_elements} tets ({res.num_dofs} DOFs, h≈{res.mesh_size_mm:.2f} mm) | Mass: {res.mass_g:.2f} g\n"
+            f"Max Displacement: [bold]{res.max_displacement_um:.2f} um[/bold] | Stiffness: {res.stiffness_n_per_mm:.1f} N/mm\n"
+            f"Max von Mises: {res.max_von_mises_mpa:.2f} MPa | Max Z-Layer Tension: {res.max_z_tensile_mpa:.2f} MPa\n"
+            f"Safety Factor: [bold green]{res.safety_factor:.2f}x[/bold green] ({res.failure_mode})",
+            title="PrintSim Conformal 3D Tet FEA (Gmsh + scikit-fem)",
+        )
+    )
+
+
 @app.command("solid-fea")
 def solid_fea(
     preset: str = typer.Option("corner_gusset", "--preset", "-p", help="corner_gusset | xy_motor_mount | toolhead_carriage | cantilever_bar"),
@@ -188,6 +272,130 @@ def solid_fea(
             title="PrintSim 3D Solid Hex8 FEA",
         )
     )
+
+
+@app.command("topo-opt")
+def topo_opt(
+    preset: str = typer.Option("corner_gusset", "--preset", "-p", help="corner_gusset | xy_motor_mount | toolhead_carriage | cantilever_bar"),
+    material: str = typer.Option("pa12_cf_printed", "--material", "-m", help="Material ID"),
+    volume_fraction: float = typer.Option(0.45, "--volume-fraction", "-v", help="Target retained volume fraction (0.2..0.85)"),
+    iterations: int = typer.Option(18, "--iterations", "-n", help="SIMP optimization iterations"),
+    fx: Optional[float] = typer.Option(None, "--fx", help="Optional override Force X (N)"),
+    fy: Optional[float] = typer.Option(None, "--fy", help="Optional override Force Y (N)"),
+    fz: Optional[float] = typer.Option(None, "--fz", help="Optional override Force Z (N)"),
+    out: Optional[Path] = typer.Option(None, "--out", "-o", help="Optional output STL file path for the optimized part"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON output"),
+) -> None:
+    """Run 3D SIMP topology optimization on a printer bracket/mount and optionally export printable STL."""
+    from printsim.fea.topology import export_topology_stl, optimize_preset_topology
+
+    force_override = None
+    if fx is not None or fy is not None or fz is not None:
+        force_override = (fx or 0.0, fy or 0.0, fz or 0.0)
+
+    res = optimize_preset_topology(
+        preset=preset,  # type: ignore[arg-type]
+        material_id=material,
+        force_n=force_override,
+        target_volume_fraction=volume_fraction,
+        iterations=iterations,
+    )
+    saved_path = export_topology_stl(res, out) if out is not None else None
+
+    if json_out:
+        d = res.to_dict(include_voxels=False)
+        if saved_path is not None:
+            d["exported_stl"] = str(saved_path.resolve())
+        print(json.dumps(d, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{res.part_name}[/bold cyan] ({res.material_id}, {res.iterations_run} SIMP iters)\n"
+            f"Mass: {res.baseline_mass_g:.1f} g -> [bold green]{res.optimized_mass_g:.1f} g[/bold green] "
+            f"([cyan]-{res.mass_reduction_pct:.1f}%[/cyan]) | VolFrac: {res.achieved_volume_fraction:.2f}\n"
+            f"Stiffness: {res.baseline_stiffness_n_per_mm:.1f} -> {res.optimized_stiffness_n_per_mm:.1f} N/mm "
+            f"(Specific Stiffness: [bold]{res.specific_stiffness_gain_pct:+.1f}%[/bold])\n"
+            f"Max von Mises: {res.max_von_mises_mpa:.2f} MPa | Safety Factor: [bold green]{res.safety_factor:.2f}x[/bold green] ({res.failure_mode})",
+            title="PrintSim 3D SIMP Topology Optimization",
+        )
+    )
+    if saved_path is not None:
+        console.print(f"Exported optimized bracket STL to [bold green]{saved_path}[/bold green]")
+
+
+@app.command("bom")
+def bom_cmd(
+    spec_path: Path = typer.Argument(..., exists=True, help="Printer YAML spec"),
+    stock_length: float = typer.Option(1000.0, "--stock-length", "-s", help="Standard extrusion stock bar length (mm)"),
+    csv_out: Optional[Path] = typer.Option(None, "--csv", help="Optional path to export BOM & cut-list as CSV"),
+    md_out: Optional[Path] = typer.Option(None, "--markdown", help="Optional path to export BOM as Markdown"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON BOM"),
+) -> None:
+    """Generate a manufacturable extrusion cut-list, stock bar nesting plan, and full hardware BOM."""
+    spec = PrinterSpec.from_yaml(spec_path)
+    bom = generate_bom(spec, stock_length_mm=stock_length)
+
+    if csv_out is not None:
+        csv_out.write_text(bom.to_csv(), encoding="utf-8")
+    if md_out is not None:
+        md_out.write_text(bom.to_markdown(), encoding="utf-8")
+
+    if json_out:
+        print(json.dumps(bom.to_dict(), indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{bom.printer_name}[/bold cyan] ({bom.architecture})\n"
+            f"Estimated Total Cost: [bold green]${bom.total_cost_usd:.2f}[/bold green] | "
+            f"Total Mass: {bom.total_mass_kg:.2f} kg | "
+            f"Extrusions: {bom.total_extrusion_length_m:.2f} m | "
+            f"Belts: {bom.total_belt_length_m:.2f} m | "
+            f"Fasteners: {bom.total_fasteners} pcs",
+            title="PrintSim Manufacturable BOM & Cut-List",
+        )
+    )
+
+    cut_table = Table(title="Extrusion & Structural Cut-List", show_header=True, header_style="bold magenta")
+    cut_table.add_column("Code")
+    cut_table.add_column("Profile")
+    cut_table.add_column("Role")
+    cut_table.add_column("Length (mm)", justify="right")
+    cut_table.add_column("Qty", justify="right")
+    cut_table.add_column("Mass (g)", justify="right")
+    cut_table.add_column("Cost ($)", justify="right")
+    for c in bom.cut_list:
+        cut_table.add_row(
+            c.part_code,
+            c.profile_id,
+            c.role,
+            f"{c.length_mm:.1f}",
+            str(c.quantity),
+            f"{c.total_mass_g:.0f}",
+            f"${c.total_cost_usd:.2f}",
+        )
+    console.print(cut_table)
+
+    if bom.stock_nesting:
+        nest_table = Table(title="Stock Bar Nesting", show_header=True, header_style="bold cyan")
+        nest_table.add_column("Profile")
+        nest_table.add_column("Stock (mm)", justify="right")
+        nest_table.add_column("Bars", justify="right")
+        nest_table.add_column("Waste", justify="right")
+        for n in bom.stock_nesting:
+            nest_table.add_row(
+                n.profile_id,
+                f"{n.stock_length_mm:.0f}",
+                str(n.bars_required),
+                f"{n.waste_pct:.1f}% ({n.waste_length_mm:.0f} mm)",
+            )
+        console.print(nest_table)
+
+    if csv_out is not None:
+        console.print(f"Saved CSV BOM to [green]{csv_out}[/green]")
+    if md_out is not None:
+        console.print(f"Saved Markdown BOM to [green]{md_out}[/green]")
 
 
 @app.command()

@@ -1,0 +1,1340 @@
+"""Manufacturable Cut-List, 1D Stock Nesting, and Bill of Materials (BOM) Generator."""
+
+from __future__ import annotations
+
+import csv
+import io
+import math
+from collections import defaultdict
+from dataclasses import dataclass
+
+import numpy as np
+
+from printsim.geometry.builder import AssemblyModel, build_assembly
+from printsim.schema import PrinterSpec, get_material, get_profile
+
+
+@dataclass
+class CutListItem:
+    """A single manufacturable structural cut-list line item."""
+
+    part_code: str
+    name: str
+    profile_id: str
+    material_id: str
+    role: str
+    length_mm: float
+    quantity: int
+    total_length_mm: float
+    unit_mass_g: float
+    total_mass_g: float
+    unit_cost_usd: float
+    total_cost_usd: float
+    notes: str = ""
+
+
+@dataclass
+class BOMLineItem:
+    """A single line item in the complete printer hardware Bill of Materials."""
+
+    sku: str
+    category: str
+    name: str
+    specification: str
+    quantity: int | float
+    unit: str
+    unit_cost_usd: float
+    total_cost_usd: float
+    total_mass_g: float
+
+
+@dataclass
+class StockNestingSummary:
+    """1D First-Fit Decreasing stock bar nesting summary for one profile+material."""
+
+    profile_id: str
+    material_id: str
+    stock_length_mm: float
+    bars_required: int
+    used_length_mm: float
+    waste_length_mm: float
+    waste_pct: float
+    bar_cuts_mm: list[list[float]]
+
+
+@dataclass
+class PrinterBOM:
+    """Complete manufacturable cut-list, stock nesting plan, and hardware BOM."""
+
+    printer_name: str
+    architecture: str
+    cut_list: list[CutListItem]
+    stock_nesting: list[StockNestingSummary]
+    items: list[BOMLineItem]
+    category_costs_usd: dict[str, float]
+    total_cost_usd: float
+    total_mass_kg: float
+    total_fasteners: int
+    total_belt_length_m: float
+    total_extrusion_length_m: float
+
+    def to_dict(self) -> dict:
+        """Return a cleanly rounded, JSON-serializable dictionary representation."""
+        return {
+            "printer_name": self.printer_name,
+            "architecture": self.architecture,
+            "summary": {
+                "total_cost_usd": round(float(self.total_cost_usd), 2),
+                "total_mass_kg": round(float(self.total_mass_kg), 3),
+                "total_fasteners": int(self.total_fasteners),
+                "total_belt_length_m": round(float(self.total_belt_length_m), 2),
+                "total_extrusion_length_m": round(float(self.total_extrusion_length_m), 3),
+            },
+            "category_costs_usd": {
+                k: round(float(v), 2) for k, v in self.category_costs_usd.items()
+            },
+            "total_cost_usd": round(float(self.total_cost_usd), 2),
+            "total_mass_kg": round(float(self.total_mass_kg), 3),
+            "total_fasteners": int(self.total_fasteners),
+            "total_belt_length_m": round(float(self.total_belt_length_m), 2),
+            "total_extrusion_length_m": round(float(self.total_extrusion_length_m), 3),
+            "cut_list": [
+                {
+                    "part_code": c.part_code,
+                    "name": c.name,
+                    "profile_id": c.profile_id,
+                    "material_id": c.material_id,
+                    "role": c.role,
+                    "length_mm": round(float(c.length_mm), 1),
+                    "quantity": int(c.quantity),
+                    "total_length_mm": round(float(c.total_length_mm), 1),
+                    "unit_mass_g": round(float(c.unit_mass_g), 1),
+                    "total_mass_g": round(float(c.total_mass_g), 1),
+                    "unit_cost_usd": round(float(c.unit_cost_usd), 2),
+                    "total_cost_usd": round(float(c.total_cost_usd), 2),
+                    "notes": c.notes,
+                }
+                for c in self.cut_list
+            ],
+            "stock_nesting": [
+                {
+                    "profile_id": s.profile_id,
+                    "material_id": s.material_id,
+                    "stock_length_mm": round(float(s.stock_length_mm), 1),
+                    "bars_required": int(s.bars_required),
+                    "used_length_mm": round(float(s.used_length_mm), 1),
+                    "waste_length_mm": round(float(s.waste_length_mm), 1),
+                    "waste_pct": round(float(s.waste_pct), 2),
+                    "bar_cuts_mm": [
+                        [round(float(cut), 1) for cut in bar] for bar in s.bar_cuts_mm
+                    ],
+                }
+                for s in self.stock_nesting
+            ],
+            "items": [
+                {
+                    "sku": item.sku,
+                    "category": item.category,
+                    "name": item.name,
+                    "specification": item.specification,
+                    "quantity": (
+                        int(item.quantity)
+                        if isinstance(item.quantity, int)
+                        else round(float(item.quantity), 2)
+                    ),
+                    "unit": item.unit,
+                    "unit_cost_usd": round(float(item.unit_cost_usd), 2),
+                    "total_cost_usd": round(float(item.total_cost_usd), 2),
+                    "total_mass_g": round(float(item.total_mass_g), 1),
+                }
+                for item in self.items
+            ],
+        }
+
+    def to_csv(self) -> str:
+        """Export Cut List and Hardware BOM as valid RFC-4180 CSV."""
+        buf = io.StringIO(newline="")
+        writer = csv.writer(buf)
+        writer.writerow(
+            [
+                "section",
+                "code",
+                "category",
+                "name",
+                "specification",
+                "length_mm",
+                "quantity",
+                "unit",
+                "unit_cost_usd",
+                "total_cost_usd",
+                "total_mass_g",
+            ]
+        )
+        for c in self.cut_list:
+            writer.writerow(
+                [
+                    "CUT_LIST",
+                    c.part_code,
+                    c.role,
+                    c.name,
+                    f"{c.profile_id} / {c.material_id}",
+                    f"{c.length_mm:.1f}",
+                    str(c.quantity),
+                    "pcs",
+                    f"{c.unit_cost_usd:.2f}",
+                    f"{c.total_cost_usd:.2f}",
+                    f"{c.total_mass_g:.1f}",
+                ]
+            )
+        for item in self.items:
+            qty_str = (
+                str(item.quantity)
+                if isinstance(item.quantity, int)
+                else f"{item.quantity:.2f}"
+            )
+            writer.writerow(
+                [
+                    "BOM",
+                    item.sku,
+                    item.category,
+                    item.name,
+                    item.specification,
+                    "",
+                    qty_str,
+                    item.unit,
+                    f"{item.unit_cost_usd:.2f}",
+                    f"{item.total_cost_usd:.2f}",
+                    f"{item.total_mass_g:.1f}",
+                ]
+            )
+        return buf.getvalue()
+
+    def to_markdown(self) -> str:
+        """Render a GitHub-flavored Markdown Bill of Materials and Cut List report."""
+        lines: list[str] = [
+            f"# Bill of Materials & Cut List — {self.printer_name}",
+            "",
+            "## Summary",
+            "",
+            "| Metric | Value |",
+            "| :--- | ---: |",
+            f"| Architecture | `{self.architecture}` |",
+            f"| Estimated Total Cost | ${self.total_cost_usd:,.2f} |",
+            f"| Estimated Total Mass | {self.total_mass_kg:.3f} kg |",
+            f"| Total Cut-List Stock Length | {self.total_extrusion_length_m:.3f} m |",
+            f"| Total Drive Belt Length | {self.total_belt_length_m:.2f} m |",
+            f"| Total Fasteners | {self.total_fasteners} pcs |",
+            "",
+            "## Cost Breakdown by Category",
+            "",
+            "| Category | Cost (USD) | Share |",
+            "| :--- | ---: | ---: |",
+        ]
+        for cat, cost in self.category_costs_usd.items():
+            share = (cost / self.total_cost_usd * 100.0) if self.total_cost_usd > 0 else 0.0
+            lines.append(f"| `{cat}` | ${cost:,.2f} | {share:.1f}% |")
+
+        lines.extend(
+            [
+                "",
+                "## Structural Cut List",
+                "",
+                "| Code | Part | Role | Profile | Material | Length (mm) | Qty | Total (mm) | Mass (g) | Cost (USD) |",
+                "| :--- | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for c in self.cut_list:
+            lines.append(
+                f"| `{c.part_code}` | {c.name} | `{c.role}` | `{c.profile_id}` | `{c.material_id}` "
+                f"| {c.length_mm:.1f} | {c.quantity} | {c.total_length_mm:.1f} "
+                f"| {c.total_mass_g:.1f} | ${c.total_cost_usd:.2f} |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "## 1D Stock Bar Nesting",
+                "",
+                "| Profile | Material | Stock Bar (mm) | Bars | Used (mm) | Waste (mm) | Waste (%) | Bar Cut Plan (mm) |",
+                "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | :--- |",
+            ]
+        )
+        for s in self.stock_nesting:
+            plan = "; ".join(
+                "[" + ", ".join(f"{cut:.1f}" for cut in bar) + "]" for bar in s.bar_cuts_mm
+            )
+            lines.append(
+                f"| `{s.profile_id}` | `{s.material_id}` | {s.stock_length_mm:.0f} "
+                f"| {s.bars_required} | {s.used_length_mm:.1f} | {s.waste_length_mm:.1f} "
+                f"| {s.waste_pct:.1f}% | {plan} |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "## Complete Hardware BOM",
+                "",
+                "| SKU | Category | Item | Specification | Qty | Unit | Unit ($) | Total ($) | Mass (g) |",
+                "| :--- | :--- | :--- | :--- | ---: | :--- | ---: | ---: | ---: |",
+            ]
+        )
+        for item in self.items:
+            qty_str = (
+                str(item.quantity)
+                if isinstance(item.quantity, int)
+                else f"{item.quantity:.2f}"
+            )
+            lines.append(
+                f"| `{item.sku}` | `{item.category}` | {item.name} | {item.specification} "
+                f"| {qty_str} | {item.unit} | ${item.unit_cost_usd:.2f} "
+                f"| ${item.total_cost_usd:.2f} | {item.total_mass_g:.1f} |"
+            )
+
+        lines.append("")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Engineering Cost & Hardware Reference Tables
+# ---------------------------------------------------------------------------
+
+_PROFILE_MFG_MULTIPLIER: dict[str, float] = {
+    "extrusion": 2.2,
+    "tube": 1.85,
+    "rod": 1.6,
+    "solid_bar": 1.8,
+    "rail": 2.6,
+}
+
+_CUT_FEE_USD = 0.75
+
+_RAIL_HARDWARE: dict[str, tuple[str, float, float, float]] = {
+    # profile_id -> (carriage_name, rail_usd_per_m, carriage_usd, carriage_mass_g)
+    "mgn9_rail": ("MGN9H Linear Rail Carriage", 32.0, 12.0, 35.0),
+    "mgn12_rail": ("MGN12H Linear Rail Carriage", 42.0, 16.0, 65.0),
+    "mgn15_rail": ("MGN15H Linear Rail Carriage", 58.0, 22.0, 110.0),
+    "steel_rod_8mm": ("LM8UU Linear Ball Bearing", 14.0, 4.5, 18.0),
+    "steel_rod_10mm": ("LM10UU Linear Ball Bearing", 18.0, 6.0, 28.0),
+    "steel_rod_12mm": ("LM12UU Linear Ball Bearing", 24.0, 8.0, 42.0),
+}
+
+_BELT_COST_USD_PER_M: dict[tuple[str, str], float] = {
+    ("gt2_6mm", "fiberglass"): 4.50,
+    ("gt2_6mm", "aramid"): 6.50,
+    ("gt2_6mm", "steel"): 6.00,
+    ("gt2_9mm", "fiberglass"): 6.50,
+    ("gt2_9mm", "aramid"): 9.00,
+    ("gt2_9mm", "steel"): 8.50,
+    ("gt2_12mm", "fiberglass"): 8.50,
+    ("gt2_12mm", "aramid"): 11.50,
+    ("gt2_12mm", "steel"): 11.00,
+}
+
+_BELT_MASS_G_PER_M: dict[str, float] = {
+    "gt2_6mm": 12.0,
+    "gt2_9mm": 18.0,
+    "gt2_12mm": 24.0,
+}
+
+
+@dataclass
+class _MergedSegment:
+    """Internal representation of a physical bar merged from collinear FEA elements."""
+
+    start_id: str
+    end_id: str
+    profile_id: str
+    material_id: str
+    role_bucket: str
+    roles: list[str]
+    member_ids: list[str]
+    length_m: float
+
+    @property
+    def canonical_role(self) -> str:
+        unique = set(self.roles)
+        if len(unique) == 1:
+            return self.roles[0]
+        return self.role_bucket
+
+
+def _role_bucket(role: str) -> str:
+    if role in ("frame", "tower", "rail"):
+        return "frame"
+    if role == "gantry":
+        return "gantry"
+    if role == "brace":
+        return "brace"
+    return role
+
+
+def _unit_direction(p0: np.ndarray, p1: np.ndarray) -> np.ndarray | None:
+    vec = p1 - p0
+    norm = float(np.linalg.norm(vec))
+    if norm < 1e-9:
+        return None
+    return vec / norm
+
+
+def _merge_collinear_members(assembly: AssemblyModel) -> list[_MergedSegment]:
+    """Merge collinear adjacent structural members sharing (profile, material, role_bucket)."""
+    nmap = assembly.node_map
+    segments: list[_MergedSegment] = []
+
+    for m in assembly.members:
+        # Skip virtual enclosure shear diaphragm elements and auxiliary FEA rail duplicates
+        if m.id.startswith("panel_shear_") or m.id.startswith("x_rail_aux_"):
+            continue
+        length_m = m.length_m(nmap)
+        if length_m < 1e-6:
+            continue
+        segments.append(
+            _MergedSegment(
+                start_id=m.start_id,
+                end_id=m.end_id,
+                profile_id=m.profile.id,
+                material_id=m.material.id,
+                role_bucket=_role_bucket(m.role),
+                roles=[m.role],
+                member_ids=[m.id],
+                length_m=length_m,
+            )
+        )
+
+    # Iteratively merge any two segments meeting at a shared node with collinear direction
+    collinear_cos_tol = 0.9999
+    merged = True
+    while merged:
+        merged = False
+        # Group indices by (profile_id, material_id, role_bucket)
+        by_key: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+        for idx, seg in enumerate(segments):
+            by_key[(seg.profile_id, seg.material_id, seg.role_bucket)].append(idx)
+
+        for indices in by_key.values():
+            if len(indices) < 2:
+                continue
+            # Build node -> incident segment indices map for this key
+            node_to_segs: dict[str, list[int]] = defaultdict(list)
+            for idx in indices:
+                seg = segments[idx]
+                node_to_segs[seg.start_id].append(idx)
+                node_to_segs[seg.end_id].append(idx)
+
+            pair_to_merge: tuple[int, int, str, str] | None = None
+            for shared_node, inc in node_to_segs.items():
+                if len(inc) < 2:
+                    continue
+                p_shared = nmap[shared_node].position_m
+                for a_pos in range(len(inc)):
+                    i = inc[a_pos]
+                    seg_i = segments[i]
+                    other_i = seg_i.end_id if seg_i.start_id == shared_node else seg_i.start_id
+                    d_into = _unit_direction(nmap[other_i].position_m, p_shared)
+                    if d_into is None:
+                        continue
+                    for b_pos in range(a_pos + 1, len(inc)):
+                        j = inc[b_pos]
+                        seg_j = segments[j]
+                        other_j = (
+                            seg_j.end_id if seg_j.start_id == shared_node else seg_j.start_id
+                        )
+                        if other_i == other_j:
+                            continue
+                        d_out = _unit_direction(p_shared, nmap[other_j].position_m)
+                        if d_out is None:
+                            continue
+                        if float(np.dot(d_into, d_out)) >= collinear_cos_tol:
+                            pair_to_merge = (i, j, other_i, other_j)
+                            break
+                    if pair_to_merge is not None:
+                        break
+                if pair_to_merge is not None:
+                    break
+
+            if pair_to_merge is not None:
+                i, j, new_start, new_end = pair_to_merge
+                seg_i = segments[i]
+                seg_j = segments[j]
+                combined = _MergedSegment(
+                    start_id=new_start,
+                    end_id=new_end,
+                    profile_id=seg_i.profile_id,
+                    material_id=seg_i.material_id,
+                    role_bucket=seg_i.role_bucket,
+                    roles=seg_i.roles + seg_j.roles,
+                    member_ids=seg_i.member_ids + seg_j.member_ids,
+                    length_m=seg_i.length_m + seg_j.length_m,
+                )
+                # Remove higher index first, then replace lower index
+                hi, lo = max(i, j), min(i, j)
+                segments.pop(hi)
+                segments[lo] = combined
+                merged = True
+                break
+
+    return segments
+
+
+def _describe_cut_group(role: str, profile_id: str, member_ids: list[str]) -> str:
+    """Create a descriptive engineering name for a grouped cut-list entry."""
+    profile_name = get_profile(profile_id).name
+    ids_lower = [mid.lower() for mid in member_ids]
+    if all(mid.startswith("col_") for mid in ids_lower):
+        return f"Vertical Frame Column ({profile_name})"
+    if all(mid.startswith("tower_") for mid in ids_lower):
+        return f"Delta Vertical Tower ({profile_name})"
+    if all(mid.startswith("z_col_") for mid in ids_lower):
+        return f"Z Portal Upright ({profile_name})"
+    if all(mid.startswith("x_gantry") for mid in ids_lower):
+        return f"X Gantry Beam ({profile_name})"
+    if all(mid.startswith("y_rail") for mid in ids_lower):
+        return f"Y Rail Support Extrusion ({profile_name})"
+    if all(mid.startswith("arm_") for mid in ids_lower):
+        return f"Delta Effector Truss Rod ({profile_name})"
+    if role == "brace":
+        return f"Diagonal Structural Brace ({profile_name})"
+    if role == "gantry":
+        return f"Gantry Beam ({profile_name})"
+    if role == "rail":
+        return f"Rail Support Beam ({profile_name})"
+    if role == "tower":
+        return f"Vertical Tower ({profile_name})"
+    return f"Frame Member ({profile_name})"
+
+
+def _build_cut_list(assembly: AssemblyModel) -> list[CutListItem]:
+    """Generate sorted, deduplicated manufacturable CutListItem list."""
+    merged_segments = _merge_collinear_members(assembly)
+    grouped: dict[tuple[str, str, float, str], list[_MergedSegment]] = defaultdict(list)
+
+    for seg in merged_segments:
+        length_mm = round(seg.length_m * 1000.0, 1)
+        key = (seg.profile_id, seg.material_id, length_mm, seg.canonical_role)
+        grouped[key].append(seg)
+
+    # Sort by role (asc), profile_id (asc), length_mm (desc), material_id (asc)
+    sorted_keys = sorted(
+        grouped.keys(),
+        key=lambda k: (k[3], k[0], -k[2], k[1]),
+    )
+
+    cut_list: list[CutListItem] = []
+    for idx, key in enumerate(sorted_keys, start=1):
+        profile_id, material_id, length_mm, role = key
+        segs = grouped[key]
+        qty = len(segs)
+        profile = get_profile(profile_id)
+        material = get_material(material_id)
+
+        length_m = length_mm * 1e-3
+        unit_mass_kg = profile.area_m2 * length_m * material.density_kg_m3
+        unit_mass_g = unit_mass_kg * 1000.0
+        total_mass_g = unit_mass_g * qty
+
+        mfg_mult = _PROFILE_MFG_MULTIPLIER.get(profile.shape, 1.8)
+        unit_cost_usd = unit_mass_kg * material.cost_per_kg_usd * mfg_mult + _CUT_FEE_USD
+        total_cost_usd = unit_cost_usd * qty
+
+        all_member_ids = [mid for s in segs for mid in s.member_ids]
+        name = _describe_cut_group(role, profile_id, all_member_ids)
+        notes = f"Saw cut ±0.5 mm; from {len(all_member_ids)} FEA segment(s)"
+
+        cut_list.append(
+            CutListItem(
+                part_code=f"CUT-{idx:02d}",
+                name=name,
+                profile_id=profile_id,
+                material_id=material_id,
+                role=role,
+                length_mm=round(length_mm, 1),
+                quantity=qty,
+                total_length_mm=round(length_mm * qty, 1),
+                unit_mass_g=round(unit_mass_g, 1),
+                total_mass_g=round(total_mass_g, 1),
+                unit_cost_usd=round(unit_cost_usd, 2),
+                total_cost_usd=round(total_cost_usd, 2),
+                notes=notes,
+            )
+        )
+
+    return cut_list
+
+
+def _nest_stock_bars(
+    cut_list: list[CutListItem],
+    stock_length_mm: float = 1000.0,
+    kerf_mm: float = 3.0,
+) -> list[StockNestingSummary]:
+    """Perform 1D First-Fit Decreasing (FFD) bin packing per (profile_id, material_id)."""
+    cuts_by_stock: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for item in cut_list:
+        cuts_by_stock[(item.profile_id, item.material_id)].extend(
+            [item.length_mm] * item.quantity
+        )
+
+    summaries: list[StockNestingSummary] = []
+    for (profile_id, material_id) in sorted(cuts_by_stock.keys()):
+        cuts = sorted(cuts_by_stock[(profile_id, material_id)], reverse=True)
+        if not cuts:
+            continue
+
+        max_cut = cuts[0]
+        eff_stock = float(stock_length_mm)
+        if max_cut > eff_stock:
+            if max_cut <= 1000.0:
+                eff_stock = 1000.0
+            elif max_cut <= 2000.0:
+                eff_stock = 2000.0
+            else:
+                eff_stock = math.ceil(max_cut / 500.0) * 500.0
+
+        # FFD packing: each bin tracks cuts and consumed length (cuts + inter-cut kerfs)
+        bins: list[list[float]] = []
+        bin_used: list[float] = []
+
+        for cut in cuts:
+            placed = False
+            for b_idx, used in enumerate(bin_used):
+                needed = cut + kerf_mm
+                if used + needed <= eff_stock + 1e-6:
+                    bins[b_idx].append(round(cut, 1))
+                    bin_used[b_idx] = used + needed
+                    placed = True
+                    break
+            if not placed:
+                bins.append([round(cut, 1)])
+                bin_used.append(cut)
+
+        bars_required = len(bins)
+        used_length_mm = sum(cuts)
+        total_stock_mm = bars_required * eff_stock
+        waste_length_mm = max(0.0, total_stock_mm - used_length_mm)
+        waste_pct = (waste_length_mm / total_stock_mm * 100.0) if total_stock_mm > 0 else 0.0
+
+        summaries.append(
+            StockNestingSummary(
+                profile_id=profile_id,
+                material_id=material_id,
+                stock_length_mm=round(eff_stock, 1),
+                bars_required=bars_required,
+                used_length_mm=round(used_length_mm, 1),
+                waste_length_mm=round(waste_length_mm, 1),
+                waste_pct=round(waste_pct, 2),
+                bar_cuts_mm=bins,
+            )
+        )
+
+    return summaries
+
+
+def _normalize_z_drive(z_drive: str) -> str:
+    """Normalize schema Z-drive identifiers and common aliases."""
+    mapping = {
+        "belted_quad_z": "belted_quad_z",
+        "quad_belted": "belted_quad_z",
+        "belted_z": "belted_z",
+        "leadscrew_triple": "leadscrew_triple",
+        "triple_leadscrew": "leadscrew_triple",
+        "leadscrew_dual": "leadscrew_dual",
+        "dual_leadscrew": "leadscrew_dual",
+        "leadscrew_single": "leadscrew_single",
+        "single_leadscrew": "leadscrew_single",
+    }
+    return mapping.get(z_drive, z_drive)
+
+
+def _z_motor_count(architecture: str, z_drive: str) -> int:
+    if architecture == "delta":
+        return 0
+    norm = _normalize_z_drive(z_drive)
+    return {
+        "belted_quad_z": 4,
+        "belted_z": 2,
+        "leadscrew_triple": 3,
+        "leadscrew_dual": 2,
+        "leadscrew_single": 1,
+    }.get(norm, 2)
+
+
+def _rail_hw_info(profile_id: str) -> tuple[str, float, float, float]:
+    if profile_id in _RAIL_HARDWARE:
+        return _RAIL_HARDWARE[profile_id]
+    prof = get_profile(profile_id)
+    return (f"{prof.name} Carriage", 35.0, 15.0, 60.0)
+
+
+def _add_bom_item(
+    items: list[BOMLineItem],
+    sku: str,
+    category: str,
+    name: str,
+    specification: str,
+    quantity: int | float,
+    unit: str,
+    unit_cost_usd: float,
+    unit_mass_g: float,
+) -> None:
+    total_cost = round(float(quantity) * float(unit_cost_usd), 2)
+    total_mass = round(float(quantity) * float(unit_mass_g), 1)
+    items.append(
+        BOMLineItem(
+            sku=sku,
+            category=category,
+            name=name,
+            specification=specification,
+            quantity=quantity,
+            unit=unit,
+            unit_cost_usd=round(float(unit_cost_usd), 2),
+            total_cost_usd=total_cost,
+            total_mass_g=total_mass,
+        )
+    )
+
+
+def generate_bom(
+    spec_or_assembly: PrinterSpec | AssemblyModel,
+    stock_length_mm: float = 1000.0,
+    kerf_mm: float = 3.0,
+) -> PrinterBOM:
+    """Generate a manufacturable cut-list, 1D stock nesting plan, and complete hardware BOM.
+
+    Parameters
+    ----------
+    spec_or_assembly:
+        A declarative ``PrinterSpec`` or an already-built ``AssemblyModel``.
+    stock_length_mm:
+        Standard raw bar length in mm for 1D stock nesting (default 1000.0 mm).
+    kerf_mm:
+        Saw blade kerf allowance in mm between cuts (default 3.0 mm).
+    """
+    if stock_length_mm <= 0:
+        raise ValueError("stock_length_mm must be positive")
+    if kerf_mm < 0:
+        raise ValueError("kerf_mm must be non-negative")
+
+    if isinstance(spec_or_assembly, AssemblyModel):
+        assembly = spec_or_assembly
+        spec = assembly.spec
+    else:
+        spec = spec_or_assembly
+        assembly = build_assembly(spec)
+
+    cut_list = _build_cut_list(assembly)
+    stock_nesting = _nest_stock_bars(
+        cut_list, stock_length_mm=stock_length_mm, kerf_mm=kerf_mm
+    )
+
+    items: list[BOMLineItem] = []
+
+    w = spec.frame.width_mm
+    d = spec.frame.depth_mm
+    h = spec.frame.height_mm
+    bx, by, bz = spec.kinematics.build_volume_mm
+    arch = spec.architecture
+
+    # ------------------------------------------------------------------
+    # 1. FRAME (structural extrusions, tubes, braces from cut list)
+    # ------------------------------------------------------------------
+    for c in cut_list:
+        prof = get_profile(c.profile_id)
+        mat = get_material(c.material_id)
+        items.append(
+            BOMLineItem(
+                sku=f"FRM-{c.part_code}",
+                category="frame",
+                name=c.name,
+                specification=f"{prof.name}, {mat.name}, L={c.length_mm:.1f} mm",
+                quantity=c.quantity,
+                unit="pcs",
+                unit_cost_usd=c.unit_cost_usd,
+                total_cost_usd=c.total_cost_usd,
+                total_mass_g=c.total_mass_g,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # 2. MOTION (linear rails, carriages, belts, pulleys, idlers, Z-drive)
+    # ------------------------------------------------------------------
+    rail_mat = get_material(spec.gantry.rail_material)
+    x_rail_prof = get_profile(spec.gantry.x_rail_profile)
+    y_rail_prof = get_profile(spec.gantry.y_rail_profile)
+
+    # Track total linear rail length (mm) and carriage count for fasteners
+    total_bolted_rail_mm = 0.0
+    total_carriages = 0
+
+    def _add_rail_and_carriage(
+        sku_prefix: str,
+        axis_label: str,
+        rail_prof_id: str,
+        rail_qty: int,
+        rail_len_mm: float,
+        carriage_qty: int,
+    ) -> None:
+        nonlocal total_bolted_rail_mm, total_carriages
+        prof = get_profile(rail_prof_id)
+        car_name, rail_usd_m, car_usd, car_mass_g = _rail_hw_info(rail_prof_id)
+        rail_len_m = rail_len_mm * 1e-3
+        rail_unit_mass_g = prof.area_m2 * rail_len_m * rail_mat.density_kg_m3 * 1000.0
+        rail_unit_cost = rail_len_m * rail_usd_m + 4.0
+
+        _add_bom_item(
+            items,
+            sku=f"MOT-{sku_prefix}-RAIL",
+            category="motion",
+            name=f"{axis_label} Linear Rail ({prof.name})",
+            specification=f"{rail_mat.name}, L={rail_len_mm:.0f} mm",
+            quantity=rail_qty,
+            unit="pcs",
+            unit_cost_usd=rail_unit_cost,
+            unit_mass_g=rail_unit_mass_g,
+        )
+        _add_bom_item(
+            items,
+            sku=f"MOT-{sku_prefix}-CAR",
+            category="motion",
+            name=f"{axis_label} {car_name}",
+            specification=f"Preloaded block for {prof.id}",
+            quantity=carriage_qty,
+            unit="pcs",
+            unit_cost_usd=car_usd,
+            unit_mass_g=car_mass_g,
+        )
+        if prof.shape == "rail":
+            total_bolted_rail_mm += rail_len_mm * rail_qty
+        total_carriages += carriage_qty
+
+    z_norm = _normalize_z_drive(spec.bed.z_drive)
+
+    if arch == "corexy":
+        x_rail_len = round(min(w - 40.0, max(bx + 60.0, w - 60.0)), 0)
+        y_rail_len = round(min(d - 40.0, max(by + 60.0, d - 60.0)), 0)
+        z_rail_len = round(min(h - 60.0, max(bz + 80.0, h - 100.0)), 0)
+        x_rail_qty = 2 if spec.gantry.dual_x_rails else 1
+        z_rail_qty = {
+            "belted_quad_z": 4,
+            "leadscrew_triple": 3,
+            "leadscrew_dual": 2,
+            "leadscrew_single": 2,
+            "belted_z": 2,
+        }.get(z_norm, 4)
+
+        _add_rail_and_carriage("X", "X-Axis", x_rail_prof.id, x_rail_qty, x_rail_len, x_rail_qty)
+        _add_rail_and_carriage("Y", "Y-Axis", y_rail_prof.id, 2, y_rail_len, 2)
+        _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, z_rail_qty, z_rail_len, z_rail_qty)
+
+    elif arch == "cartesian_bedslinger":
+        x_rail_len = round(min(w - 30.0, max(bx + 60.0, w - 50.0)), 0)
+        y_rail_len = round(min(d - 30.0, max(by + 80.0, d - 50.0)), 0)
+        z_rail_len = round(min(h - 50.0, max(bz + 80.0, h - 80.0)), 0)
+        x_rail_qty = 2 if spec.gantry.dual_x_rails else 1
+        y_car_qty = 4 if y_rail_prof.shape == "rod" else 2
+
+        _add_rail_and_carriage("X", "X-Axis", x_rail_prof.id, x_rail_qty, x_rail_len, x_rail_qty)
+        _add_rail_and_carriage("Y", "Y-Bed", y_rail_prof.id, 2, y_rail_len, y_car_qty)
+        _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, 2, z_rail_len, 2)
+
+    elif arch == "delta":
+        tower_rail_len = round(min(h - 60.0, max(bz + 180.0, h - 160.0)), 0)
+        _add_rail_and_carriage("TWR", "Delta Tower", y_rail_prof.id, 3, tower_rail_len, 3)
+
+    # Drive belts, pulleys, idlers (architecture-specific exact formulas)
+    belt = spec.gantry.belt
+    belt_cost_m = _BELT_COST_USD_PER_M.get((belt.type, belt.core), 6.0)
+    belt_mass_g_m = _BELT_MASS_G_PER_M.get(belt.type, 14.0)
+
+    if arch == "corexy":
+        drive_belt_m = round(2.0 * (2.0 * (w + d) + 400.0) / 1000.0, 2)
+        pulley_qty = 2
+        idler_qty = 8
+    elif arch == "cartesian_bedslinger":
+        drive_belt_m = round((2.0 * w + 150.0 + 2.0 * d + 150.0) / 1000.0, 2)
+        pulley_qty = 2
+        idler_qty = 2
+    elif arch == "delta":
+        drive_belt_m = round(3.0 * (2.0 * h + 120.0) / 1000.0, 2)
+        pulley_qty = 3
+        idler_qty = 3
+    else:
+        drive_belt_m = round(2.0 * (w + d) / 1000.0, 2)
+        pulley_qty = 2
+        idler_qty = 4
+
+    _add_bom_item(
+        items,
+        sku="MOT-BELT-XY",
+        category="motion",
+        name=f"Drive Belt ({belt.type.upper()}, {belt.core} core)",
+        specification=f"Pitch {belt.pitch_mm:.1f}mm, pretension {belt.pretension_n:.0f}N",
+        quantity=drive_belt_m,
+        unit="m",
+        unit_cost_usd=belt_cost_m,
+        unit_mass_g=belt_mass_g_m,
+    )
+    _add_bom_item(
+        items,
+        sku="MOT-PULLEY-DRV",
+        category="motion",
+        name=f"GT2 {belt.pulley_teeth}T Drive Pulley",
+        specification=f"5mm bore, aluminum, matches {belt.type}",
+        quantity=pulley_qty,
+        unit="pcs",
+        unit_cost_usd=4.50,
+        unit_mass_g=12.0,
+    )
+    _add_bom_item(
+        items,
+        sku="MOT-IDLER",
+        category="motion",
+        name=f"GT2 {belt.pulley_teeth}T Flange Idler Pulley",
+        specification=f"Dual-bearing idler for {belt.type}",
+        quantity=idler_qty,
+        unit="pcs",
+        unit_cost_usd=3.50,
+        unit_mass_g=10.0,
+    )
+
+    if arch == "delta":
+        arm_len_mm = spec.kinematics.delta_arm_length_mm
+        arm_mass_g = (arm_len_mm * 1e-3) * 28.0 + 10.0  # CF tube + rod ends
+        _add_bom_item(
+            items,
+            sku="MOT-DELTA-RODS",
+            category="motion",
+            name="Carbon Fiber Delta Parallel Rod Assembly",
+            specification=f"6mm OD carbon tube w/ ball joints, L={arm_len_mm:.1f} mm",
+            quantity=6,
+            unit="pcs",
+            unit_cost_usd=11.50,
+            unit_mass_g=arm_mass_g,
+        )
+
+    # Z-drive hardware (CoreXY & Cartesian)
+    if arch != "delta":
+        if z_norm in ("belted_quad_z", "belted_z"):
+            z_axes = 4 if z_norm == "belted_quad_z" else 2
+            z_belt_m = round(z_axes * (h + 120.0) / 1000.0, 2)
+            _add_bom_item(
+                items,
+                sku="MOT-Z-BELT",
+                category="motion",
+                name="Z-Drive GT2 6mm Belt",
+                specification=f"{z_axes}x vertical Z drive belts (fiberglass core)",
+                quantity=z_belt_m,
+                unit="m",
+                unit_cost_usd=4.50,
+                unit_mass_g=12.0,
+            )
+            _add_bom_item(
+                items,
+                sku="MOT-Z-GEAR",
+                category="motion",
+                name="Z-Drive 80T/16T Reduction Pulley & Shaft Kit",
+                specification="80T + 16T GT2 pulleys, 188mm closed loop belt, 5mm shaft & bearings",
+                quantity=z_axes,
+                unit="sets",
+                unit_cost_usd=16.50,
+                unit_mass_g=85.0,
+            )
+        else:
+            ls_qty = {
+                "leadscrew_triple": 3,
+                "leadscrew_dual": 2,
+                "leadscrew_single": 1,
+            }.get(z_norm, 2)
+            ls_len_mm = round(min(h - 40.0, bz + 100.0), 0)
+            ls_mass_g = (ls_len_mm * 1e-3) * 320.0  # TR8x8 stainless ~320 g/m
+            _add_bom_item(
+                items,
+                sku="MOT-Z-LS",
+                category="motion",
+                name="TR8x8 Stainless Leadscrew",
+                specification=f"8mm dia, 2mm pitch, 4-start, L={ls_len_mm:.0f} mm",
+                quantity=ls_qty,
+                unit="pcs",
+                unit_cost_usd=11.00 + (ls_len_mm * 1e-3) * 14.0,
+                unit_mass_g=ls_mass_g,
+            )
+            _add_bom_item(
+                items,
+                sku="MOT-Z-NUT",
+                category="motion",
+                name="TR8x8 POM Anti-Backlash Leadscrew Nut & 5x8mm Coupler",
+                specification="Spring-loaded POM nut + flexible aluminum shaft coupler",
+                quantity=ls_qty,
+                unit="sets",
+                unit_cost_usd=8.50,
+                unit_mass_g=35.0,
+            )
+
+    # ------------------------------------------------------------------
+    # 3. MOTORS (XY/Tower steppers + Z steppers + 1x Extruder stepper)
+    # ------------------------------------------------------------------
+    xy_stepper = spec.kinematics.xy_stepper
+    z_stepper = spec.kinematics.z_stepper
+    xy_motor_qty = 3 if arch == "delta" else 2
+    z_motor_qty = _z_motor_count(arch, spec.bed.z_drive)
+
+    xy_unit_cost = 12.0 + xy_stepper.holding_torque_nm * 18.0
+    _add_bom_item(
+        items,
+        sku="MTR-XY",
+        category="motors",
+        name=f"{'Tower' if arch == 'delta' else 'XY'} Stepper Motor — {xy_stepper.name}",
+        specification=(
+            f"{xy_stepper.holding_torque_nm:.2f} N·m, {xy_stepper.rated_current_a:.1f}A, "
+            f"{xy_stepper.inductance_mh:.1f}mH, {xy_stepper.supply_voltage_v:.0f}V"
+        ),
+        quantity=xy_motor_qty,
+        unit="pcs",
+        unit_cost_usd=xy_unit_cost,
+        unit_mass_g=xy_stepper.motor_mass_g,
+    )
+
+    if z_motor_qty > 0:
+        z_unit_cost = 11.0 + z_stepper.holding_torque_nm * 16.0
+        _add_bom_item(
+            items,
+            sku="MTR-Z",
+            category="motors",
+            name=f"Z-Axis Stepper Motor — {z_stepper.name}",
+            specification=(
+                f"{z_stepper.holding_torque_nm:.2f} N·m, {z_stepper.rated_current_a:.1f}A, "
+                f"{z_stepper.supply_voltage_v:.0f}V"
+            ),
+            quantity=z_motor_qty,
+            unit="pcs",
+            unit_cost_usd=z_unit_cost,
+            unit_mass_g=z_stepper.motor_mass_g,
+        )
+
+    is_direct = spec.toolhead.extruder.type == "direct_drive"
+    _add_bom_item(
+        items,
+        sku="MTR-EXT",
+        category="motors",
+        name=(
+            "NEMA14 Pancake Extruder Stepper (LDO 36STH20)"
+            if is_direct
+            else "NEMA17 Extruder Stepper (40mm)"
+        ),
+        specification=(
+            "36mm round pancake, 1.0A, 10T gear"
+            if is_direct
+            else "42x40mm, 0.45 N·m, 1.5A"
+        ),
+        quantity=1,
+        unit="pcs",
+        unit_cost_usd=16.50 if is_direct else 14.00,
+        unit_mass_g=105.0 if is_direct else 280.0,
+    )
+
+    total_motors = xy_motor_qty + z_motor_qty + 1
+
+    # ------------------------------------------------------------------
+    # 4. HOTEND & EXTRUDER & COOLING
+    # ------------------------------------------------------------------
+    hotend = spec.toolhead.hotend
+    extruder = spec.toolhead.extruder
+    block_mat = get_material(hotend.block_material)
+    nozzle_mat = get_material(hotend.nozzle_material)
+    hb_mat = get_material(hotend.heatbreak_material)
+
+    hotend_cost = 38.0
+    if hotend.heater_power_w >= 65.0:
+        hotend_cost += 16.0
+    elif hotend.heater_power_w >= 50.0:
+        hotend_cost += 8.0
+    if hotend.block_material == "copper_c110":
+        hotend_cost += 14.0
+    if hotend.heatbreak_material == "titanium_grade5":
+        hotend_cost += 16.0
+    if hotend.nozzle_material == "hardened_steel":
+        hotend_cost += 12.0
+    if hotend.melt_zone_length_mm >= 18.0:
+        hotend_cost += 10.0
+
+    _add_bom_item(
+        items,
+        sku="HOT-ASM",
+        category="hotend",
+        name=f"Hotend Assembly — {hotend.name}",
+        specification=(
+            f"{hotend.heater_power_w:.0f}W heater, {hotend.nozzle_diameter_mm:.2f}mm "
+            f"{nozzle_mat.id} nozzle, {block_mat.id} block, {hb_mat.id} heatbreak, "
+            f"{hotend.melt_zone_length_mm:.0f}mm melt zone"
+        ),
+        quantity=1,
+        unit="pcs",
+        unit_cost_usd=hotend_cost,
+        unit_mass_g=hotend.block_mass_g + 48.0,
+    )
+
+    _add_bom_item(
+        items,
+        sku="HOT-EXT",
+        category="hotend",
+        name=(
+            "Direct-Drive Dual-Gear Extruder Assembly"
+            if is_direct
+            else "Bowden Dual-Gear Extruder & PTFE Tube Assembly"
+        ),
+        specification=(
+            f"{extruder.type}, {extruder.gear_ratio:.1f}:1 ratio, "
+            f"{extruder.filament_diameter_mm:.2f}mm filament, "
+            f"{extruder.max_push_force_n:.0f}N max push"
+        ),
+        quantity=1,
+        unit="pcs",
+        unit_cost_usd=44.00 if is_direct else 32.00,
+        unit_mass_g=130.0 if is_direct else 110.0,
+    )
+
+    part_fan_qty = 2 if hotend.part_cooling_cfm >= 10.0 else (1 if hotend.part_cooling_cfm > 0 else 0)
+    if part_fan_qty > 0:
+        _add_bom_item(
+            items,
+            sku="HOT-FAN-PART",
+            category="hotend",
+            name="5015 Dual-Ball-Bearing Part Cooling Blower",
+            specification=f"24V radial blower, {hotend.part_cooling_cfm:.1f} CFM total system flow",
+            quantity=part_fan_qty,
+            unit="pcs",
+            unit_cost_usd=8.50,
+            unit_mass_g=28.0,
+        )
+    _add_bom_item(
+        items,
+        sku="HOT-FAN-HS",
+        category="hotend",
+        name="4010 Hotend Heatsink Axial Cooling Fan",
+        specification=f"24V dual-ball bearing, R_th={hotend.heatsink_thermal_resistance_k_w:.1f} K/W",
+        quantity=1,
+        unit="pcs",
+        unit_cost_usd=6.50,
+        unit_mass_g=18.0,
+    )
+
+    # ------------------------------------------------------------------
+    # 5. BED (build plate + heater + PEI spring steel sheet)
+    # ------------------------------------------------------------------
+    bed = spec.bed
+    bed_x, bed_y = bed.size_mm
+    bed_area_m2 = (bed_x * 1e-3) * (bed_y * 1e-3)
+    plate_mat = get_material(bed.plate_material)
+    plate_vol_m3 = bed_area_m2 * (bed.plate_thickness_mm * 1e-3)
+    plate_mass_kg = plate_vol_m3 * plate_mat.density_kg_m3
+    plate_cost = max(22.0, plate_mass_kg * plate_mat.cost_per_kg_usd * 2.2)
+
+    _add_bom_item(
+        items,
+        sku="BED-PLATE",
+        category="bed",
+        name=f"Precision Build Plate ({plate_mat.name})",
+        specification=f"{bed_x:.0f}x{bed_y:.0f}x{bed.plate_thickness_mm:.1f} mm, stress-relieved flat",
+        quantity=1,
+        unit="pcs",
+        unit_cost_usd=plate_cost,
+        unit_mass_g=plate_mass_kg * 1000.0,
+    )
+
+    heater_kind = "Silicone AC Mains" if bed.heater_power_w >= 400.0 else "PCB/Silicone 24V DC"
+    heater_cost = 18.0 + bed.heater_power_w * 0.045
+    _add_bom_item(
+        items,
+        sku="BED-HEATER",
+        category="bed",
+        name=f"{heater_kind} Bed Heater Pad",
+        specification=f"{bed.heater_power_w:.0f}W, {bed_x - 20:.0f}x{bed_y - 20:.0f} mm w/ thermistor & thermal fuse",
+        quantity=1,
+        unit="pcs",
+        unit_cost_usd=heater_cost,
+        unit_mass_g=bed_area_m2 * 2200.0,
+    )
+
+    pei_cost = 14.0 + bed_area_m2 * 180.0
+    _add_bom_item(
+        items,
+        sku="BED-PEI",
+        category="bed",
+        name="PEI Spring Steel Build Sheet & Magnetic Base",
+        specification=f"{bed_x:.0f}x{bed_y:.0f} mm double-sided textured/smooth PEI + high-temp magnet",
+        quantity=1,
+        unit="sets",
+        unit_cost_usd=pei_cost,
+        unit_mass_g=bed_area_m2 * 3500.0,
+    )
+
+    # ------------------------------------------------------------------
+    # 6. ENCLOSURE (5 cut panels when enclosed_panels is True)
+    # ------------------------------------------------------------------
+    if spec.frame.enclosed_panels:
+        pt = spec.frame.panel_thickness_mm
+        # Polycarbonate / cast acrylic: rho = 1200 kg/m^3, ~$48/m^2 at 3mm scaled by thickness
+        panel_rho = 1200.0
+        panel_usd_m2 = 48.0 * (pt / 3.0)
+
+        if arch == "delta":
+            side_w = round(max(w, d) * 0.5 * math.sqrt(3.0), 0)
+            panel_defs = [
+                ("ENC-LEFT", "Left Side Enclosure Panel", side_w, h, 1.0),
+                ("ENC-RIGHT", "Right Side Enclosure Panel", side_w, h, 1.0),
+                ("ENC-REAR", "Rear Enclosure Panel", side_w, h, 1.0),
+                ("ENC-TOP", "Top Enclosure Panel", side_w, round(side_w * 0.866, 0), 0.5),
+                ("ENC-DOOR", "Front Door Enclosure Panel (w/ Hinges & Latch)", side_w, h, 1.0),
+            ]
+        else:
+            panel_defs = [
+                ("ENC-LEFT", "Left Side Enclosure Panel", d, h, 1.0),
+                ("ENC-RIGHT", "Right Side Enclosure Panel", d, h, 1.0),
+                ("ENC-REAR", "Rear Enclosure Panel", w, h, 1.0),
+                ("ENC-TOP", "Top Enclosure Panel", w, d, 1.0),
+                ("ENC-DOOR", "Front Door Enclosure Panel (w/ Hinges & Latch)", w, h, 1.0),
+            ]
+
+        for sku, pname, dim_a, dim_b, area_factor in panel_defs:
+            area_m2 = (dim_a * 1e-3) * (dim_b * 1e-3) * area_factor
+            mass_g = area_m2 * (pt * 1e-3) * panel_rho * 1000.0
+            extra_hw = 8.0 if sku == "ENC-DOOR" else 0.0
+            cost = max(6.0, area_m2 * panel_usd_m2 + 2.5) + extra_hw
+            _add_bom_item(
+                items,
+                sku=sku,
+                category="enclosure",
+                name=pname,
+                specification=f"Clear Polycarbonate/Acrylic, {dim_a:.0f}x{dim_b:.0f}x{pt:.1f} mm",
+                quantity=1,
+                unit="pcs",
+                unit_cost_usd=cost,
+                unit_mass_g=mass_g,
+            )
+
+    # ------------------------------------------------------------------
+    # 7. FASTENERS (corner joints, M5 frame bolts/T-nuts, M3 rail/motor HW)
+    # ------------------------------------------------------------------
+    if arch == "corexy":
+        corner_joints = 16  # 8 outer cube corners + 4 gantry junctions + 4 reinforced corner brackets
+    elif arch == "cartesian_bedslinger":
+        corner_joints = 12
+    elif arch == "delta":
+        corner_joints = 12
+    else:
+        corner_joints = max(8, len(assembly.nodes) * 2)
+
+    brace_cuts = sum(c.quantity for c in cut_list if c.role == "brace")
+    m5_bolt_qty = corner_joints * 2 + brace_cuts * 2
+    m5_tnut_qty = m5_bolt_qty
+
+    # M3 linear rail mounting screws spaced every 25 mm along total bolted rail length
+    m3_rail_screw_qty = int(math.ceil(total_bolted_rail_mm / 25.0)) if total_bolted_rail_mm > 0 else 0
+    m3_motor_toolhead_qty = (
+        total_motors * 4
+        + total_carriages * 4
+        + 16  # toolhead, extruder, bed mounts
+        + (24 if spec.frame.enclosed_panels else 0)
+    )
+
+    _add_bom_item(
+        items,
+        sku="FST-CORNER",
+        category="fasteners",
+        name="Cast Aluminum Corner Bracket / Blind Joint",
+        specification=f"Matches {spec.frame.profile} T-slot frame junctions",
+        quantity=corner_joints,
+        unit="pcs",
+        unit_cost_usd=1.35,
+        unit_mass_g=16.0,
+    )
+    _add_bom_item(
+        items,
+        sku="FST-M5-BOLT",
+        category="fasteners",
+        name="M5x10mm Stainless SHCS Frame Bolts",
+        specification="ISO 4762 A2-70 stainless steel for frame joints & braces",
+        quantity=m5_bolt_qty,
+        unit="pcs",
+        unit_cost_usd=0.14,
+        unit_mass_g=3.2,
+    )
+    _add_bom_item(
+        items,
+        sku="FST-M5-TNUT",
+        category="fasteners",
+        name="M5 Spring-Loaded Roll-In T-Nuts",
+        specification=f"Nickel-plated steel T-nuts for {spec.frame.profile}",
+        quantity=m5_tnut_qty,
+        unit="pcs",
+        unit_cost_usd=0.18,
+        unit_mass_g=4.0,
+    )
+    if m3_rail_screw_qty > 0:
+        _add_bom_item(
+            items,
+            sku="FST-M3-RAIL",
+            category="fasteners",
+            name="M3x8mm Linear Rail Mounting Screws & M3 T-Nuts",
+            specification="Spaced every 25 mm along total linear rail length",
+            quantity=m3_rail_screw_qty,
+            unit="pcs",
+            unit_cost_usd=0.16,
+            unit_mass_g=2.4,
+        )
+    _add_bom_item(
+        items,
+        sku="FST-M3-HW",
+        category="fasteners",
+        name="M3 Stepper, Carriage & Toolhead Hardware Pack",
+        specification="Assorted M3x6–M3x30 SHCS, washers, heat-set inserts & panel clips",
+        quantity=m3_motor_toolhead_qty,
+        unit="pcs",
+        unit_cost_usd=0.12,
+        unit_mass_g=1.8,
+    )
+
+    # ------------------------------------------------------------------
+    # Totals & Summaries
+    # ------------------------------------------------------------------
+    category_totals_raw: dict[str, float] = defaultdict(float)
+    for item in items:
+        category_totals_raw[item.category] += item.total_cost_usd
+
+    category_order = ["frame", "motion", "motors", "hotend", "bed", "enclosure", "fasteners"]
+    category_costs_usd: dict[str, float] = {}
+    for cat in category_order:
+        if cat in category_totals_raw:
+            category_costs_usd[cat] = round(category_totals_raw[cat], 2)
+    for cat, val in category_totals_raw.items():
+        if cat not in category_costs_usd:
+            category_costs_usd[cat] = round(val, 2)
+
+    total_cost_usd = round(sum(category_costs_usd.values()), 2)
+    total_mass_kg = round(sum(item.total_mass_g for item in items) / 1000.0, 3)
+    total_fasteners = int(
+        sum(item.quantity for item in items if item.category == "fasteners")
+    )
+    total_belt_length_m = round(
+        sum(
+            float(item.quantity)
+            for item in items
+            if item.category == "motion" and item.unit == "m"
+        ),
+        2,
+    )
+    total_extrusion_length_m = round(
+        sum(c.total_length_mm for c in cut_list) / 1000.0, 3
+    )
+
+    return PrinterBOM(
+        printer_name=spec.name,
+        architecture=spec.architecture,
+        cut_list=cut_list,
+        stock_nesting=stock_nesting,
+        items=items,
+        category_costs_usd=category_costs_usd,
+        total_cost_usd=total_cost_usd,
+        total_mass_kg=total_mass_kg,
+        total_fasteners=total_fasteners,
+        total_belt_length_m=total_belt_length_m,
+        total_extrusion_length_m=total_extrusion_length_m,
+    )
