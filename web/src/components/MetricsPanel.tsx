@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  CompareMode,
   PrinterBOMResponse,
   SimulationResponse,
   SolidFeaEngine,
@@ -11,6 +12,18 @@ import {
 
 interface Props {
   sim: SimulationResponse | null;
+  baselineSim: SimulationResponse | null;
+  baselineBom: PrinterBOMResponse | null;
+  baselineLabel: string;
+  prevSim: SimulationResponse | null;
+  prevBom: PrinterBOMResponse | null;
+  lastChangeSummary: string | null;
+  compareMode: CompareMode;
+  onCompareModeChange: (m: CompareMode) => void;
+  canUndo: boolean;
+  onUndo: () => void;
+  onResetToBaseline: () => void;
+  onSetBaseline: () => void;
   solidFea: SolidFEAResponse | null;
   tetFea: TetFEAResponse | null;
   activeSolidEngine: SolidFeaEngine;
@@ -59,6 +72,303 @@ function scoreColor(v: number): string {
   if (v >= 45) return "var(--amber)";
   return "var(--red)";
 }
+
+type DeltaStatus = "better" | "worse" | "same";
+
+interface ImpactMetricRow {
+  key: string;
+  label: string;
+  oldVal: number;
+  newVal: number;
+  delta: number;
+  pct: number;
+  status: DeltaStatus;
+  oldText: string;
+  newText: string;
+  deltaText: string;
+}
+
+function evalDelta(
+  oldVal: number,
+  newVal: number,
+  higherIsBetter: boolean,
+  eps: number
+): { delta: number; pct: number; status: DeltaStatus } {
+  const delta = newVal - oldVal;
+  const pct = Math.abs(oldVal) > 1e-6 ? (delta / Math.abs(oldVal)) * 100 : 0;
+  if (Math.abs(delta) < eps) {
+    return { delta: 0, pct: 0, status: "same" };
+  }
+  const improved = higherIsBetter ? delta > 0 : delta < 0;
+  return { delta, pct, status: improved ? "better" : "worse" };
+}
+
+function buildImpactMetrics(
+  cur: SimulationResponse,
+  cmp: SimulationResponse,
+  curBom: PrinterBOMResponse | null,
+  cmpBom: PrinterBOMResponse | null
+): ImpactMetricRow[] {
+  const curCost = curBom?.total_cost_usd ?? cur.geometry.mass_summary.estimated_material_cost_usd;
+  const cmpCost = cmpBom?.total_cost_usd ?? cmp.geometry.mass_summary.estimated_material_cost_usd;
+
+  const defs: Array<{
+    key: string;
+    label: string;
+    oldVal: number;
+    newVal: number;
+    higherIsBetter: boolean;
+    eps: number;
+    fmt: (v: number) => string;
+    fmtDelta: (d: number) => string;
+  }> = [
+    {
+      key: "score",
+      label: "Overall Score",
+      oldVal: cmp.scores.composite,
+      newVal: cur.scores.composite,
+      higherIsBetter: true,
+      eps: 0.05,
+      fmt: (v) => v.toFixed(1),
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+    },
+    {
+      key: "accel",
+      label: "Safe Max Accel",
+      oldVal: cmp.modal_fea.recommended_max_accel_mm_s2,
+      newVal: cur.modal_fea.recommended_max_accel_mm_s2,
+      higherIsBetter: true,
+      eps: 15,
+      fmt: (v) => `${Math.round(v).toLocaleString()} mm/s²`,
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`,
+    },
+    {
+      key: "freq",
+      label: "Resonance (f₁)",
+      oldVal: cmp.modal_fea.fundamental_freq_hz,
+      newVal: cur.modal_fea.fundamental_freq_hz,
+      higherIsBetter: true,
+      eps: 0.05,
+      fmt: (v) => `${v.toFixed(1)} Hz`,
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} Hz`,
+    },
+    {
+      key: "flex",
+      label: "Frame Flex",
+      oldVal: cmp.static_fea.combined_max_deflection_um,
+      newVal: cur.static_fea.combined_max_deflection_um,
+      higherIsBetter: false,
+      eps: 0.05,
+      fmt: (v) => `${v.toFixed(1)} µm`,
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`,
+    },
+    {
+      key: "flow",
+      label: "Max Flow",
+      oldVal: cmp.thermal.max_volumetric_flow_mm3_s,
+      newVal: cur.thermal.max_volumetric_flow_mm3_s,
+      higherIsBetter: true,
+      eps: 0.05,
+      fmt: (v) => `${v.toFixed(1)} mm³/s`,
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+    },
+    {
+      key: "time",
+      label: "Print Time",
+      oldVal: cmp.virtual_print.total_time_s,
+      newVal: cur.virtual_print.total_time_s,
+      higherIsBetter: false,
+      eps: 0.05,
+      fmt: (v) => `${v.toFixed(1)} s`,
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} s`,
+    },
+    {
+      key: "cost",
+      label: "Build Cost",
+      oldVal: cmpCost,
+      newVal: curCost,
+      higherIsBetter: false,
+      eps: 0.5,
+      fmt: (v) => `$${Math.round(v).toLocaleString()}`,
+      fmtDelta: (d) => `${d > 0 ? "+" : "-"}$${Math.round(Math.abs(d)).toLocaleString()}`,
+    },
+    {
+      key: "mass",
+      label: "Total Mass",
+      oldVal: cmp.geometry.mass_summary.total_mass_kg,
+      newVal: cur.geometry.mass_summary.total_mass_kg,
+      higherIsBetter: false,
+      eps: 0.01,
+      fmt: (v) => `${v.toFixed(2)} kg`,
+      fmtDelta: (d) => `${d > 0 ? "+" : ""}${d.toFixed(2)} kg`,
+    },
+  ];
+
+  return defs.map((def) => {
+    const res = evalDelta(def.oldVal, def.newVal, def.higherIsBetter, def.eps);
+    return {
+      key: def.key,
+      label: def.label,
+      oldVal: def.oldVal,
+      newVal: def.newVal,
+      delta: res.delta,
+      pct: res.pct,
+      status: res.status,
+      oldText: def.fmt(def.oldVal),
+      newText: def.fmt(def.newVal),
+      deltaText: res.status === "same" ? "0" : def.fmtDelta(res.delta),
+    };
+  });
+}
+
+function buildPlainEnglishSummary(metrics: ImpactMetricRow[]): string {
+  const byKey = Object.fromEntries(metrics.map((m) => [m.key, m])) as Record<string, ImpactMetricRow>;
+
+  const gains: Array<{ weight: number; text: string }> = [];
+  const tradeoffs: Array<{ weight: number; text: string }> = [];
+
+  const pctTag = (m: ImpactMetricRow) =>
+    Math.abs(m.pct) >= 1 ? ` (${m.pct > 0 ? "+" : ""}${Math.round(m.pct)}%)` : "";
+
+  const accel = byKey.accel;
+  if (accel.status === "better") {
+    gains.push({
+      weight: Math.abs(accel.pct) + 12,
+      text: `raised safe accel by +${Math.round(accel.delta).toLocaleString()} mm/s²${pctTag(accel)}`,
+    });
+  } else if (accel.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(accel.pct) + 12,
+      text: `lowered safe accel by ${Math.round(accel.delta).toLocaleString()} mm/s²${pctTag(accel)}`,
+    });
+  }
+
+  const freq = byKey.freq;
+  if (freq.status === "better") {
+    gains.push({
+      weight: Math.abs(freq.pct) + 10,
+      text: `boosted resonance by +${freq.delta.toFixed(1)} Hz${pctTag(freq)}`,
+    });
+  } else if (freq.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(freq.pct) + 10,
+      text: `dropped resonance by ${freq.delta.toFixed(1)} Hz${pctTag(freq)}`,
+    });
+  }
+
+  const flex = byKey.flex;
+  if (flex.status === "better") {
+    gains.push({
+      weight: Math.abs(flex.pct) + 11,
+      text: `cut frame flex by ${Math.round(flex.pct)}%`,
+    });
+  } else if (flex.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(flex.pct) + 11,
+      text: `increased frame flex by +${Math.round(flex.pct)}%`,
+    });
+  }
+
+  const flow = byKey.flow;
+  if (flow.status === "better") {
+    gains.push({
+      weight: Math.abs(flow.pct) + 11,
+      text: `increased max flow by +${flow.delta.toFixed(1)} mm³/s${pctTag(flow)}`,
+    });
+  } else if (flow.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(flow.pct) + 11,
+      text: `reduced max flow by ${flow.delta.toFixed(1)} mm³/s${pctTag(flow)}`,
+    });
+  }
+
+  const time = byKey.time;
+  if (time.status === "better") {
+    gains.push({
+      weight: Math.abs(time.pct) + 8,
+      text: `cut print time by ${time.delta.toFixed(1)} s${pctTag(time)}`,
+    });
+  } else if (time.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(time.pct) + 8,
+      text: `slowed print time by +${time.delta.toFixed(1)} s`,
+    });
+  }
+
+  const cost = byKey.cost;
+  if (cost.status === "better") {
+    gains.push({
+      weight: Math.abs(cost.pct) + 5,
+      text: `saved $${Math.round(Math.abs(cost.delta)).toLocaleString()} in build cost`,
+    });
+  } else if (cost.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(cost.pct) + 7,
+      text: `adding +$${Math.round(cost.delta).toLocaleString()} to build cost`,
+    });
+  }
+
+  const mass = byKey.mass;
+  if (mass.status === "better") {
+    gains.push({
+      weight: Math.abs(mass.pct) + 4,
+      text: `trimmed ${Math.abs(mass.delta).toFixed(2)} kg total mass`,
+    });
+  } else if (mass.status === "worse") {
+    tradeoffs.push({
+      weight: Math.abs(mass.pct) + 6,
+      text: `adding +${mass.delta.toFixed(2)} kg mass`,
+    });
+  }
+
+  const score = byKey.score;
+  if (gains.length === 0 && tradeoffs.length === 0) {
+    if (score.status === "better") {
+      return `Improved overall engineering score by +${score.delta.toFixed(1)} pts.`;
+    }
+    if (score.status === "worse") {
+      return `Lowered overall engineering score by ${score.delta.toFixed(1)} pts.`;
+    }
+    return "No measurable change to performance.";
+  }
+
+  gains.sort((a, b) => b.weight - a.weight);
+  tradeoffs.sort((a, b) => b.weight - a.weight);
+
+  const topGains = gains.slice(0, 2).map((g) => g.text);
+  const topTrades = tradeoffs.slice(0, 2).map((t) => t.text);
+
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const joinAnd = (arr: string[]) => (arr.length <= 1 ? arr[0] ?? "" : `${arr[0]} and ${arr[1]}`);
+
+  if (topGains.length > 0 && topTrades.length > 0) {
+    return `${cap(joinAnd(topGains))}, while ${joinAnd(topTrades)}.`;
+  }
+  if (topGains.length > 0) {
+    return `${cap(joinAnd(topGains))} with no measurable downsides.`;
+  }
+  // Only tradeoffs
+  const normalizedTrades = topTrades.map((t) =>
+    t.startsWith("adding ") ? t.replace("adding ", "added ") : t
+  );
+  return `${cap(joinAnd(normalizedTrades))}.`;
+}
+
+const InlineDeltaBadge: React.FC<{
+  oldVal: number;
+  newVal: number;
+  higherIsBetter: boolean;
+  eps?: number;
+  formatDelta: (d: number) => string;
+}> = ({ oldVal, newVal, higherIsBetter, eps = 0.05, formatDelta }) => {
+  const res = evalDelta(oldVal, newVal, higherIsBetter, eps);
+  if (res.status === "same") return null;
+  return (
+    <span className={`delta-inline ${res.status}`}>
+      {formatDelta(res.delta)}
+    </span>
+  );
+};
 
 const TopologyOptCard: React.FC<{ topo: TopologyOptResponse }> = ({ topo }) => {
   const hist = topo.history || [];
@@ -348,6 +658,18 @@ const SolidHexFEACard: React.FC<{ solidFea: SolidFEAResponse }> = ({ solidFea })
 
 export const MetricsPanel: React.FC<Props> = ({
   sim,
+  baselineSim,
+  baselineBom,
+  baselineLabel,
+  prevSim,
+  prevBom,
+  lastChangeSummary,
+  compareMode,
+  onCompareModeChange,
+  canUndo,
+  onUndo,
+  onResetToBaseline,
+  onSetBaseline,
   solidFea,
   tetFea,
   activeSolidEngine,
@@ -415,6 +737,32 @@ export const MetricsPanel: React.FC<Props> = ({
     return bom.items.filter((it) => it.category === bomCategoryFilter);
   }, [bom, bomCategoryFilter]);
 
+  const hasComparison = Boolean(lastChangeSummary && (prevSim || baselineSim));
+  const compareSim = hasComparison
+    ? compareMode === "last"
+      ? prevSim ?? baselineSim
+      : baselineSim ?? prevSim
+    : null;
+  const compareBom = hasComparison
+    ? compareMode === "last"
+      ? prevSim
+        ? prevBom
+        : baselineBom
+      : baselineSim
+        ? baselineBom
+        : prevBom
+    : null;
+
+  const impactMetrics = useMemo(() => {
+    if (!sim || !compareSim) return [];
+    return buildImpactMetrics(sim, compareSim, bom, compareBom);
+  }, [sim, compareSim, bom, compareBom]);
+
+  const impactSummaryText = useMemo(() => {
+    if (impactMetrics.length === 0) return "";
+    return buildPlainEnglishSummary(impactMetrics);
+  }, [impactMetrics]);
+
   if (!sim && error) {
     return (
       <aside className="sidebar right">
@@ -436,6 +784,30 @@ export const MetricsPanel: React.FC<Props> = ({
   }
 
   const { scores, static_fea: fea, modal_fea: mod, kinematics: kin, thermal: th, virtual_print: vp } = sim;
+
+  // Determine which detail cards moved vs comparison
+  const structuralChanged =
+    compareSim != null &&
+    (Math.abs(fea.combined_max_deflection_um - compareSim.static_fea.combined_max_deflection_um) >= 0.05 ||
+      Math.abs(scores.structural - compareSim.scores.structural) >= 0.05);
+  const modalChanged =
+    compareSim != null &&
+    (Math.abs(mod.fundamental_freq_hz - compareSim.modal_fea.fundamental_freq_hz) >= 0.05 ||
+      Math.abs(mod.recommended_max_accel_mm_s2 - compareSim.modal_fea.recommended_max_accel_mm_s2) >= 15 ||
+      Math.abs(scores.dynamics - compareSim.scores.dynamics) >= 0.05 ||
+      Math.abs(kin.torque_safety_margin - compareSim.kinematics.torque_safety_margin) >= 0.05 ||
+      (kin.drive_mode ?? "") !== (compareSim.kinematics.drive_mode ?? "") ||
+      Math.abs((kin.belt_pluck_freq_150mm_hz ?? 0) - (compareSim.kinematics.belt_pluck_freq_150mm_hz ?? 0)) >= 1);
+  const thermalChanged =
+    compareSim != null &&
+    (Math.abs(th.max_volumetric_flow_mm3_s - compareSim.thermal.max_volumetric_flow_mm3_s) >= 0.05 ||
+      Math.abs(scores.thermal - compareSim.scores.thermal) >= 0.05);
+  const printChanged =
+    compareSim != null &&
+    (Math.abs(vp.total_time_s - compareSim.virtual_print.total_time_s) >= 0.05 ||
+      Math.abs(scores.print_quality - compareSim.scores.print_quality) >= 0.05);
+
+  const baselineShortTag = baselineLabel.toLowerCase().startsWith("stock") ? "vs. Stock" : "vs. Base";
 
   // Mini SVG polyline for hotend heat-up curve
   const pts = th.heatup_curve;
@@ -489,6 +861,102 @@ export const MetricsPanel: React.FC<Props> = ({
             {viewMode === "solid_part" && isTetActive && tetFea && <TetFEACard tet={tetFea} />}
             {viewMode === "solid_part" && !isTetActive && solidFea && <SolidHexFEACard solidFea={solidFea} />}
 
+            {/* Live Impact Card OR Welcoming Baseline Tip */}
+            {hasComparison && compareSim ? (
+              <div className="section-card impact-card">
+                <div className="impact-header">
+                  <div className="impact-title-row">
+                    <span className="section-title" style={{ margin: 0 }}>
+                      Change Impact
+                    </span>
+                    <div className="impact-actions">
+                      <div className="impact-seg">
+                        <button
+                          type="button"
+                          className={`impact-seg-btn ${compareMode === "last" ? "active" : ""}`}
+                          onClick={() => onCompareModeChange("last")}
+                          title="Compare against the design right before your last edit"
+                        >
+                          vs. Last
+                        </button>
+                        <button
+                          type="button"
+                          className={`impact-seg-btn ${compareMode === "baseline" ? "active" : ""}`}
+                          onClick={() => onCompareModeChange("baseline")}
+                          title={`Compare cumulative gains against ${baselineLabel}`}
+                        >
+                          {baselineShortTag}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className="impact-mini-btn"
+                        disabled={!canUndo}
+                        onClick={onUndo}
+                        title="Undo last change"
+                      >
+                        Undo
+                      </button>
+                      <button
+                        type="button"
+                        className="impact-mini-btn"
+                        onClick={onResetToBaseline}
+                        title={`Reset all changes back to ${baselineLabel}`}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                  <div className="impact-change-pill">
+                    <span className="impact-change-label">
+                      {compareMode === "baseline" ? `Total vs. ${baselineLabel}` : lastChangeSummary}
+                    </span>
+                    <button
+                      type="button"
+                      className="impact-pin-btn"
+                      onClick={onSetBaseline}
+                      title="Save current configuration as your new baseline for future comparisons"
+                    >
+                      Set as Baseline
+                    </button>
+                  </div>
+                  {compareMode === "baseline" && lastChangeSummary && (
+                    <div className="impact-sub-note">Latest edit: {lastChangeSummary}</div>
+                  )}
+                </div>
+
+                <div className="impact-summary">{impactSummaryText}</div>
+
+                <div className="impact-grid">
+                  {impactMetrics.map((m) => (
+                    <div key={m.key} className={`impact-tile ${m.status}`}>
+                      <div className="impact-tile-top">
+                        <span className="impact-tile-label">
+                          {m.status !== "same" && <span className={`impact-dot ${m.status}`} />}
+                          {m.label}
+                        </span>
+                        <span className={`impact-badge ${m.status}`}>
+                          {m.status === "same" ? "—" : m.deltaText}
+                        </span>
+                      </div>
+                      <div className="impact-tile-val">{m.newText}</div>
+                      <div className="impact-tile-sub">
+                        {m.status === "same" ? "No change" : `${m.oldText} → ${m.newText}`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="welcome-tip-card">
+                <div className="welcome-tip-text">
+                  Loaded <strong>{baselineLabel}</strong> — change any setting or click a{" "}
+                  <strong>Quick Upgrade</strong> on the left to see its exact impact on stiffness, ringing,
+                  print speed, and cost.
+                </div>
+              </div>
+            )}
+
             <div className="score-hero">
               <div>
                 <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
@@ -496,8 +964,18 @@ export const MetricsPanel: React.FC<Props> = ({
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{sim.printer_name}</div>
               </div>
-              <div className="score-number" style={{ color: scoreColor(scores.composite) }}>
-                {scores.composite.toFixed(1)}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                <div className="score-number" style={{ color: scoreColor(scores.composite) }}>
+                  {scores.composite.toFixed(1)}
+                </div>
+                {compareSim && (
+                  <InlineDeltaBadge
+                    oldVal={compareSim.scores.composite}
+                    newVal={scores.composite}
+                    higherIsBetter={true}
+                    formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                  />
+                )}
               </div>
             </div>
 
@@ -505,17 +983,27 @@ export const MetricsPanel: React.FC<Props> = ({
               <div className="section-title">Subsystem Scorecard</div>
               {(
                 [
-                  ["Structural (FEA)", scores.structural],
-                  ["Dynamics & Shaper", scores.dynamics],
-                  ["Hotend Thermal", scores.thermal],
-                  ["Virtual Print Quality", scores.print_quality],
-                  ["Mass & Packaging", scores.efficiency],
-                ] as Array<[string, number]>
-              ).map(([label, val]) => (
+                  ["Structural (FEA)", scores.structural, compareSim?.scores.structural],
+                  ["Dynamics & Shaper", scores.dynamics, compareSim?.scores.dynamics],
+                  ["Hotend Thermal", scores.thermal, compareSim?.scores.thermal],
+                  ["Virtual Print Quality", scores.print_quality, compareSim?.scores.print_quality],
+                  ["Mass & Packaging", scores.efficiency, compareSim?.scores.efficiency],
+                ] as Array<[string, number, number | undefined]>
+              ).map(([label, val, oldVal]) => (
                 <div className="bar-row" key={label}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5 }}>
                     <span style={{ color: "var(--muted)" }}>{label}</span>
-                    <strong>{val.toFixed(1)}</strong>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      {oldVal !== undefined && (
+                        <InlineDeltaBadge
+                          oldVal={oldVal}
+                          newVal={val}
+                          higherIsBetter={true}
+                          formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                        />
+                      )}
+                      <strong>{val.toFixed(1)}</strong>
+                    </span>
                   </div>
                   <div className="bar-track">
                     <div className="bar-fill" style={{ width: `${val}%`, background: scoreColor(val) }} />
@@ -527,11 +1015,17 @@ export const MetricsPanel: React.FC<Props> = ({
             <div className="section-card">
               <div className="section-title">Engineering Diagnostics</div>
               {sim.diagnostics.map((d, idx) => {
-                const cls = d.startsWith("COLLISION")
-                  ? "bad"
-                  : d.includes("risk") || d.includes("Low") || d.includes("detected")
-                    ? "warn"
-                    : "";
+                const lower = d.toLowerCase();
+                const cls =
+                  d.startsWith("COLLISION") || lower.includes("overtension")
+                    ? "bad"
+                    : lower.includes("risk") ||
+                        lower.includes("low") ||
+                        lower.includes("detected") ||
+                        lower.includes("bending") ||
+                        lower.includes("double-shear")
+                      ? "warn"
+                      : "";
                 return (
                   <div key={idx} className={`diag-item ${cls}`}>
                     {d}
@@ -542,15 +1036,37 @@ export const MetricsPanel: React.FC<Props> = ({
 
             {viewMode !== "topology" && topoResult && <TopologyOptCard topo={topoResult} />}
 
-            <div className="section-card">
-              <div className="section-title">Static 3D Frame FEA</div>
+            <div className={`section-card ${structuralChanged ? "card-changed" : ""}`}>
+              <div className="section-title">
+                <span>Static 3D Frame FEA</span>
+                {structuralChanged && <span className="changed-dot-label">Updated</span>}
+              </div>
+              {sim.geometry.panels?.enabled && (
+                <div className="metric-kv">
+                  <span>Enclosure / Panels</span>
+                  <span className="metric-val" style={{ color: "var(--accent)" }}>
+                    {sim.geometry.panels.thickness_mm}mm {sim.geometry.panels.material_name} (
+                    {sim.geometry.panels.mounting === "bolted_structural" ? "Bolted" : "Clip-In"})
+                  </span>
+                </div>
+              )}
               <div className="metric-kv">
                 <span>Gravity Sag (Nozzle)</span>
                 <span className="metric-val">{fea.gravity_sag_toolhead_um.toFixed(1)} µm</span>
               </div>
               <div className="metric-kv">
                 <span>Peak Accel Deflection</span>
-                <span className="metric-val">{fea.combined_max_deflection_um.toFixed(1)} µm</span>
+                <span className="metric-val metric-val-with-delta">
+                  {compareSim && (
+                    <InlineDeltaBadge
+                      oldVal={compareSim.static_fea.combined_max_deflection_um}
+                      newVal={fea.combined_max_deflection_um}
+                      higherIsBetter={false}
+                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+                    />
+                  )}
+                  {fea.combined_max_deflection_um.toFixed(1)} µm
+                </span>
               </div>
               <div className="metric-kv">
                 <span>Toolhead Stiffness X / Y</span>
@@ -570,54 +1086,170 @@ export const MetricsPanel: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="section-card">
-              <div className="section-title">Modal Resonance &amp; Input Shaper</div>
-              <div className="metric-kv">
-                <span>Fundamental Mode f₁</span>
-                <span className="metric-val">{mod.fundamental_freq_hz.toFixed(1)} Hz</span>
+            <div className={`section-card ${modalChanged ? "card-changed" : ""}`}>
+              <div className="section-title">
+                <span>Dynamics, Kinematics &amp; Belts</span>
+                {modalChanged && <span className="changed-dot-label">Updated</span>}
               </div>
-              {mod.shaper_x && (
-                <div className="metric-kv">
-                  <span>X-Axis Shaper</span>
-                  <span className="metric-val">
-                    {mod.shaper_x.recommended_shaper} @ {mod.shaper_x.effective_freq_hz.toFixed(1)} Hz
-                  </span>
-                </div>
-              )}
-              {mod.shaper_y && (
-                <div className="metric-kv">
-                  <span>Y-Axis Shaper</span>
-                  <span className="metric-val">
-                    {mod.shaper_y.recommended_shaper} @ {mod.shaper_y.effective_freq_hz.toFixed(1)} Hz
-                  </span>
-                </div>
-              )}
-              <div className="metric-kv">
-                <span>Rec. Max Accel</span>
-                <span className="metric-val">{mod.recommended_max_accel_mm_s2.toFixed(0)} mm/s²</span>
-              </div>
-              <div className="metric-kv">
-                <span>Stepper Torque Margin</span>
-                <span className={`metric-val ${kin.step_skip_risk ? "tag-bad" : "tag-ok"}`}>
-                  {kin.torque_safety_margin.toFixed(2)}×
-                </span>
-              </div>
-              <div className="metric-kv">
-                <span>Belt Peak Tension</span>
-                <span className={`metric-val ${kin.belt_slip_risk ? "tag-bad" : "tag-ok"}`}>
-                  {kin.belt_peak_tension_n.toFixed(1)} N {kin.belt_slip_risk ? "(SLIP)" : ""}
-                </span>
-              </div>
+              {(() => {
+                const effDrive = kin.drive_mode || sim.spec.gantry.drive_mode || "2wd";
+                const motorCount = kin.xy_motor_count ?? (effDrive === "awd" ? 4 : 2);
+                const isAwd = effDrive === "awd";
+                const pluckHz = kin.belt_pluck_freq_150mm_hz;
+                const prevPluckHz = compareSim?.kinematics.belt_pluck_freq_150mm_hz;
+                const pretensionN = sim.spec.gantry.belt.pretension_n;
+                const maxWorkingN = kin.belt_max_working_tension_n;
+
+                return (
+                  <>
+                    <div className="metric-kv">
+                      <span>Drive Mode</span>
+                      <span className="metric-val" style={{ color: isAwd ? "var(--accent)" : undefined }}>
+                        {isAwd ? `AWD (${motorCount} Motors)` : `2WD (${motorCount} Motors)`}
+                        {sim.spec.gantry.double_shear_pulleys ? " • Double-Shear" : ""}
+                      </span>
+                    </div>
+                    <div className="metric-kv">
+                      <span>Fundamental Mode f₁</span>
+                      <span className="metric-val metric-val-with-delta">
+                        {compareSim && (
+                          <InlineDeltaBadge
+                            oldVal={compareSim.modal_fea.fundamental_freq_hz}
+                            newVal={mod.fundamental_freq_hz}
+                            higherIsBetter={true}
+                            formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} Hz`}
+                          />
+                        )}
+                        {mod.fundamental_freq_hz.toFixed(1)} Hz
+                      </span>
+                    </div>
+                    {mod.shaper_x && (
+                      <div className="metric-kv">
+                        <span>X-Axis Shaper</span>
+                        <span className="metric-val">
+                          {mod.shaper_x.recommended_shaper} @ {mod.shaper_x.effective_freq_hz.toFixed(1)} Hz
+                        </span>
+                      </div>
+                    )}
+                    {mod.shaper_y && (
+                      <div className="metric-kv">
+                        <span>Y-Axis Shaper</span>
+                        <span className="metric-val">
+                          {mod.shaper_y.recommended_shaper} @ {mod.shaper_y.effective_freq_hz.toFixed(1)} Hz
+                        </span>
+                      </div>
+                    )}
+                    <div className="metric-kv">
+                      <span>Rec. Max Accel</span>
+                      <span className="metric-val metric-val-with-delta">
+                        {compareSim && (
+                          <InlineDeltaBadge
+                            oldVal={compareSim.modal_fea.recommended_max_accel_mm_s2}
+                            newVal={mod.recommended_max_accel_mm_s2}
+                            higherIsBetter={true}
+                            eps={15}
+                            formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
+                          />
+                        )}
+                        {mod.recommended_max_accel_mm_s2.toFixed(0)} mm/s²
+                      </span>
+                    </div>
+                    <div className="metric-kv">
+                      <span>Stepper Torque Margin</span>
+                      <span className={`metric-val metric-val-with-delta ${kin.step_skip_risk ? "tag-bad" : "tag-ok"}`}>
+                        {compareSim && (
+                          <InlineDeltaBadge
+                            oldVal={compareSim.kinematics.torque_safety_margin}
+                            newVal={kin.torque_safety_margin}
+                            higherIsBetter={true}
+                            eps={0.05}
+                            formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(2)}×`}
+                          />
+                        )}
+                        {kin.torque_safety_margin.toFixed(2)}×
+                      </span>
+                    </div>
+                    {pluckHz != null && (
+                      <div className="metric-kv">
+                        <span>Belt Tune (150mm span)</span>
+                        <span
+                          className={`metric-val metric-val-with-delta ${
+                            kin.belt_overtension_risk ? "tag-bad" : kin.shaft_bending_risk ? "tag-warn" : ""
+                          }`}
+                        >
+                          {prevPluckHz != null && (
+                            <InlineDeltaBadge
+                              oldVal={prevPluckHz}
+                              newVal={pluckHz}
+                              higherIsBetter={true}
+                              eps={1}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d)} Hz`}
+                            />
+                          )}
+                          {Math.round(pluckHz)} Hz
+                          <span style={{ color: "var(--muted)", fontWeight: 500, fontSize: 10.5 }}>
+                            ({Math.round(pretensionN)} N
+                            {maxWorkingN != null ? ` / ${Math.round(maxWorkingN)} N max` : ""})
+                          </span>
+                        </span>
+                      </div>
+                    )}
+                    <div className="metric-kv">
+                      <span>Belt Peak Tension</span>
+                      <span
+                        className={`metric-val ${
+                          kin.belt_slip_risk || kin.belt_overtension_risk ? "tag-bad" : "tag-ok"
+                        }`}
+                      >
+                        {kin.belt_peak_tension_n.toFixed(1)} N {kin.belt_slip_risk ? "(SLIP)" : ""}
+                      </span>
+                    </div>
+                    {kin.frame_belt_preload_n != null && (
+                      <div className="metric-kv">
+                        <span>Frame Belt Preload</span>
+                        <span className="metric-val">{Math.round(kin.frame_belt_preload_n)} N</span>
+                      </div>
+                    )}
+                    {(kin.belt_overtension_risk || kin.shaft_bending_risk) && (
+                      <div className="warning-pill-stack">
+                        {kin.belt_overtension_risk && (
+                          <div className="warning-pill bad">
+                            ⚠ Belt overtensioned — upgrade to 9mm/12mm Aramid
+                          </div>
+                        )}
+                        {kin.shaft_bending_risk && (
+                          <div className="warning-pill warn">
+                            ⚠ High tension (&gt;45 N) without double-shear pulleys
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             {viewMode !== "solid_part" && isTetActive && tetFea && <TetFEACard tet={tetFea} />}
             {viewMode !== "solid_part" && !isTetActive && solidFea && <SolidHexFEACard solidFea={solidFea} />}
 
-            <div className="section-card">
-              <div className="section-title">Hotend FVM Thermal &amp; Cooling ({th.filament_id.toUpperCase()})</div>
+            <div className={`section-card ${thermalChanged ? "card-changed" : ""}`}>
+              <div className="section-title">
+                <span>Hotend FVM Thermal &amp; Cooling ({th.filament_id.toUpperCase()})</span>
+                {thermalChanged && <span className="changed-dot-label">Updated</span>}
+              </div>
               <div className="metric-kv">
                 <span>Max Volumetric Flow</span>
-                <span className="metric-val">{th.max_volumetric_flow_mm3_s.toFixed(1)} mm³/s</span>
+                <span className="metric-val metric-val-with-delta">
+                  {compareSim && (
+                    <InlineDeltaBadge
+                      oldVal={compareSim.thermal.max_volumetric_flow_mm3_s}
+                      newVal={th.max_volumetric_flow_mm3_s}
+                      higherIsBetter={true}
+                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                    />
+                  )}
+                  {th.max_volumetric_flow_mm3_s.toFixed(1)} mm³/s
+                </span>
               </div>
               <div className="metric-kv">
                 <span>Flow Bottleneck</span>
@@ -668,11 +1300,24 @@ export const MetricsPanel: React.FC<Props> = ({
               </svg>
             </div>
 
-            <div className="section-card">
-              <div className="section-title">Virtual G-code Print</div>
+            <div className={`section-card ${printChanged ? "card-changed" : ""}`}>
+              <div className="section-title">
+                <span>Virtual G-code Print</span>
+                {printChanged && <span className="changed-dot-label">Updated</span>}
+              </div>
               <div className="metric-kv">
                 <span>Simulated Print Time</span>
-                <span className="metric-val">{vp.total_time_s.toFixed(1)} s</span>
+                <span className="metric-val metric-val-with-delta">
+                  {compareSim && (
+                    <InlineDeltaBadge
+                      oldVal={compareSim.virtual_print.total_time_s}
+                      newVal={vp.total_time_s}
+                      higherIsBetter={false}
+                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} s`}
+                    />
+                  )}
+                  {vp.total_time_s.toFixed(1)} s
+                </span>
               </div>
               <div className="metric-kv">
                 <span>Avg / Peak Print Speed</span>

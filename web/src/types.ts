@@ -231,6 +231,8 @@ export interface PrinterSpecData {
     brace_profile: string;
     brace_material: string;
     enclosed_panels: boolean;
+    panel_mounting: "none" | "clip_enclosure" | "bolted_structural";
+    panel_material: string;
     panel_thickness_mm: number;
   };
   gantry: {
@@ -240,6 +242,8 @@ export interface PrinterSpecData {
     y_rail_profile: string;
     rail_material: string;
     dual_x_rails: boolean;
+    drive_mode: "2wd" | "awd";
+    double_shear_pulleys: boolean;
     carriage_mass_g: number;
     belt: {
       type: "gt2_6mm" | "gt2_9mm" | "gt2_12mm";
@@ -379,6 +383,16 @@ export interface SimulationResponse {
   diagnostics: string[];
   geometry: {
     architecture: string;
+    drive_mode?: "2wd" | "awd";
+    double_shear_pulleys?: boolean;
+    panels?: {
+      enabled: boolean;
+      mounting: string;
+      material_id: string;
+      material_name: string;
+      thickness_mm: number;
+      color_hex: string;
+    };
     frame_dims_mm: [number, number, number];
     build_volume_mm: [number, number, number];
     build_origin_mm: [number, number, number];
@@ -436,6 +450,8 @@ export interface SimulationResponse {
   };
   kinematics: {
     architecture: string;
+    drive_mode?: string;
+    xy_motor_count?: number;
     build_volume_liters: number;
     frame_volume_liters: number;
     packaging_efficiency_pct: number;
@@ -448,6 +464,11 @@ export interface SimulationResponse {
     step_skip_risk: boolean;
     belt_peak_tension_n: number;
     belt_slip_risk: boolean;
+    belt_pluck_freq_150mm_hz?: number;
+    belt_max_working_tension_n?: number;
+    belt_overtension_risk?: boolean;
+    shaft_bending_risk?: boolean;
+    frame_belt_preload_n?: number;
     delta_workspace_valid: boolean;
   };
   thermal: {
@@ -492,3 +513,13 @@ export interface SimulationResponse {
 }
 
 export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath" | "solid_part" | "topology";
+
+export type CompareMode = "last" | "baseline";
+
+export interface HistorySnapshot {
+  sim: SimulationResponse;
+  bom: PrinterBOMResponse | null;
+  spec: PrinterSpecData;
+  filamentId: string;
+  label: string | null;
+}

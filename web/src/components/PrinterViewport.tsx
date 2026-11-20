@@ -664,6 +664,194 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
+    // Assembly-only visual feedback: NEMA17 stepper motors at mount nodes & 3D structural panels
+    if (viewMode === "assembly") {
+      // NEMA17 stepper motor blocks at every node with role === "mount" (2WD = 2 rear, AWD = all 4 corners)
+      const mountNodes = geom.nodes.filter((n) => n.role === "mount" && basePos[n.id]);
+      if (mountNodes.length > 0) {
+        const motorBodyGeo = new THREE.BoxGeometry(0.42, 0.38, 0.42);
+        const motorBodyMat = new THREE.MeshStandardMaterial({
+          color: 0x1e2532,
+          metalness: 0.72,
+          roughness: 0.32,
+        });
+        const motorCapGeo = new THREE.BoxGeometry(0.43, 0.045, 0.43);
+        const motorCapMat = new THREE.MeshStandardMaterial({
+          color: 0x94a3b8,
+          metalness: 0.82,
+          roughness: 0.25,
+        });
+        const pulleyGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.14, 14);
+        const pulleyMat = new THREE.MeshStandardMaterial({
+          color: 0xe2e8f0,
+          metalness: 0.85,
+          roughness: 0.2,
+        });
+        const isDoubleShear = Boolean(geom.double_shear_pulleys ?? sim.spec.gantry.double_shear_pulleys);
+        const bearingCapGeo = isDoubleShear ? new THREE.CylinderGeometry(0.115, 0.115, 0.04, 14) : null;
+        const bearingCapMat = isDoubleShear
+          ? new THREE.MeshStandardMaterial({
+              color: 0x38bdf8,
+              metalness: 0.65,
+              roughness: 0.28,
+            })
+          : null;
+
+        for (const n of mountNodes) {
+          const p = basePos[n.id];
+          const inwardX = Math.abs(p.x) > 0.2 ? -Math.sign(p.x) * 0.16 : 0;
+          const inwardZ = Math.abs(p.z) > 0.2 ? -Math.sign(p.z) * 0.16 : 0;
+
+          const motorGroup = new THREE.Group();
+          motorGroup.position.set(p.x + inwardX, p.y, p.z + inwardZ);
+
+          const bodyMesh = new THREE.Mesh(motorBodyGeo, motorBodyMat);
+          bodyMesh.position.y = -0.19;
+          motorGroup.add(bodyMesh);
+
+          const capMesh = new THREE.Mesh(motorCapGeo, motorCapMat);
+          capMesh.position.y = 0.02;
+          motorGroup.add(capMesh);
+
+          const pulleyMesh = new THREE.Mesh(pulleyGeo, pulleyMat);
+          pulleyMesh.position.y = 0.11;
+          motorGroup.add(pulleyMesh);
+
+          if (bearingCapGeo && bearingCapMat) {
+            const topBearing = new THREE.Mesh(bearingCapGeo, bearingCapMat);
+            topBearing.position.y = 0.2;
+            motorGroup.add(topBearing);
+          }
+
+          group.add(motorGroup);
+        }
+      }
+
+      // Translucent / semi-opaque 3D structural panels on CoreXY Left, Right, and Rear bays
+      if (geom.architecture === "corexy" && geom.panels?.enabled) {
+        const panels = geom.panels;
+        const [fw, fd, fh] = geom.frame_dims_mm;
+        const frameMember = geom.members.find((m) => m.role === "frame");
+        const extrusionHalfMm = (frameMember?.width_mm ?? 20) * 0.5;
+        const insetMm = extrusionHalfMm + 3;
+
+        const spanX = Math.max(fw - 2 * insetMm, 20) * SCALE;
+        const spanY = Math.max(fd - 2 * insetMm, 20) * SCALE;
+        const spanZ = Math.max(fh - 2 * insetMm, 20) * SCALE;
+        const tScene = Math.max((panels.thickness_mm || 3) * SCALE, 0.024);
+
+        const isTransparentSheet =
+          panels.material_id === "acrylic_pmma" || panels.material_id === "polycarbonate";
+        const isBoltedStructural = panels.mounting === "bolted_structural";
+
+        const panelColor = new THREE.Color(
+          panels.color_hex || (isTransparentSheet ? "#93c5fd" : "#475569")
+        );
+        const panelMat = new THREE.MeshStandardMaterial({
+          color: panelColor,
+          transparent: true,
+          opacity: isTransparentSheet ? 0.16 : 0.34,
+          depthWrite: false,
+          roughness: isTransparentSheet ? 0.14 : 0.38,
+          metalness: isTransparentSheet ? 0.1 : 0.42,
+          side: THREE.DoubleSide,
+        });
+
+        const edgeMat = new THREE.LineBasicMaterial({
+          color: isBoltedStructural ? 0x38bdf8 : 0x94a3b8,
+          transparent: true,
+          opacity: isBoltedStructural ? 0.65 : 0.26,
+        });
+
+        const sidePanelGeo = new THREE.BoxGeometry(tScene, spanZ, spanY);
+        const rearPanelGeo = new THREE.BoxGeometry(spanX, spanZ, tScene);
+        const sideEdgesGeo = new THREE.EdgesGeometry(sidePanelGeo);
+        const rearEdgesGeo = new THREE.EdgesGeometry(rearPanelGeo);
+
+        const leftPos = toThree([0, fd * 0.5, fh * 0.5], cx, cy);
+        const rightPos = toThree([fw, fd * 0.5, fh * 0.5], cx, cy);
+        const rearPos = toThree([fw * 0.5, fd, fh * 0.5], cx, cy);
+
+        const panelSpecs: Array<{
+          geo: THREE.BoxGeometry;
+          edges: THREE.EdgesGeometry;
+          pos: THREE.Vector3;
+        }> = [
+          { geo: sidePanelGeo, edges: sideEdgesGeo, pos: leftPos },
+          { geo: sidePanelGeo, edges: sideEdgesGeo, pos: rightPos },
+          { geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos },
+        ];
+
+        for (const ps of panelSpecs) {
+          const mesh = new THREE.Mesh(ps.geo, panelMat);
+          mesh.position.copy(ps.pos);
+          mesh.renderOrder = 2;
+          group.add(mesh);
+
+          const outline = new THREE.LineSegments(ps.edges, edgeMat);
+          outline.position.copy(ps.pos);
+          group.add(outline);
+        }
+
+        // Subtle metallic perimeter bolt dots when bolted structural mounting is active
+        if (isBoltedStructural) {
+          const boltCoords: THREE.Vector3[] = [];
+          const margin = 0.12;
+          const steps = 4;
+
+          const addSideBolts = (xPos: number) => {
+            const halfY = Math.max(spanZ * 0.5 - margin, 0.1);
+            const halfZ = Math.max(spanY * 0.5 - margin, 0.1);
+            for (let i = 0; i <= steps; i++) {
+              const frac = -1 + (2 * i) / steps;
+              // Top & bottom edges
+              boltCoords.push(new THREE.Vector3(xPos, leftPos.y + halfY, leftPos.z + frac * halfZ));
+              boltCoords.push(new THREE.Vector3(xPos, leftPos.y - halfY, leftPos.z + frac * halfZ));
+              // Left & right vertical edges (skip corners)
+              if (i > 0 && i < steps) {
+                boltCoords.push(new THREE.Vector3(xPos, leftPos.y + frac * halfY, leftPos.z + halfZ));
+                boltCoords.push(new THREE.Vector3(xPos, leftPos.y + frac * halfY, leftPos.z - halfZ));
+              }
+            }
+          };
+
+          const addRearBolts = (zPos: number) => {
+            const halfX = Math.max(spanX * 0.5 - margin, 0.1);
+            const halfY = Math.max(spanZ * 0.5 - margin, 0.1);
+            for (let i = 0; i <= steps; i++) {
+              const frac = -1 + (2 * i) / steps;
+              boltCoords.push(new THREE.Vector3(rearPos.x + frac * halfX, rearPos.y + halfY, zPos));
+              boltCoords.push(new THREE.Vector3(rearPos.x + frac * halfX, rearPos.y - halfY, zPos));
+              if (i > 0 && i < steps) {
+                boltCoords.push(new THREE.Vector3(rearPos.x + halfX, rearPos.y + frac * halfY, zPos));
+                boltCoords.push(new THREE.Vector3(rearPos.x - halfX, rearPos.y + frac * halfY, zPos));
+              }
+            }
+          };
+
+          addSideBolts(leftPos.x);
+          addSideBolts(rightPos.x);
+          addRearBolts(rearPos.z);
+
+          const boltGeo = new THREE.SphereGeometry(0.032, 8, 8);
+          const boltMat = new THREE.MeshStandardMaterial({
+            color: 0xe2e8f0,
+            metalness: 0.85,
+            roughness: 0.25,
+          });
+          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
+          const dummy = new THREE.Object3D();
+          for (let i = 0; i < boltCoords.length; i++) {
+            dummy.position.copy(boltCoords[i]);
+            dummy.updateMatrix();
+            boltInst.setMatrixAt(i, dummy.matrix);
+          }
+          boltInst.instanceMatrix.needsUpdate = true;
+          group.add(boltInst);
+        }
+      }
+    }
+
     // Heated bed plate
     const [bedX, bedY] = geom.bed_size_mm;
     const bedGeo = new THREE.BoxGeometry(bedX * SCALE, 0.08, bedY * SCALE);
@@ -794,7 +982,7 @@ export const PrinterViewport: React.FC<Props> = ({
             [
               ["assembly", "Assembly"],
               ["fea_stress", "Frame FEA"],
-              ["modal", "Modal Vibration"],
+              ["modal", "Modal"],
               ["toolpath", "Virtual Print"],
               ["solid_part", "3D Solid Part"],
               ["topology", "Topo Opt"],
@@ -811,7 +999,7 @@ export const PrinterViewport: React.FC<Props> = ({
         </div>
 
         {sim && (
-          <div className="hud-card">
+          <div className="hud-card hud-stats">
             <span>
               <strong>{sim.geometry.mass_summary.total_mass_kg} kg</strong> total
             </span>
