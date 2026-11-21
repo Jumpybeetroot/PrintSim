@@ -84,12 +84,14 @@ def test_voron_trident_pareto_front():
     assert ("Sweet Spot (Knee)" in labels) or ("Fastest Safe Accel" in labels)
 
     # Verify architectural & hardware engineering invariants on every Pareto spec
+    assert all(opt[3] == "fiberglass" for opt in pareto_mod.BELT_OPTIONS)
     for pt in result.pareto_front:
         assert pt.spec.architecture == spec.architecture
         assert pt.spec.kinematics.build_volume_mm == spec.kinematics.build_volume_mm
         assert pt.spec.frame.width_mm == spec.frame.width_mm
         assert pt.spec.frame.depth_mm == spec.frame.depth_mm
         assert pt.spec.frame.height_mm == spec.frame.height_mm
+        assert pt.spec.gantry.belt.core == "fiberglass"
         if pt.spec.gantry.belt.pretension_n > 45.0 or pt.spec.gantry.drive_mode == "awd":
             assert pt.spec.gantry.double_shear_pulleys is True
         if (

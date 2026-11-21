@@ -53,9 +53,9 @@ DRIVE_MODES: tuple[str, ...] = ("2wd", "awd")
 # (id, label, belt_type, belt_core, pretension_n)
 BELT_OPTIONS: tuple[tuple[str, str, str, str, float], ...] = (
     ("gt2_6mm_fg_28n", "GT2 6mm fiberglass @ 28N", "gt2_6mm", "fiberglass", 28.0),
-    ("gt2_9mm_fg_50n", "GT2 9mm fiberglass @ 50N", "gt2_9mm", "fiberglass", 50.0),
-    ("gt2_9mm_aramid_65n", "GT2 9mm aramid @ 65N", "gt2_9mm", "aramid", 65.0),
-    ("gt2_12mm_aramid_85n", "GT2 12mm aramid @ 85N", "gt2_12mm", "aramid", 85.0),
+    ("gt2_9mm_fg_48n", "GT2 9mm fiberglass @ 48N", "gt2_9mm", "fiberglass", 48.0),
+    ("gt2_9mm_fg_62n", "GT2 9mm fiberglass @ 62N", "gt2_9mm", "fiberglass", 62.0),
+    ("gt2_12mm_fg_80n", "GT2 12mm fiberglass @ 80N", "gt2_12mm", "fiberglass", 80.0),
 )
 
 # (stepper_preset_id, supply_voltage_v, run_current_a)
@@ -265,7 +265,7 @@ def _encode_baseline_vector(spec: PrinterSpec) -> tuple[int, ...]:
     belt = spec.gantry.belt
     if belt.type == "gt2_12mm":
         x5 = 3
-    elif belt.type == "gt2_9mm" and belt.core == "aramid":
+    elif belt.type == "gt2_9mm" and belt.pretension_n >= 55.0:
         x5 = 2
     elif belt.type == "gt2_9mm":
         x5 = 1
@@ -327,17 +327,17 @@ def _build_seed_vectors(baseline_spec: PrinterSpec, population_size: int, seed: 
         (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
         # Budget lightweight open + compact toolhead + PPA-CF mounts
         (0, 1, 0, 0, 0, 0, 0, 2, 0, 1, 2, 1),
-        # Balanced structural ACM + CF X-beam + 9mm FG + 48V + Archetype + Kinematic 3-pt
+        # Balanced structural ACM + CF X-beam + 9mm FG (48N) + 48V + Archetype + Kinematic 3-pt
         (0, 2, 2, 1, 0, 1, 1, 2, 1, 1, 3, 1),
-        # Mid-high 3030 + rear cross + bolted ACM + 9mm aramid + low-L 48V + CNC toolhead mount
+        # Mid-high 3030 + rear cross + bolted ACM + 9mm FG (62N) + low-L 48V + CNC toolhead mount
         (1, 2, 2, 1, 0, 2, 2, 2, 2, 2, 3, 1),
-        # Fast AWD (or fast 2WD for non-CoreXY): 3030 + full truss + ACM + AWD + 9mm aramid + 0.9deg 48V
+        # Fast AWD (or fast 2WD for non-CoreXY): 3030 + full truss + ACM + AWD + 9mm FG (62N) + 0.9deg 48V
         (1, 3, 2, 1, 1 if is_corexy else 0, 2, 4, 2, 2, 2, 3, 2),
-        # High-stiffness AWD Al5052: 3030 + full truss + Al5052 + AWD + 12mm aramid + Kraken 48V
+        # High-stiffness AWD Al5052: 3030 + full truss + Al5052 + AWD + 12mm FG (80N) + Kraken 48V
         (1, 3, 3, 1, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
-        # Max-stiffness 4040 fortress + Al5052 + AWD + 12mm aramid + 0.9deg 48V + rigid bed mount
+        # Max-stiffness 4040 fortress + Al5052 + AWD + 12mm FG (80N) + 0.9deg 48V + rigid bed mount
         (2, 3, 3, 1, 1 if is_corexy else 0, 3, 4, 2, 2, 2, 4, 2),
-        # Max-stiffness 4040 + bolted CF + AWD + 12mm aramid + Kraken 48V + kinematic 3-pt
+        # Max-stiffness 4040 + bolted CF + AWD + 12mm FG (80N) + Kraken 48V + kinematic 3-pt
         (2, 3, 4, 1, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
     ]
 

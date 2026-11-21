@@ -350,7 +350,7 @@ def test_human_readable_fea_modal_and_grouped_sensitivity_diagnoses() -> None:
             assert t["hz_gain_per_100g_saved"] > 0.0
             assert {"id", "role", "mass_sens_hz", "hz_per_100g", "action_hint"} <= set(t.keys())
 
-    # Spec-tailored action hints check: Trident (clip acrylic) vs Monolith (already bolted 4mm Al)
+    # Spec-tailored physical bottleneck hints check: Trident (clip acrylic) vs Monolith (already bolted 4mm Al)
     trident_rep = evaluate_printer(PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml"))
     monolith_rep = evaluate_printer(PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml"))
     assert trident_rep.sensitivity is not None and monolith_rep.sensitivity is not None
@@ -360,6 +360,13 @@ def test_human_readable_fea_modal_and_grouped_sensitivity_diagnoses() -> None:
     monolith_col = next(
         t for t in monolith_rep.sensitivity.top_stiffen_targets if t["id"] == "front_frame_columns"
     )
-    assert "Bolted Structural" in trident_col["action_hint"]
-    assert "Bolted Structural" not in monolith_col["action_hint"]
-    assert "3030" in monolith_col["action_hint"] or "Epoxy Granite" in monolith_col["action_hint"]
+    assert trident_col["action_hint"].startswith("Main limit:")
+    assert monolith_col["action_hint"].startswith("Main limit:")
+    assert "shear" in trident_col["action_hint"].lower()
+    assert "column" in monolith_col["action_hint"].lower()
+    for hint in (trident_col["action_hint"], monolith_col["action_hint"]):
+        low = hint.lower()
+        assert "bolted structural" not in low
+        assert "epoxy granite" not in low
+        assert "upgrade to" not in low
+        assert "switch to" not in low

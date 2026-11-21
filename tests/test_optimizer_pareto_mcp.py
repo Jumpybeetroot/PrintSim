@@ -64,6 +64,7 @@ def test_optimizer_explores_new_levers_and_improves_weak_printer() -> None:
             assert cand.gantry.double_shear_pulleys is True
         if cand.is_flying_gantry and cand.frame.panel_mounting == "bolted_structural":
             assert cand.frame.bolt_panels_to_gantry is False
+        assert cand.gantry.belt.core == "fiberglass"
         for ch in changes:
             seen_prefixes.add(ch.split("=")[0])
 

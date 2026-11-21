@@ -21,7 +21,7 @@ gantry:
   carriage_mass_g: 120
   belt:
     type: gt2_9mm
-    core: aramid
+    core: fiberglass
     pulley_teeth: 20
     pitch_mm: 2.0
     pretension_n: 36.0

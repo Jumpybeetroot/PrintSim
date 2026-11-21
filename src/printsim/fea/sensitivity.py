@@ -196,29 +196,18 @@ def _member_mass_and_cost(
 def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> str:
     if spec is None:
         if group_id == "frame_feet":
-            return (
-                "Switch Machine Feet to rigid bolted / stiff TPU pads (or direct frame-to-bench mounts) "
-                "to eliminate whole-printer rocking on soft isolation feet."
-            )
+            return "Main limit: benchtop foot anchoring stiffness (compliant isolation pads allow base rocking/bounce)."
         if role == "toolhead" or group_id == "toolhead_mount":
-            return "Upgrade toolhead carriage mount from polymer to CNC Al 6061 / PPA-CF or shorten nozzle overhang."
+            return "Main limit: toolhead mount stiffness, carriage pitch compliance, and CoG/nozzle lever arm."
         if role == "rail" or group_id == "y_axis_rail_beams":
-            return "Upgrade linear rail profile (e.g. MGN9 -> MGN12/15) or bolt structural side panels to Y-rail extrusion."
+            return "Main limit: Y-rail beam & carriage lateral/torsional stiffness along the gantry load path."
         if role == "panel" or group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
-            return "Increase panel thickness (4–5 mm) or switch to bolted Aluminum 5052 / Carbon Fiber Plate."
+            return "Main limit: outer frame shear-panel in-plane stiffness and panel-to-frame coupling."
         if role == "brace" or group_id == "frame_bracing":
-            return "Upgrade diagonal truss brace cross-section or switch to full_truss bracing."
+            return "Main limit: outer frame diagonal racking and triangulation stiffness."
         if role == "gantry" or group_id == "x_gantry_beam":
-            return "Step up X-gantry beam section (2020 -> 2040/CF tube) or add dual top+bottom X rails."
-        return "Step up frame extrusion profile (2020 -> 3030), add diagonal bracing, or bolt structural panels."
-
-    prof_short = spec.frame.profile.replace("extrusion_", "")
-    next_prof = {
-        "1515": "2020 / 3030",
-        "2020": "3030",
-        "2040": "3030 / 4040",
-        "3030": "4040",
-    }.get(prof_short, "larger section")
+            return "Main limit: X-gantry beam & X-rail bending/torsional stiffness under toolhead acceleration."
+        return "Main limit: outer frame bending and racking stiffness along the structural load path."
 
     if group_id in (
         "front_frame_columns",
@@ -229,112 +218,78 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
         if spec.architecture == "corexy":
             if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
                 return (
-                    f"Switch Panel Mounting -> Bolted Structural (4 mm Aluminum 5052), "
-                    f"or upgrade Frame Profile {prof_short} -> {next_prof}"
+                    "Main limit: outer frame shear & racking stiffness "
+                    "(non-structural or open panels leave frame columns uncoupled in shear)."
                 )
             if (
                 spec.frame.panel_material not in ("aluminum_5052_sheet", "carbon_fiber_plate")
                 or spec.frame.panel_thickness_mm < 4.0
             ):
                 return (
-                    f"Upgrade Structural Panels -> 4–5 mm Aluminum 5052 (bolted), "
-                    f"or upgrade Frame Profile {prof_short} -> {next_prof}"
+                    "Main limit: outer frame shear-panel in-plane stiffness, fastener shear stiffness, "
+                    "and column bending rigidity."
                 )
-            parts: list[str] = []
-            if prof_short in ("1515", "2020", "2040"):
-                parts.append(f"Upgrade Frame Profile {prof_short} -> {next_prof}")
-            if spec.frame.extrusion_filling not in ("epoxy_granite", "uhpc_grout"):
-                parts.append("add Epoxy Granite / UHPC cavity fill")
-            if spec.frame.corner_joint_type != "corner_cube":
-                parts.append("switch Corner Joints -> Corner Cube")
-            return ", ".join(parts) if parts else "Add full_truss diagonal bracing or step up to 4040 extrusions."
+            return "Main limit: outer frame column bending/torsional stiffness and corner-joint rigidity."
         if spec.architecture == "cartesian_bedslinger":
             if spec.frame.bracing != "full_truss":
-                return (
-                    f"Add Diagonal Portal Bracing (rear_cross / full_truss) "
-                    f"or upgrade Frame Profile {prof_short} -> {next_prof}."
-                )
-            return f"Upgrade Frame Profile {prof_short} -> {next_prof} or add Epoxy Granite cavity fill."
-        return f"Upgrade Frame Profile {prof_short} -> {next_prof} or fill tower cavities with Epoxy Granite / UHPC."
+                return "Main limit: portal frame fore-aft/lateral bending stiffness and diagonal racking rigidity."
+            return "Main limit: portal frame column bending/torsional stiffness and base-joint rigidity."
+        return "Main limit: vertical tower bending/torsional stiffness and perimeter triangulation rigidity."
 
     if group_id == "z_gantry_uprights":
         if spec.frame.bracing != "full_truss":
-            return (
-                f"Add Diagonal Portal Bracing (rear_cross / full_truss) "
-                f"or upgrade Z-Upright Profile {prof_short} -> {next_prof}."
-            )
-        return f"Upgrade Z-Upright Profile {prof_short} -> {next_prof}, switch Corner Joints -> Corner Cube, or add Epoxy Granite fill."
+            return "Main limit: Z-upright portal bending stiffness and fore-aft diagonal racking rigidity."
+        return "Main limit: Z-upright extrusion bending/torsional stiffness and corner-joint rigidity."
 
     if group_id == "delta_towers":
         if spec.frame.bracing != "full_truss":
-            return f"Upgrade Delta Tower Profile {prof_short} -> {next_prof} and enable full_truss perimeter bracing."
-        return f"Upgrade Delta Tower Profile {prof_short} -> {next_prof} or fill tower extrusions with Epoxy Granite / UHPC."
+            return "Main limit: delta tower bending stiffness and perimeter triangulation rigidity."
+        return "Main limit: delta tower extrusion bending and torsional stiffness."
 
     if group_id == "delta_arms":
-        return "Upgrade diagonal delta arms to larger-OD Carbon Fiber tubes, shorten arm length, or lighten the effector."
+        return "Main limit: diagonal delta arm axial/buckling stiffness and effector inertia."
 
     if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels") or role == "panel":
         if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
-            return "Switch Panel Mounting -> Bolted Structural (4–5 mm Aluminum 5052 or Carbon Fiber Plate)."
+            return "Main limit: outer frame shear-panel coupling (panels are unbolted and carry no frame shear load)."
         if (
             spec.frame.panel_material not in ("aluminum_5052_sheet", "carbon_fiber_plate")
             or spec.frame.panel_thickness_mm < 4.0
         ):
-            return "Upgrade Panel Material -> 4–5 mm Aluminum 5052 Sheet or Carbon Fiber Plate (bolted)."
-        return "Step up panel thickness to 5 mm or switch to Carbon Fiber Plate bolted directly to frame & gantry."
+            return "Main limit: outer frame shear-panel in-plane stiffness and panel-to-frame fastener shear stiffness."
+        return "Main limit: shear-panel membrane/flexural stiffness and bolted gantry-frame joint compliance."
 
     if group_id == "y_axis_rail_beams" or role == "rail":
         if spec.architecture == "corexy" and not spec.panels_bolted_to_gantry_effective and not spec.is_flying_gantry:
-            return (
-                "Bolt 4 mm Aluminum 5052 structural panels to the Y-rail extrusions, "
-                "or upgrade Y-rail to MGN12/MGN15 (inner mount)."
-            )
-        if spec.gantry.y_rail_profile in ("mgn7_rail", "mgn9_rail") or spec.gantry.y_rail_mount != "inner":
-            return "Upgrade Y-axis rail to MGN12/MGN15, switch Y-Rail Mount -> inner, or step Frame Profile -> 3030."
-        return "Upgrade gantry XY brackets to CNC Aluminum 6061, use MGN15 Y-rails, or step Frame Profile -> 3030."
+            return "Main limit: Y-rail beam lateral/torsional stiffness (Y-rails are not shear-coupled to side panels)."
+        return "Main limit: Y-rail beam & carriage lateral/torsional stiffness and XY-joint bracket compliance."
 
     if group_id == "x_gantry_beam" or role == "gantry":
-        if not spec.gantry.effective_dual_x_rails:
-            return (
-                "Switch X-Rail Mount -> dual_top_bottom, upgrade X-Gantry Beam to Carbon Fiber Tube / 2040, "
-                "or lighten the toolhead."
-            )
-        return "Step up X-beam section (e.g., 2040 or larger CF tube), use H-long Z1/ZA rail block, or cut toolhead mass."
+        return "Main limit: X-gantry beam & X-rail bending/torsional stiffness under toolhead acceleration."
 
     if group_id == "toolhead_mount" or role == "toolhead":
         if spec.architecture == "delta":
-            if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
-                return (
-                    f"Upgrade Effector Mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
-                    "and shorten nozzle/CoG overhang."
-                )
-            return "Shorten effector nozzle/CoG overhang or lighten the hotend & cooling shroud."
-        if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
             return (
-                f"Upgrade Toolhead Mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
-                "use H-long Z1/ZA rail block, and shorten nozzle overhang."
+                f"Main limit: effector mount compliance ('{spec.toolhead.mount_material}'), "
+                "nozzle/CoG lever arm overhang, and effector mass."
             )
-        return "Shorten toolhead CoG / nozzle Z overhang, upgrade rail carriage to H-long ZA preload, or use dual_top_bottom X rails."
-
-    if group_id == "bed_support" or role == "bed":
-        if spec.architecture == "corexy" and spec.bed.z_drive != "leadscrew_triple":
-            return "Switch Z Drive -> Triple Leadscrew (leadscrew_triple) or stiffen bed plate (8–10 mm Cast Aluminum)."
-        if spec.architecture == "cartesian_bedslinger":
-            return "Use a stiffer Y-bed carriage frame, upgrade to 9 mm GT2 Y-belt, or step up cast bed plate thickness."
-        return "Use 8–10 mm Cast MIC-6 Aluminum bed plate, shorter bed support arms, or stiffer rear Z-rail extrusions."
-
-    if group_id == "frame_feet":
         return (
-            "Switch Machine Feet to rigid bolted / stiff TPU pads (or direct frame-to-bench mounts) "
-            "to eliminate whole-printer rocking on soft isolation feet."
+            f"Main limit: toolhead mount stiffness ('{spec.toolhead.mount_material}'), "
+            "rail carriage pitch compliance, and CoG/nozzle lever arm."
         )
 
-    if group_id == "frame_bracing" or role == "brace":
-        if spec.frame.bracing != "full_truss":
-            return "Switch Frame Bracing -> full_truss (or rear_cross) with steel/carbon diagonal rods."
-        return "Upgrade diagonal brace profile or combine bracing with bolted 4 mm Aluminum 5052 structural panels."
+    if group_id == "bed_support" or role == "bed":
+        if spec.architecture == "cartesian_bedslinger":
+            return "Main limit: moving Y-bed carriage stiffness, Y-axis drive belt compliance, and bed inertia."
+        return "Main limit: bed support & Z-mount axial/cantilever stiffness and bed plate flexural rigidity."
 
-    return f"Upgrade {prof_short} extrusion profile, add diagonal bracing, or bolt structural Aluminum 5052 panels."
+    if group_id == "frame_feet":
+        return "Main limit: benchtop foot anchoring stiffness (compliant isolation pads allow base rocking/bounce)."
+
+    if group_id == "frame_bracing" or role == "brace":
+        return "Main limit: outer frame diagonal racking and triangulation stiffness."
+
+    return "Main limit: outer frame bending and racking stiffness along the primary structural load path."
 
 
 def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
@@ -375,20 +330,16 @@ def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
 
 def _lighten_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> str:
     if role in ("cog", "toolhead", "nozzle") or group_id == "toolhead_assembly":
-        return "Reduce moving toolhead mass (compact direct-drive extruder, remote CPAP cooling, lighter hotend)."
+        return "Main limit: moving mass on toolhead assembly (accelerates on every X and Y move)."
     if group_id == "x_gantry_beam" or (role == "gantry" and "x_gantry" in group_id):
-        if spec is not None and spec.gantry.x_beam_material == "carbon_fiber_tube":
-            return "Trim X-gantry hardware weight, use a hollow thin-wall CF tube, or match rail size (MGN9 vs MGN12)."
-        return "Switch moving X-gantry beam from aluminum extrusion to roll-wrapped Carbon Fiber Tube."
+        return "Main limit: moving mass along the X-gantry beam (accelerates on every Y move)."
     if group_id in ("y_carriages", "z_carriages", "delta_carriages"):
-        if group_id == "z_carriages":
-            return "Use lighter CNC/CF XY motor mounts and hollowed Z-carriage brackets to trim portal top inertia."
-        return "Switch XY-joint/carriage brackets to hollowed PPA-CF or skeletal CNC Aluminum 6061."
+        return "Main limit: moving carriage mass at gantry ends (loads rails, brackets, and drive belts)."
     if group_id == "moving_y_bed" or role == "bed":
-        return "Lighten moving heated bed plate (thinner cast Al / spring-steel sheet) to raise Y-axis resonance."
+        return "Main limit: moving Y-axis heated bed inertia (loads Y-drive belt and bed carriage)."
     if role == "rail" or group_id == "y_axis_rail_beams":
-        return "Use hollow/lightened rail backing or match rail size (MGN9 vs MGN12) to carriage load."
-    return "Trim non-structural moving or upper-frame mass to raise natural frequency without sacrificing stiffness."
+        return "Main limit: linear rail and backing mass along the gantry/frame load path."
+    return "Main limit: moving or upper-frame inertia participating in the fundamental vibration mode."
 
 
 def _lighten_why(group_id: str, hz_gain_100g: float, is_moving: bool) -> str:
@@ -1453,18 +1404,22 @@ def compute_structural_sensitivities(
         summary_parts.append(
             f"Bed & Z-Mount drives {be_sub_pct:.1f}% of nozzle-to-bed flex (vs {fr_sub_pct:.1f}% outer frame)."
         )
+    else:
+        summary_parts.append(
+            f"Outer Frame & Panels drives {fr_sub_pct:.1f}% of nozzle-to-bed flex."
+        )
 
     if top_stiffen_targets:
         s0 = top_stiffen_targets[0]
         summary_parts.append(
-            f"Biggest stiffness win: {s0['label']} — {s0['action_hint'].rstrip('.')}."
+            f"Primary stiffness bottleneck: {s0['label']} — {s0['action_hint'].rstrip('.')}."
         )
     if top_lighten_targets:
         l0 = top_lighten_targets[0]
         gain = float(l0["hz_gain_per_100g_saved"])
         gain_str = f"{gain:.1f}" if gain >= 0.1 else f"{gain:.2f}"
         summary_parts.append(
-            f"Biggest weight win: {l0['label']} (+{gain_str} Hz per 100g saved)."
+            f"Primary inertia sensitivity: {l0['label']} (+{gain_str} Hz per 100g reduction)."
         )
     summary_diagnosis = " ".join(summary_parts)
 

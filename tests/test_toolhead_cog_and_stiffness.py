@@ -132,6 +132,72 @@ def test_cog_sweep_zero_to_100mm_smooth_monotonic_and_stable() -> None:
     assert any(m.id == "toolhead_mount" for m in asm_nz.members)
 
 
+def test_cog_sweep_modal_shaper_freq_and_safe_accel_monotonic() -> None:
+    """Increasing CoG overhang strictly lowers shaper structural/effective freq and safe accel."""
+    from pathlib import Path
+
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    cog_sweep_4 = [
+        (0.0, 0.0, 0.0),
+        (0.0, -15.0, -20.0),
+        (0.0, -35.0, -35.0),
+        (0.0, -70.0, -60.0),
+    ]
+
+    for yaml_name in ("voron_trident_300.yaml", "corexy_voron_style.yaml", "voron_monolith_awd.yaml"):
+        base = PrinterSpec.from_yaml(examples_dir / yaml_name)
+        modal_results = []
+        for cog in cog_sweep_4:
+            s = base.model_copy(deep=True)
+            s.toolhead.cog_offset_mm = cog
+            mo = solve_modal_fea(build_assembly(s))
+            assert mo.shaper_x is not None and mo.shaper_y is not None
+            modal_results.append(mo)
+
+        for idx in range(len(modal_results) - 1):
+            cur, nxt = modal_results[idx], modal_results[idx + 1]
+            assert nxt.shaper_x.structural_freq_hz < cur.shaper_x.structural_freq_hz, (
+                f"{yaml_name} step {idx}: X struct freq did not drop"
+            )
+            assert nxt.shaper_y.structural_freq_hz < cur.shaper_y.structural_freq_hz, (
+                f"{yaml_name} step {idx}: Y struct freq did not drop"
+            )
+            assert nxt.shaper_y.effective_freq_hz < cur.shaper_y.effective_freq_hz, (
+                f"{yaml_name} step {idx}: Y effective freq did not drop"
+            )
+            assert nxt.recommended_max_accel_mm_s2 < cur.recommended_max_accel_mm_s2, (
+                f"{yaml_name} step {idx}: recommended_max_accel did not drop"
+            )
+
+    # Full 0 -> 100 mm sweep on paneled CoreXY stays smooth and strictly monotonic in modal freqs
+    cog_sweep_8 = [
+        (0.0, 0.0, 0.0),
+        (0.0, -0.1, -0.1),
+        (0.0, -1.0, -1.0),
+        (0.0, -5.0, -5.0),
+        (0.0, -15.0, -20.0),
+        (0.0, -30.0, -35.0),
+        (0.0, -60.0, -70.0),
+        (0.0, -100.0, -100.0),
+    ]
+    paneled_modals = []
+    for cog in cog_sweep_8:
+        s = _corexy_paneled()
+        s.toolhead.cog_offset_mm = cog
+        s.toolhead.nozzle_offset_mm = (0.0, -22.0, -62.0)
+        mo = solve_modal_fea(build_assembly(s))
+        assert mo.shaper_x is not None and mo.shaper_y is not None
+        paneled_modals.append(mo)
+
+    for idx in range(len(paneled_modals) - 1):
+        cur, nxt = paneled_modals[idx], paneled_modals[idx + 1]
+        assert nxt.shaper_x.structural_freq_hz < cur.shaper_x.structural_freq_hz
+        assert nxt.shaper_y.structural_freq_hz < cur.shaper_y.structural_freq_hz
+        assert nxt.shaper_y.effective_freq_hz < cur.shaper_y.effective_freq_hz
+        assert nxt.recommended_max_accel_mm_s2 <= cur.recommended_max_accel_mm_s2
+    assert paneled_modals[-1].recommended_max_accel_mm_s2 < paneled_modals[0].recommended_max_accel_mm_s2 * 0.25
+
+
 def test_cog_equals_nozzle_edge_case_zero_clamp_and_finite_fea() -> None:
     """Verify CoG == Nozzle uses zero-length CBUSH stem without arbitrary 5 mm push or crash."""
     for cog in ((0.0, 0.0, 0.0), (0.0, -20.0, -40.0)):

@@ -164,8 +164,12 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
             changes.append(f"gantry.x_beam={prof}({mat})")
         elif m == "belt":
             btype = rng.choice(["gt2_6mm", "gt2_9mm", "gt2_12mm"])
-            core = rng.choice(["fiberglass", "aramid", "steel"])
-            pret_opts = [25.0, 35.0, 45.0] if btype == "gt2_6mm" else [35.0, 45.0, 60.0]
+            core = "fiberglass"
+            pret_opts = (
+                [25.0, 35.0, 45.0]
+                if btype == "gt2_6mm"
+                else ([35.0, 48.0, 62.0] if btype == "gt2_9mm" else [45.0, 65.0, 80.0])
+            )
             pret = rng.choice(pret_opts)
             child.gantry.belt.type = btype  # type: ignore[assignment]
             child.gantry.belt.core = core  # type: ignore[assignment]

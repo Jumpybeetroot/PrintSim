@@ -1,5 +1,5 @@
 name: Voron Monolith AWD 300
-description: High-speed 4-motor AWD CoreXY with 9mm aramid high-tension belts, double-shear pulleys, 4mm Aluminum 5052 structural panels, carbon X-beam, 48V steppers, and UHF hotend
+description: High-speed 4-motor AWD CoreXY with 9mm fiberglass high-tension belts, double-shear pulleys, 4mm Aluminum 5052 structural panels, carbon X-beam, 48V steppers, and UHF hotend
 architecture: corexy
 frame:
   width_mm: 460
@@ -27,7 +27,7 @@ gantry:
   carriage_mass_g: 115
   belt:
     type: gt2_9mm
-    core: aramid
+    core: fiberglass
     pulley_teeth: 20
     pitch_mm: 2.0
     pretension_n: 65.0

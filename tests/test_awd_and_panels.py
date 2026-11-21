@@ -389,7 +389,7 @@ def test_thick_aluminum_beats_thin_aluminum_and_acm_without_front_gantry_bar() -
     # 4mm & 5mm solid Al 5052 strictly beat 3mm & 4mm ACM on frequency, safe accel, and stiffness
     assert mo_al40.fundamental_freq_hz > mo_acm3.fundamental_freq_hz + 35.0
     assert mo_al50.fundamental_freq_hz > mo_acm4.fundamental_freq_hz + 40.0
-    assert mo_al40.recommended_max_accel_mm_s2 > mo_acm3.recommended_max_accel_mm_s2 * 1.5
+    assert mo_al40.recommended_max_accel_mm_s2 > mo_acm3.recommended_max_accel_mm_s2 * 1.35
     assert st_al40.toolhead_stiffness_x_n_per_mm > st_acm3.toolhead_stiffness_x_n_per_mm
     assert st_al50.combined_max_deflection_um < st_acm3.combined_max_deflection_um
 

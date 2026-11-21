@@ -159,13 +159,13 @@ class TestAWDAndStructuralPanelsBOM:
         )
         assert monolith_belt.quantity == pytest.approx(expected_awd_belt_m, abs=0.01)
         assert "AWD" in monolith_belt.specification
-        assert "GT2_9MM" in monolith_belt.name and "aramid" in monolith_belt.name
+        assert "GT2_9MM" in monolith_belt.name and "fiberglass" in monolith_belt.name
 
         # 4 XY + 3 Z (leadscrew_triple) + 1 extruder = 8 motors
         monolith_motor_qty = sum(i.quantity for i in bom_monolith.items if i.category == "motors")
         assert monolith_motor_qty == 8
 
-        # Monolith AWD with 48V motors, 9mm aramid belts, double-shear, CF beam & ACM panels costs more
+        # Monolith AWD with 48V motors, 9mm fiberglass belts, double-shear, CF beam & Al panels costs more
         assert bom_monolith.total_cost_usd > bom_trident.total_cost_usd
         assert bom_monolith.category_costs_usd["motors"] > bom_trident.category_costs_usd["motors"]
         assert bom_monolith.category_costs_usd["motion"] > bom_trident.category_costs_usd["motion"]

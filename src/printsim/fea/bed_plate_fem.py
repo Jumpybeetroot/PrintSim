@@ -401,13 +401,32 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 4) -> BedPlateFEAResult
     )
     first_mode_hz = plate_modes_hz[0]
 
+    bed_limit_note = ""
+    if total_flatness_error_um >= 120.0:
+        if spec.architecture == "corexy" and spec.bed.z_drive == "leadscrew_single":
+            bed_limit_note = " Main limit: cantilevered single-Z bed support compliance."
+        elif taco_buckling_um >= 30.0:
+            bed_limit_note = " Main limit: over-constrained thermal expansion causing bed taco buckling."
+        else:
+            bed_limit_note = " Main limit: bed plate flexural rigidity against gravity sag and thermal bow."
+    elif first_mode_hz < 60.0:
+        bed_limit_note = (
+            " Main limit: cantilevered Z support compliance."
+            if mode_type == "cantilever_flap"
+            else (
+                " Main limit: compliant bed-mount vertical spring stiffness."
+                if mode_type == "mount_bounce"
+                else " Main limit: bed plate flexural stiffness relative to bed mass and support span."
+            )
+        )
+
     summary = (
         f"{spec.bed.size_mm[0]:.0f}x{spec.bed.size_mm[1]:.0f}x{spec.bed.plate_thickness_mm:.1f}mm "
         f"{spec.bed.plate_material} ({spec.bed.mount_type} / {spec.bed.z_drive}): "
         f"total flatness error {total_flatness_error_um:.1f} um ({risk} first-layer risk, "
         f"taco {taco_buckling_um:.1f} um, grav sag {gravity_sag_um:.1f} um), "
         f"2N probe {probe_center_um:.1f} um center / {probe_corner_um:.1f} um corner, "
-        f"f1 = {first_mode_hz:.1f} Hz ({mode_type})."
+        f"f1 = {first_mode_hz:.1f} Hz ({mode_type}).{bed_limit_note}"
     )
 
     return BedPlateFEAResult(

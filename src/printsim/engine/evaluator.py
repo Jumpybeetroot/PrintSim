@@ -120,18 +120,18 @@ def _compute_scores_and_diagnostics(
     if modal_fea.fundamental_freq_hz < 40.0:
         diag.append(
             f"Low frame natural frequency ({modal_fea.fundamental_freq_hz:.1f} Hz): "
-            "add diagonal bracing ('rear_cross' or 'full_truss') or step up frame profile (3030)."
+            "main limit is outer frame racking and bending stiffness relative to moving/frame mass."
         )
     if static_fea.combined_max_deflection_um > 40.0:
         diag.append(
             f"High peak deflection ({static_fea.combined_max_deflection_um:.1f} um) under acceleration: "
-            "stiffen gantry beam or reduce moving toolhead mass."
+            "main limit is gantry/toolhead structural stiffness relative to moving inertial load."
         )
     if static_fea.nozzle_twist_amplification_pct > 45.0:
         diag.append(
             f"High nozzle-tip lever-arm twist amplification (+{static_fea.nozzle_twist_amplification_pct:.1f}% vs X-beam center, "
-            f"{static_fea.nozzle_twist_angle_mrad:.2f} mrad): lower toolhead CoG, shorten nozzle drop, "
-            f"or upgrade carriage mount from '{spec.toolhead.mount_material}' to 'pa12_cf_printed' or 'aluminum_6061_t6'."
+            f"{static_fea.nozzle_twist_angle_mrad:.2f} mrad): main limit is toolhead mount compliance "
+            f"('{spec.toolhead.mount_material}') and CoG/nozzle lever arm overhang."
         )
     if spec.toolhead.z_probe_type in ("printed_tap", "cnc_tap"):
         max_th_share = max(
@@ -146,9 +146,9 @@ def _compute_scores_and_diagnostics(
             or (rcsa is not None and rcsa.whip_risk)
         ):
             diag.append(
-                f"Voron Tap probe ('{spec.toolhead.z_probe_type}') adds moving mass and sliding-rail pitch compliance "
+                f"Voron Tap probe ('{spec.toolhead.z_probe_type}') adds moving carriage mass and sliding-rail pitch compliance "
                 f"(toolhead compliance {max_th_share:.1f}%, nozzle whip +{static_fea.nozzle_twist_amplification_pct:.1f}%): "
-                "switching to a static eddy probe ('static_eddy', Beacon/Cartographer) raises X/Y resonance significantly."
+                "main limit is Z-probe carriage pitch compliance and overhanging mass."
             )
     if (
         spec.architecture == "corexy"
@@ -159,7 +159,7 @@ def _compute_scores_and_diagnostics(
         diag.append(
             f"Panel oil-canning / drum resonance risk ({modal_fea.panel_drum_freq_hz:.1f} Hz < 65 Hz): "
             f"{spec.frame.panel_thickness_mm:.1f} mm {spec.frame.panel_material} panels vibrate out-of-plane "
-            "within print excitation bandwidth; step up to 4-5 mm Aluminum 5052 or >= 4 mm ACM Dibond."
+            "within print excitation bandwidth (main limit: panel flexural rigidity)."
         )
     if (
         structural < 80.0
@@ -170,8 +170,7 @@ def _compute_scores_and_diagnostics(
     ):
         diag.append(
             "Flying-gantry CoreXY (belted_quad_z): structural panels bolt only to the outer frame perimeter "
-            "and cannot tie into the moving Z gantry beams; switch to a fixed-gantry Z drive "
-            "(e.g., leadscrew_triple) if direct gantry-to-panel bolting is desired."
+            "and cannot couple into the moving Z gantry beams (main limit: unbraced gantry Y-rail load path)."
         )
 
     # 2. Dynamics score (effective resonance accel up to high-speed AWD range, motor torque margin, belt integrity)
@@ -199,30 +198,31 @@ def _compute_scores_and_diagnostics(
     if kinematics.step_skip_risk:
         diag.append(
             f"Stepper torque margin is low ({kinematics.torque_safety_margin:.2f}x): "
-            f"limit accel to <= {kinematics.max_safe_accel_motor_mm_s2:.0f} mm/s^2 or use stronger/48V steppers."
+            f"motor pull-out torque headroom limits acceleration to <= {kinematics.max_safe_accel_motor_mm_s2:.0f} mm/s^2 at target speed/voltage."
         )
     if kinematics.motor_overcurrent_risk:
         diag.append(
             f"Stepper overcurrent risk (run {kinematics.motor_run_current_a:.2f} A > rated "
             f"{spec.kinematics.xy_stepper.rated_current_a:.2f} A * 1.05, ~{kinematics.motor_heat_w_each:.1f} W/motor): "
-            "risk of coil overheating or magnet demagnetization; reduce run_current_a or use higher-current motors."
+            "main limit is continuous coil thermal dissipation and magnet demagnetization margin."
         )
     if kinematics.belt_slip_risk:
         diag.append(
             f"Belt slack-side slip risk at {spec.kinematics.max_accel_mm_s2:.0f} mm/s^2: "
-            "increase belt pretension or upgrade to 9mm/12mm GT2 belt."
+            f"main limit is belt pretension ({spec.gantry.belt.pretension_n:.1f} N) relative to peak dynamic drive tension."
         )
     if kinematics.belt_overtension_risk:
         diag.append(
             f"Belt overtension risk (peak {kinematics.belt_peak_tension_n:.1f} N > rated "
-            f"{kinematics.belt_max_working_tension_n:.1f} N): upgrade to 9mm/12mm EPDM Fiberglass or Aramid (Kevlar) belts."
+            f"{kinematics.belt_max_working_tension_n:.1f} N): peak dynamic load exceeds the "
+            f"{spec.gantry.belt.type} ({spec.gantry.belt.core}) working tension limit."
         )
     if kinematics.steel_core_fatigue_risk or (
         spec.gantry.belt.core == "steel" and spec.gantry.belt.pulley_teeth <= 24
     ):
         diag.append(
-            f"Steel-core belt fatigue fracture risk: steel-core GT2 belts suffer rapid bend-fatigue cracking on "
-            f"<=20T/{spec.gantry.belt.pulley_teeth}T pulleys — use Gates PowerGrip 2GT fiberglass or aramid (EPDM) instead."
+            f"Steel-core belt fatigue fracture risk: steel-core GT2 cords experience severe reverse-bend fatigue "
+            f"on small-radius {spec.gantry.belt.pulley_teeth}T pulleys (main limit: cord bend-radius fatigue life)."
         )
     if kinematics.bracket_creep_risk:
         bkt_info = GANTRY_BRACKET_CATALOG.get(
@@ -232,7 +232,7 @@ def _compute_scores_and_diagnostics(
         diag.append(
             f"Gantry bracket creep risk ({spec.gantry.belt.pretension_n:.0f} N belt pretension > "
             f"{creep_limit_n:.0f} N sustained limit for '{spec.gantry.bracket_material}'): "
-            "upgrade gantry brackets to 'ppa_cf_printed', 'pps_cf_printed', or 'aluminum_6061_t6'."
+            "main limit is sustained viscoelastic creep strength of the bracket material."
         )
     if (
         spec.gantry.belt.pretension_n > 50.0
@@ -240,31 +240,39 @@ def _compute_scores_and_diagnostics(
         and not (kinematics.bracket_creep_risk and spec.gantry.bracket_material == "abs_printed")
     ):
         diag.append(
-            f"High-tension printed mount creep warning ({spec.gantry.belt.pretension_n:.0f} N with ABS toolhead mount): "
-            "unfilled ABS creeps under sustained high belt tension — upgrade to PA12-CF / PPA-CF or CNC Aluminum mounts."
+            f"High-tension printed mount creep warning ({spec.gantry.belt.pretension_n:.0f} N with "
+            f"'{spec.toolhead.mount_material}' toolhead mount): sustained belt preload exceeds long-term "
+            "viscoelastic creep margin of unfilled polymer."
         )
     if kinematics.shaft_bending_risk:
         diag.append(
-            f"Stepper shaft bending risk at {spec.gantry.belt.pretension_n:.0f} N belt pretension (> 45 N) "
-            "on cantilevered single-shear motor shafts: enable Double-Shear Pulley Supports."
+            f"Stepper shaft bending risk at {spec.gantry.belt.pretension_n:.0f} N belt pretension (> 45 N): "
+            "main limit is cantilevered single-shear motor shaft bending without double-shear pulley support."
         )
     if not kinematics.delta_workspace_valid:
-        diag.append("Delta arm length cannot reach full build volume corners; increase delta_arm_length_mm.")
+        diag.append(
+            f"Delta arm workspace geometry limit: arm length ({spec.kinematics.delta_arm_length_mm:.0f} mm) "
+            "cannot reach full build volume perimeter within rod-angle limits."
+        )
     if workspace_frf is not None:
         if workspace_frf.worst_corner_drop_pct > 12.0:
             diag.append(
                 f"CoreXY corner belt-span asymmetry drops workspace frequency by "
                 f"{workspace_frf.worst_corner_drop_pct:.1f}% (center {workspace_frf.center_freq_hz:.1f} Hz -> "
                 f"corner {workspace_frf.min_freq_hz:.1f} Hz, max X-Y cross-coupling {workspace_frf.max_cross_coupling_pct:.1f}%): "
-                "upgrade to 4-motor AWD or use a wide-notch 'ei' / 'smooth_ei' input shaper."
+                "main limit is asymmetric free belt-span stiffness across the XY workspace."
             )
         if workspace_frf.midband_instability_risk:
             diag.append(
                 "Open-loop stepper mid-band resonance risk (negative electrical L/R damping at speed): "
-                "upgrade stepper supply to 48V, switch to lower-inductance motors, or enable closed-loop stepper / FOC servo drive."
+                "main limit is winding inductance-to-voltage time constant limiting high-speed phase margin."
             )
-    if rcsa is not None and rcsa.whip_risk and rcsa.warning_message:
-        diag.append(rcsa.warning_message)
+    if rcsa is not None and rcsa.whip_risk:
+        diag.append(
+            f"Nozzle-to-sensor whip risk ({rcsa.nozzle_to_sensor_amp_ratio:.2f}x > 1.35x at "
+            f"{rcsa.nozzle_tip_peak_freq_hz:.1f} Hz): main limit is toolhead mount bending stiffness "
+            f"('{spec.toolhead.mount_material}') and CoG/nozzle lever arm."
+        )
 
     # 3. Thermal score (volumetric flow, heatup speed, heat creep safety)
     flow_score = min(55.0, (thermal.max_volumetric_flow_mm3_s / 35.0) * 55.0)
@@ -274,25 +282,24 @@ def _compute_scores_and_diagnostics(
     if thermal.heat_creep_risk:
         diag.append(
             f"Heat creep risk (cold-side throat {thermal.cold_side_temp_c:.1f} C > 52 C): "
-            "use a titanium bi-metal heatbreak or improve heatsink cooling."
+            "main limit is heatbreak axial thermal conductance relative to heatsink convective cooling capacity."
         )
     if thermal.max_volumetric_flow_mm3_s < 18.0:
         diag.append(
-            f"Hotend volumetric flow capped at {thermal.max_volumetric_flow_mm3_s:.1f} mm^3/s "
-            f"(limited by {thermal.flow_limiting_factor}): lengthen melt zone or increase heater wattage."
+            f"Hotend volumetric flow capped at {thermal.max_volumetric_flow_mm3_s:.1f} mm^3/s: "
+            f"primary thermal/extrusion bottleneck is {thermal.flow_limiting_factor}."
         )
     if spec.gantry.x_beam_material == "carbon_fiber_tube" and spec.frame.chamber_temp_c >= 65.0:
         diag.append(
             f"Standard epoxy carbon fiber X-beam softening/creep risk at {spec.frame.chamber_temp_c:.0f} C chamber "
-            "(>= 65 C): standard roll-wrapped CF tubes can soften and creep in heated enclosures — switch to "
-            "'carbon_fiber_high_tg' (Tg 125 C) or 'cnc_al_beam_20x20'."
+            "(>= 65 C): main limit is epoxy matrix glass-transition temperature (Tg), reducing flexural modulus and creep resistance."
         )
     if thermal_structural is not None:
         if thermal_structural.gantry_bimetallic_bow_um > 40.0:
             diag.append(
                 f"Bimetallic X-gantry thermal bow ({thermal_structural.gantry_bimetallic_bow_um:.1f} um at "
-                f"{thermal_structural.chamber_temp_c:.0f} C chamber): add a 'titanium_grade5' or 'steel_4140' "
-                "rail backer or switch to 'dual_top_bottom' X rails."
+                f"{thermal_structural.chamber_temp_c:.0f} C chamber): main limit is CTE mismatch between the "
+                "X-gantry beam and steel linear rail causing asymmetric thermal bending."
             )
         if (
             thermal_structural.bed_mount_type == "rigid_4pt"
@@ -300,15 +307,14 @@ def _compute_scores_and_diagnostics(
         ):
             diag.append(
                 f"Rigid 4-point bed thermal taco buckling ({thermal_structural.bed_buckling_taco_um:.1f} um at "
-                f"{thermal_structural.bed_target_temp_c:.0f} C): switch bed.mount_type to a 3-point Maxwell "
-                "'kinematic_3pt' mount."
+                f"{thermal_structural.bed_target_temp_c:.0f} C): main limit is over-constrained lateral mounting "
+                "blocking radial thermal expansion."
             )
         if thermal_structural.bracket_tg_warning:
             diag.append(
                 f"Polymer bracket thermal softening near Tg ({spec.gantry.bracket_material} retains "
                 f"{thermal_structural.bracket_modulus_retention_pct:.1f}% modulus at "
-                f"{thermal_structural.chamber_temp_c:.0f} C chamber): upgrade to 'ppa_cf_printed', "
-                "'pps_cf_printed', or CNC Aluminum ('aluminum_6061_t6')."
+                f"{thermal_structural.chamber_temp_c:.0f} C chamber): main limit is bracket polymer Tg stiffness retention."
             )
         elif spec.toolhead.mount_material != spec.gantry.bracket_material:
             th_mat = get_material(spec.toolhead.mount_material)
@@ -319,7 +325,7 @@ def _compute_scores_and_diagnostics(
                 diag.append(
                     f"Toolhead mount polymer thermal softening near Tg ({spec.toolhead.mount_material} retains "
                     f"{th_ret * 100.0:.1f}% modulus at {thermal_structural.chamber_temp_c:.0f} C): "
-                    "upgrade toolhead.mount_material to 'ppa_cf_printed', 'pps_cf_printed', or CNC Aluminum."
+                    "main limit is mount polymer Tg stiffness retention."
                 )
 
     if bed_plate_fea is not None:
@@ -328,30 +334,30 @@ def _compute_scores_and_diagnostics(
                 diag.append(
                     f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
                     f"({bed_plate_fea.first_layer_risk} first-layer risk, gravity sag {bed_plate_fea.gravity_sag_um:.1f} um): "
-                    "single rear-cantilever Z leadscrew droops at the front edge; upgrade to 'leadscrew_triple' or 'belted_quad_z'."
+                    "main limit is cantilevered single-Z bed support compliance causing front-edge droop."
                 )
             elif bed_plate_fea.taco_buckling_um >= 30.0:
                 diag.append(
                     f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
-                    f"({bed_plate_fea.first_layer_risk} first-layer risk): over-constrained thermal bow "
-                    f"({bed_plate_fea.taco_buckling_um:.1f} um); switch to 'kinematic_3pt' or 'floating_4pt' mounts."
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk): main limit is over-constrained "
+                    f"thermal bow ({bed_plate_fea.taco_buckling_um:.1f} um) from rigid lateral mounting."
                 )
             else:
                 diag.append(
                     f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
-                    f"({bed_plate_fea.first_layer_risk} first-layer risk): step up bed plate thickness "
-                    "to 6-8 mm MIC-6 cast aluminum or enable mesh bed leveling."
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk): main limit is bed plate flexural "
+                    "rigidity against gravity sag and thermal gradient bow."
                 )
         if bed_plate_fea.plate_first_mode_hz < 60.0:
             if bed_plate_fea.plate_first_mode_type == "cantilever_flap":
-                bed_mode_fix = "upgrade Z-drive from 'leadscrew_single' to 'leadscrew_triple' or 'belted_quad_z'"
+                bed_mode_limit = "cantilevered Z-support pitch compliance"
             elif bed_plate_fea.plate_first_mode_type == "mount_bounce":
-                bed_mode_fix = "replace soft bed springs/silicone spacers with 'kinematic_3pt' or 'floating_4pt' mounts"
+                bed_mode_limit = "compliant bed-mount vertical spring stiffness"
             else:
-                bed_mode_fix = "increase bed plate thickness (6-8 mm MIC-6) or add multi-point bed support"
+                bed_mode_limit = "bed plate flexural stiffness relative to bed mass and support span"
             diag.append(
                 f"Low bed plate natural frequency ({bed_plate_fea.plate_first_mode_hz:.1f} Hz, "
-                f"{bed_plate_fea.plate_first_mode_type}): {bed_mode_fix}."
+                f"{bed_plate_fea.plate_first_mode_type}): main limit is {bed_mode_limit}."
             )
 
     # 4. Print quality score (directly from virtual G-code print)

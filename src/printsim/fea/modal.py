@@ -27,10 +27,10 @@ _BOTTLENECK_LABELS: dict[str, str] = {
 }
 
 _BOTTLENECK_TIPS: dict[str, str] = {
-    "frame": "Bolt 4-5mm Aluminum 5052 structural panels, upgrade frame bracing/extrusions, or mount X/Y rails for higher composite EI.",
-    "belt": "Upgrade to wider 9mm/12mm GT2 Aramid belts, raise belt tension (with double-shear pulleys), or switch to 4-motor AWD.",
-    "motor": "Raise stepper bus voltage (48V), increase run current within motor rating, use lower-inductance/0.9° steppers, or switch to AWD.",
-    "bracket": "Upgrade motor mounts & XY-joint brackets from ABS to annealed PPA-CF / PPS-CF or CNC Aluminum 6061-T6 (and enable double-shear).",
+    "frame": "Main limit: outer frame racking, rail-beam bending, and toolhead-mount structural stiffness along the load path.",
+    "belt": "Main limit: belt tensile axial stiffness and free-span drive-path compliance.",
+    "motor": "Main limit: stepper electromagnetic stiffness (holding torque headroom and winding L/R back-EMF margin) relative to moving inertia.",
+    "bracket": "Main limit: XY-joint / motor-mount bracket compliance and cantilevered pulley shaft bending.",
 }
 
 
@@ -257,91 +257,51 @@ def _frame_mode_fix_hint(assembly: AssemblyModel) -> str:
     if spec.architecture == "corexy":
         if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
             return (
-                "Switch Panel Mounting -> Bolted Structural (4–5 mm Aluminum 5052), "
-                "add Corner Gussets/Cross Bracing, or step Frame Profile up to 3030."
+                "Main limit: outer frame shear & racking stiffness "
+                "(open or non-structural enclosure panels leave frame columns uncoupled in shear)."
             )
         if (
             spec.frame.panel_material not in ("aluminum_5052_sheet", "carbon_fiber_plate")
             or spec.frame.panel_thickness_mm < 4.0
         ):
             return (
-                "Upgrade structural panels to 4–5 mm Aluminum 5052 or Carbon Fiber Plate (bolted), "
-                "add Cross Bracing, or step Frame Profile up to 3030."
+                "Main limit: outer frame shear-panel in-plane stiffness, fastener shear stiffness, "
+                "and perimeter racking rigidity."
             )
-        return (
-            "Step up Frame Profile (2020 -> 3030), switch Corner Joints -> Corner Cube, "
-            "or add Epoxy Granite / UHPC cavity filling."
-        )
+        return "Main limit: outer frame extrusion bending/torsional stiffness and corner-joint rigidity."
     if spec.architecture == "cartesian_bedslinger":
-        return (
-            "Add Diagonal Portal Bracing (rear_cross or full_truss) and step up Z-upright "
-            "extrusion profile to 3030 / 2040."
-        )
-    return (
-        "Step up Delta tower extrusions to 3030 / 4040, enable full_truss perimeter bracing, "
-        "or fill tower extrusions with Epoxy Granite / UHPC."
-    )
+        return "Main limit: Z-portal lateral/fore-aft bending stiffness and diagonal portal racking rigidity."
+    return "Main limit: vertical tower extrusion bending/torsional stiffness and perimeter triangulation rigidity."
 
 
 def _toolhead_mode_fix_hint(assembly: AssemblyModel) -> str:
     spec = assembly.spec
     if spec.architecture == "delta":
-        if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
-            return (
-                f"Upgrade effector mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
-                "shorten nozzle/CoG overhang, or use a lighter hotend."
-            )
-        return "Shorten effector nozzle/CoG overhang or reduce hotend/cooling shroud mass."
-    if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
         return (
-            f"Upgrade toolhead mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
-            "use an H-long Z1/ZA rail block, shorten nozzle/CoG overhang, or use a lighter toolhead."
-        )
-    if not spec.gantry.effective_dual_x_rails:
-        return (
-            "Upgrade rail block to H-long with Z1/ZA preload (or dual_top_bottom X rails), "
-            "shorten nozzle/CoG overhang, or use a lighter direct-drive/CPAP toolhead."
+            f"Main limit: effector mount compliance ('{spec.toolhead.mount_material}'), "
+            "nozzle/CoG lever arm overhang, and effector moving mass."
         )
     return (
-        "Shorten toolhead CoG / nozzle Z overhang, upgrade rail preload to ZA/ZB, "
-        "or reduce hotend/extruder mass."
+        f"Main limit: toolhead mount stiffness ('{spec.toolhead.mount_material}'), "
+        "rail carriage pitch/torsional compliance, CoG/nozzle lever arm, and toolhead mass."
     )
 
 
 def _gantry_mode_fix_hint(assembly: AssemblyModel) -> str:
     spec = assembly.spec
     if spec.architecture == "delta":
-        return (
-            "Step up Delta tower extrusions to 3030 / 4040, add full_truss bracing, "
-            "or upgrade diagonal arms to stiffer larger-OD carbon fiber tubes."
-        )
-    if not spec.gantry.effective_dual_x_rails and spec.gantry.x_beam_material != "carbon_fiber_tube":
-        return (
-            "Switch X-Gantry Beam to Carbon Fiber Tube or 2040 + Dual Top/Bottom Rails, "
-            "use an H-long Z1 rail, or lighten the toolhead."
-        )
+        return "Main limit: delta tower bending stiffness, perimeter bracing rigidity, and diagonal arm axial stiffness."
     return (
-        "Step up X-beam section / Y-rail size (MGN12/MGN15), upgrade XY-joint brackets to CNC Al 6061, "
-        "or lighten the toolhead and carriages."
+        "Main limit: X-gantry beam & rail bending/torsional stiffness, XY-joint bracket compliance, "
+        "and moving gantry inertia."
     )
 
 
 def _bed_mode_fix_hint(assembly: AssemblyModel) -> str:
     spec = assembly.spec
     if spec.architecture == "cartesian_bedslinger":
-        return (
-            "Use a stiffer lighter heated bed carriage, upgrade to wider 9 mm GT2 Y-belt with higher "
-            "pretension, or trim heated bed plate mass."
-        )
-    if spec.bed.z_drive != "leadscrew_triple":
-        return (
-            "Switch Z drive to Triple Leadscrew (leadscrew_triple), use an 8–10 mm Cast MIC-6 bed plate, "
-            "or shorten bed support arms."
-        )
-    return (
-        "Use a stiffer cast aluminum bed plate (8–10 mm MIC-6), shorter bed support arms, "
-        "or stiffer Z-rail backing extrusions."
-    )
+        return "Main limit: moving Y-bed carriage stiffness, Y-axis belt stiffness, and heated bed inertia."
+    return "Main limit: Z-drive / bed support axial/cantilever stiffness and bed plate flexural rigidity."
 
 
 def _classify_mode_diagnosis(
@@ -577,6 +537,11 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     candidates: list[dict] = []
     receptance_x: list[tuple[float, float]] = []
     receptance_y: list[tuple[float, float]] = []
+    car_mode_entries: list[tuple[float, float, float, float]] = []
+    sum_comp_x_car = 0.0
+    sum_comp_y_car = 0.0
+    sum_comp_x_noz = 0.0
+    sum_comp_y_noz = 0.0
     panel_drum_freq: float | None = None
     panel_drum_fallback_freq: float | None = None
 
@@ -693,11 +658,13 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             and float(noz_rel[1]) < 0.20
         )
 
-        # Exact modal compliance / receptance residue at the nozzle-to-bed print interface:
+        # Exact modal compliance / receptance residue at the nozzle-to-bed and carriage-to-bed interfaces:
         # R_{k,a} = |phi_{k,rel,a} * (phi_k^T F_a)| / (m_{gen,k} * omega_k^2)
         rec_x = 0.0
         rec_y = 0.0
         if lam > 1.0:
+            pf_x = float(full_vec @ fx_exc)
+            pf_y = float(full_vec @ fy_exc)
             rel_x_raw = (
                 float(full_vec[6 * noz_idx + 0] - full_vec[6 * bed_idx + 0])
                 if bed_idx is not None
@@ -708,10 +675,31 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 if bed_idx is not None
                 else float(full_vec[6 * noz_idx + 1])
             )
-            rec_x = abs(rel_x_raw * float(full_vec @ fx_exc)) / (m_gen * lam)
-            rec_y = abs(rel_y_raw * float(full_vec @ fy_exc)) / (m_gen * lam)
+            rel_x_car = (
+                float(full_vec[6 * th_idx + 0] - full_vec[6 * bed_idx + 0])
+                if bed_idx is not None
+                else float(full_vec[6 * th_idx + 0])
+            )
+            rel_y_car = (
+                float(full_vec[6 * th_idx + 1] - full_vec[6 * bed_idx + 1])
+                if bed_idx is not None
+                else float(full_vec[6 * th_idx + 1])
+            )
+            comp_x_noz = (rel_x_raw * pf_x) / (m_gen * lam)
+            comp_y_noz = (rel_y_raw * pf_y) / (m_gen * lam)
+            comp_x_car = (rel_x_car * pf_x) / (m_gen * lam)
+            comp_y_car = (rel_y_car * pf_y) / (m_gen * lam)
+
+            rec_x = abs(comp_x_noz)
+            rec_y = abs(comp_y_noz)
             receptance_x.append((freq_hz, rec_x))
             receptance_y.append((freq_hz, rec_y))
+            car_mode_entries.append((freq_hz, comp_x_car, comp_y_car, max(0.0, ke_panel)))
+
+            sum_comp_x_car += comp_x_car
+            sum_comp_y_car += comp_y_car
+            sum_comp_x_noz += comp_x_noz
+            sum_comp_y_noz += comp_y_noz
 
         candidates.append(
             {
@@ -980,8 +968,30 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         ]
         return eff_hz, sec_modes
 
-    struct_x, norm_scanned_x = _receptance_structural_freq_and_psd(receptance_x, fundamental)
-    struct_y, norm_scanned_y = _receptance_structural_freq_and_psd(receptance_y, fundamental)
+    # Filter out minor negative-residue panel/bed modes from carriage receptance while preserving major bed modes
+    max_pos_car_x = max((ccx for _, ccx, _, _ in car_mode_entries if ccx > 0.0), default=0.0)
+    max_pos_car_y = max((ccy for _, _, ccy, _ in car_mode_entries if ccy > 0.0), default=0.0)
+    receptance_x_car = [
+        (f, abs(ccx))
+        for f, ccx, _, kp in car_mode_entries
+        if ccx > 0.0 or (kp < 0.50 and abs(ccx) > 0.5 * max_pos_car_x)
+    ] or [(f, abs(ccx)) for f, ccx, _, _ in car_mode_entries]
+    receptance_y_car = [
+        (f, abs(ccy))
+        for f, _, ccy, kp in car_mode_entries
+        if ccy > 0.0 or (kp < 0.50 and abs(ccy) > 0.5 * max_pos_car_y)
+    ] or [(f, abs(ccy)) for f, _, ccy, _ in car_mode_entries]
+
+    struct_x_car, _ = _receptance_structural_freq_and_psd(receptance_x_car, fundamental)
+    struct_y_car, _ = _receptance_structural_freq_and_psd(receptance_y_car, fundamental)
+    _, norm_scanned_x = _receptance_structural_freq_and_psd(receptance_x, fundamental)
+    _, norm_scanned_y = _receptance_structural_freq_and_psd(receptance_y, fundamental)
+
+    # Exact signed Rayleigh nozzle-to-carriage compliance amplification ratio
+    ratio_x = max(1.0, abs(sum_comp_x_noz) / max(abs(sum_comp_x_car), 1e-18)) if has_nozzle else 1.0
+    ratio_y = max(1.0, abs(sum_comp_y_noz) / max(abs(sum_comp_y_car), 1e-18)) if has_nozzle else 1.0
+    struct_x = struct_x_car / math.sqrt(ratio_x)
+    struct_y = struct_y_car / math.sqrt(ratio_y)
     if nozzle_twist_freq is None:
         nozzle_twist_freq = min(struct_x, struct_y)
 

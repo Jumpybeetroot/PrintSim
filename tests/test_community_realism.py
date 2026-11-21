@@ -158,7 +158,18 @@ def test_belt_routing_monolith_short_increases_stiffness_and_accel() -> None:
     assert r_mono.kinematics.drive_stiffness_n_per_mm > r_stock.kinematics.drive_stiffness_n_per_mm
     assert r_mono.kinematics.idler_shaft_stiffness_n_per_mm > r_stock.kinematics.idler_shaft_stiffness_n_per_mm
     assert r_mono.kinematics.idler_shaft_deflection_um < r_stock.kinematics.idler_shaft_deflection_um
-    assert r_mono.modal_fea.recommended_max_accel_mm_s2 > r_stock.modal_fea.recommended_max_accel_mm_s2
+    assert r_mono.modal_fea.shaper_x is not None and r_stock.modal_fea.shaper_x is not None
+    assert r_mono.modal_fea.shaper_x.effective_freq_hz > r_stock.modal_fea.shaper_x.effective_freq_hz
+
+    # On a stiffened paneled CoreXY (where 27 Hz frame+toolhead doesn't cap Y accel), monolith_short raises safe accel
+    paneled = _paneled_trident()
+    paneled.toolhead.mount_material = "aluminum_6061_t6"
+    paneled.toolhead.internal_stiffness_n_per_mm = 1850.0
+    p_stock = paneled.model_copy(deep=True)
+    p_stock.gantry.belt_routing = "stock_corexy"
+    p_mono = paneled.model_copy(deep=True)
+    p_mono.gantry.belt_routing = "monolith_short"
+    assert evaluate_printer(p_mono).modal_fea.recommended_max_accel_mm_s2 > evaluate_printer(p_stock).modal_fea.recommended_max_accel_mm_s2
 
     # Pulley circumference & VFA speed band sanity
     assert r_mono.kinematics.pulley_circumference_mm == pytest.approx(40.0)
@@ -254,12 +265,17 @@ def test_whopping_pochard_and_paver_on_foam_physics() -> None:
     assert math.isfinite(mo_paver.fundamental_freq_hz) and mo_paver.fundamental_freq_hz > 5.0
 
 
-@pytest.mark.parametrize("preset_file", ["doomcube_4040.yaml", "vzbot_330_awd.yaml"])
-def test_new_community_presets_load_build_and_evaluate_cleanly(preset_file: str) -> None:
+@pytest.mark.parametrize(
+    ("preset_file", "min_composite"),
+    [("doomcube_4040.yaml", 85.0), ("vzbot_330_awd.yaml", 72.0)],
+)
+def test_new_community_presets_load_build_and_evaluate_cleanly(
+    preset_file: str, min_composite: float
+) -> None:
     """DoomCube 4040 and VzBot 330 AWD evaluate with clean scores and zero collisions."""
     spec = PrinterSpec.from_yaml(EXAMPLES_DIR / preset_file)
     report = evaluate_printer(spec)
     assert not report.collision.has_collision
-    assert report.scores.composite > 75.0
+    assert report.scores.composite > min_composite
     assert report.modal_fea.fundamental_freq_hz > 40.0
     assert report.kinematics.belt_routing == "monolith_short"
