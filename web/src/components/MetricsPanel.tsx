@@ -835,7 +835,8 @@ const KlipperShaperPsdCard: React.FC<{
             <span className="psd-axis-peak">{graphs.x.peak_freq_hz.toFixed(0)} Hz</span>
           </span>
           <span className="psd-axis-rec">
-            X: {graphs.x.recommended_shaper} @ {graphs.x.recommended_freq_hz.toFixed(0)} Hz
+            {graphs.x.recommended_shaper} @ {graphs.x.recommended_freq_hz.toFixed(0)} Hz · ≤
+            {Math.round(graphs.x.recommended_max_accel_mm_s2).toLocaleString()} mm/s²
           </span>
         </button>
         <button
@@ -848,7 +849,8 @@ const KlipperShaperPsdCard: React.FC<{
             <span className="psd-axis-peak">{graphs.y.peak_freq_hz.toFixed(0)} Hz</span>
           </span>
           <span className="psd-axis-rec">
-            Y: {graphs.y.recommended_shaper} @ {graphs.y.recommended_freq_hz.toFixed(0)} Hz
+            {graphs.y.recommended_shaper} @ {graphs.y.recommended_freq_hz.toFixed(0)} Hz · ≤
+            {Math.round(graphs.y.recommended_max_accel_mm_s2).toLocaleString()} mm/s²
           </span>
         </button>
       </div>
@@ -2156,17 +2158,37 @@ export const MetricsPanel: React.FC<Props> = ({
                     )}
                     {mod.shaper_x && (
                       <div className="metric-kv">
-                        <span>X-Axis Shaper</span>
-                        <span className="metric-val">
-                          {mod.shaper_x.recommended_shaper} @ {mod.shaper_x.effective_freq_hz.toFixed(1)} Hz
+                        <span>X-Axis Shaper &amp; Accel</span>
+                        <span className="metric-val metric-val-with-delta">
+                          {compareSim?.modal_fea.shaper_x && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.modal_fea.shaper_x.max_accel_mm_s2}
+                              newVal={mod.shaper_x.max_accel_mm_s2}
+                              higherIsBetter={true}
+                              eps={15}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
+                            />
+                          )}
+                          {mod.shaper_x.recommended_shaper} @ {mod.shaper_x.effective_freq_hz.toFixed(1)} Hz ·{" "}
+                          <strong>{Math.round(mod.shaper_x.max_accel_mm_s2).toLocaleString()}</strong> mm/s²
                         </span>
                       </div>
                     )}
                     {mod.shaper_y && (
                       <div className="metric-kv">
-                        <span>Y-Axis Shaper</span>
-                        <span className="metric-val">
-                          {mod.shaper_y.recommended_shaper} @ {mod.shaper_y.effective_freq_hz.toFixed(1)} Hz
+                        <span>Y-Axis Shaper &amp; Accel</span>
+                        <span className="metric-val metric-val-with-delta">
+                          {compareSim?.modal_fea.shaper_y && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.modal_fea.shaper_y.max_accel_mm_s2}
+                              newVal={mod.shaper_y.max_accel_mm_s2}
+                              higherIsBetter={true}
+                              eps={15}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
+                            />
+                          )}
+                          {mod.shaper_y.recommended_shaper} @ {mod.shaper_y.effective_freq_hz.toFixed(1)} Hz ·{" "}
+                          <strong>{Math.round(mod.shaper_y.max_accel_mm_s2).toLocaleString()}</strong> mm/s²
                         </span>
                       </div>
                     )}
@@ -2219,7 +2241,7 @@ export const MetricsPanel: React.FC<Props> = ({
                       </>
                     )}
                     <div className="metric-kv">
-                      <span>Rec. Max Accel</span>
+                      <span>Rec. Max Accel (Limiting)</span>
                       <span className="metric-val metric-val-with-delta">
                         {compareSim && (
                           <InlineDeltaBadge
@@ -2230,7 +2252,7 @@ export const MetricsPanel: React.FC<Props> = ({
                             formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
                           />
                         )}
-                        {mod.recommended_max_accel_mm_s2.toFixed(0)} mm/s²
+                        <strong>{Math.round(mod.recommended_max_accel_mm_s2).toLocaleString()} mm/s²</strong>
                       </span>
                     </div>
                     <div className="metric-kv">
