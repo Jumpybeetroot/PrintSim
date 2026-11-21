@@ -17,6 +17,7 @@ frame:
 gantry:
   drive_mode: awd
   double_shear_pulleys: true
+  bracket_material: aluminum_6061_t6
   x_beam_profile: cf_tube_20x20x2
   x_beam_material: carbon_fiber_tube
   x_rail_profile: mgn12_rail

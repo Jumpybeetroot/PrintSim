@@ -275,10 +275,30 @@ def synthesize_axis_psd(
 
 
 def estimate_psd_damping_ratio(freqs_hz: np.ndarray, raw_psd: np.ndarray) -> float:
-    """Estimate primary peak damping ratio via -3 dB (half-power = peak / 2) bandwidth."""
+    """Estimate primary peak damping ratio via -3 dB (half-power = peak / 2) bandwidth.
+
+    Uses 3-point inverse-PSD (Lorentzian) sub-bin peak interpolation so narrow low-frequency
+    peaks sitting between discrete frequency bins do not overestimate bandwidth.
+    """
     pk_idx = int(np.argmax(raw_psd))
     pk_val = float(raw_psd[pk_idx])
     pk_freq = float(freqs_hz[pk_idx])
+    if 0 < pk_idx < len(freqs_hz) - 1:
+        f0, f1, f2 = float(freqs_hz[pk_idx - 1]), pk_freq, float(freqs_hz[pk_idx + 1])
+        y0 = 1.0 / max(float(raw_psd[pk_idx - 1]), 1e-9)
+        y1 = 1.0 / max(pk_val, 1e-9)
+        y2 = 1.0 / max(float(raw_psd[pk_idx + 1]), 1e-9)
+        d0, d2 = f0 - f1, f2 - f1
+        if abs(d0) > 1e-9 and abs(d2) > 1e-9 and abs(d2 - d0) > 1e-9:
+            a = ((y2 - y1) / d2 - (y0 - y1) / d0) / (d2 - d0)
+            b = (y2 - y1) / d2 - a * d2
+            if a > 1e-12:
+                d_min = -b / (2.0 * a)
+                y_min = y1 + b * d_min + a * d_min * d_min
+                if 0.0 < y_min <= y1 and abs(d_min) < max(abs(d0), abs(d2)):
+                    pk_freq = f1 + d_min
+                    pk_val = 1.0 / y_min
+
     half_power = 0.5 * pk_val
 
     f_lo = float(freqs_hz[0])
@@ -357,13 +377,17 @@ def calibrate_axis_shapers(
     damping_ratio: float = DEFAULT_SHAPER_DAMPING_RATIO,
     freqs_hz: np.ndarray | None = None,
     raw_psd: np.ndarray | None = None,
+    psd_damping_ratio: float | None = None,
 ) -> AxisShaperGraph:
     """Run full Klipper `shaper_calibrate` optimization over `[5, 220] Hz` for one axis."""
+    psd_zeta = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
     if raw_psd is None:
         freqs, psd = synthesize_axis_psd(
             axis=axis,
             primary_freq_hz=primary_freq_hz,
             secondary_modes=secondary_modes,
+            damping_primary=psd_zeta,
+            damping_secondary=psd_zeta,
             freqs_hz=freqs_hz,
         )
     else:

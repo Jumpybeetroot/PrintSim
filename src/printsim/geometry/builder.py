@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from printsim.schema import (
+    EXTRUSION_FILLINGS,
+    GANTRY_BRACKET_CATALOG,
+    PROFILE_CATALOG,
     MaterialSpec,
     PrinterSpec,
     ProfileSpec,
@@ -39,6 +42,8 @@ class StructuralMember:
     material: MaterialSpec
     role: str = "frame"
     is_truss: bool = False  # if True, reduced rotational coupling (rod/brace)
+    fill_mass_kg: float = 0.0
+    rail_mass_kg: float = 0.0
 
     def length_m(self, node_map: dict[str, StructuralNode]) -> float:
         p0 = node_map[self.start_id].position_m
@@ -59,6 +64,7 @@ class AssemblyModel:
     toolhead_node_id: str = "toolhead"
     toolhead_cog_node_id: str = "toolhead_cog"
     nozzle_node_id: str = "nozzle_tip"
+    bed_node_id: str = "bed_surface"
     gantry_node_ids: list[str] = field(default_factory=list)
     bed_center_m: np.ndarray = field(default_factory=lambda: np.zeros(3))
     build_origin_m: np.ndarray = field(default_factory=lambda: np.zeros(3))
@@ -66,6 +72,12 @@ class AssemblyModel:
     y_moving_mass_kg: float = 0.0
     frame_mass_kg: float = 0.0
     panel_mass_kg: float = 0.0
+    extrusion_fill_mass_kg: float = 0.0
+    x_rail_ei_y_boost_pct: float = 0.0
+    x_rail_ei_z_boost_pct: float = 0.0
+    y_rail_ei_x_boost_pct: float = 0.0
+    total_rail_mass_kg: float = 0.0
+    frame_damping_ratio: float = 0.042
     total_mass_kg: float = 0.0
     estimated_material_cost_usd: float = 0.0
     panel_rep_props: dict[str, float] | None = None
@@ -77,6 +89,8 @@ class AssemblyModel:
                 self.toolhead_cog_node_id = self.toolhead_node_id
             if self.nozzle_node_id not in node_ids:
                 self.nozzle_node_id = self.toolhead_node_id
+            if self.bed_node_id and self.bed_node_id not in node_ids:
+                self.bed_node_id = ""
 
     @property
     def node_map(self) -> dict[str, StructuralNode]:
@@ -86,6 +100,10 @@ class AssemblyModel:
         """Serialize assembly geometry (mm) for the 3D web viewer and AI tools."""
         nmap = self.node_map
         pmat = get_material(self.spec.frame.panel_material)
+        fill_id = self.spec.frame.extrusion_filling
+        fill_spec = EXTRUSION_FILLINGS.get(fill_id, EXTRUSION_FILLINGS["none"])
+        bkt_id = self.spec.gantry.bracket_material
+        bkt_info = GANTRY_BRACKET_CATALOG.get(bkt_id, GANTRY_BRACKET_CATALOG["abs_printed"])
         panels_active = bool(
             self.spec.frame.enclosed_panels and self.spec.frame.panel_mounting != "none"
         )
@@ -108,6 +126,44 @@ class AssemblyModel:
             "architecture": self.spec.architecture,
             "drive_mode": self.spec.gantry.drive_mode,
             "double_shear_pulleys": self.spec.gantry.double_shear_pulleys,
+            "extrusion_filling": {
+                "id": fill_id,
+                "name": fill_spec["name"],
+                "short_name": fill_spec["short_name"],
+                "bonded": fill_spec["bonded"],
+                "added_mass_kg": round(self.extrusion_fill_mass_kg, 3),
+                "damping_ratio": round(self.frame_damping_ratio, 4),
+                "color_hex": fill_spec["color_hex"],
+                "notes": fill_spec["notes"],
+            },
+            "gantry_brackets": {
+                "material_id": bkt_id,
+                "name": bkt_info["name"],
+                "short_name": bkt_info["short_name"],
+                "youngs_modulus_gpa": bkt_info["youngs_modulus_gpa"],
+                "hdt_c": bkt_info["hdt_c"],
+                "creep_tension_limit_n": bkt_info["creep_tension_limit_n"],
+                "cnc_machined": bkt_info["cnc_machined"],
+                "kit_cost_usd": bkt_info["kit_cost_usd"],
+                "carriage_mass_delta_g": bkt_info["carriage_mass_delta_g"],
+                "color_hex": bkt_info["color_hex"],
+            },
+            "linear_rails": {
+                "x_rail_profile": self.spec.gantry.x_rail_profile,
+                "y_rail_profile": self.spec.gantry.y_rail_profile,
+                "rail_material": self.spec.gantry.rail_material,
+                "x_rail_mount": self.spec.gantry.effective_x_rail_mount,
+                "y_rail_mount": self.spec.gantry.y_rail_mount,
+                "dual_x_rails": self.spec.gantry.effective_dual_x_rails,
+                "x_rail_width_mm": round(get_profile(self.spec.gantry.x_rail_profile).width_m * 1e3, 1),
+                "x_rail_height_mm": round(get_profile(self.spec.gantry.x_rail_profile).height_m * 1e3, 1),
+                "y_rail_width_mm": round(get_profile(self.spec.gantry.y_rail_profile).width_m * 1e3, 1),
+                "y_rail_height_mm": round(get_profile(self.spec.gantry.y_rail_profile).height_m * 1e3, 1),
+                "x_beam_ei_y_boost_pct": round(self.x_rail_ei_y_boost_pct, 1),
+                "x_beam_ei_z_boost_pct": round(self.x_rail_ei_z_boost_pct, 1),
+                "y_rail_ei_x_boost_pct": round(self.y_rail_ei_x_boost_pct, 1),
+                "total_rail_mass_g": round(self.total_rail_mass_kg * 1e3, 1),
+            },
             "panels": {
                 "enabled": panels_active,
                 "mounting": self.spec.frame.panel_mounting if panels_active else "none",
@@ -146,6 +202,7 @@ class AssemblyModel:
             "toolhead_node_id": self.toolhead_node_id,
             "toolhead_cog_node_id": self.toolhead_cog_node_id,
             "nozzle_node_id": self.nozzle_node_id,
+            "bed_node_id": self.bed_node_id,
             "cog_offset_mm": list(self.spec.toolhead.cog_offset_mm),
             "nozzle_offset_mm": list(self.spec.toolhead.nozzle_offset_mm),
             "mount_material": self.spec.toolhead.mount_material,
@@ -361,6 +418,11 @@ def _make_panel_virtual_material(pmat: MaterialSpec) -> MaterialSpec:
     return pmat.model_copy(update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0})
 
 
+def _make_bed_virtual_material(mat: MaterialSpec) -> MaterialSpec:
+    """Create a virtually massless, zero-cost stiffness copy for bed structural mounts."""
+    return mat.model_copy(update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0})
+
+
 def _add_shear_panel_bay(
     members: list[StructuralMember],
     node_map: dict[str, StructuralNode],
@@ -502,8 +564,12 @@ def _apply_composite_panel_stiffening(
     nz = np.array([0.0, 0.0, 1.0])
     panel_attachments: dict[str, list[np.ndarray]] = {
         "col_fl_low": [nx],
+        "col_fl_bot": [nx],
+        "col_fl_mid": [nx],
         "col_fl_top": [nx],
         "col_fr_low": [nx],
+        "col_fr_bot": [nx],
+        "col_fr_mid": [nx],
         "col_fr_top": [nx],
         "col_rl_low": [nx, ny],
         "col_rl_top": [nx, ny],
@@ -522,6 +588,8 @@ def _apply_composite_panel_stiffening(
                 "y_rail_r_f": [nx],
                 "y_rail_r_r": [nx],
                 "gantry_rear_bar": [ny],
+                "gantry_rear_bar_l": [ny],
+                "gantry_rear_bar_r": [ny],
             }
         )
 
@@ -567,6 +635,111 @@ def _apply_composite_panel_stiffening(
         )
 
 
+def _x_rail_mount_normals(x_mount: str) -> list[np.ndarray]:
+    """Return global outward normal vector(s) for X-gantry linear rail mounting."""
+    if x_mount == "top":
+        return [np.array([0.0, 0.0, 1.0])]
+    if x_mount == "bottom":
+        return [np.array([0.0, 0.0, -1.0])]
+    if x_mount == "dual_top_bottom":
+        return [np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])]
+    return [np.array([0.0, -1.0, 0.0])]
+
+
+def _y_rail_mount_normals(y_mount: str, side: str) -> list[np.ndarray]:
+    """Return global outward normal vector(s) for CoreXY Y-rail mounting ('l' or 'r')."""
+    if y_mount == "bottom":
+        return [np.array([0.0, 0.0, -1.0])]
+    if y_mount == "inner":
+        return [np.array([1.0 if side == "l" else -1.0, 0.0, 0.0])]
+    return [np.array([0.0, 0.0, 1.0])]
+
+
+def _apply_bolted_linear_rail(
+    member: StructuralMember,
+    node_map: dict[str, StructuralNode],
+    rail_profile: ProfileSpec,
+    rail_material: MaterialSpec,
+    mount_normals: list[np.ndarray],
+    beam_shape: str | None = None,
+) -> tuple[float, float, float]:
+    """Model 1 or 2 steel linear rails bolted every ~25 mm (M3 fasteners) to beam face(s).
+
+    Applies transformed-section parallel-axis bending and torsional boosts to ``member.profile``
+    while keeping ``area_m2`` equal to the bare beam cross-section, and folds distributed rail
+    mass into ``member.material.density_kg_m3`` and ``member.rail_mass_kg`` with zero double-counting.
+    """
+    if not mount_normals:
+        return 0.0, 0.0, 0.0
+
+    p0 = node_map[member.start_id].position_m
+    p1 = node_map[member.end_id].position_m
+    length = float(np.linalg.norm(p1 - p0))
+    if length <= 1e-9:
+        return 0.0, 0.0, 0.0
+
+    ey, ez = _member_local_axes(p0, p1)
+    shape = beam_shape or member.profile.shape
+
+    # Partial bolted composite shear transfer efficiency (M3 bolts on ~25 mm pitch)
+    if member.profile.id.startswith("cf_"):
+        eta_rail = 0.35
+    elif shape == "solid_bar":
+        eta_rail = 0.55
+    else:
+        eta_rail = 0.45
+
+    n_e = rail_material.youngs_modulus_pa / max(member.material.youngs_modulus_pa, 1e6)
+    n_g = rail_material.effective_shear_modulus_pa / max(
+        member.material.effective_shear_modulus_pa, 1e6
+    )
+
+    i_local_norm = rail_profile.iy_m4
+    i_local_tang = rail_profile.iz_m4
+    j_local = rail_profile.j_m4
+    a_ext = member.profile.area_m2
+    n_a_rail = n_e * rail_profile.area_m2
+    is_symmetric_dual = len(mount_normals) == 2
+
+    d_iy = 0.0
+    d_iz = 0.0
+    d_j = 0.0
+    for n_mount in mount_normals:
+        n_norm = float(np.linalg.norm(n_mount))
+        n_unit = n_mount / n_norm if n_norm > 1e-12 else n_mount
+        cy = float(np.dot(n_unit, ey)) ** 2
+        cz = float(np.dot(n_unit, ez)) ** 2
+        beam_half = 0.5 * (cy * member.profile.width_m + cz * member.profile.height_m)
+        d_c = beam_half + 0.5 * rail_profile.height_m
+
+        if is_symmetric_dual:
+            i_par = eta_rail * n_a_rail * (d_c**2)
+        else:
+            i_par = eta_rail * ((a_ext * n_a_rail) / max(a_ext + n_a_rail, 1e-12)) * (d_c**2)
+
+        d_iz += cy * (n_e * i_local_norm + i_par) + cz * (n_e * i_local_tang)
+        d_iy += cz * (n_e * i_local_norm + i_par) + cy * (n_e * i_local_tang)
+        d_j += n_g * j_local
+
+    member.profile = member.profile.model_copy(
+        update={
+            "iy_m4": member.profile.iy_m4 + d_iy,
+            "iz_m4": member.profile.iz_m4 + d_iz,
+            "j_m4": member.profile.j_m4 + d_j,
+        }
+    )
+
+    m_rail_member = (
+        len(mount_normals) * rail_profile.area_m2 * length * rail_material.density_kg_m3
+    )
+    rho_delta = m_rail_member / max(a_ext * length, 1e-12)
+    member.material = member.material.model_copy(
+        update={"density_kg_m3": member.material.density_kg_m3 + rho_delta}
+    )
+    member.rail_mass_kg += m_rail_member
+    return d_iy, d_iz, d_j
+
+
 def _attach_toolhead_cog_and_nozzle(
     nodes: list[StructuralNode],
     members: list[StructuralMember],
@@ -586,11 +759,32 @@ def _attach_toolhead_cog_and_nozzle(
     base_node.lumped_mass_kg = 0.04
 
     cog_offset = np.array(spec.toolhead.cog_offset_mm, dtype=float) * 1e-3
+    nozzle_offset = np.array(spec.toolhead.nozzle_offset_mm, dtype=float) * 1e-3
+
+    if spec.architecture != "delta":
+        x_mount = spec.gantry.effective_x_rail_mount
+        if x_mount == "top":
+            for off in (cog_offset, nozzle_offset):
+                if off[1] < 0.0:
+                    off[1] = min(0.0, off[1] + 0.006)
+                elif off[1] > 0.0:
+                    off[1] = max(0.0, off[1] - 0.006)
+                off[2] -= 0.006
+        elif x_mount == "bottom":
+            for off in (cog_offset, nozzle_offset):
+                if off[1] < 0.0:
+                    off[1] = min(0.0, off[1] + 0.005)
+                elif off[1] > 0.0:
+                    off[1] = max(0.0, off[1] - 0.005)
+            if cog_offset[2] < 0.0:
+                cog_offset[2] = min(-0.004, cog_offset[2] + 0.012)
+            if nozzle_offset[2] < 0.0:
+                nozzle_offset[2] = min(-0.010, nozzle_offset[2] + 0.012)
+
     if float(np.linalg.norm(cog_offset)) < 0.004:
         cog_offset = np.array([0.0, 0.0, -0.004], dtype=float)
     cog_pos = base_pos + cog_offset
 
-    nozzle_offset = np.array(spec.toolhead.nozzle_offset_mm, dtype=float) * 1e-3
     nozzle_pos = base_pos + nozzle_offset
     stem_vec = nozzle_pos - cog_pos
     stem_len = float(np.linalg.norm(stem_vec))
@@ -668,6 +862,64 @@ def _attach_toolhead_cog_and_nozzle(
     )
 
 
+def _apply_extrusion_filling(model: AssemblyModel) -> None:
+    """Apply stationary extrusion cavity filling mass, bonded stiffness, and structural damping."""
+    fill_id = model.spec.frame.extrusion_filling
+    fill_spec = EXTRUSION_FILLINGS.get(fill_id, EXTRUSION_FILLINGS["none"])
+    bkt_id = model.spec.gantry.bracket_material
+    bkt_info = GANTRY_BRACKET_CATALOG.get(bkt_id, GANTRY_BRACKET_CATALOG["abs_printed"])
+
+    nmap = model.node_map
+    total_fill_mass_kg = 0.0
+    filled_count = 0
+
+    if fill_id != "none":
+        rho_fill = float(fill_spec["density_kg_m3"])
+        e_fill = float(fill_spec["youngs_modulus_pa"])
+        is_bonded = bool(fill_spec["bonded"])
+        g_fill = e_fill / (2.0 * (1.0 + 0.25))  # mineral/grout Poisson ~0.25
+
+        for member in model.members:
+            if member.profile.shape != "extrusion" or member.role not in ("frame", "rail", "tower"):
+                continue
+
+            raw_prof = PROFILE_CATALOG.get(member.profile.id, member.profile)
+            w = raw_prof.width_m
+            h = raw_prof.height_m
+            a_ext = raw_prof.area_m2
+            a_void = max(w * h - a_ext, 0.0)
+            a_cav = 0.58 * a_void
+            i_cav_y = 0.52 * max((w * (h**3)) / 12.0 - raw_prof.iy_m4, 0.0)
+            i_cav_z = 0.52 * max((h * (w**3)) / 12.0 - raw_prof.iz_m4, 0.0)
+
+            length = member.length_m(nmap)
+            m_fill = rho_fill * a_cav * length
+            member.fill_mass_kg = m_fill
+            total_fill_mass_kg += m_fill
+            filled_count += 1
+
+            base_rho = member.material.density_kg_m3
+            member.material = member.material.model_copy(
+                update={"density_kg_m3": base_rho + rho_fill * (a_cav / max(a_ext, 1e-12))}
+            )
+
+            if is_bonded:
+                n_e = e_fill / max(member.material.youngs_modulus_pa, 1e6)
+                n_g = g_fill / max(member.material.effective_shear_modulus_pa, 1e6)
+                member.profile = member.profile.model_copy(
+                    update={
+                        "iy_m4": member.profile.iy_m4 + n_e * i_cav_y,
+                        "iz_m4": member.profile.iz_m4 + n_e * i_cav_z,
+                        "j_m4": member.profile.j_m4 + n_g * 0.7 * (i_cav_y + i_cav_z),
+                    }
+                )
+
+    model.extrusion_fill_mass_kg = total_fill_mass_kg
+    fill_boost = float(fill_spec["damping_boost"]) if (fill_id == "none" or filled_count > 0) else 0.0
+    bracket_damping = -0.003 if bkt_info["cnc_machined"] else 0.004
+    model.frame_damping_ratio = max(0.025, min(0.12, 0.042 + fill_boost + bracket_damping))
+
+
 def build_assembly(
     spec: PrinterSpec,
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
@@ -720,6 +972,7 @@ def build_assembly(
                 role=cm.role,
             )
 
+    _apply_extrusion_filling(model)
     _finalize_mass_and_cost(model)
     return model
 
@@ -742,6 +995,10 @@ def _build_custom_assembly(spec: PrinterSpec) -> AssemblyModel:
     toolhead_id = next((n.id for n in nodes if n.role == "toolhead"), nodes[-1].id)
     w, d, h = spec.frame.width_mm * 1e-3, spec.frame.depth_mm * 1e-3, spec.frame.height_mm * 1e-3
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
+    bkt_info = GANTRY_BRACKET_CATALOG.get(
+        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+    )
+    bkt_delta_kg = float(bkt_info["carriage_mass_delta_g"]) * 1e-3
     model = AssemblyModel(
         spec=spec,
         nodes=nodes,
@@ -750,8 +1007,9 @@ def _build_custom_assembly(spec: PrinterSpec) -> AssemblyModel:
         bed_center_m=np.array([w * 0.5, d * 0.5, 0.06]),
         build_origin_m=np.array([(w - bx) * 0.5, (d - by) * 0.5, 0.07]),
         x_moving_mass_kg=spec.toolhead.total_mass_g * 1e-3,
-        y_moving_mass_kg=(spec.toolhead.total_mass_g + spec.gantry.carriage_mass_g) * 1e-3,
+        y_moving_mass_kg=(spec.toolhead.total_mass_g + spec.gantry.carriage_mass_g) * 1e-3 + bkt_delta_kg,
     )
+    _apply_extrusion_filling(model)
     _finalize_mass_and_cost(model)
     return model
 
@@ -763,14 +1021,19 @@ def _build_corexy(
     d = spec.frame.depth_mm * 1e-3
     h = spec.frame.height_mm * 1e-3
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
-    u, v, _ = np.clip(toolhead_rel_pos, 0.05, 0.95)
+    u, v, w_rel = np.clip(toolhead_rel_pos, 0.05, 0.95)
 
     # Gantry plane near top of CoreXY frame
     z_gantry = h - 0.055
     xy_motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     z_motor_kg = spec.kinematics.z_stepper.motor_mass_g * 1e-3
-    carriage_side_kg = (spec.gantry.carriage_mass_g * 0.5) * 1e-3
+    bkt_info = GANTRY_BRACKET_CATALOG.get(
+        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+    )
+    bkt_delta_kg = float(bkt_info["carriage_mass_delta_g"]) * 1e-3
+    carriage_side_kg = (spec.gantry.carriage_mass_g * 0.5) * 1e-3 + 0.5 * bkt_delta_kg
     toolhead_kg = spec.toolhead.total_mass_g * 1e-3
+    bed_kg = spec.bed.mass_g * 1e-3
 
     # Build origin centered in frame
     orig_x = (w - bx) * 0.5
@@ -778,6 +1041,15 @@ def _build_corexy(
     orig_z = 0.08
     y_gantry = orig_y + v * by
     x_tool = orig_x + u * bx
+
+    is_flying = spec.is_flying_gantry
+    if is_flying:
+        z_bed = orig_z
+    else:
+        z_min = min(0.08, 0.5 * z_gantry)
+        z_max = max(z_min + 0.01, z_gantry - 0.045)
+        z_stroke = min(bz, max(z_gantry - 0.14, 0.02))
+        z_bed = float(np.clip(z_gantry - 0.045 - w_rel * z_stroke, z_min, z_max))
 
     is_awd = spec.gantry.drive_mode == "awd"
     front_motor_kg = (xy_motor_kg + 0.03) if is_awd else 0.0
@@ -804,7 +1076,19 @@ def _build_corexy(
         StructuralNode("y_car_r", np.array([w, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
         # Toolhead node on the X gantry beam
         StructuralNode("toolhead", np.array([x_tool, y_gantry, z_gantry]), lumped_mass_kg=toolhead_kg, role="toolhead"),
+        # Physical heated bed center node
+        StructuralNode("bed_surface", np.array([w * 0.5, d * 0.5, z_bed]), lumped_mass_kg=bed_kg, role="bed"),
     ]
+    if not is_flying:
+        nodes.extend(
+            [
+                StructuralNode("z_bed_fl", np.array([0.0, 0.0, z_bed]), role="frame"),
+                StructuralNode("z_bed_fr", np.array([w, 0.0, z_bed]), role="frame"),
+                StructuralNode("b_rear_mid", np.array([w * 0.5, d, 0.0]), role="frame"),
+                StructuralNode("g_rear_mid", np.array([w * 0.5, d, z_gantry]), role="frame"),
+                StructuralNode("z_bed_r", np.array([w * 0.5, d, z_bed]), role="bed"),
+            ]
+        )
 
     fp = spec.frame.profile
     fm = spec.frame.material
@@ -814,13 +1098,21 @@ def _build_corexy(
 
     # Base perimeter
     _add_member(members, "base_front", "b_fl", "b_fr", fp, fm)
-    _add_member(members, "base_rear", "b_rl", "b_rr", fp, fm)
+    if is_flying:
+        _add_member(members, "base_rear", "b_rl", "b_rr", fp, fm)
+    else:
+        _add_member(members, "base_rear_l", "b_rl", "b_rear_mid", fp, fm)
+        _add_member(members, "base_rear_r", "b_rear_mid", "b_rr", fp, fm)
     _add_member(members, "base_left", "b_fl", "b_rl", fp, fm)
     _add_member(members, "base_right", "b_fr", "b_rr", fp, fm)
 
-    # 4 vertical columns split at gantry height
+    # 4 vertical columns split at gantry height (and front columns split at bed height on Trident)
     for tag in ("fl", "fr", "rl", "rr"):
-        _add_member(members, f"col_{tag}_low", f"b_{tag}", f"g_{tag}", fp, fm)
+        if not is_flying and tag in ("fl", "fr"):
+            _add_member(members, f"col_{tag}_bot", f"b_{tag}", f"z_bed_{tag}", fp, fm)
+            _add_member(members, f"col_{tag}_mid", f"z_bed_{tag}", f"g_{tag}", fp, fm)
+        else:
+            _add_member(members, f"col_{tag}_low", f"b_{tag}", f"g_{tag}", fp, fm)
         _add_member(members, f"col_{tag}_top", f"g_{tag}", f"t_{tag}", fp, fm)
 
     # Top perimeter
@@ -834,34 +1126,102 @@ def _build_corexy(
     _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
     _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
     _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
-    _add_member(members, "gantry_rear_bar", "g_rl", "g_rr", fp, fm)
+    if is_flying:
+        _add_member(members, "gantry_rear_bar", "g_rl", "g_rr", fp, fm)
+    else:
+        _add_member(members, "gantry_rear_bar_l", "g_rl", "g_rear_mid", fp, fm)
+        _add_member(members, "gantry_rear_bar_r", "g_rear_mid", "g_rr", fp, fm)
+
+    # Structural bed mounting links (virtually massless so bed_surface.lumped_mass_kg carries exact bed mass)
+    bed_vmat = _make_bed_virtual_material(get_material(spec.bed.plate_material))
+    t_mm = max(float(spec.bed.plate_thickness_mm), 2.0)
+    t_ratio = t_mm / 8.0
+    if is_flying:
+        bed_arm_prof = ProfileSpec.model_construct(
+            id="bed_fixed_arm_profile",
+            name=f"Fixed Bed Base Mount ({t_mm:.1f}mm {spec.bed.plate_material})",
+            shape="solid_bar",
+            width_m=0.020,
+            height_m=max(0.014, 0.012 + t_mm * 1e-3),
+            area_m2=8.0e-4,
+            iy_m4=4.0e-8 + 1.2e-7 * (t_ratio**3),
+            iz_m4=1.6e-7,
+            j_m4=6.0e-8,
+        )
+        for tag in ("fl", "fr", "rl", "rr"):
+            members.append(
+                StructuralMember(
+                    id=f"bed_arm_{tag}",
+                    start_id=f"b_{tag}",
+                    end_id="bed_surface",
+                    profile=bed_arm_prof,
+                    material=bed_vmat,
+                    role="bed",
+                )
+            )
+    else:
+        frame_prof = get_profile(fp)
+        z_rail_prof_ref = get_profile(spec.gantry.y_rail_profile)
+        z_rail_vmat = _make_bed_virtual_material(get_material(fm))
+        z_rail_prof = ProfileSpec.model_construct(
+            id="bed_rear_z_rail_profile",
+            name="Rear Z-Rail Backing Extrusion + MGN12",
+            shape="solid_bar",
+            width_m=frame_prof.width_m,
+            height_m=frame_prof.height_m,
+            area_m2=frame_prof.area_m2 + 0.5 * z_rail_prof_ref.area_m2,
+            iy_m4=frame_prof.iy_m4 * 2.6,
+            iz_m4=frame_prof.iz_m4 * 1.5,
+            j_m4=frame_prof.j_m4 * 1.8,
+        )
+        members.append(
+            StructuralMember(
+                id="bed_rear_z_bot",
+                start_id="b_rear_mid",
+                end_id="z_bed_r",
+                profile=z_rail_prof,
+                material=z_rail_vmat,
+                role="bed",
+            )
+        )
+        members.append(
+            StructuralMember(
+                id="bed_rear_z_top",
+                start_id="z_bed_r",
+                end_id="g_rear_mid",
+                profile=z_rail_prof,
+                material=z_rail_vmat,
+                role="bed",
+            )
+        )
+        bed_arm_prof = ProfileSpec.model_construct(
+            id="bed_trident_arm_profile",
+            name=f"3-Point Z Bed Spider + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
+            shape="solid_bar",
+            width_m=0.020,
+            height_m=max(0.012, 0.012 + t_mm * 1e-3),
+            area_m2=6.0e-4,
+            iy_m4=1.8e-8 + 7.2e-8 * (t_ratio**3),
+            iz_m4=1.5e-7,
+            j_m4=6.0e-8,
+        )
+        for tag, z_nid in (("fl", "z_bed_fl"), ("fr", "z_bed_fr"), ("r", "z_bed_r")):
+            members.append(
+                StructuralMember(
+                    id=f"bed_arm_{tag}",
+                    start_id=z_nid,
+                    end_id="bed_surface",
+                    profile=bed_arm_prof,
+                    material=bed_vmat,
+                    role="bed",
+                )
+            )
 
     # Moving X gantry beam (split at toolhead node)
     xp = spec.gantry.x_beam_profile
     xm = spec.gantry.x_beam_material
     _add_member(members, "x_gantry_l", "y_car_l", "toolhead", xp, xm, role="gantry")
     _add_member(members, "x_gantry_r", "toolhead", "y_car_r", xp, xm, role="gantry")
-
-    # Optional dual X rail stiffening member modeled in parallel
-    if spec.gantry.dual_x_rails:
-        _add_member(
-            members,
-            "x_rail_aux_l",
-            "y_car_l",
-            "toolhead",
-            spec.gantry.x_rail_profile,
-            spec.gantry.rail_material,
-            role="rail",
-        )
-        _add_member(
-            members,
-            "x_rail_aux_r",
-            "toolhead",
-            "y_car_r",
-            spec.gantry.x_rail_profile,
-            spec.gantry.rail_material,
-            role="rail",
-        )
 
     # Bracing strategies
     bracing = spec.frame.bracing
@@ -883,6 +1243,52 @@ def _build_corexy(
         _add_member(members, "brace_top_2", "t_fr", "t_rl", bp, bm, role="brace", is_truss=True)
 
     nmap = {n.id: n for n in nodes}
+
+    # Composite bolted steel linear rails on Y extrusions and moving X gantry beam
+    rail_mat = get_material(spec.gantry.rail_material)
+    x_rail_prof = get_profile(spec.gantry.x_rail_profile)
+    y_rail_prof = get_profile(spec.gantry.y_rail_profile)
+    base_y_prof = get_profile(fp)
+    base_x_prof = get_profile(xp)
+    y_mount = spec.gantry.y_rail_mount
+    x_mount = spec.gantry.effective_x_rail_mount
+    x_normals = _x_rail_mount_normals(x_mount)
+    member_by_id = {m.id: m for m in members}
+
+    y_boost_iz = 0.0
+    for mid, side in (
+        ("y_rail_l_f", "l"),
+        ("y_rail_l_r", "l"),
+        ("y_rail_r_f", "r"),
+        ("y_rail_r_r", "r"),
+    ):
+        _, d_iz_y, _ = _apply_bolted_linear_rail(
+            member_by_id[mid],
+            nmap,
+            y_rail_prof,
+            rail_mat,
+            _y_rail_mount_normals(y_mount, side),
+            beam_shape=base_y_prof.shape,
+        )
+        y_boost_iz = d_iz_y
+
+    x_boost_iy = 0.0
+    x_boost_iz = 0.0
+    for mid in ("x_gantry_l", "x_gantry_r"):
+        d_iy_x, d_iz_x, _ = _apply_bolted_linear_rail(
+            member_by_id[mid],
+            nmap,
+            x_rail_prof,
+            rail_mat,
+            x_normals,
+            beam_shape=base_x_prof.shape,
+        )
+        x_boost_iy = d_iy_x
+        x_boost_iz = d_iz_x
+
+    x_rail_ei_y_boost_pct = 100.0 * x_boost_iz / max(base_x_prof.iz_m4, 1e-18)
+    x_rail_ei_z_boost_pct = 100.0 * x_boost_iy / max(base_x_prof.iy_m4, 1e-18)
+    y_rail_ei_x_boost_pct = 100.0 * y_boost_iz / max(base_y_prof.iz_m4, 1e-18)
 
     # Enclosure / structural shear panels across rear, side, and top bays
     panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
@@ -980,15 +1386,67 @@ def _build_corexy(
                     )
                 )
 
-    # Calculate moving masses
-    x_beam_mass = sum(m.mass_kg(nmap) for m in members if m.role == "gantry")
-    x_rail_mass = get_profile(spec.gantry.x_rail_profile).area_m2 * w * get_material(spec.gantry.rail_material).density_kg_m3
-    if spec.gantry.dual_x_rails:
+        if not is_flying and panel_mounting == "bolted_structural":
+            virtual_mat = _make_panel_virtual_material(pmat)
+            zbed_ties = (
+                ("l", "b_fl", "b_rl", "z_bed_fl", "left_low" if bolted_to_gantry else "left"),
+                ("r", "b_fr", "b_rr", "z_bed_fr", "right_low" if bolted_to_gantry else "right"),
+                ("rear", "b_rl", "b_rr", "z_bed_r", "rear_low" if bolted_to_gantry else "rear"),
+            )
+            for tag, p_a, p_b, z_nid, bay_key in zbed_ties:
+                zbed_prof = ProfileSpec.model_construct(
+                    id=f"panel_shear_zbed_{tag}",
+                    name=f"Z-Rail Panel Shear Tie-In ({tag}, {panel_t_m * 1e3:.1f}mm {pmat.id})",
+                    shape="plate",
+                    width_m=max(panel_t_m, 0.002),
+                    height_m=max(panel_t_m, 0.004),
+                    area_m2=max(0.35 * bay_aeq[bay_key], 1e-10),
+                    iy_m4=1e-11,
+                    iz_m4=1e-11,
+                    j_m4=1e-11,
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"panel_shear_zbed_{tag}_1",
+                        start_id=p_a,
+                        end_id=z_nid,
+                        profile=zbed_prof,
+                        material=virtual_mat,
+                        role="brace",
+                        is_truss=True,
+                    )
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"panel_shear_zbed_{tag}_2",
+                        start_id=p_b,
+                        end_id=z_nid,
+                        profile=zbed_prof,
+                        material=virtual_mat,
+                        role="brace",
+                        is_truss=True,
+                    )
+                )
+
+    # Calculate moving masses (strip composite rail mass from gantry beam before adding x_rail_mass)
+    x_beam_mass = sum(
+        max(m.mass_kg(nmap) - m.rail_mass_kg - m.fill_mass_kg, 0.0)
+        for m in members
+        if m.role == "gantry"
+    )
+    x_rail_mass = x_rail_prof.area_m2 * w * rail_mat.density_kg_m3
+    if spec.gantry.effective_dual_x_rails:
         x_rail_mass *= 2.0
 
-    # In CoreXY, X moves toolhead; Y moves toolhead + X beam + X rail + Y carriages
+    # In CoreXY, X moves toolhead; Y moves toolhead + X beam + X rail + Y carriages + gantry bracket delta
     x_moving = toolhead_kg + 0.04  # plus belt segment
-    y_moving = toolhead_kg + x_beam_mass + x_rail_mass + spec.gantry.carriage_mass_g * 1e-3
+    y_moving = (
+        toolhead_kg
+        + x_beam_mass
+        + x_rail_mass
+        + spec.gantry.carriage_mass_g * 1e-3
+        + bkt_delta_kg
+    )
 
     _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
 
@@ -999,12 +1457,17 @@ def _build_corexy(
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",
+        bed_node_id="bed_surface",
         gantry_node_ids=["y_car_l", "toolhead", "y_car_r"],
-        bed_center_m=np.array([w * 0.5, d * 0.5, orig_z]),
+        bed_center_m=np.array([w * 0.5, d * 0.5, z_bed]),
         build_origin_m=np.array([orig_x, orig_y, orig_z]),
         x_moving_mass_kg=x_moving,
         y_moving_mass_kg=y_moving,
         panel_mass_kg=total_panel_mass_kg,
+        x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
+        x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,
+        y_rail_ei_x_boost_pct=y_rail_ei_x_boost_pct,
+        total_rail_mass_kg=sum(m.rail_mass_kg for m in members),
         panel_rep_props=rep_panel_props,
     )
 
@@ -1027,6 +1490,10 @@ def _build_cartesian_bedslinger(
 
     xy_motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     z_motor_kg = spec.kinematics.z_stepper.motor_mass_g * 1e-3
+    bkt_info = GANTRY_BRACKET_CATALOG.get(
+        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+    )
+    bkt_delta_kg = float(bkt_info["carriage_mass_delta_g"]) * 1e-3
     carriage_side_kg = (spec.gantry.carriage_mass_g * 0.5) * 1e-3
     toolhead_kg = spec.toolhead.total_mass_g * 1e-3
 
@@ -1088,11 +1555,112 @@ def _build_cartesian_bedslinger(
         _add_member(members, "brace_r_front", "b_fr", "p_tr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_portal_x2", "p_br", "p_tl", bp, bm, role="brace", is_truss=True)
 
+    nmap = {n.id: n for n in nodes}
+    rail_mat = get_material(spec.gantry.rail_material)
+    x_rail_prof = get_profile(spec.gantry.x_rail_profile)
+    base_x_prof = get_profile(xp)
+    x_normals = _x_rail_mount_normals(spec.gantry.effective_x_rail_mount)
+    member_by_id = {m.id: m for m in members}
+    x_boost_iy = 0.0
+    x_boost_iz = 0.0
+    for mid in ("x_gantry_l", "x_gantry_r"):
+        d_iy_x, d_iz_x, _ = _apply_bolted_linear_rail(
+            member_by_id[mid],
+            nmap,
+            x_rail_prof,
+            rail_mat,
+            x_normals,
+            beam_shape=base_x_prof.shape,
+        )
+        x_boost_iy = d_iy_x
+        x_boost_iz = d_iz_x
+
+    x_rail_ei_y_boost_pct = 100.0 * x_boost_iz / max(base_x_prof.iz_m4, 1e-18)
+    x_rail_ei_z_boost_pct = 100.0 * x_boost_iy / max(base_x_prof.iy_m4, 1e-18)
+
     # Bedslinger: X moves toolhead; Y moves the entire heavy heated bed + carriage!
+    bed_kg = spec.bed.mass_g * 1e-3
     x_moving = toolhead_kg + 0.03
-    y_moving = spec.bed.mass_g * 1e-3 + 0.35
+    y_moving = bed_kg + 0.35 + bkt_delta_kg
+
+    # Explicit bedslinger Y-bed node mounted to base frame via Y-rails (stiff X/Z, compliant Y carriage/belt)
+    bed_center = np.array([w * 0.5, d * 0.5, orig_z])
+    nodes.extend(
+        [
+            StructuralNode("bed_rail_l", np.array([0.0, d * 0.5, orig_z]), role="bed"),
+            StructuralNode("bed_rail_r", np.array([w, d * 0.5, orig_z]), role="bed"),
+            StructuralNode("bed_surface", bed_center.copy(), lumped_mass_kg=bed_kg, role="bed"),
+        ]
+    )
+    bed_vmat = _make_bed_virtual_material(get_material(spec.bed.plate_material))
+    rail_vmat = _make_bed_virtual_material(get_material(spec.gantry.rail_material))
+    t_mm = max(float(spec.bed.plate_thickness_mm), 2.0)
+    t_ratio = t_mm / 4.0
+    y_rail_guide_prof = ProfileSpec.model_construct(
+        id="bed_y_rail_guide_profile",
+        name="Bedslinger Y-Rail Guide Support",
+        shape="rod",
+        width_m=0.010,
+        height_m=0.010,
+        area_m2=6.0e-4,
+        iy_m4=8.0e-8,
+        iz_m4=8.0e-8,
+        j_m4=4.0e-8,
+    )
+    for tag, f_nid, r_nid, rail_nid in (
+        ("l", "b_fl", "b_rl", "bed_rail_l"),
+        ("r", "b_fr", "b_rr", "bed_rail_r"),
+    ):
+        members.append(
+            StructuralMember(
+                id=f"bed_y_rail_{tag}_f",
+                start_id=f_nid,
+                end_id=rail_nid,
+                profile=y_rail_guide_prof,
+                material=rail_vmat,
+                role="bed",
+            )
+        )
+        members.append(
+            StructuralMember(
+                id=f"bed_y_rail_{tag}_r",
+                start_id=r_nid,
+                end_id=rail_nid,
+                profile=y_rail_guide_prof,
+                material=rail_vmat,
+                role="bed",
+            )
+        )
+
+    l_arm = max(w * 0.5, 0.05)
+    k_y_target = 1.15e6 * ((spec.gantry.belt.stiffness_ea_n / 52000.0) ** 0.35)
+    iz_y_carriage = k_y_target * (l_arm**3) / (24.0 * max(bed_vmat.youngs_modulus_pa, 1e6))
+    bed_car_prof = ProfileSpec.model_construct(
+        id="bed_carriage_arm_profile",
+        name=f"Bedslinger Y-Carriage & Belt Mount ({t_mm:.1f}mm {spec.bed.plate_material})",
+        shape="solid_bar",
+        width_m=0.014,
+        height_m=max(0.010, 0.008 + t_mm * 1e-3),
+        area_m2=2.5e-4,
+        iy_m4=1.2e-8 + 1.5e-8 * (t_ratio**3),
+        iz_m4=iz_y_carriage,
+        j_m4=2.0e-8,
+    )
+    for tag, rail_nid in (("l", "bed_rail_l"), ("r", "bed_rail_r")):
+        members.append(
+            StructuralMember(
+                id=f"bed_arm_{tag}",
+                start_id=rail_nid,
+                end_id="bed_surface",
+                profile=bed_car_prof,
+                material=bed_vmat,
+                role="bed",
+            )
+        )
 
     _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+    if bkt_delta_kg > 0.0:
+        next(n for n in nodes if n.id == "toolhead").lumped_mass_kg += bkt_delta_kg
 
     return AssemblyModel(
         spec=spec,
@@ -1101,11 +1669,15 @@ def _build_cartesian_bedslinger(
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",
+        bed_node_id="bed_surface",
         gantry_node_ids=["z_l", "toolhead", "z_r"],
-        bed_center_m=np.array([w * 0.5, d * 0.5, orig_z]),
+        bed_center_m=bed_center,
         build_origin_m=np.array([orig_x, orig_y, orig_z]),
         x_moving_mass_kg=x_moving,
         y_moving_mass_kg=y_moving,
+        x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
+        x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,
+        total_rail_mass_kg=sum(m.rail_mass_kg for m in members),
     )
 
 
@@ -1126,6 +1698,10 @@ def _build_delta(
 
     motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     toolhead_kg = spec.toolhead.total_mass_g * 1e-3
+    bkt_info = GANTRY_BRACKET_CATALOG.get(
+        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+    )
+    bkt_delta_kg = float(bkt_info["carriage_mass_delta_g"]) * 1e-3
     car_kg = (spec.gantry.carriage_mass_g / 3.0) * 1e-3
 
     nodes: list[StructuralNode] = []
@@ -1181,8 +1757,41 @@ def _build_delta(
             if rep_panel_props is None:
                 rep_panel_props = props
 
+    bed_kg = spec.bed.mass_g * 1e-3
+    bed_center = np.array([cx, cy, 0.06])
+    nodes.append(
+        StructuralNode("bed_surface", bed_center.copy(), lumped_mass_kg=bed_kg, role="bed")
+    )
+    bed_vmat = _make_bed_virtual_material(get_material(spec.bed.plate_material))
+    t_mm = max(float(spec.bed.plate_thickness_mm), 2.0)
+    t_ratio = t_mm / 6.0
+    delta_bed_prof = ProfileSpec.model_construct(
+        id="bed_delta_mount_profile",
+        name=f"Delta Base Bed Mount ({t_mm:.1f}mm {spec.bed.plate_material})",
+        shape="solid_bar",
+        width_m=0.020,
+        height_m=max(0.012, 0.010 + t_mm * 1e-3),
+        area_m2=8.0e-4,
+        iy_m4=3.0e-8 + 9.0e-8 * (t_ratio**3),
+        iz_m4=1.4e-7,
+        j_m4=5.0e-8,
+    )
+    for i in range(3):
+        members.append(
+            StructuralMember(
+                id=f"bed_arm_{i}",
+                start_id=f"b_{i}",
+                end_id="bed_surface",
+                profile=delta_bed_prof,
+                material=bed_vmat,
+                role="bed",
+            )
+        )
+
     eff_mass = toolhead_kg + 0.09  # ultra-light effector + arm portion
     _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+    if bkt_delta_kg > 0.0:
+        next(n for n in nodes if n.id == "toolhead").lumped_mass_kg += bkt_delta_kg
 
     return AssemblyModel(
         spec=spec,
@@ -1191,11 +1800,12 @@ def _build_delta(
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",
+        bed_node_id="bed_surface",
         gantry_node_ids=["c_0", "c_1", "c_2", "toolhead"],
-        bed_center_m=np.array([cx, cy, 0.06]),
+        bed_center_m=bed_center,
         build_origin_m=np.array([cx - bx * 0.5, cy - by * 0.5, 0.06]),
         x_moving_mass_kg=eff_mass,
-        y_moving_mass_kg=eff_mass,
+        y_moving_mass_kg=eff_mass + bkt_delta_kg,
         panel_mass_kg=total_panel_mass_kg,
         panel_rep_props=rep_panel_props,
     )
@@ -1205,15 +1815,35 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     nmap = model.node_map
     frame_mass = 0.0
     cost = 0.0
+    total_rail_mass = 0.0
+    rail_mat = get_material(model.spec.gantry.rail_material)
     for m in model.members:
         mk = m.mass_kg(nmap)
         frame_mass += mk
-        cost += mk * m.material.cost_per_kg_usd
+        base_mk = max(mk - m.fill_mass_kg - m.rail_mass_kg, 0.0)
+        cost += base_mk * m.material.cost_per_kg_usd
+        if m.rail_mass_kg > 0.0:
+            total_rail_mass += m.rail_mass_kg
+            cost += m.rail_mass_kg * rail_mat.cost_per_kg_usd
+    model.total_rail_mass_kg = total_rail_mass
 
+    if model.extrusion_fill_mass_kg > 0.0:
+        fill_spec = EXTRUSION_FILLINGS.get(
+            model.spec.frame.extrusion_filling, EXTRUSION_FILLINGS["none"]
+        )
+        cost += model.extrusion_fill_mass_kg * float(fill_spec["cost_per_kg_usd"])
+
+    bkt_info = GANTRY_BRACKET_CATALOG.get(
+        model.spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+    )
+    cost += float(bkt_info["kit_cost_usd"])
+
+    has_bed_node = bool(model.bed_node_id and model.bed_node_id in nmap)
     lumped_mass = sum(n.lumped_mass_kg for n in model.nodes)
     bed_mass = model.spec.bed.mass_g * 1e-3
+    bed_node_mass = nmap[model.bed_node_id].lumped_mass_kg if has_bed_node else 0.0
     model.frame_mass_kg = frame_mass
-    model.total_mass_kg = frame_mass + lumped_mass + bed_mass
+    model.total_mass_kg = frame_mass + lumped_mass + max(bed_mass - bed_node_mass, 0.0)
     if model.panel_mass_kg > 0.0:
         pmat = get_material(model.spec.frame.panel_material)
         cost += model.panel_mass_kg * pmat.cost_per_kg_usd

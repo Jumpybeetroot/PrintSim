@@ -41,6 +41,8 @@ class StaticFEAResult:
     beam_center_deflection_um: float = 0.0
     nozzle_twist_amplification_pct: float = 0.0
     nozzle_twist_angle_mrad: float = 0.0
+    nozzle_absolute_deflection_um: float = 0.0
+    bed_deflection_um: float = 0.0
     nodal_displacements_mm: dict[str, list[float]] = field(default_factory=dict)
     member_stresses: list[MemberStressResult] = field(default_factory=list)
 
@@ -50,6 +52,8 @@ class StaticFEAResult:
             "accel_deflection_x_um": round(self.accel_deflection_x_um, 2),
             "accel_deflection_y_um": round(self.accel_deflection_y_um, 2),
             "combined_max_deflection_um": round(self.combined_max_deflection_um, 2),
+            "nozzle_absolute_deflection_um": round(self.nozzle_absolute_deflection_um, 2),
+            "bed_deflection_um": round(self.bed_deflection_um, 2),
             "beam_center_deflection_um": round(self.beam_center_deflection_um, 2),
             "nozzle_twist_amplification_pct": round(self.nozzle_twist_amplification_pct, 1),
             "nozzle_twist_angle_mrad": round(self.nozzle_twist_angle_mrad, 3),
@@ -117,28 +121,40 @@ def solve_static_fea(
     noz_idx = node_idx[noz_id]
     noz_dof = 6 * noz_idx
     has_explicit_cog = cog_idx != th_idx
+    bed_idx = node_idx.get(assembly.bed_node_id) if assembly.bed_node_id else None
+    has_bed = bed_idx is not None
+    bed_dof = 6 * bed_idx if bed_idx is not None else -1
+
+    def _rel_disp_vec(u_vec: np.ndarray) -> np.ndarray:
+        u_noz = u_vec[noz_dof : noz_dof + 3]
+        if has_bed:
+            return u_noz - u_vec[bed_dof : bed_dof + 3]
+        return u_noz
 
     accel_m_s2 = (
         accel_mm_s2 if accel_mm_s2 is not None else assembly.spec.kinematics.max_accel_mm_s2
     ) * 1e-3
 
-    # 1. Gravity sag case (measured at nozzle tip)
+    # 1. Gravity sag case (nozzle relative to bed)
     u_grav = _solve_linear_system(K, F_grav, free_dofs)
-    grav_sag_um = abs(float(u_grav[noz_dof + 2])) * 1e6
+    grav_sag_um = abs(float(_rel_disp_vec(u_grav)[2])) * 1e6
 
-    # 2. Unit load compliance probing at nozzle tip (1 N in X, Y, Z)
+    # 2. Unit load compliance probing across structural loop (+1 N nozzle / -1 N bed in X, Y, Z)
     def _probe_stiffness(axis: int) -> float:
         f_unit = np.zeros(n_dof, dtype=float)
         f_unit[noz_dof + axis] = 1.0
+        if has_bed:
+            f_unit[bed_dof + axis] = -1.0
         u_unit = _solve_linear_system(K, f_unit, free_dofs)
-        disp_mm = abs(float(u_unit[noz_dof + axis])) * 1e3
+        rel_disp = float(u_unit[noz_dof + axis] - (u_unit[bed_dof + axis] if has_bed else 0.0))
+        disp_mm = abs(rel_disp) * 1e3
         return 1.0 / max(disp_mm, 1e-9)
 
     stiff_x = _probe_stiffness(0)
     stiff_y = _probe_stiffness(1)
     stiff_z = _probe_stiffness(2)
 
-    # 3. Peak inertial loads applied at toolhead_cog (+ gantry) during max X and max Y acceleration
+    # 3. Peak inertial loads applied at toolhead_cog (+ gantry / moving bed) during max X and max Y accel
     f_inertial_x = assembly.x_moving_mass_kg * accel_m_s2
     f_inertial_y = assembly.y_moving_mass_kg * accel_m_s2
 
@@ -148,14 +164,16 @@ def solve_static_fea(
     if not has_explicit_cog:
         F_x[th_dof + 4] = f_inertial_x * cog_z_m
     u_x = _solve_linear_system(K, F_x, free_dofs)
-    defl_x_um = float(np.linalg.norm(u_x[noz_dof : noz_dof + 3])) * 1e6
+    defl_x_um = float(np.linalg.norm(_rel_disp_vec(u_x))) * 1e6
 
     F_y = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "cartesian_bedslinger":
-        # Bed inertia kicks frame base/portal in Y; toolhead CoG sees reaction inertial load
+        # Bed inertia kicks bed carriage/base in -Y; toolhead CoG sees reaction inertial load in +Y
         F_y[cog_dof + 1] = assembly.x_moving_mass_kg * accel_m_s2
         if not has_explicit_cog:
             F_y[th_dof + 3] = -(assembly.x_moving_mass_kg * accel_m_s2) * cog_z_m
+        if has_bed:
+            F_y[bed_dof + 1] = -(assembly.spec.bed.mass_g * 1e-3) * accel_m_s2
     else:
         # Toolhead + X gantry accelerate in Y -> load distributed on toolhead_cog and Y carriages
         th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
@@ -170,7 +188,7 @@ def solve_static_fea(
         else:
             F_y[cog_dof + 1] = f_inertial_y
     u_y = _solve_linear_system(K, F_y, free_dofs)
-    defl_y_um = float(np.linalg.norm(u_y[noz_dof : noz_dof + 3])) * 1e6
+    defl_y_um = float(np.linalg.norm(_rel_disp_vec(u_y))) * 1e6
 
     # 4. Belt-induced frame preload (true CoreXY belt routing: self-equilibrating, sum F = 0)
     # Neither 2WD nor AWD CoreXY runs a belt across the open front door (g_fl <-> g_fr).
@@ -198,12 +216,10 @@ def solve_static_fea(
     u_base = u_grav + u_belt
     u_comb = u_base + 0.7071 * u_x + 0.7071 * u_y
     best_peak = -1.0
-    n_nodes = len(assembly.nodes)
     for sx in (1.0, -1.0):
         for sy in (1.0, -1.0):
             cand = u_base + sx * 0.7071 * u_x + sy * 0.7071 * u_y
-            trans = cand.reshape(n_nodes, 6)[:, :3]
-            peak = float(np.max(np.linalg.norm(trans, axis=1))) if n_nodes > 0 else 0.0
+            peak = float(np.linalg.norm(_rel_disp_vec(cand)))
             if peak > best_peak:
                 best_peak = peak
                 u_comb = cand
@@ -213,10 +229,15 @@ def solve_static_fea(
         d_vec = u_comb[6 * i : 6 * i + 3]
         nodal_disp_mm[node.id] = [round(float(v) * 1e3, 6) for v in d_vec]
 
-    combined_nozzle_um = float(np.linalg.norm(u_comb[noz_dof : noz_dof + 3])) * 1e6
-    beam_center_um = float(np.linalg.norm(u_comb[th_dof : th_dof + 3])) * 1e6
+    combined_nozzle_um = float(np.linalg.norm(_rel_disp_vec(u_comb))) * 1e6
+    u_th_rel = u_comb[th_dof : th_dof + 3] - (
+        u_comb[bed_dof : bed_dof + 3] if has_bed else 0.0
+    )
+    beam_center_um = float(np.linalg.norm(u_th_rel)) * 1e6
     nozzle_twist_amp_pct = ((combined_nozzle_um / max(beam_center_um, 1e-6)) - 1.0) * 100.0
     nozzle_twist_angle_mrad = float(np.hypot(u_comb[noz_dof + 3], u_comb[noz_dof + 4])) * 1e3
+    nozzle_abs_um = float(np.linalg.norm(u_comb[noz_dof : noz_dof + 3])) * 1e6
+    bed_defl_um = float(np.linalg.norm(u_comb[bed_dof : bed_dof + 3])) * 1e6 if has_bed else 0.0
 
     # Element stress recovery
     member_stresses: list[MemberStressResult] = []
@@ -254,6 +275,8 @@ def solve_static_fea(
         beam_center_deflection_um=beam_center_um,
         nozzle_twist_amplification_pct=nozzle_twist_amp_pct,
         nozzle_twist_angle_mrad=nozzle_twist_angle_mrad,
+        nozzle_absolute_deflection_um=nozzle_abs_um,
+        bed_deflection_um=bed_defl_um,
         toolhead_stiffness_x_n_per_mm=stiff_x,
         toolhead_stiffness_y_n_per_mm=stiff_y,
         toolhead_stiffness_z_n_per_mm=stiff_z,

@@ -11,7 +11,13 @@ from dataclasses import dataclass
 import numpy as np
 
 from printsim.geometry.builder import AssemblyModel, build_assembly, panel_mechanical_properties
-from printsim.schema import PrinterSpec, get_material, get_profile
+from printsim.schema import (
+    EXTRUSION_FILLINGS,
+    GANTRY_BRACKET_CATALOG,
+    PrinterSpec,
+    get_material,
+    get_profile,
+)
 
 
 @dataclass
@@ -382,9 +388,9 @@ def _merge_collinear_members(assembly: AssemblyModel) -> list[_MergedSegment]:
     segments: list[_MergedSegment] = []
 
     for m in assembly.members:
-        # Skip virtual enclosure shear diaphragm elements, auxiliary FEA rail duplicates, and toolhead sub-beams
+        # Skip virtual enclosure shear diaphragm elements, auxiliary FEA rail duplicates, and toolhead/bed sub-beams
         if (
-            m.role == "toolhead"
+            m.role in ("toolhead", "bed")
             or m.id.startswith("panel_shear_")
             or m.id.startswith("x_rail_aux_")
             or m.id.startswith(("toolhead_", "nozzle_"))
@@ -739,7 +745,7 @@ def generate_bom(
     arch = spec.architecture
 
     # ------------------------------------------------------------------
-    # 1. FRAME (structural extrusions, tubes, braces from cut list)
+    # 1. FRAME (structural extrusions, tubes, braces, & cavity filling)
     # ------------------------------------------------------------------
     for c in cut_list:
         prof = get_profile(c.profile_id)
@@ -757,6 +763,47 @@ def generate_bom(
                 total_mass_g=c.total_mass_g,
             )
         )
+
+    fill_id = spec.frame.extrusion_filling
+    if fill_id != "none" and assembly.extrusion_fill_mass_kg > 0.0:
+        fill_spec = EXTRUSION_FILLINGS.get(fill_id, EXTRUSION_FILLINGS["none"])
+        fill_sku_id = fill_id.upper().replace("_", "-")
+        fill_qty_kg = round(float(assembly.extrusion_fill_mass_kg), 4)
+        fill_cost_per_kg = float(fill_spec["cost_per_kg_usd"])
+        fill_mode = "Bonded composite core" if fill_spec["bonded"] else "Unbonded granular/foam damper"
+        _add_bom_item(
+            items,
+            sku=f"EXT-FILL-{fill_sku_id}",
+            category="frame",
+            name=f"Frame Extrusion Cavity Filling — {fill_spec['name']}",
+            specification=(
+                f"{fill_mode}, rho={fill_spec['density_kg_m3']:.0f} kg/m^3, "
+                f"zeta={assembly.frame_damping_ratio:.4f}"
+            ),
+            quantity=fill_qty_kg,
+            unit="kg",
+            unit_cost_usd=fill_cost_per_kg,
+            unit_mass_g=1000.0,
+        )
+
+    bkt_id = spec.gantry.bracket_material
+    bkt_info = GANTRY_BRACKET_CATALOG.get(bkt_id, GANTRY_BRACKET_CATALOG["abs_printed"])
+    bkt_sku_id = bkt_id.upper().replace("_", "-")
+    bkt_kit_mass_g = round(160.0 + 3.0 * float(bkt_info["carriage_mass_delta_g"]), 1)
+    _add_bom_item(
+        items,
+        sku=f"GNT-BKT-{bkt_sku_id}",
+        category="gantry",
+        name=f"XY Gantry Bracket & Motor Mount Kit ({bkt_info['short_name']})",
+        specification=(
+            f"{bkt_info['name']}, E={bkt_info['youngs_modulus_gpa']:.1f} GPa, "
+            f"HDT {bkt_info['hdt_c']:.0f} C, creep limit {bkt_info['creep_tension_limit_n']:.0f} N"
+        ),
+        quantity=1,
+        unit="kit",
+        unit_cost_usd=float(bkt_info["kit_cost_usd"]),
+        unit_mass_g=bkt_kit_mass_g,
+    )
 
     # ------------------------------------------------------------------
     # 2. MOTION (linear rails, carriages, belts, pulleys, idlers, Z-drive)
@@ -776,6 +823,7 @@ def generate_bom(
         rail_qty: int,
         rail_len_mm: float,
         carriage_qty: int,
+        mount_note: str = "",
     ) -> None:
         nonlocal total_bolted_rail_mm, total_carriages
         prof = get_profile(rail_prof_id)
@@ -784,12 +832,16 @@ def generate_bom(
         rail_unit_mass_g = prof.area_m2 * rail_len_m * rail_mat.density_kg_m3 * 1000.0
         rail_unit_cost = rail_len_m * rail_usd_m + 4.0
 
+        spec_str = f"{rail_mat.name}, L={rail_len_mm:.0f} mm"
+        if mount_note:
+            spec_str += f", {mount_note}"
+
         _add_bom_item(
             items,
             sku=f"MOT-{sku_prefix}-RAIL",
             category="motion",
             name=f"{axis_label} Linear Rail ({prof.name})",
-            specification=f"{rail_mat.name}, L={rail_len_mm:.0f} mm",
+            specification=spec_str,
             quantity=rail_qty,
             unit="pcs",
             unit_cost_usd=rail_unit_cost,
@@ -811,12 +863,24 @@ def generate_bom(
         total_carriages += carriage_qty
 
     z_norm = _normalize_z_drive(spec.bed.z_drive)
+    x_mount_id = spec.gantry.effective_x_rail_mount
+    x_mount_note = {
+        "front": "front-face mount (Voron standard)",
+        "top": "top-face mount (RatRig/Annex)",
+        "bottom": "bottom under-slung mount",
+        "dual_top_bottom": "dual top+bottom I-beam mount",
+    }.get(x_mount_id, f"{x_mount_id} mount")
+    y_mount_note = {
+        "top": "top-face mount (Voron standard)",
+        "inner": "inner-side mount (Monolith/VzBot)",
+        "bottom": "bottom-face mount (inverted)",
+    }.get(spec.gantry.y_rail_mount, f"{spec.gantry.y_rail_mount} mount")
 
     if arch == "corexy":
         x_rail_len = round(min(w - 40.0, max(bx + 60.0, w - 60.0)), 0)
         y_rail_len = round(min(d - 40.0, max(by + 60.0, d - 60.0)), 0)
         z_rail_len = round(min(h - 60.0, max(bz + 80.0, h - 100.0)), 0)
-        x_rail_qty = 2 if spec.gantry.dual_x_rails else 1
+        x_rail_qty = 2 if spec.gantry.effective_dual_x_rails else 1
         z_rail_qty = {
             "belted_quad_z": 4,
             "leadscrew_triple": 3,
@@ -825,18 +889,42 @@ def generate_bom(
             "belted_z": 2,
         }.get(z_norm, 4)
 
-        _add_rail_and_carriage("X", "X-Axis", x_rail_prof.id, x_rail_qty, x_rail_len, x_rail_qty)
-        _add_rail_and_carriage("Y", "Y-Axis", y_rail_prof.id, 2, y_rail_len, 2)
+        _add_rail_and_carriage(
+            "X",
+            "X-Axis",
+            x_rail_prof.id,
+            x_rail_qty,
+            x_rail_len,
+            x_rail_qty,
+            mount_note=x_mount_note,
+        )
+        _add_rail_and_carriage(
+            "Y",
+            "Y-Axis",
+            y_rail_prof.id,
+            2,
+            y_rail_len,
+            2,
+            mount_note=y_mount_note,
+        )
         _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, z_rail_qty, z_rail_len, z_rail_qty)
 
     elif arch == "cartesian_bedslinger":
         x_rail_len = round(min(w - 30.0, max(bx + 60.0, w - 50.0)), 0)
         y_rail_len = round(min(d - 30.0, max(by + 80.0, d - 50.0)), 0)
         z_rail_len = round(min(h - 50.0, max(bz + 80.0, h - 80.0)), 0)
-        x_rail_qty = 2 if spec.gantry.dual_x_rails else 1
+        x_rail_qty = 2 if spec.gantry.effective_dual_x_rails else 1
         y_car_qty = 4 if y_rail_prof.shape == "rod" else 2
 
-        _add_rail_and_carriage("X", "X-Axis", x_rail_prof.id, x_rail_qty, x_rail_len, x_rail_qty)
+        _add_rail_and_carriage(
+            "X",
+            "X-Axis",
+            x_rail_prof.id,
+            x_rail_qty,
+            x_rail_len,
+            x_rail_qty,
+            mount_note=x_mount_note,
+        )
         _add_rail_and_carriage("Y", "Y-Bed", y_rail_prof.id, 2, y_rail_len, y_car_qty)
         _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, 2, z_rail_len, 2)
 
@@ -1406,7 +1494,7 @@ def generate_bom(
     for item in items:
         category_totals_raw[item.category] += item.total_cost_usd
 
-    category_order = ["frame", "motion", "motors", "hotend", "bed", "enclosure", "fasteners"]
+    category_order = ["frame", "gantry", "motion", "motors", "hotend", "bed", "enclosure", "fasteners"]
     category_costs_usd: dict[str, float] = {}
     for cat in category_order:
         if cat in category_totals_raw:

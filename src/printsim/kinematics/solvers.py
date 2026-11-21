@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from printsim.geometry.builder import AssemblyModel
-from printsim.schema import PrinterSpec, StepperSpec
+from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec, StepperSpec, get_material
 
 
 @dataclass
@@ -37,6 +37,9 @@ class KinematicsReport:
     motor_run_current_a: float = 1.2
     motor_stiffness_n_per_mm: float = 0.0
     belt_stiffness_n_per_mm: float = 0.0
+    bracket_material: str = "abs_printed"
+    bracket_stiffness_n_per_mm: float = 0.0
+    bracket_creep_risk: bool = False
     drive_stiffness_n_per_mm: float = 0.0
     motor_voltage_efficiency_pct: float = 100.0
     motor_heat_w_each: float = 0.0
@@ -68,6 +71,9 @@ class KinematicsReport:
             "motor_run_current_a": round(self.motor_run_current_a, 2),
             "motor_stiffness_n_per_mm": round(self.motor_stiffness_n_per_mm, 1),
             "belt_stiffness_n_per_mm": round(self.belt_stiffness_n_per_mm, 1),
+            "bracket_material": self.bracket_material,
+            "bracket_stiffness_n_per_mm": round(self.bracket_stiffness_n_per_mm, 1),
+            "bracket_creep_risk": self.bracket_creep_risk,
             "drive_stiffness_n_per_mm": round(self.drive_stiffness_n_per_mm, 1),
             "motor_voltage_efficiency_pct": round(self.motor_voltage_efficiency_pct, 1),
             "motor_heat_w_each": round(self.motor_heat_w_each, 2),
@@ -150,10 +156,22 @@ def stepper_available_torque_nm(stepper: StepperSpec, rpm: float) -> float:
     return stepper.effective_holding_torque_nm * 0.72 * stepper.dynamic_voltage_efficiency(rpm)
 
 
+def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
+    """Compute effective gantry bracket / motor-mount / XY-joint stiffness in series (N/m)."""
+    spec = assembly.spec
+    e_bkt = get_material(spec.gantry.bracket_material).youngs_modulus_pa
+    k_ref = 2.6e5  # Base 2WD single-shear ABS bracket stiffness (260 N/mm) at 2.1 GPa
+    ds_mult = 1.45 if spec.gantry.double_shear_pulleys else 1.0
+    awd_mult = 1.65 if (spec.architecture == "corexy" and spec.gantry.drive_mode == "awd") else 1.0
+    k_mat = k_ref * ds_mult * awd_mult * (e_bkt / 2.1e9)
+    k_ceil = 8.0e6  # Bolted fastener / bearing compliance ceiling (8,000 N/mm)
+    return (k_mat * k_ceil) / max(k_mat + k_ceil, 1e-9)
+
+
 def compute_drive_stiffness_n_per_m(
     assembly: AssemblyModel, axis: str = "X"
 ) -> tuple[float, float, float]:
-    """Compute (k_belt_n_m, k_motor_axis_n_m, k_drive_n_m) coupling belt & motor electromagnetic spring in series."""
+    """Compute (k_belt_n_m, k_motor_axis_n_m, k_drive_n_m) coupling belt, motor EM, & bracket springs in series."""
     spec = assembly.spec
     belt = spec.gantry.belt
     kin = spec.kinematics
@@ -197,7 +215,12 @@ def compute_drive_stiffness_n_per_m(
         motor_factor = 1.0
 
     k_motor_axis = motor_factor * k_motor_single
-    k_drive = (k_belt * k_motor_axis) / max(k_belt + k_motor_axis, 1e-9)
+    k_bracket = compute_bracket_stiffness_n_per_m(assembly)
+    k_drive = 1.0 / (
+        1.0 / max(k_belt, 1e-9)
+        + 1.0 / max(k_motor_axis, 1e-9)
+        + 1.0 / max(k_bracket, 1e-9)
+    )
     return (k_belt, k_motor_axis, k_drive)
 
 
@@ -284,6 +307,10 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
 
     stepper = kin.xy_stepper
     k_belt_n_m, k_motor_n_m, k_drive_n_m = compute_drive_stiffness_n_per_m(assembly, "X")
+    bkt_id = spec.gantry.bracket_material
+    bkt_info = GANTRY_BRACKET_CATALOG.get(bkt_id, GANTRY_BRACKET_CATALOG["abs_printed"])
+    k_bracket_n_m = compute_bracket_stiffness_n_per_m(assembly)
+    bracket_creep = belt.pretension_n > float(bkt_info["creep_tension_limit_n"])
     motor_volt_eff_pct = stepper.dynamic_voltage_efficiency(max_rpm * 0.7) * 100.0
     motor_heat_w = stepper.power_dissipation_w
     motor_overcurrent = stepper.run_current_a > stepper.rated_current_a * 1.05
@@ -313,6 +340,9 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         motor_run_current_a=stepper.run_current_a,
         motor_stiffness_n_per_mm=k_motor_n_m * 1e-3,
         belt_stiffness_n_per_mm=k_belt_n_m * 1e-3,
+        bracket_material=bkt_id,
+        bracket_stiffness_n_per_mm=k_bracket_n_m * 1e-3,
+        bracket_creep_risk=bracket_creep,
         drive_stiffness_n_per_mm=k_drive_n_m * 1e-3,
         motor_voltage_efficiency_pct=motor_volt_eff_pct,
         motor_heat_w_each=motor_heat_w,

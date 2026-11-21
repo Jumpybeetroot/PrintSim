@@ -11,7 +11,7 @@ from printsim.gcode.simulator import VirtualPrintReport, simulate_gcode
 from printsim.geometry.builder import AssemblyModel, build_assembly
 from printsim.kinematics.collision import CollisionReport, check_frame_clearance
 from printsim.kinematics.solvers import KinematicsReport, analyze_kinematics
-from printsim.schema import PrinterSpec
+from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec
 from printsim.thermal.hotend import HotendThermalReport, simulate_hotend_thermal
 
 
@@ -122,9 +122,18 @@ def _compute_scores_and_diagnostics(
     belt_score = 0.0 if kinematics.belt_slip_risk else 15.0
     belt_overtension_pen = 8.0 if kinematics.belt_overtension_risk else 0.0
     shaft_bend_pen = 6.0 if kinematics.shaft_bending_risk else 0.0
+    bracket_creep_pen = 5.0 if kinematics.bracket_creep_risk else 0.0
     dynamics = max(
         0.0,
-        min(100.0, accel_score + torque_score + belt_score - belt_overtension_pen - shaft_bend_pen),
+        min(
+            100.0,
+            accel_score
+            + torque_score
+            + belt_score
+            - belt_overtension_pen
+            - shaft_bend_pen
+            - bracket_creep_pen,
+        ),
     )
     if kinematics.step_skip_risk:
         diag.append(
@@ -152,9 +161,23 @@ def _compute_scores_and_diagnostics(
             f"Steel-core belt fatigue warning: steel-core GT2 belts suffer rapid bend-fatigue cracking on small "
             f"{spec.gantry.belt.pulley_teeth}T pulleys (per Monolith/Voron community testing) — use Gates EPDM Fiberglass or Rubber+Aramid instead."
         )
-    if spec.gantry.belt.pretension_n > 50.0 and spec.toolhead.mount_material == "abs_printed":
+    if kinematics.bracket_creep_risk:
+        bkt_info = GANTRY_BRACKET_CATALOG.get(
+            spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+        )
+        creep_limit_n = float(bkt_info["creep_tension_limit_n"])
         diag.append(
-            f"High-tension printed mount creep warning ({spec.gantry.belt.pretension_n:.0f} N with ABS mounts): "
+            f"Gantry bracket creep risk ({spec.gantry.belt.pretension_n:.0f} N belt pretension > "
+            f"{creep_limit_n:.0f} N sustained limit for '{spec.gantry.bracket_material}'): "
+            "upgrade gantry brackets to 'ppa_cf_printed', 'pps_cf_printed', or 'aluminum_6061_t6'."
+        )
+    if (
+        spec.gantry.belt.pretension_n > 50.0
+        and spec.toolhead.mount_material == "abs_printed"
+        and not (kinematics.bracket_creep_risk and spec.gantry.bracket_material == "abs_printed")
+    ):
+        diag.append(
+            f"High-tension printed mount creep warning ({spec.gantry.belt.pretension_n:.0f} N with ABS toolhead mount): "
             "unfilled ABS creeps under sustained high belt tension — upgrade to PA12-CF / PPA-CF or CNC Aluminum mounts."
         )
     if kinematics.shaft_bending_risk:

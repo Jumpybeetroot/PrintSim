@@ -2,32 +2,143 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.fea.bracket_designer import design_and_evaluate_bracket
 from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
 from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
 from printsim.fea.topology import export_topology_stl, optimize_preset_topology
 from printsim.geometry import build_assembly, export_assembly_step, export_assembly_stl, generate_bom
-from printsim.schema import MATERIAL_CATALOG, PROFILE_CATALOG, PrinterSpec
+from printsim.schema import (
+    EXTRUSION_FILLINGS,
+    GANTRY_BRACKET_CATALOG,
+    MATERIAL_CATALOG,
+    PROFILE_CATALOG,
+    STEPPER_CATALOG,
+    TOOLHEAD_PRESETS,
+    PrinterSpec,
+)
 from printsim.thermal import FILAMENT_CATALOG
 
-SERVER_INFO = {"name": "printsim-mcp", "version": "0.7.0"}
+SERVER_INFO = {"name": "printsim-mcp", "version": "0.8.0"}
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES_DIR = PROJECT_ROOT / "examples"
+
+_VALID_RANK_BY = ("composite", "safe_accel", "stiffness", "budget")
+
+
+def _list_preset_ids() -> list[str]:
+    if not EXAMPLES_DIR.exists():
+        return []
+    return sorted(p.stem for p in EXAMPLES_DIR.glob("*.yaml"))
+
+
+def _apply_dot_overrides(base_data: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy of ``base_data`` with dot-path ``overrides`` applied."""
+    out = copy.deepcopy(base_data)
+    for raw_key, value in overrides.items():
+        key = str(raw_key).strip()
+        parts = [p for p in key.split(".") if p]
+        if not parts:
+            raise ValueError(f"Invalid override key: {raw_key!r}")
+
+        # Convenience preset expansion when an agent sets stepper or toolhead by catalog ID
+        if key == "kinematics.xy_stepper" and isinstance(value, str):
+            if value not in STEPPER_CATALOG:
+                raise ValueError(f"Unknown stepper preset '{value}'.")
+            cur_st = dict(out.get("kinematics", {}).get("xy_stepper", {}))
+            cur_st.update(STEPPER_CATALOG[value])
+            out.setdefault("kinematics", {})["xy_stepper"] = cur_st
+            continue
+        if key == "toolhead" and isinstance(value, str):
+            if value not in TOOLHEAD_PRESETS:
+                raise ValueError(f"Unknown toolhead preset '{value}'.")
+            cur_th = dict(out.get("toolhead", {}))
+            cur_th.update(TOOLHEAD_PRESETS[value])
+            out["toolhead"] = cur_th
+            continue
+
+        cur: Any = out
+        for part in parts[:-1]:
+            if not isinstance(cur, dict):
+                raise ValueError(f"Cannot traverse into non-dict segment '{part}' in '{raw_key}'")
+            if part not in cur or cur[part] is None:
+                cur[part] = {}
+            cur = cur[part]
+        if not isinstance(cur, dict):
+            raise ValueError(f"Cannot set key '{parts[-1]}' on non-dict target in '{raw_key}'")
+        cur[parts[-1]] = copy.deepcopy(value)
+    return out
+
+
+def _summarize_printer(
+    spec: PrinterSpec,
+    filament_id: str = "pla",
+    toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
+) -> dict[str, Any]:
+    report = evaluate_printer(
+        spec,
+        toolhead_rel_pos=toolhead_rel_pos,
+        filament_id=filament_id,
+    )
+    bom = generate_bom(report.assembly)
+    real_diags = [
+        d
+        for d in report.diagnostics
+        if not d.startswith("Design passes all structural, kinematic, thermal")
+    ]
+    return {
+        "composite_score": round(float(report.scores.composite), 2),
+        "fundamental_freq_hz": round(float(report.modal_fea.fundamental_freq_hz), 2),
+        "recommended_max_accel_mm_s2": round(float(report.modal_fea.recommended_max_accel_mm_s2), 1),
+        "nozzle_deflection_um": round(float(report.static_fea.combined_max_deflection_um), 2),
+        "toolhead_stiffness_x_n_per_mm": round(float(report.static_fea.toolhead_stiffness_x_n_per_mm), 2),
+        "toolhead_stiffness_y_n_per_mm": round(float(report.static_fea.toolhead_stiffness_y_n_per_mm), 2),
+        "total_mass_kg": round(float(bom.total_mass_kg), 3),
+        "estimated_cost_usd": round(float(bom.total_cost_usd), 2),
+        "diagnostics_count": len(real_diags),
+    }
+
 
 TOOLS_SCHEMA = [
     {
         "name": "list_catalog",
-        "description": "List all available engineering materials, structural profiles, filaments, and built-in solid part presets in PrintSim.",
+        "description": (
+            "List all available engineering materials, structural profiles, filaments, steppers, "
+            "toolhead presets, extrusion fillings, gantry bracket materials, rail mount orientations, "
+            "solid part presets, and built-in YAML printer presets in PrintSim."
+        ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_preset_yaml",
+        "description": "Load the full declarative YAML text and metadata for a built-in printer preset ID from examples/.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "preset_id": {
+                    "type": "string",
+                    "description": "Preset stem from list_catalog().presets (e.g. 'voron_trident_300', 'voron_monolith_awd')",
+                }
+            },
+            "required": ["preset_id"],
+        },
+    },
+    {
         "name": "evaluate_printer_yaml",
-        "description": "Run full multiphysics 3D printer simulation (static 3D frame FEA, modal resonance & Klipper input shaper, kinematics/belt/torque, hotend FVM thermal & volumetric flow, and virtual G-code print) on a YAML printer specification.",
+        "description": (
+            "Run full multiphysics 3D printer simulation (static 3D frame FEA, modal resonance & "
+            "Klipper input shaper, kinematics/belt/torque, hotend FVM thermal & volumetric flow, "
+            "and virtual G-code print) on a YAML printer specification."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -38,8 +149,59 @@ TOOLS_SCHEMA = [
                     "description": "Filament material ID (pla, petg, abs, asa, pa12_cf, tpu_95a)",
                 },
                 "gcode_text": {"type": "string", "description": "Optional custom G-code string to simulate"},
+                "toolhead_rel_pos": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "default": [0.5, 0.5, 0.5],
+                    "description": "Normalized [rx, ry, rz] toolhead/bed probe position in 0..1 inside the build volume",
+                },
             },
             "required": ["yaml_text"],
+        },
+    },
+    {
+        "name": "mutate_and_compare_printer",
+        "description": (
+            "Batch-evaluate and rank multiple hardware/layout mutations of a base printer YAML using "
+            "dot-path overrides (e.g. 'frame.extrusion_filling', 'gantry.bracket_material', "
+            "'gantry.x_rail_mount', 'toolhead.cog_offset_mm', 'frame.custom_members') and compute deltas vs baseline."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_text": {"type": "string", "description": "Base printer YAML specification"},
+                "candidates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Candidate variant label"},
+                            "overrides": {
+                                "type": "object",
+                                "description": "Mapping of dot-path keys to replacement values",
+                            },
+                        },
+                        "required": ["name", "overrides"],
+                    },
+                },
+                "rank_by": {
+                    "type": "string",
+                    "enum": ["composite", "safe_accel", "stiffness", "budget"],
+                    "default": "composite",
+                },
+                "filament_id": {"type": "string", "default": "pla"},
+                "toolhead_rel_pos": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "default": [0.5, 0.5, 0.5],
+                },
+            },
+            "required": ["yaml_text", "candidates"],
         },
     },
     {
@@ -81,6 +243,43 @@ TOOLS_SCHEMA = [
                     "description": "Applied 3D force vector [Fx, Fy, Fz] in Newtons",
                 },
                 "fdm_anisotropic": {"type": "boolean"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "design_and_test_bracket",
+        "description": (
+            "Parametrically generate a 3D printer structural bracket (corner_gusset, motor_mount, "
+            "or xy_joint_l_bracket), run 3D Hex8 (~0.1s) or conformal build123d+Gmsh Tet10 FEA, "
+            "and optionally export watertight STL and/or OpenCASCADE STEP CAD."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bracket_type": {
+                    "type": "string",
+                    "enum": ["corner_gusset", "motor_mount", "xy_joint_l_bracket"],
+                    "default": "corner_gusset",
+                },
+                "arm_length_mm": {"type": "number", "default": 40.0, "minimum": 25.0, "maximum": 90.0},
+                "height_mm": {"type": "number", "default": 20.0, "minimum": 10.0, "maximum": 60.0},
+                "wall_thickness_mm": {"type": "number", "default": 6.0, "minimum": 2.5, "maximum": 18.0},
+                "rib_thickness_mm": {"type": "number", "default": 6.0, "minimum": 0.0, "maximum": 18.0},
+                "bolt_hole_mm": {"type": "number", "default": 5.5, "minimum": 0.0, "maximum": 10.0},
+                "fillet_mm": {"type": "number", "default": 2.0, "minimum": 0.0, "maximum": 6.0},
+                "material_id": {"type": "string", "default": "ppa_cf_printed"},
+                "force_n": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "default": [60.0, 0.0, 0.0],
+                },
+                "fdm_anisotropic": {"type": "boolean"},
+                "engine": {"type": "string", "enum": ["hex8", "tet10"], "default": "hex8"},
+                "output_stl_path": {"type": "string", "description": "Optional STL output path"},
+                "output_step_path": {"type": "string", "description": "Optional OpenCASCADE STEP output path"},
             },
             "required": [],
         },
@@ -196,17 +395,151 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             "materials": list(MATERIAL_CATALOG.keys()),
             "profiles": list(PROFILE_CATALOG.keys()),
             "filaments": list(FILAMENT_CATALOG.keys()),
+            "steppers": list(STEPPER_CATALOG.keys()),
+            "toolhead_presets": list(TOOLHEAD_PRESETS.keys()),
+            "extrusion_fillings": [
+                {
+                    "id": k,
+                    "name": v["name"],
+                    "bonded": v["bonded"],
+                    "notes": v["notes"],
+                }
+                for k, v in EXTRUSION_FILLINGS.items()
+            ],
+            "gantry_brackets": [
+                {
+                    "id": k,
+                    "name": v["name"],
+                    "youngs_modulus_gpa": v["youngs_modulus_gpa"],
+                    "hdt_c": v["hdt_c"],
+                    "creep_tension_limit_n": v["creep_tension_limit_n"],
+                    "kit_cost_usd": v["kit_cost_usd"],
+                }
+                for k, v in GANTRY_BRACKET_CATALOG.items()
+            ],
+            "x_rail_mounts": ["front", "top", "bottom", "dual_top_bottom"],
+            "y_rail_mounts": ["top", "inner", "bottom"],
             "part_presets": ["corner_gusset", "xy_motor_mount", "toolhead_carriage", "cantilever_bar"],
+            "presets": _list_preset_ids(),
+        }
+
+    if name == "get_preset_yaml":
+        preset_id = str(args["preset_id"]).strip()
+        available = _list_preset_ids()
+        if preset_id not in available:
+            raise ValueError(f"Unknown preset '{preset_id}'. Available: {', '.join(available)}")
+        yaml_text = (EXAMPLES_DIR / f"{preset_id}.yaml").read_text(encoding="utf-8")
+        spec = PrinterSpec.model_validate(yaml.safe_load(yaml_text))
+        return {
+            "preset_id": preset_id,
+            "name": spec.name,
+            "architecture": spec.architecture,
+            "yaml_text": yaml_text,
         }
 
     if name == "evaluate_printer_yaml":
         spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
+        raw_pos = args.get("toolhead_rel_pos")
+        rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
+        if raw_pos is not None:
+            if len(raw_pos) != 3:
+                raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
+            rel_pos = (float(raw_pos[0]), float(raw_pos[1]), float(raw_pos[2]))
         report = evaluate_printer(
             spec,
             gcode_text=args.get("gcode_text"),
+            toolhead_rel_pos=rel_pos,
             filament_id=args.get("filament_id", "pla"),
         )
         return report.to_dict(include_toolpath_segments=False)
+
+    if name == "mutate_and_compare_printer":
+        base_spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
+        candidates_in = args.get("candidates") or []
+        if not candidates_in:
+            raise ValueError("candidates must be a non-empty list of {name, overrides} objects")
+
+        rank_by: Literal["composite", "safe_accel", "stiffness", "budget"] = args.get(
+            "rank_by", "composite"
+        )
+        if rank_by not in _VALID_RANK_BY:
+            raise ValueError(f"Unknown rank_by '{rank_by}'. Expected one of {_VALID_RANK_BY}.")
+
+        filament_id = str(args.get("filament_id", "pla"))
+        raw_pos = args.get("toolhead_rel_pos", [0.5, 0.5, 0.5])
+        if len(raw_pos) != 3:
+            raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
+        rel_pos = (float(raw_pos[0]), float(raw_pos[1]), float(raw_pos[2]))
+
+        baseline_summary = _summarize_printer(
+            base_spec, filament_id=filament_id, toolhead_rel_pos=rel_pos
+        )
+        base_dict = base_spec.model_dump(mode="json")
+
+        evaluated: list[tuple[dict[str, Any], PrinterSpec]] = []
+        for cand in candidates_in:
+            cname = str(cand["name"])
+            overrides = cand.get("overrides") or {}
+            cand_dict = _apply_dot_overrides(base_dict, overrides)
+            cand_spec = PrinterSpec.model_validate(cand_dict)
+            csum = _summarize_printer(
+                cand_spec, filament_id=filament_id, toolhead_rel_pos=rel_pos
+            )
+            entry = {
+                "name": cname,
+                "overrides": overrides,
+                **csum,
+                "delta_score": round(csum["composite_score"] - baseline_summary["composite_score"], 2),
+                "delta_freq_hz": round(
+                    csum["fundamental_freq_hz"] - baseline_summary["fundamental_freq_hz"], 2
+                ),
+                "delta_accel_mm_s2": round(
+                    csum["recommended_max_accel_mm_s2"]
+                    - baseline_summary["recommended_max_accel_mm_s2"],
+                    1,
+                ),
+                "delta_deflection_um": round(
+                    csum["nozzle_deflection_um"] - baseline_summary["nozzle_deflection_um"], 2
+                ),
+                "delta_cost_usd": round(
+                    csum["estimated_cost_usd"] - baseline_summary["estimated_cost_usd"], 2
+                ),
+            }
+            evaluated.append((entry, cand_spec))
+
+        def _sort_key(item: tuple[dict[str, Any], PrinterSpec]) -> tuple[float, ...]:
+            c = item[0]
+            if rank_by == "safe_accel":
+                return (
+                    -c["recommended_max_accel_mm_s2"],
+                    -c["composite_score"],
+                    c["nozzle_deflection_um"],
+                )
+            if rank_by == "stiffness":
+                return (
+                    c["nozzle_deflection_um"],
+                    -(c["toolhead_stiffness_x_n_per_mm"] + c["toolhead_stiffness_y_n_per_mm"]),
+                    -c["composite_score"],
+                )
+            if rank_by == "budget":
+                return (c["estimated_cost_usd"], -c["composite_score"])
+            return (-c["composite_score"], c["nozzle_deflection_um"], c["estimated_cost_usd"])
+
+        evaluated.sort(key=_sort_key)
+        ranked_candidates: list[dict[str, Any]] = []
+        for idx, (entry, _) in enumerate(evaluated, start=1):
+            ranked_candidates.append({"rank": idx, **entry})
+
+        best_entry, best_spec = evaluated[0]
+        return {
+            "rank_by": rank_by,
+            "filament_id": filament_id,
+            "toolhead_rel_pos": [rel_pos[0], rel_pos[1], rel_pos[2]],
+            "baseline": baseline_summary,
+            "ranked_candidates": ranked_candidates,
+            "best_candidate_name": best_entry["name"],
+            "best_yaml": best_spec.to_yaml(),
+        }
 
     if name == "optimize_printer_yaml":
         spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
@@ -243,6 +576,29 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         d = res.to_dict()
         d.pop("voxels", None)  # keep MCP response compact for LLM context
         return d
+
+    if name == "design_and_test_bracket":
+        raw_force = args.get("force_n")
+        force_vec: tuple[float, float, float] = (
+            (float(raw_force[0]), float(raw_force[1]), float(raw_force[2]))
+            if raw_force is not None
+            else (60.0, 0.0, 0.0)
+        )
+        return design_and_evaluate_bracket(
+            bracket_type=args.get("bracket_type", "corner_gusset"),
+            arm_length_mm=float(args.get("arm_length_mm", 40.0)),
+            height_mm=float(args.get("height_mm", 20.0)),
+            wall_thickness_mm=float(args.get("wall_thickness_mm", 6.0)),
+            rib_thickness_mm=float(args.get("rib_thickness_mm", 6.0)),
+            bolt_hole_mm=float(args.get("bolt_hole_mm", 5.5)),
+            fillet_mm=float(args.get("fillet_mm", 2.0)),
+            material_id=args.get("material_id", "ppa_cf_printed"),
+            force_n=force_vec,
+            fdm_anisotropic=args.get("fdm_anisotropic"),
+            engine=args.get("engine", "hex8"),
+            output_stl_path=args.get("output_stl_path"),
+            output_step_path=args.get("output_step_path"),
+        )
 
     if name == "export_printer_stl":
         spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))

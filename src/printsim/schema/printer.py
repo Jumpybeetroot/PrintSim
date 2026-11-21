@@ -11,8 +11,191 @@ from pydantic import BaseModel, Field, model_validator
 Architecture = Literal["corexy", "cartesian_bedslinger", "delta"]
 BracingType = Literal["none", "corner_gussets", "rear_cross", "full_truss"]
 PanelMountingType = Literal["none", "clip_enclosure", "bolted_structural"]
+ExtrusionFillingType = Literal[
+    "none",
+    "pu_foam",
+    "silica_sand",
+    "lead_shot",
+    "epoxy_granite",
+    "uhpc_grout",
+]
+BracketMaterialType = Literal[
+    "abs_printed",
+    "pet_cf_printed",
+    "pa12_cf_printed",
+    "ppa_cf_printed",
+    "pps_cf_printed",
+    "aluminum_6061_t6",
+    "aluminum_7075_t6",
+]
 DriveModeType = Literal["2wd", "awd"]
+XRailMountType = Literal["front", "top", "bottom", "dual_top_bottom"]
+YRailMountType = Literal["top", "inner", "bottom"]
 InputShaperType = Literal["auto", "none", "zv", "mzv", "ei", "2hump_ei"]
+
+# Engineering catalog for frame extrusion cavity fillings (SI units; literature / CNC casting data)
+EXTRUSION_FILLINGS: dict[str, dict] = {
+    "none": {
+        "id": "none",
+        "name": "Hollow (Unfilled)",
+        "short_name": "Hollow",
+        "density_kg_m3": 0.0,
+        "youngs_modulus_pa": 0.0,
+        "bonded": False,
+        "damping_boost": 0.0,
+        "cost_per_kg_usd": 0.0,
+        "color_hex": "#94a3b8",
+        "notes": "Standard hollow aluminum extrusion (low structural damping)",
+    },
+    "pu_foam": {
+        "id": "pu_foam",
+        "name": "Expanding PU Acoustic Foam",
+        "short_name": "PU Foam",
+        "density_kg_m3": 45.0,
+        "youngs_modulus_pa": 0.02e9,
+        "bonded": False,
+        "damping_boost": 0.010,
+        "cost_per_kg_usd": 18.0,
+        "color_hex": "#fde68a",
+        "notes": "Ultra-light acoustic deadening; negligible added mass or stiffness",
+    },
+    "silica_sand": {
+        "id": "silica_sand",
+        "name": "Kiln-Dried Silica Sand",
+        "short_name": "Silica Sand",
+        "density_kg_m3": 1550.0,
+        "youngs_modulus_pa": 0.0,
+        "bonded": False,
+        "damping_boost": 0.028,
+        "cost_per_kg_usd": 1.5,
+        "color_hex": "#d6b88d",
+        "notes": "Low-cost granular Coulomb friction damping; zero bonded bending stiffness",
+    },
+    "lead_shot": {
+        "id": "lead_shot",
+        "name": "Fine Lead Shot (#8–#9)",
+        "short_name": "Lead Shot",
+        "density_kg_m3": 6800.0,
+        "youngs_modulus_pa": 0.0,
+        "bonded": False,
+        "damping_boost": 0.042,
+        "cost_per_kg_usd": 11.0,
+        "color_hex": "#475569",
+        "notes": "Maximum granular impact damping & base inertia; heavy mass lowers raw Hz",
+    },
+    "epoxy_granite": {
+        "id": "epoxy_granite",
+        "name": "Epoxy Granite (85% Quartz + Epoxy)",
+        "short_name": "Epoxy Granite",
+        "density_kg_m3": 2250.0,
+        "youngs_modulus_pa": 30.0e9,
+        "bonded": True,
+        "damping_boost": 0.036,
+        "cost_per_kg_usd": 9.5,
+        "color_hex": "#64748b",
+        "notes": "Mineral casting bonds to cavity walls: +10-16% bending stiffness & strong resin damping",
+    },
+    "uhpc_grout": {
+        "id": "uhpc_grout",
+        "name": "Non-Shrink UHPC / CSA Grout",
+        "short_name": "UHPC Grout",
+        "density_kg_m3": 2350.0,
+        "youngs_modulus_pa": 40.0e9,
+        "bonded": True,
+        "damping_boost": 0.030,
+        "cost_per_kg_usd": 4.5,
+        "color_hex": "#9ca3af",
+        "notes": "High-modulus bonded cementitious grout: highest core EI boost + solid damping",
+    },
+}
+
+# Gantry bracket / motor-mount / XY-joint material catalog (ISO 527 / ISO 75 TDS + Monolith data)
+GANTRY_BRACKET_CATALOG: dict[str, dict] = {
+    "abs_printed": {
+        "id": "abs_printed",
+        "name": "3D-Printed ABS / ASA (2.1 GPa)",
+        "short_name": "Printed ABS",
+        "youngs_modulus_gpa": 2.1,
+        "hdt_c": 95.0,
+        "creep_tension_limit_n": 45.0,
+        "cnc_machined": False,
+        "kit_cost_usd": 28.0,
+        "carriage_mass_delta_g": 0.0,
+        "color_hex": "#e63946",
+    },
+    "pet_cf_printed": {
+        "id": "pet_cf_printed",
+        "name": "3D-Printed PET-CF15 Annealed (5.2 GPa)",
+        "short_name": "Printed PET-CF15",
+        "youngs_modulus_gpa": 5.2,
+        "hdt_c": 182.0,
+        "creep_tension_limit_n": 75.0,
+        "cnc_machined": False,
+        "kit_cost_usd": 52.0,
+        "carriage_mass_delta_g": 10.0,
+        "color_hex": "#3b4252",
+    },
+    "pa12_cf_printed": {
+        "id": "pa12_cf_printed",
+        "name": "3D-Printed PA12-CF15 (6.2 GPa)",
+        "short_name": "Printed PA12-CF",
+        "youngs_modulus_gpa": 6.2,
+        "hdt_c": 155.0,
+        "creep_tension_limit_n": 65.0,
+        "cnc_machined": False,
+        "kit_cost_usd": 72.0,
+        "carriage_mass_delta_g": 6.0,
+        "color_hex": "#333840",
+    },
+    "ppa_cf_printed": {
+        "id": "ppa_cf_printed",
+        "name": "3D-Printed PPA-CF Annealed (11.8 GPa)",
+        "short_name": "Printed PPA-CF",
+        "youngs_modulus_gpa": 11.8,
+        "hdt_c": 196.0,
+        "creep_tension_limit_n": 105.0,
+        "cnc_machined": False,
+        "kit_cost_usd": 98.0,
+        "carriage_mass_delta_g": 9.0,
+        "color_hex": "#2d333b",
+    },
+    "pps_cf_printed": {
+        "id": "pps_cf_printed",
+        "name": "3D-Printed PPS-CF Annealed (8.5 GPa, 235°C HDT)",
+        "short_name": "Printed PPS-CF",
+        "youngs_modulus_gpa": 8.5,
+        "hdt_c": 235.0,
+        "creep_tension_limit_n": 115.0,
+        "cnc_machined": False,
+        "kit_cost_usd": 120.0,
+        "carriage_mass_delta_g": 12.0,
+        "color_hex": "#23272e",
+    },
+    "aluminum_6061_t6": {
+        "id": "aluminum_6061_t6",
+        "name": "CNC Aluminum 6061-T6 (68.9 GPa)",
+        "short_name": "CNC Al 6061",
+        "youngs_modulus_gpa": 68.9,
+        "hdt_c": 300.0,
+        "creep_tension_limit_n": 250.0,
+        "cnc_machined": True,
+        "kit_cost_usd": 210.0,
+        "carriage_mass_delta_g": 42.0,
+        "color_hex": "#c6d0db",
+    },
+    "aluminum_7075_t6": {
+        "id": "aluminum_7075_t6",
+        "name": "CNC Aluminum 7075-T6 Billet (71.7 GPa)",
+        "short_name": "CNC Al 7075",
+        "youngs_modulus_gpa": 71.7,
+        "hdt_c": 300.0,
+        "creep_tension_limit_n": 280.0,
+        "cnc_machined": True,
+        "kit_cost_usd": 285.0,
+        "carriage_mass_delta_g": 46.0,
+        "color_hex": "#cbd5e1",
+    },
+}
 
 
 class FrameNodeSpec(BaseModel):
@@ -76,6 +259,10 @@ class FrameSpec(BaseModel):
         True,
         description="On non-flying-gantry CoreXY machines, bolt structural panels directly to fixed Y-rail & rear gantry beams",
     )
+    extrusion_filling: ExtrusionFillingType = Field(
+        "none",
+        description="Frame extrusion cavity filling for damping & bonded core stiffness (none, pu_foam, silica_sand, lead_shot, epoxy_granite, uhpc_grout)",
+    )
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
 
@@ -129,14 +316,38 @@ class GantrySpec(BaseModel):
     double_shear_pulleys: bool = Field(
         False, description="Double-shear bearing supports on XY motor shafts & idlers for high belt tension"
     )
+    bracket_material: BracketMaterialType = Field(
+        "abs_printed",
+        description="Material for XY motor mounts, front idlers, and XY-joint gantry brackets",
+    )
     x_beam_profile: str = "extrusion_2020"
     x_beam_material: str = "aluminum_6063_t5"
     x_rail_profile: str = "mgn12_rail"
     y_rail_profile: str = "mgn12_rail"
     rail_material: str = "steel_4140"
+    x_rail_mount: XRailMountType = Field(
+        "front",
+        description="X-axis linear rail mounting face on the X gantry beam: front (Voron standard, max Y stiffness), top (RatRig/Annex, max Z stiffness), bottom (under-slung, shorter nozzle drop), or dual_top_bottom (symmetric dual-rail I-beam)",
+    )
+    y_rail_mount: YRailMountType = Field(
+        "top",
+        description="Y-axis linear rail mounting face on the left/right Y extrusions: top (Voron standard), inner (side-mounted Monolith/VzBot, max X stiffness), or bottom (inverted)",
+    )
     dual_x_rails: bool = False
     carriage_mass_g: float = Field(140.0, gt=0, description="Combined X/Y gantry carriages & joints (g)")
     belt: BeltSpec = Field(default_factory=BeltSpec)
+
+    @property
+    def effective_x_rail_mount(self) -> XRailMountType:
+        """Resolve effective X rail mount, honoring legacy ``dual_x_rails=True``."""
+        if self.dual_x_rails or self.x_rail_mount == "dual_top_bottom":
+            return "dual_top_bottom"
+        return self.x_rail_mount
+
+    @property
+    def effective_dual_x_rails(self) -> bool:
+        """True when dual top+bottom X rails are active."""
+        return self.dual_x_rails or self.x_rail_mount == "dual_top_bottom"
 
 
 class StepperSpec(BaseModel):
@@ -332,7 +543,7 @@ class ToolheadSpec(BaseModel):
         (0.0, -22.0, -62.0),
         description="Nozzle tip offset [dx, dy, dz] from X-beam centerline (mm)",
     )
-    mount_material: Literal["abs_printed", "pa12_cf_printed", "aluminum_6061_t6"] = Field(
+    mount_material: BracketMaterialType = Field(
         "abs_printed",
         description="Toolhead carriage & XY-joint mount material affecting nozzle pitch/twist stiffness",
     )

@@ -38,6 +38,8 @@ from printsim.geometry import (
     generate_bom,
 )
 from printsim.schema import (
+    EXTRUSION_FILLINGS,
+    GANTRY_BRACKET_CATALOG,
     MATERIAL_CATALOG,
     PROFILE_CATALOG,
     STEPPER_CATALOG,
@@ -190,6 +192,19 @@ def create_app() -> FastAPI:
             "filaments": [f.model_dump(mode="json") for f in FILAMENT_CATALOG.values()],
             "steppers": list(STEPPER_CATALOG.values()),
             "toolhead_presets": list(TOOLHEAD_PRESETS.values()),
+            "extrusion_fillings": list(EXTRUSION_FILLINGS.values()),
+            "gantry_brackets": list(GANTRY_BRACKET_CATALOG.values()),
+            "x_rail_mounts": [
+                {"id": "front", "name": "Front Face (Voron Standard)", "short_name": "Front", "notes": "Bolted to front (-Y) face: max Y-accel bending stiffness; standard forward CoG"},
+                {"id": "top", "name": "Top Face (RatRig / Annex)", "short_name": "Top", "notes": "Bolted to top (+Z) face: max Z stiffness & shorter Y overhang; slightly taller nozzle drop"},
+                {"id": "bottom", "name": "Bottom Face (Under-Slung)", "short_name": "Bottom", "notes": "Bolted to bottom (-Z) face: max Z stiffness & ~12 mm shorter nozzle Z lever arm (less pitch twist)"},
+                {"id": "dual_top_bottom", "name": "Dual Top + Bottom (I-Beam)", "short_name": "Dual Top+Bot", "notes": "Symmetric top & bottom rails: highest Z/Y stiffness & zero bimetallic warp, +2× rail mass"},
+            ],
+            "y_rail_mounts": [
+                {"id": "top", "name": "Top Face (Voron Standard)", "short_name": "Top", "notes": "Bolted to top (+Z) face of Y extrusions: max Z stiffness + wide face resists X"},
+                {"id": "inner", "name": "Inner Side Face (Monolith / VzBot)", "short_name": "Inner Side", "notes": "Bolted to inner (±X) face of Y extrusions: max X-bending stiffness against gantry push"},
+                {"id": "bottom", "name": "Bottom Face (Inverted)", "short_name": "Bottom", "notes": "Bolted to bottom (-Z) face of Y extrusions: high Z stiffness & debris protection"},
+            ],
             "part_presets": [
                 {"id": "corner_gusset", "name": "40mm L-Corner Gusset Bracket"},
                 {"id": "xy_motor_mount", "name": "CoreXY NEMA17 Motor Mount Plate"},

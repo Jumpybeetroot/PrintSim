@@ -1,15 +1,19 @@
 from .materials import MATERIAL_CATALOG, MaterialSpec, get_material
 from .profiles import PROFILE_CATALOG, ProfileSpec, get_profile
 from .printer import (
+    EXTRUSION_FILLINGS,
+    GANTRY_BRACKET_CATALOG,
     STEPPER_CATALOG,
     TOOLHEAD_PRESETS,
     Architecture,
     BedSpec,
     BeltSpec,
+    BracketMaterialType,
     BracingType,
     CustomMeshSpec,
     DriveModeType,
     ExtruderSpec,
+    ExtrusionFillingType,
     FrameMemberSpec,
     FrameNodeSpec,
     FrameSpec,
@@ -21,6 +25,8 @@ from .printer import (
     PrinterSpec,
     StepperSpec,
     ToolheadSpec,
+    XRailMountType,
+    YRailMountType,
 )
 
 __all__ = [
@@ -30,15 +36,19 @@ __all__ = [
     "PROFILE_CATALOG",
     "ProfileSpec",
     "get_profile",
+    "EXTRUSION_FILLINGS",
+    "GANTRY_BRACKET_CATALOG",
     "STEPPER_CATALOG",
     "TOOLHEAD_PRESETS",
     "Architecture",
     "BedSpec",
     "BeltSpec",
+    "BracketMaterialType",
     "BracingType",
     "CustomMeshSpec",
     "DriveModeType",
     "ExtruderSpec",
+    "ExtrusionFillingType",
     "FrameMemberSpec",
     "FrameNodeSpec",
     "FrameSpec",
@@ -50,4 +60,6 @@ __all__ = [
     "PrinterSpec",
     "StepperSpec",
     "ToolheadSpec",
+    "XRailMountType",
+    "YRailMountType",
 ]
