@@ -3345,43 +3345,8 @@ textarea.code-editor {
 }
 
 /* ==========================================================================
-   One-Click Quick-Fix Buttons, 3D Part Inspector & 2D MITC4 Bed Warp Overlay
+   3D Part Inspector & 2D MITC4 Bed Warp Overlay
    ========================================================================== */
-
-.quick-fix-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.quick-fix-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  border: 1px solid rgba(52, 211, 153, 0.52);
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(14, 165, 233, 0.18));
-  color: #a7f3d0;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
-}
-
-.quick-fix-btn:hover {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.34), rgba(14, 165, 233, 0.3));
-  border-color: #34d399;
-  color: #ecfdf5;
-}
-
-.quick-fix-btn:active {
-  transform: translateY(1px);
-}
 
 .viewport-hud-top-left {
   display: flex;
@@ -3598,13 +3563,6 @@ textarea.code-editor {
   font-size: 10.5px;
   line-height: 1.35;
   color: #d1fae5;
-}
-
-.part-inspector-fix-btn {
-  width: 100%;
-  justify-content: center;
-  padding: 6px 10px;
-  font-size: 11px;
 }
 
 .bed-warp-hud {

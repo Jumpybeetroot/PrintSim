@@ -3,7 +3,6 @@ import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
-import { QuickFixAction } from "./utils/quickFixes";
 import {
   CatalogResponse,
   CompareMode,
@@ -1081,16 +1080,6 @@ export default function App() {
     [catalog, clearDeepVerify, gcodeText, runSimulate, spec]
   );
 
-  const handleApplyQuickFix = useCallback(
-    (fix: QuickFixAction) => {
-      const currentSpec = spec ?? simRef.current?.spec;
-      if (!currentSpec) return;
-      const nextSpec = fix.apply(currentSpec);
-      handleSpecChange(nextSpec, fix.summary);
-    },
-    [handleSpecChange, spec]
-  );
-
   const handleInspectBedWarp = useCallback(() => {
     setShowBedWarp(true);
     setViewMode((prev) =>
@@ -1500,7 +1489,6 @@ export default function App() {
           onLayerLimitChange={setLayerLimit}
           showBedWarp={showBedWarp}
           onToggleBedWarp={setShowBedWarp}
-          onApplyFix={handleApplyQuickFix}
         />
 
         <MetricsPanel
@@ -1535,7 +1523,6 @@ export default function App() {
           onDownloadBomCsv={handleExportBomCsv}
           showBedWarp={showBedWarp}
           onInspectBedWarp={handleInspectBedWarp}
-          onApplyFix={handleApplyQuickFix}
           error={error}
         />
       </main>

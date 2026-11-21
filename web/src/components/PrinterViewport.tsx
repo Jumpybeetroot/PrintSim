@@ -18,11 +18,108 @@ import {
   XRailMountType,
   YRailMountType,
 } from "../types";
-import {
-  classifyPartGroup,
-  getQuickFixForTarget,
-  QuickFixAction,
-} from "../utils/quickFixes";
+
+interface PartGroupClassification {
+  id: string;
+  label: string;
+  subsystem: SubsystemKey;
+}
+
+/**
+ * Mirror backend `classify_part_group` + `frame_feet` so 3D viewport raycasting
+ * maps member/bay IDs to the exact same physical group IDs used by adjoint sensitivity.
+ */
+function classifyPartGroup(memberId: string, role = ""): PartGroupClassification {
+  const mid = (memberId || "").trim();
+  if (mid.startsWith("feet_") || mid.startsWith("foot_") || mid.startsWith("ground_") || role === "foot") {
+    return { id: "frame_feet", label: "Machine Feet & Benchtop Pads", subsystem: "frame" };
+  }
+  if (mid.startsWith("col_fl") || mid.startsWith("col_fr")) {
+    return { id: "front_frame_columns", label: "Front Frame Columns", subsystem: "frame" };
+  }
+  if (mid.startsWith("col_rl") || mid.startsWith("col_rr")) {
+    return { id: "rear_frame_columns", label: "Rear Frame Columns", subsystem: "frame" };
+  }
+  if (mid.startsWith("col_")) {
+    return { id: "frame_columns", label: "Frame Vertical Columns", subsystem: "frame" };
+  }
+  if (mid.startsWith("z_col_")) {
+    return { id: "z_gantry_uprights", label: "Z-Axis Gantry Uprights", subsystem: "frame" };
+  }
+  if (mid.startsWith("tower_") || role === "tower") {
+    return { id: "delta_towers", label: "Delta Vertical Towers", subsystem: "frame" };
+  }
+  if (mid.startsWith("arm_")) {
+    return { id: "delta_arms", label: "Delta Diagonal Arms", subsystem: "gantry" };
+  }
+  if (mid.startsWith("x_gantry") || mid.startsWith("x_beam")) {
+    return { id: "x_gantry_beam", label: "Moving X-Gantry Beam", subsystem: "gantry" };
+  }
+  if (mid.startsWith("y_rail") || mid.startsWith("gantry_y")) {
+    return { id: "y_axis_rail_beams", label: "Y-Axis Rail Beams", subsystem: "gantry" };
+  }
+  if (mid.startsWith("toolhead_mount") || mid.startsWith("nozzle_stem") || mid === "toolhead_cog_spring") {
+    return { id: "toolhead_mount", label: "Toolhead & Nozzle Mount", subsystem: "toolhead" };
+  }
+  if (mid === "toolhead_cog" || mid === "toolhead_assembly") {
+    return { id: "toolhead_assembly", label: "Toolhead Moving Mass (CoG)", subsystem: "toolhead" };
+  }
+  if (mid === "bed_plate") {
+    return { id: "bed_plate", label: "Heated Bed Plate", subsystem: "bed" };
+  }
+  if (mid.startsWith("bed_") || mid.startsWith("z_bed")) {
+    return { id: "bed_support", label: "Bed Support & Z Arms", subsystem: "bed" };
+  }
+  if (mid.startsWith("panel_shear_") || mid.startsWith("bay_") || role === "panel") {
+    if (mid.includes("left") || mid.includes("right")) {
+      return { id: "side_panels", label: "Left & Right Enclosure Panels", subsystem: "frame" };
+    }
+    if (mid.includes("rear")) {
+      return { id: "rear_panel", label: "Rear Enclosure Panel", subsystem: "frame" };
+    }
+    if (mid.includes("top")) {
+      return { id: "top_panel", label: "Top Enclosure Panel", subsystem: "frame" };
+    }
+    return { id: "enclosure_panels", label: "Enclosure Panels", subsystem: "frame" };
+  }
+  if (mid.startsWith("brace_") || mid.startsWith("diag_") || role === "brace") {
+    return { id: "frame_bracing", label: "Frame Diagonal Bracing", subsystem: "frame" };
+  }
+  if (
+    mid.startsWith("top_") ||
+    mid.startsWith("bot_") ||
+    mid.startsWith("base_") ||
+    mid.startsWith("g_front") ||
+    mid.startsWith("g_rear") ||
+    mid.startsWith("g_left") ||
+    mid.startsWith("g_right") ||
+    mid.startsWith("gantry_rear_bar") ||
+    mid.startsWith("portal_top")
+  ) {
+    return { id: "frame_perimeter_beams", label: "Frame Perimeter Beams", subsystem: "frame" };
+  }
+
+  if (role === "rail") {
+    return { id: "y_axis_rail_beams", label: "Y-Axis Rail Beams", subsystem: "gantry" };
+  }
+  if (role === "gantry") {
+    return { id: "x_gantry_beam", label: "Moving X-Gantry Beam", subsystem: "gantry" };
+  }
+  if (role === "bed") {
+    return { id: "bed_support", label: "Bed Support & Z Arms", subsystem: "bed" };
+  }
+  if (role === "toolhead") {
+    return { id: "toolhead_mount", label: "Toolhead & Nozzle Mount", subsystem: "toolhead" };
+  }
+  if (role === "frame") {
+    return { id: "frame_perimeter_beams", label: "Frame Perimeter Beams", subsystem: "frame" };
+  }
+  return {
+    id: mid || "frame",
+    label: mid ? mid.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Structural Member",
+    subsystem: "frame",
+  };
+}
 
 interface InspectedPartInfo {
   key: string;
@@ -64,7 +161,6 @@ interface Props {
   onLayerLimitChange: (l: number) => void;
   showBedWarp?: boolean;
   onToggleBedWarp?: (show: boolean) => void;
-  onApplyFix?: (fix: QuickFixAction) => void;
 }
 
 const SCALE = 0.01; // 100 mm = 1 Three.js unit
@@ -995,7 +1091,6 @@ export const PrinterViewport: React.FC<Props> = ({
   onLayerLimitChange,
   showBedWarp: showBedWarpProp,
   onToggleBedWarp,
-  onApplyFix,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(true);
@@ -2173,7 +2268,7 @@ export const PrinterViewport: React.FC<Props> = ({
         actionHint:
           feetStiff?.action_hint ??
           (feetType !== "rigid_bolted"
-            ? "Switch benchtop feet to Rigid Bolted to eliminate whole-printer rocking."
+            ? "Compliant benchtop feet allow whole-frame rocking motion"
             : undefined),
       };
 
@@ -3043,7 +3138,7 @@ export const PrinterViewport: React.FC<Props> = ({
         bedStiffTarget?.action_hint ??
         (bedPlateFea &&
         (bedPlateFea.first_layer_risk === "high" || bedPlateFea.first_layer_risk === "critical")
-          ? "Switch to Kinematic 3-Pt mount or thicken cast plate to eliminate taco warp."
+          ? "Bed mount & Z-axis support stiffness / thermal constraint"
           : undefined),
       bedFlatnessUm: bedPlateFea?.total_flatness_error_um,
       bedTacoUm: bedPlateFea?.taco_buckling_um,
@@ -3758,7 +3853,7 @@ export const PrinterViewport: React.FC<Props> = ({
         actionHint:
           thMassLight?.action_hint ??
           (sim.spec.toolhead.total_mass_g > 235
-            ? "Trim toolhead moving mass to boost XY acceleration and input-shaper frequency."
+            ? "Moving toolhead inertia limits XY acceleration and input-shaper frequency"
             : undefined),
       };
       const nozzleInspectInfo: InspectedPartInfo = {
@@ -4120,15 +4215,6 @@ export const PrinterViewport: React.FC<Props> = ({
     canShowBedWarpHud &&
     !showBedWarp &&
     (bedPlateFeaHud?.total_flatness_error_um ?? 0) >= 50;
-  const bedWarpQuickFix =
-    sim &&
-    bedPlateFeaHud &&
-    (bedPlateFeaHud.first_layer_risk === "high" ||
-      bedPlateFeaHud.first_layer_risk === "critical")
-      ? getQuickFixForTarget("bed_plate", sim.spec)
-      : null;
-  const pinnedQuickFix =
-    pinnedPart && sim ? getQuickFixForTarget(pinnedPart.partGroupId, sim.spec) : null;
 
   return (
     <div className="viewport-wrap">
@@ -4339,19 +4425,8 @@ export const PrinterViewport: React.FC<Props> = ({
           )}
           {pinnedPart.actionHint && (
             <div className="part-inspector-hint">
-              <span className="sens-fix-prefix">Hint:</span> {pinnedPart.actionHint}
+              <span className="sens-fix-prefix">Main limit:</span> {pinnedPart.actionHint}
             </div>
-          )}
-
-          {pinnedQuickFix && onApplyFix && (
-            <button
-              type="button"
-              className="quick-fix-btn part-inspector-fix-btn"
-              onClick={() => onApplyFix(pinnedQuickFix)}
-              title={pinnedQuickFix.summary}
-            >
-              ⚡ {pinnedQuickFix.buttonLabel}
-            </button>
           )}
         </div>
       )}
@@ -4389,16 +4464,6 @@ export const PrinterViewport: React.FC<Props> = ({
             <span>
               Plate 1st Mode: <strong>{bedPlateFeaHud.plate_first_mode_hz.toFixed(0)} Hz</strong>
             </span>
-            {bedWarpQuickFix && onApplyFix && (
-              <button
-                type="button"
-                className="quick-fix-btn"
-                onClick={() => onApplyFix(bedWarpQuickFix)}
-                title={bedWarpQuickFix.summary}
-              >
-                ⚡ {bedWarpQuickFix.buttonLabel}
-              </button>
-            )}
           </div>
         )}
         {viewMode === "fea_stress" && sim && (
@@ -4690,7 +4755,7 @@ export const PrinterViewport: React.FC<Props> = ({
                   )}
                   {activeMode.how_to_fix && (
                     <div className="hud-guide-line hud-fix-line">
-                      <span className="hud-fix-key">How to fix:</span>{" "}
+                      <span className="hud-fix-key">Main limit:</span>{" "}
                       <span className="hud-fix-val">{activeMode.how_to_fix}</span>
                     </div>
                   )}
@@ -4744,7 +4809,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 <div className="hud-guide-row hud-sens-legend">
                   <div className="legend-gradient sensitivity" />
                   {adjointLens !== "compliance" && (
-                    <span style={{ color: "#22d3ee", fontWeight: 700 }}>Cyan = Lighten Mass</span>
+                    <span style={{ color: "#22d3ee", fontWeight: 700 }}>Cyan = Inertia Hotspot</span>
                   )}
                   {adjointLens !== "compliance" && adjointLens !== "mass" && (
                     <span style={{ color: "var(--muted)" }}>·</span>
@@ -4754,7 +4819,7 @@ export const PrinterViewport: React.FC<Props> = ({
                     <>
                       <span style={{ color: "var(--muted)" }}>·</span>
                       <span style={{ color: "#fb923c", fontWeight: 700 }}>
-                        Red/Orange = Stiffen Hotspot
+                        Red/Orange = Compliance Hotspot
                       </span>
                     </>
                   )}
@@ -4805,13 +4870,13 @@ export const PrinterViewport: React.FC<Props> = ({
                 <div className="hud-guide-row hud-sens-takeaway">
                   {topStiff && (
                     <span className="hud-sens-item">
-                      <span className="hud-sens-tag stiffen">#1 Stiffen:</span>{" "}
+                      <span className="hud-sens-tag stiffen">#1 Compliance:</span>{" "}
                       <strong>{topStiff.label ?? topStiff.id}</strong>{" "}
                       <span className="hud-sens-stat">({stiffStatParts.join(" · ")})</span>
                       {topStiff.action_hint && (
                         <>
                           {" "}
-                          <span className="hud-fix-key">Fix:</span>{" "}
+                          <span className="hud-fix-key">Main limit:</span>{" "}
                           <span className="hud-fix-val">{topStiff.action_hint}</span>
                         </>
                       )}
@@ -4819,7 +4884,7 @@ export const PrinterViewport: React.FC<Props> = ({
                   )}
                   {topLight && (
                     <span className="hud-sens-item">
-                      <span className="hud-sens-tag lighten">#1 Lighten:</span>{" "}
+                      <span className="hud-sens-tag lighten">#1 Inertia:</span>{" "}
                       <strong>{topLight.label ?? topLight.id}</strong>{" "}
                       <span className="hud-sens-stat">(+{lightGain.toFixed(2)} Hz / 100g)</span>
                     </span>

@@ -2434,7 +2434,7 @@ export const DesignPanel: React.FC<Props> = ({
                       </span>
                     )}
                     {beltOvertension
-                      ? "Belt overtensioned — upgrade to 9mm/12mm Aramid!"
+                      ? "Belt overtensioned — exceeds working tension rating"
                       : shaftBendingRisk
                         ? "High tension (>45 N) without double-shear bearings risks shaft bending."
                         : "High tension >45 N needs 9mm+ belts & double-shear bearings."}

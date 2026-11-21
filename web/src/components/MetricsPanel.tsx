@@ -9,7 +9,6 @@ import {
   GeometryExtrusionFillingData,
   KlipperShaperCandidate,
   PrinterBOMResponse,
-  PrinterSpecData,
   RCSAData,
   SensitivityData,
   SimulationResponse,
@@ -22,11 +21,6 @@ import {
   ViewMode,
   WorkspaceFRFData,
 } from "../types";
-import {
-  getQuickFixForMode,
-  getQuickFixForTarget,
-  QuickFixAction,
-} from "../utils/quickFixes";
 
 interface Props {
   sim: SimulationResponse | null;
@@ -60,7 +54,6 @@ interface Props {
   onDownloadBomCsv: () => void;
   showBedWarp?: boolean;
   onInspectBedWarp?: () => void;
-  onApplyFix?: (fix: QuickFixAction) => void;
   error: string | null;
 }
 
@@ -1459,11 +1452,9 @@ const CncControlMetrologyCard: React.FC<{
   workspaceFrf?: WorkspaceFRFData;
   rcsa?: RCSAData;
   sensitivity?: SensitivityData;
-  spec: PrinterSpecData;
-  onApplyFix?: (fix: QuickFixAction) => void;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
-}> = ({ metrology, workspaceFrf, rcsa, sensitivity, spec, onApplyFix, viewMode, onViewModeChange }) => {
+}> = ({ metrology, workspaceFrf, rcsa, sensitivity, viewMode, onViewModeChange }) => {
   const ballbarSvg = useMemo(() => {
     const angles = metrology?.ballbar_angles_deg;
     const errs = metrology?.ballbar_radial_error_um;
@@ -2093,17 +2084,17 @@ const CncControlMetrologyCard: React.FC<{
 
             let calloutText: string | null = null;
             if (thPct > frPct && thPct >= ganPct && thPct >= 15) {
-              calloutText = `Toolhead Flop (${Math.round(thPct)}%) > Outer Frame (${Math.round(
-                frPct
-              )}%) — stiffen toolhead mount before adding frame braces`;
+              calloutText = `Primary compliance limit: Toolhead & Mount (${Math.round(
+                thPct
+              )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
             } else if (ganPct > frPct && ganPct >= 15) {
-              calloutText = `X/Y Gantry Flex (${Math.round(ganPct)}%) > Outer Frame (${Math.round(
-                frPct
-              )}%) — stiffen X-beam/gantry before adding frame braces`;
+              calloutText = `Primary compliance limit: X/Y Gantry (${Math.round(
+                ganPct
+              )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
             } else if (bedPct > frPct && bedPct >= 15) {
-              calloutText = `Bed & Z-Mount (${Math.round(bedPct)}%) > Outer Frame (${Math.round(
-                frPct
-              )}%) — stiffen bed mount / Z-supports before adding frame braces`;
+              calloutText = `Primary compliance limit: Bed & Z-Mount (${Math.round(
+                bedPct
+              )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
             }
 
             return (
@@ -2166,71 +2157,53 @@ const CncControlMetrologyCard: React.FC<{
                   })}
                 </div>
 
-                {calloutText && <div className="sens-priority-callout">⚡ {calloutText}</div>}
+                {calloutText && <div className="sens-priority-callout">{calloutText}</div>}
               </div>
             );
           })()}
 
           {topStiffen.length > 0 && (
             <div className="sens-group">
-              <div className="sens-group-label stiffen">Top Stiffen Targets (Fix Flex First)</div>
-              {topStiffen.map((t) => {
-                const quickFix = getQuickFixForTarget(t.id, spec);
-                return (
-                  <div
-                    key={`stiff-${t.id}`}
-                    className="sens-row stiffen"
-                    title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
-                  >
-                    <div className="sens-row-top">
-                      <span className="sens-id">
-                        <strong>{t.label ?? t.id}</strong>
-                        {!t.label && <span className="sens-role">{t.role}</span>}
-                      </span>
-                    </div>
-                    <div className="sens-badge-row">
-                      {(t.est_hz_gain ?? 0) > 0 && (
-                        <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
-                      )}
-                      {t.compliance_share_pct >= 1 && (
-                        <span className="sens-badge flex">
-                          {t.compliance_share_pct.toFixed(0)}% of flex
-                        </span>
-                      )}
-                      <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
-                    </div>
-                    {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
-                    {t.action_hint && (
-                      <div className="sens-fix">
-                        <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
-                      </div>
-                    )}
-                    {quickFix && onApplyFix && (
-                      <div className="quick-fix-row">
-                        <button
-                          type="button"
-                          className="quick-fix-btn"
-                          onClick={() => onApplyFix(quickFix)}
-                          title={quickFix.summary}
-                        >
-                          ⚡ {quickFix.buttonLabel}
-                        </button>
-                      </div>
-                    )}
+              <div className="sens-group-label stiffen">Primary Compliance Hotspots (Stiffness Limits)</div>
+              {topStiffen.map((t) => (
+                <div
+                  key={`stiff-${t.id}`}
+                  className="sens-row stiffen"
+                  title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+                >
+                  <div className="sens-row-top">
+                    <span className="sens-id">
+                      <strong>{t.label ?? t.id}</strong>
+                      {!t.label && <span className="sens-role">{t.role}</span>}
+                    </span>
                   </div>
-                );
-              })}
+                  <div className="sens-badge-row">
+                    {(t.est_hz_gain ?? 0) > 0 && (
+                      <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
+                    )}
+                    {t.compliance_share_pct >= 1 && (
+                      <span className="sens-badge flex">
+                        {t.compliance_share_pct.toFixed(0)}% of flex
+                      </span>
+                    )}
+                    <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
+                  </div>
+                  {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+                  {t.action_hint && (
+                    <div className="sens-fix">
+                      <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
           {topLighten.length > 0 && (
             <div className="sens-group">
-              <div className="sens-group-label lighten">Top Lighten Targets (Cut Moving Weight)</div>
+              <div className="sens-group-label lighten">Primary Inertia Hotspots (Moving-Mass Limits)</div>
               {topLighten.map((t) => {
                 const gainPer100g = t.hz_gain_per_100g_saved ?? Math.abs(t.hz_per_100g);
-                const lightenTargetId =
-                  t.id === "toolhead" || t.id === "toolhead_cog" ? "toolhead_assembly" : t.id;
-                const quickFix = getQuickFixForTarget(lightenTargetId, spec);
                 return (
                   <div
                     key={`light-${t.id}`}
@@ -2251,19 +2224,7 @@ const CncControlMetrologyCard: React.FC<{
                     {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
                     {t.action_hint && (
                       <div className="sens-fix">
-                        <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
-                      </div>
-                    )}
-                    {quickFix && onApplyFix && (
-                      <div className="quick-fix-row">
-                        <button
-                          type="button"
-                          className="quick-fix-btn"
-                          onClick={() => onApplyFix(quickFix)}
-                          title={quickFix.summary}
-                        >
-                          ⚡ {quickFix.buttonLabel}
-                        </button>
+                        <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
                       </div>
                     )}
                   </div>
@@ -2296,17 +2257,14 @@ const BED_RISK_META: Record<
 const BedPlateFemStrip: React.FC<{
   bedFea: BedPlateFeaData;
   cmpBedFea?: BedPlateFeaData | null;
-  spec: PrinterSpecData;
   showBedWarp?: boolean;
   onInspectBedWarp?: () => void;
-  onApplyFix?: (fix: QuickFixAction) => void;
-}> = ({ bedFea, cmpBedFea, spec, showBedWarp, onInspectBedWarp, onApplyFix }) => {
+}> = ({ bedFea, cmpBedFea, showBedWarp, onInspectBedWarp }) => {
   const riskMeta = BED_RISK_META[bedFea.first_layer_risk] ?? BED_RISK_META.low;
   const modeTypeLabel =
     BED_MODE_TYPE_LABELS[bedFea.plate_first_mode_type] ?? bedFea.plate_first_mode_type;
   const isHighRisk =
     bedFea.first_layer_risk === "high" || bedFea.first_layer_risk === "critical";
-  const bedFix = isHighRisk ? getQuickFixForTarget("bed_plate", spec) : null;
 
   return (
     <div className={`bed-fem-strip risk-${bedFea.first_layer_risk}`}>
@@ -2368,29 +2326,17 @@ const BedPlateFemStrip: React.FC<{
 
       {bedFea.summary && <div className="bed-fem-summary">{bedFea.summary}</div>}
 
-      {(onInspectBedWarp || (bedFix && onApplyFix)) && (
+      {onInspectBedWarp && (
         <div className="bed-fem-actions">
-          {onInspectBedWarp && (
-            <button
-              type="button"
-              className={`deep-verify-cta ${showBedWarp ? "active" : ""}`}
-              style={{ padding: "3px 8px", fontSize: 10 }}
-              onClick={onInspectBedWarp}
-              title="Highlight 3D MITC4 heated bed thermal & gravity warp surface in the viewport"
-            >
-              {showBedWarp ? "Viewing 3D Bed Warp" : "View 3D Bed Warp"}
-            </button>
-          )}
-          {bedFix && onApplyFix && (
-            <button
-              type="button"
-              className="quick-fix-btn"
-              onClick={() => onApplyFix(bedFix)}
-              title={bedFix.summary}
-            >
-              ⚡ {bedFix.buttonLabel}
-            </button>
-          )}
+          <button
+            type="button"
+            className={`deep-verify-cta ${showBedWarp ? "active" : ""}`}
+            style={{ padding: "3px 8px", fontSize: 10 }}
+            onClick={onInspectBedWarp}
+            title="Highlight 3D MITC4 heated bed thermal & gravity warp surface in the viewport"
+          >
+            {showBedWarp ? "Viewing 3D Bed Warp" : "View 3D Bed Warp"}
+          </button>
         </div>
       )}
     </div>
@@ -2429,7 +2375,6 @@ export const MetricsPanel: React.FC<Props> = ({
   onDownloadBomCsv,
   showBedWarp,
   onInspectBedWarp,
-  onApplyFix,
   error,
 }) => {
   const [rightTab, setRightTab] = useState<"simulation" | "bom">("simulation");
@@ -3313,10 +3258,8 @@ export const MetricsPanel: React.FC<Props> = ({
                   <BedPlateFemStrip
                     bedFea={bedFea}
                     cmpBedFea={cmpBedFea}
-                    spec={sim.spec}
                     showBedWarp={showBedWarp}
                     onInspectBedWarp={onInspectBedWarp}
-                    onApplyFix={onApplyFix}
                   />
                 )}
               </div>
@@ -3331,10 +3274,8 @@ export const MetricsPanel: React.FC<Props> = ({
                 <BedPlateFemStrip
                   bedFea={bedFea}
                   cmpBedFea={cmpBedFea}
-                  spec={sim.spec}
                   showBedWarp={showBedWarp}
                   onInspectBedWarp={onInspectBedWarp}
-                  onApplyFix={onApplyFix}
                 />
               </div>
             )}
@@ -3357,8 +3298,6 @@ export const MetricsPanel: React.FC<Props> = ({
               workspaceFrf={sim.workspace_frf}
               rcsa={sim.rcsa}
               sensitivity={sim.sensitivity}
-              spec={sim.spec}
-              onApplyFix={onApplyFix}
               viewMode={viewMode}
               onViewModeChange={onViewModeChange}
             />
@@ -3761,7 +3700,7 @@ export const MetricsPanel: React.FC<Props> = ({
                         )}
                         {kin.bracket_creep_risk && (
                           <div className="warning-pill bad">
-                            ⚠ Belt tension exceeds gantry bracket creep limit — upgrade to PPA-CF/PPS-CF or CNC Aluminum
+                            ⚠ Belt tension exceeds gantry bracket creep limit
                           </div>
                         )}
                         {kin.motor_overcurrent_risk && (
@@ -3771,7 +3710,7 @@ export const MetricsPanel: React.FC<Props> = ({
                         )}
                         {kin.belt_overtension_risk && (
                           <div className="warning-pill bad">
-                            ⚠ Belt overtensioned — upgrade to 9mm/12mm Aramid
+                            ⚠ Belt overtensioned — exceeds working tension rating
                           </div>
                         )}
                         {kin.shaft_bending_risk && (
@@ -3784,7 +3723,7 @@ export const MetricsPanel: React.FC<Props> = ({
                     {mod.modes && mod.modes.length > 0 && (
                       <div className="modal-summary-block">
                         <div className="modal-summary-head">
-                          <span>What&apos;s Vibrating &amp; How to Fix</span>
+                          <span>Dominant Vibration Modes &amp; Limits</span>
                           <button
                             type="button"
                             className={`deep-verify-cta ${viewMode === "modal" ? "active" : ""}`}
@@ -3900,28 +3839,11 @@ export const MetricsPanel: React.FC<Props> = ({
 
                                   {m.how_to_fix ? (
                                     <div className="modal-mode-fix">
-                                      <span className="sens-fix-prefix">Fix:</span> {m.how_to_fix}
+                                      <span className="sens-fix-prefix">Main limit:</span> {m.how_to_fix}
                                     </div>
                                   ) : m.what_is_shaking ? (
                                     <div className="modal-mode-why">{m.what_is_shaking}</div>
                                   ) : null}
-
-                                  {(() => {
-                                    const modeFix = getQuickFixForMode(m, sim.spec);
-                                    if (!modeFix || !onApplyFix) return null;
-                                    return (
-                                      <div className="quick-fix-row">
-                                        <button
-                                          type="button"
-                                          className="quick-fix-btn"
-                                          onClick={() => onApplyFix(modeFix)}
-                                          title={modeFix.summary}
-                                        >
-                                          ⚡ {modeFix.buttonLabel}
-                                        </button>
-                                      </div>
-                                    );
-                                  })()}
                                 </div>
                               );
                             });
