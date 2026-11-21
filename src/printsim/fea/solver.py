@@ -172,24 +172,21 @@ def solve_static_fea(
     u_y = _solve_linear_system(K, F_y, free_dofs)
     defl_y_um = float(np.linalg.norm(u_y[noz_dof : noz_dof + 3])) * 1e6
 
-    # 4. Belt-induced frame preload (self-equilibrating internal compression along X/Y belt runs: sum F = 0)
+    # 4. Belt-induced frame preload (true CoreXY belt routing: self-equilibrating, sum F = 0)
+    # Neither 2WD nor AWD CoreXY runs a belt across the open front door (g_fl <-> g_fr).
+    # Belt spans run along: rear bar (g_rl <-> g_rr), left/right Y rails (g_fl <-> y_car_l <-> g_rl),
+    # and the moving X gantry beam (y_car_l <-> y_car_r).
     F_belt = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "corexy":
         t0 = assembly.spec.gantry.belt.pretension_n
-        if assembly.spec.gantry.drive_mode == "awd":
-            belt_loads = [
-                ("g_rl", +t0, -t0),
-                ("g_rr", -t0, -t0),
-                ("g_fl", +t0, +t0),
-                ("g_fr", -t0, +t0),
-            ]
-        else:
-            belt_loads = [
-                ("g_rl", +t0, -t0),
-                ("g_rr", -t0, -t0),
-                ("g_fl", 0.0, +t0),
-                ("g_fr", 0.0, +t0),
-            ]
+        belt_loads = [
+            ("g_rl", +2.0 * t0, -t0),
+            ("g_rr", -2.0 * t0, -t0),
+            ("g_fl", 0.0, +2.0 * t0),
+            ("g_fr", 0.0, +2.0 * t0),
+            ("y_car_l", +2.0 * t0, -t0),
+            ("y_car_r", -2.0 * t0, -t0),
+        ]
         for nid, fx, fy in belt_loads:
             if nid in node_idx:
                 bi = 6 * node_idx[nid]

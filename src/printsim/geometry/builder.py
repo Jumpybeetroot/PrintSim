@@ -219,17 +219,27 @@ def panel_mechanical_properties(
     mounting: str,
     bolted_to_gantry: bool = False,
 ) -> dict[str, float]:
-    """Compute panel shear, flexural, Timoshenko buckling, and areal mass properties (SI).
+    """Compute panel shear, flexural, Timoshenko buckling, Huth joint, and areal mass properties (SI).
 
     - ACM / Dibond (``acm_dibond``) uses a 3-layer Aluminum/LDPE/Aluminum sandwich model
-      calibrated to 3A Composites DIBOND datasheets (0.3 mm Al skins + LDPE core).
-    - Homogeneous solid sheets use isotropic thin-plate theory.
-    - Applies Timoshenko shear-buckling knockdown ``psi_buckle in [0.50, 1.0]`` and puts
-      perimeter fastener/mount shear stiffness ``k_mount`` in series with sheet shear
-      stiffness ``k_sheet``.
+      calibrated to 3A Composites DIBOND datasheets (0.3 mm Al skins + LDPE core) with
+      Timoshenko core-shear knockdown on flexural rigidity.
+    - Homogeneous solid sheets use isotropic thin-plate theory (``D = E t^3 / (12 (1-nu^2))``).
+    - Applies Timoshenko shear-buckling / oil-canning knockdown ``psi_buckle in [0.22, 1.0]``.
+    - Models perimeter bolted fastener shear stiffness via the Huth-Schwarmann (1986) single-shear
+      bolted joint formula (M5 fasteners on ~85 mm pitch into 2020/3030 T-slot flange) with
+      material-specific bearing thickness and clamping preload efficiency (solid metal friction-lock
+      vs unpotted ACM soft LDPE core crush vs polymer thermal-clearance holes).
     """
     t = max(float(thickness_m), 1e-4)
-    if pmat.id == "acm_dibond":
+    is_acm = pmat.id == "acm_dibond"
+    is_polymer = pmat.youngs_modulus_pa < 10.0e9
+    is_composite = pmat.id == "carbon_fiber_plate"
+
+    b_min = max(min(float(bay_w_m), float(bay_h_m)), 0.04)
+    b_max = max(max(float(bay_w_m), float(bay_h_m)), b_min)
+
+    if is_acm:
         t_skin = min(0.0003, 0.25 * t)
         e_al = 70.0e9
         nu_al = 0.33
@@ -240,32 +250,76 @@ def panel_mechanical_properties(
         rho_core = 920.0
 
         gt_0 = g_al * (2.0 * t_skin) + g_core * t_core
-        flexural_d = e_al * (t_skin * (t - t_skin) ** 2) / (2.0 * (1.0 - nu_al**2))
+        d_bend = e_al * (t_skin * (t - t_skin) ** 2) / (2.0 * (1.0 - nu_al**2))
+        s_core = g_core * ((t - t_skin) ** 2) / max(t_core, 1e-5) if t_core > 1e-6 else 1e12
+        # Sandwich Timoshenko flexural rigidity including soft LDPE core shear deformation
+        flexural_d = 1.0 / (
+            1.0 / max(d_bend, 1e-9) + ((math.pi / b_min) ** 2) / max(s_core, 1e-9)
+        )
         areal_mass = rho_al * (2.0 * t_skin) + rho_core * t_core
+        # Unpotted sandwich bolts bear primarily on the single 0.3 mm Al skin against the extrusion
+        t_bear = t_skin
+        e_bear = e_al
     else:
         gt_0 = pmat.effective_shear_modulus_pa * t
         flexural_d = (pmat.youngs_modulus_pa * (t**3)) / (
             12.0 * (1.0 - pmat.poisson_ratio**2)
         )
         areal_mass = pmat.density_kg_m3 * t
+        t_bear = t
+        e_bear = pmat.youngs_modulus_pa
 
-    b_min = max(min(float(bay_w_m), float(bay_h_m)), 0.04)
-    b_max = max(max(float(bay_w_m), float(bay_h_m)), b_min)
     k_s = 5.34 + 4.0 * ((b_min / b_max) ** 2)
     n_xy_cr = k_s * (math.pi**2) * flexural_d / (b_min**2)
-    n_xy_ref = 1200.0
-    psi_buckle = 0.50 + 0.50 * (n_xy_cr / (n_xy_cr + n_xy_ref))
+    # Critical shear-buckling & thin-plate oil-canning transition (~40 kN/m -> 3-4 mm Al plate)
+    n_xy_ref = 40_000.0
+    psi_buckle = 0.22 + 0.78 * (n_xy_cr / (n_xy_cr + n_xy_ref))
 
     h_eff = max(float(bay_h_m), 0.04)
     w_eff = max(float(bay_w_m), 0.04)
-    k_sheet = psi_buckle * gt_0 * (float(bay_w_m) / h_eff)
+    k_sheet = psi_buckle * gt_0 * (w_eff / h_eff)
 
     if mounting == "clip_enclosure":
         k_mount = 28_000.0
+        eta_comp = 0.0
     elif mounting == "bolted_structural":
-        k_mount = 9.0e6 if bolted_to_gantry else 6.0e6
+        # Huth-Schwarmann (1986) single-shear M5 bolted fastener flexibility
+        d_bolt = 0.005
+        e_bolt = 200.0e9
+        t_ext = 0.0022  # 2020/3030 aluminum extrusion T-slot flange thickness
+        e_ext = 69.0e9
+        a_huth = 2.0 / 3.0
+        b_huth = 3.0 if (not is_acm and not is_polymer and not is_composite) else 4.2
+        c_bolt = (
+            (((t_bear + t_ext) / (2.0 * d_bolt)) ** a_huth)
+            * b_huth
+            * (
+                1.0 / (t_bear * e_bear)
+                + 1.0 / (t_ext * e_ext)
+                + 1.0 / (2.0 * t_bear * e_bolt)
+                + 1.0 / (2.0 * t_ext * e_bolt)
+            )
+        )
+        k_bolt = 1.0 / max(c_bolt, 1e-12)
+
+        # Clamping / preload efficiency (metal-on-metal friction lock vs soft LDPE core crush vs polymer)
+        if is_acm:
+            clamp_eff = 0.22
+        elif is_polymer:
+            clamp_eff = 0.30
+        elif is_composite:
+            clamp_eff = 0.80
+        else:
+            clamp_eff = 1.0
+
+        # M5 bolts at ~85 mm pitch along loaded edge; top & bottom rows act in series (N_edge / 2)
+        n_edge = max(3.0, round(w_eff / 0.085) + 1.0)
+        n_eff = (n_edge * 0.5) * (1.35 if bolted_to_gantry else 1.0)
+        k_mount = n_eff * k_bolt * clamp_eff
+        eta_comp = 0.55 * clamp_eff * psi_buckle
     else:
         k_mount = 0.0
+        eta_comp = 0.0
 
     if k_mount <= 0.0:
         k_panel_eff = 0.0
@@ -285,6 +339,9 @@ def panel_mechanical_properties(
         "flexural_d_nm": flexural_d,
         "psi_buckle": psi_buckle,
         "eta_mount": eta_mount,
+        "eta_comp": eta_comp,
+        "t_bear_m": t_bear,
+        "e_bear_pa": e_bear,
         "areal_mass_kg_m2": areal_mass,
     }
 
@@ -399,6 +456,115 @@ def _add_shear_panel_bay(
             node_map[nid].lumped_mass_kg += 0.15 * actual_panel_mass
 
     return a_eq, actual_panel_mass, props
+
+
+def _member_local_axes(p0: np.ndarray, p1: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return local (ey, ez) unit vectors matching ``fea.beam3d.beam_rotation_matrix``."""
+    vec = p1 - p0
+    length = float(np.linalg.norm(vec))
+    ex = vec / max(length, 1e-12)
+    global_z = np.array([0.0, 0.0, 1.0])
+    ref = np.array([0.0, 1.0, 0.0]) if abs(float(np.dot(ex, global_z))) > 0.99 else global_z
+    ey = np.cross(ref, ex)
+    ey /= max(float(np.linalg.norm(ey)), 1e-12)
+    ez = np.cross(ex, ey)
+    ez /= max(float(np.linalg.norm(ez)), 1e-12)
+    return ey, ez
+
+
+def _apply_composite_panel_stiffening(
+    members: list[StructuralMember],
+    node_map: dict[str, StructuralNode],
+    pmat: MaterialSpec,
+    thickness_m: float,
+    props: dict[str, float],
+    bolted_to_gantry: bool,
+) -> None:
+    """Apply parallel-axis composite flange / rail-backer bending stiffening to bolted frame beams.
+
+    Rigidly bolted structural panels act compositely with the aluminum extrusions they are
+    bolted against (columns, top rails, and fixed gantry Y-rails / rear bar). Uses von Karman /
+    Eurocode 3 effective flange width ``b_eff = min(15 * t_bear, 60 mm)`` projected onto exact
+    3D beam local axes ``ey, ez`` without altering ``area_m2`` (no mass double-counting).
+    """
+    eta_c = float(props.get("eta_comp", 0.0))
+    if eta_c <= 1e-4:
+        return
+
+    t_load = float(props.get("t_bear_m", thickness_m))
+    e_load = float(props.get("e_bear_pa", pmat.youngs_modulus_pa))
+    g_load = 26.3e9 if pmat.id == "acm_dibond" else pmat.effective_shear_modulus_pa
+    b_eff = min(15.0 * t_load, 0.060)
+    a_f = b_eff * t_load
+
+    nx = np.array([1.0, 0.0, 0.0])
+    ny = np.array([0.0, 1.0, 0.0])
+    nz = np.array([0.0, 0.0, 1.0])
+    panel_attachments: dict[str, list[np.ndarray]] = {
+        "col_fl_low": [nx],
+        "col_fl_top": [nx],
+        "col_fr_low": [nx],
+        "col_fr_top": [nx],
+        "col_rl_low": [nx, ny],
+        "col_rl_top": [nx, ny],
+        "col_rr_low": [nx, ny],
+        "col_rr_top": [nx, ny],
+        "top_front": [nz],
+        "top_rear": [ny, nz],
+        "top_left": [nx, nz],
+        "top_right": [nx, nz],
+    }
+    if bolted_to_gantry:
+        panel_attachments.update(
+            {
+                "y_rail_l_f": [nx],
+                "y_rail_l_r": [nx],
+                "y_rail_r_f": [nx],
+                "y_rail_r_r": [nx],
+                "gantry_rear_bar": [ny],
+            }
+        )
+
+    for member in members:
+        normals = panel_attachments.get(member.id)
+        if not normals:
+            continue
+        p0 = node_map[member.start_id].position_m
+        p1 = node_map[member.end_id].position_m
+        ey, ez = _member_local_axes(p0, p1)
+        n_e = e_load / max(member.material.youngs_modulus_pa, 1e6)
+        n_g = g_load / max(member.material.effective_shear_modulus_pa, 1e6)
+        a_ext = member.profile.area_m2
+        d_c = 0.5 * member.profile.width_m + 0.5 * thickness_m
+
+        i_par = (a_ext * (n_e * a_f)) / max(a_ext + n_e * a_f, 1e-12) * (d_c**2)
+        i_loc = n_e * (b_eff * (t_load**3)) / 12.0
+        i_oop = eta_c * (i_par + i_loc)
+        i_inp = eta_c * n_e * (t_load * (b_eff**3)) / 12.0 * 0.25
+        dj = eta_c * n_g * (b_eff * (t_load**3)) / 3.0
+
+        d_iy = 0.0
+        d_iz = 0.0
+        d_jt = 0.0
+        for n_p in normals:
+            cy = float(np.dot(n_p, ey)) ** 2
+            cz = float(np.dot(n_p, ez)) ** 2
+            # Local iz governs bending in ey; local iy governs bending in ez
+            d_iz += cy * i_oop + cz * i_inp
+            d_iy += cz * i_oop + cy * i_inp
+            d_jt += dj
+
+        member.profile = ProfileSpec.model_construct(
+            id=member.profile.id,
+            name=member.profile.name,
+            shape=member.profile.shape,
+            width_m=member.profile.width_m,
+            height_m=member.profile.height_m,
+            area_m2=member.profile.area_m2,
+            iy_m4=member.profile.iy_m4 + d_iy,
+            iz_m4=member.profile.iz_m4 + d_iz,
+            j_m4=member.profile.j_m4 + d_jt,
+        )
 
 
 def _attach_toolhead_cog_and_nozzle(
@@ -663,13 +829,12 @@ def _build_corexy(
     _add_member(members, "top_left", "t_fl", "t_rl", fp, fm)
     _add_member(members, "top_right", "t_fr", "t_rr", fp, fm)
 
-    # Mid gantry frame rails (closed 4-bar gantry perimeter: left/right Y rails + front/rear motor bars)
+    # Mid gantry frame rails (standard Voron Trident / CoreXY layout: left/right Y rails + rear motor bar, open front door)
     _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
     _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
     _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
     _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
     _add_member(members, "gantry_rear_bar", "g_rl", "g_rr", fp, fm)
-    _add_member(members, "gantry_front_bar", "g_fl", "g_fr", fp, fm)
 
     # Moving X gantry beam (split at toolhead node)
     xp = spec.gantry.x_beam_profile
@@ -764,6 +929,16 @@ def _build_corexy(
             total_panel_mass_kg += bay_mass
             if rep_panel_props is None and bay in ("rear_low", "rear"):
                 rep_panel_props = props
+
+        if panel_mounting == "bolted_structural" and rep_panel_props is not None:
+            _apply_composite_panel_stiffening(
+                members,
+                nmap,
+                pmat,
+                panel_t_m,
+                rep_panel_props,
+                bolted_to_gantry=bolted_to_gantry,
+            )
 
         if bolted_to_gantry:
             virtual_mat = _make_panel_virtual_material(pmat)

@@ -77,11 +77,12 @@ def _compute_scores_and_diagnostics(
 ) -> tuple[ScoreBreakdown, list[str]]:
     diag: list[str] = []
 
-    # 1. Structural score (deflection < 15um ideal, fundamental freq > 60Hz ideal, SF >= 5)
+    # 1. Structural score (deflection < 15um ideal, high fundamental freq rewarded up to 200 Hz, SF >= 4)
     defl_pen = min(45.0, static_fea.combined_max_deflection_um * 0.65)
-    freq_bonus = min(45.0, modal_fea.fundamental_freq_hz * 0.68)
+    f0 = modal_fea.fundamental_freq_hz
+    freq_bonus = min(36.0, f0 * 0.60) + min(12.0, max(0.0, f0 - 60.0) / 12.0)
     sf_pen = 0.0 if static_fea.min_safety_factor >= 4.0 else (4.0 - static_fea.min_safety_factor) * 10.0
-    structural = max(0.0, min(100.0, 55.0 + freq_bonus - defl_pen - sf_pen))
+    structural = max(0.0, min(100.0, 52.0 + freq_bonus - defl_pen - sf_pen))
 
     if modal_fea.fundamental_freq_hz < 40.0:
         diag.append(
@@ -112,9 +113,11 @@ def _compute_scores_and_diagnostics(
             "(e.g., leadscrew_triple) if direct gantry-to-panel bolting is desired."
         )
 
-    # 2. Dynamics score (effective resonance accel, motor torque margin, belt tension)
+    # 2. Dynamics score (effective resonance accel up to high-speed AWD range, motor torque margin, belt integrity)
     rec_a = modal_fea.recommended_max_accel_mm_s2
-    accel_score = min(55.0, (rec_a / 12000.0) * 55.0)
+    accel_score = min(45.0, (rec_a / 12000.0) * 45.0) + min(
+        10.0, max(0.0, rec_a - 12000.0) / 6000.0
+    )
     torque_score = min(30.0, kinematics.torque_safety_margin * 15.0)
     belt_score = 0.0 if kinematics.belt_slip_risk else 15.0
     belt_overtension_pen = 8.0 if kinematics.belt_overtension_risk else 0.0
@@ -191,9 +194,11 @@ def _compute_scores_and_diagnostics(
             f"(recommended input shaper max accel: {modal_fea.recommended_max_accel_mm_s2:.0f} mm/s^2)."
         )
 
-    # 5. Packaging / mass / cost efficiency
+    # 5. Packaging / moving-mass / cost efficiency
     pkg_score = min(45.0, kinematics.packaging_efficiency_pct * 1.4)
-    mass_score = max(0.0, min(30.0, 30.0 * (1.0 - max(0.0, assembly.total_mass_kg - 8.0) / 28.0)))
+    moving_mass_score = max(0.0, min(20.0, 20.0 * (1.0 - max(0.0, assembly.y_moving_mass_kg - 0.35) / 1.5)))
+    frame_mass_score = max(0.0, min(10.0, 10.0 * (1.0 - max(0.0, assembly.total_mass_kg - 15.0) / 60.0)))
+    mass_score = moving_mass_score + frame_mass_score
     cost_score = max(0.0, min(25.0, 25.0 * (1.0 - max(0.0, assembly.estimated_material_cost_usd - 220.0) / 800.0)))
     efficiency = max(0.0, min(100.0, pkg_score + mass_score + cost_score))
 

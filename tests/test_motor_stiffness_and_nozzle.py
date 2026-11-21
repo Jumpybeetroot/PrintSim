@@ -254,17 +254,23 @@ def test_toolhead_cog_nozzle_drop_and_mount_material_stiffness() -> None:
 
 def test_panel_fastener_series_compliance_and_vertical_mass_distribution() -> None:
     """Verify clip <25% mild stiffening, bolted 4mm ACM (+gantry) dominance, and 0.35/0.15 mass lumping."""
-    # 1. Exact series fastener compliance formula check
+    # 1. Exact series fastener compliance formula check (Huth bolted joint model)
     dibond = get_material("acm_dibond")
+    al5052 = get_material("aluminum_5052_sheet")
     p_fly = panel_mechanical_properties(dibond, 0.004, 0.46, 0.50, "bolted_structural", bolted_to_gantry=False)
     p_gan = panel_mechanical_properties(dibond, 0.004, 0.46, 0.50, "bolted_structural", bolted_to_gantry=True)
+    p_al4 = panel_mechanical_properties(al5052, 0.004, 0.46, 0.50, "bolted_structural", bolted_to_gantry=True)
     assert p_fly["k_panel_eff_n_m"] == pytest.approx(
-        (p_fly["k_sheet_n_m"] * 6.0e6) / (p_fly["k_sheet_n_m"] + 6.0e6), rel=1e-9
+        (p_fly["k_sheet_n_m"] * p_fly["k_mount_n_m"]) / (p_fly["k_sheet_n_m"] + p_fly["k_mount_n_m"]),
+        rel=1e-9,
     )
     assert p_gan["k_panel_eff_n_m"] == pytest.approx(
-        (p_gan["k_sheet_n_m"] * 9.0e6) / (p_gan["k_sheet_n_m"] + 9.0e6), rel=1e-9
+        (p_gan["k_sheet_n_m"] * p_gan["k_mount_n_m"]) / (p_gan["k_sheet_n_m"] + p_gan["k_mount_n_m"]),
+        rel=1e-9,
     )
+    assert p_gan["k_mount_n_m"] > p_fly["k_mount_n_m"]
     assert p_gan["gt_eff_n_m"] > p_fly["gt_eff_n_m"]
+    assert p_al4["k_panel_eff_n_m"] > p_gan["k_panel_eff_n_m"] * 5.0
 
     # 2. Open vs Clip 3mm Acrylic vs Bolted 3mm Acrylic vs Bolted 3/4/6mm ACM (+gantry)
     s_open = _base_corexy(enclosed=False, mounting="none", material="acm_dibond", thickness_mm=3.0)
@@ -310,7 +316,7 @@ def test_panel_fastener_series_compliance_and_vertical_mass_distribution() -> No
 
     # Monotonic static stiffness across thicknesses & 6mm ACM remains far stiffer than bolted acrylic/open
     assert st_bolt_6acm.toolhead_stiffness_x_n_per_mm > st_bolt_4acm.toolhead_stiffness_x_n_per_mm > st_bolt_3acm.toolhead_stiffness_x_n_per_mm
-    assert mo_bolt_6acm.fundamental_freq_hz > mo_bolt_acr.fundamental_freq_hz > mo_open.fundamental_freq_hz * 2.0
+    assert mo_bolt_6acm.fundamental_freq_hz > mo_bolt_acr.fundamental_freq_hz > mo_open.fundamental_freq_hz * 1.45
 
     # Verify exact 0.35 / 0.15 vertical wall mass lumping on flying-gantry CoreXY (clean 4-bay geometry)
     s_fly_open = _base_corexy(enclosed=False, mounting="none", z_drive="belted_quad_z")

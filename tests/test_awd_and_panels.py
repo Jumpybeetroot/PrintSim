@@ -120,12 +120,12 @@ def test_structural_panel_monotonicity_frequency_stiffness_and_mass() -> None:
     assert (defl_open - defl_clip) / defl_open < 0.25
     assert f_clip < f_open * 1.15  # no artificial 2x jump from foam-tape/twist-clip enclosure
 
-    # Bolted structural panels dramatically outperform open & clip-in frames
-    assert f_bolt_acr > f_open * 2.0
-    assert defl_bolt_acr < defl_open * 0.58
+    # Bolted structural panels outperform open & clip-in frames; solid Al beats ACM beats acrylic
+    assert f_bolt_acr > f_open * 1.45
+    assert defl_bolt_acr < defl_open * 0.65
     assert f_bolt_3acm > f_bolt_acr > f_clip
     assert f_bolt_6acm > f_bolt_acr and f_bolt_6acm > f_open * 2.4
-    assert f_bolt_4al > f_bolt_acr and f_bolt_4al > f_open * 2.4
+    assert f_bolt_4al > f_bolt_3acm and f_bolt_4al > f_bolt_6acm and f_bolt_4al > f_open * 2.8
 
     # Thickness increase (3mm -> 6mm Dibond) adds 3mm LDPE core mass across the 4 bays
     expected_core_delta = (2.0 * 0.46 * 0.50 + 0.46 * 0.50 + 0.46 * 0.46) * (0.003 * 920.0)
@@ -327,31 +327,82 @@ def test_dibond_tds_sandwich_mechanics_and_timoshenko_buckling() -> None:
     for t_mm, target_mass, target_d in tds_targets:
         props = panel_mechanical_properties(dibond, t_mm * 1e-3, 0.46, 0.50, "bolted_structural")
         assert props["areal_mass_kg_m2"] == pytest.approx(target_mass, rel=0.02)
-        assert props["flexural_d_nm"] == pytest.approx(target_d, rel=0.05)
-        assert 0.50 <= props["psi_buckle"] <= 1.0
-        assert props["k_mount_n_m"] == pytest.approx(6.0e6, rel=1e-9)
+        # Timoshenko core-shear knockdown keeps effective D slightly below pure bending TDS D
+        assert 0.80 * target_d <= props["flexural_d_nm"] <= 1.05 * target_d
+        assert 0.22 <= props["psi_buckle"] <= 1.0
+        # Series stiffness identity holds identically with Huth bolted joint stiffness
+        expected_k_eff = (props["k_sheet_n_m"] * props["k_mount_n_m"]) / (
+            props["k_sheet_n_m"] + props["k_mount_n_m"]
+        )
+        assert props["k_panel_eff_n_m"] == pytest.approx(expected_k_eff, rel=1e-9)
         expected_eta = props["k_panel_eff_n_m"] / props["k_sheet_n_m"]
         assert props["eta_mount"] == pytest.approx(expected_eta, rel=1e-9)
         props_gantry = panel_mechanical_properties(
             dibond, t_mm * 1e-3, 0.46, 0.50, "bolted_structural", bolted_to_gantry=True
         )
-        assert props_gantry["k_mount_n_m"] == pytest.approx(9.0e6, rel=1e-9)
+        assert props_gantry["k_mount_n_m"] == pytest.approx(props["k_mount_n_m"] * 1.35, rel=1e-6)
         assert props_gantry["gt_eff_n_m"] > props["gt_eff_n_m"]
 
-    # Timoshenko buckling factor decreases on thin flexible plastic and increases when span shortens
+    # Timoshenko buckling factor & Huth joint stiffness: solid Al 5052 far stiffer than ACM & acrylic
     acrylic = get_material("acrylic_pmma")
     al5052 = get_material("aluminum_5052_sheet")
     p_2mm_acrylic = panel_mechanical_properties(acrylic, 0.002, 0.46, 0.50, "bolted_structural")
     p_3mm_acrylic = panel_mechanical_properties(acrylic, 0.003, 0.46, 0.50, "bolted_structural")
+    p_15mm_al = panel_mechanical_properties(al5052, 0.0015, 0.46, 0.50, "bolted_structural")
     p_4mm_al = panel_mechanical_properties(al5052, 0.004, 0.46, 0.50, "bolted_structural")
+    p_5mm_al = panel_mechanical_properties(al5052, 0.005, 0.46, 0.50, "bolted_structural")
+    p_3mm_acm = panel_mechanical_properties(dibond, 0.003, 0.46, 0.50, "bolted_structural")
     p_3mm_acrylic_gantry = panel_mechanical_properties(acrylic, 0.003, 0.46, 0.445, "bolted_structural")
 
-    assert 0.50 < p_2mm_acrylic["psi_buckle"] < p_3mm_acrylic["psi_buckle"] < p_4mm_al["psi_buckle"] <= 1.0
+    assert 0.22 < p_2mm_acrylic["psi_buckle"] < p_3mm_acrylic["psi_buckle"] < p_15mm_al["psi_buckle"] < p_4mm_al["psi_buckle"] < p_5mm_al["psi_buckle"] <= 1.0
+    assert p_5mm_al["k_panel_eff_n_m"] > p_4mm_al["k_panel_eff_n_m"] > p_15mm_al["k_panel_eff_n_m"] > p_3mm_acm["k_panel_eff_n_m"] > p_3mm_acrylic["k_panel_eff_n_m"]
+    assert p_4mm_al["k_mount_n_m"] > p_3mm_acm["k_mount_n_m"] * 5.0
     assert p_3mm_acrylic_gantry["psi_buckle"] > p_3mm_acrylic["psi_buckle"]
     clip_props = panel_mechanical_properties(acrylic, 0.003, 0.46, 0.50, "clip_enclosure")
     assert clip_props["k_mount_n_m"] == pytest.approx(28_000.0, rel=1e-9)
     assert clip_props["k_panel_eff_n_m"] < 28_000.0
     assert panel_mechanical_properties(acrylic, 0.003, 0.46, 0.50, "none")["gt_eff_n_m"] == 0.0
+
+
+def test_thick_aluminum_beats_thin_aluminum_and_acm_without_front_gantry_bar() -> None:
+    """Standard Voron Trident / Monolith has no front gantry bar, and 4-5mm Al beats 1.5-2mm Al & ACM."""
+    base = PrinterSpec.from_yaml("examples/voron_monolith_awd.yaml")
+
+    def _run(mat: str, thk_mm: float):
+        s = base.model_copy(deep=True)
+        s.frame.enclosed_panels = True
+        s.frame.panel_mounting = "bolted_structural"
+        s.frame.panel_material = mat
+        s.frame.panel_thickness_mm = thk_mm
+        asm = build_assembly(s)
+        return asm, solve_static_fea(asm), solve_modal_fea(asm)
+
+    asm_acm3, st_acm3, mo_acm3 = _run("acm_dibond", 3.0)
+    _, st_acm4, mo_acm4 = _run("acm_dibond", 4.0)
+    _, st_al15, mo_al15 = _run("aluminum_5052_sheet", 1.5)
+    _, st_al20, mo_al20 = _run("aluminum_5052_sheet", 2.0)
+    _, st_al40, mo_al40 = _run("aluminum_5052_sheet", 4.0)
+    _, st_al50, mo_al50 = _run("aluminum_5052_sheet", 5.0)
+
+    # Standard Voron Trident / Monolith CoreXY has an open front door at gantry height (no gantry_front_bar)
+    assert all(m.id != "gantry_front_bar" for m in asm_acm3.members)
+
+    # 4mm & 5mm solid Al 5052 strictly beat 3mm & 4mm ACM on frequency, safe accel, and stiffness
+    assert mo_al40.fundamental_freq_hz > mo_acm3.fundamental_freq_hz + 40.0
+    assert mo_al50.fundamental_freq_hz > mo_acm4.fundamental_freq_hz + 40.0
+    assert mo_al40.recommended_max_accel_mm_s2 > mo_acm3.recommended_max_accel_mm_s2 * 1.5
+    assert st_al40.toolhead_stiffness_x_n_per_mm > st_acm3.toolhead_stiffness_x_n_per_mm
+    assert st_al50.combined_max_deflection_um < st_acm3.combined_max_deflection_um
+
+    # 4mm & 5mm solid Al strictly beat flimsy 1.5mm & 2mm Al sheets (buckling + composite flange action)
+    assert mo_al40.fundamental_freq_hz > mo_al20.fundamental_freq_hz > mo_al15.fundamental_freq_hz
+    assert mo_al50.fundamental_freq_hz > mo_al20.fundamental_freq_hz > mo_al15.fundamental_freq_hz
+    assert mo_al40.shaper_y.structural_freq_hz > mo_al20.shaper_y.structural_freq_hz > mo_al15.shaper_y.structural_freq_hz
+    assert st_al50.toolhead_stiffness_x_n_per_mm > st_al40.toolhead_stiffness_x_n_per_mm > st_al20.toolhead_stiffness_x_n_per_mm > st_al15.toolhead_stiffness_x_n_per_mm
+
+    # Even without gantry_front_bar, true CoreXY belt routing keeps front corner flex tiny (< 5 um)
+    gfl_um = (sum(v * v for v in st_al40.nodal_displacements_mm["g_fl"]) ** 0.5) * 1000.0
+    assert gfl_um < 5.0
 
 
 @pytest.mark.parametrize("z_drive,bolt_to_gantry", [
