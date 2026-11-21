@@ -12,6 +12,21 @@ from printsim.schema import PrinterSpec
 
 Objective = Literal["balanced", "speed", "rigidity", "budget"]
 
+TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM: dict[str, float] = {
+    "abs_printed": 380.0,
+    "pet_cf_printed": 650.0,
+    "pa12_cf_printed": 800.0,
+    "ppa_cf_printed": 1150.0,
+    "aluminum_6061_t6": 1850.0,
+}
+
+_PANEL_CONFIG_OPTIONS: tuple[tuple[str, str, float], ...] = (
+    ("none", "acrylic_pmma", 3.0),
+    ("clip_enclosure", "acrylic_pmma", 3.0),
+    ("bolted_structural", "acm_dibond", 4.0),
+    ("bolted_structural", "aluminum_5052_sheet", 4.0),
+)
+
 
 @dataclass
 class OptimizationCandidate:
@@ -83,51 +98,80 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
     mutation_pool = [
         "frame_profile",
         "bracing",
-        "enclosed_panels",
+        "panel_config",
         "x_beam",
         "belt",
         "hotend_melt",
         "hotend_heater",
         "heatbreak",
         "toolhead_mass",
+        "toolhead_mount",
+        "bed_mount",
+        "gantry_brackets",
+        "extrusion_filling",
         "accel",
     ]
+    if child.architecture == "corexy":
+        mutation_pool.extend(["drive_mode", "bed_z_drive"])
     chosen = rng.sample(mutation_pool, n_mutations)
 
     for m in chosen:
         if m == "frame_profile":
-            val = rng.choice(["extrusion_2020", "extrusion_2040", "extrusion_3030", "extrusion_4040", "al_tube_30x30x3"])
-            if val != child.frame.profile:
-                child.frame.profile = val
-                changes.append(f"frame.profile={val}")
+            opts = ["extrusion_2020", "extrusion_2040", "extrusion_3030", "extrusion_4040", "al_tube_30x30x3"]
+            alts = [x for x in opts if x != child.frame.profile] or opts
+            val = rng.choice(alts)
+            child.frame.profile = val
+            changes.append(f"frame.profile={val}")
         elif m == "bracing":
-            val = rng.choice(["none", "corner_gussets", "rear_cross", "full_truss"])
-            if val != child.frame.bracing:
-                child.frame.bracing = val  # type: ignore[assignment]
-                changes.append(f"frame.bracing={val}")
-        elif m == "enclosed_panels":
-            child.frame.enclosed_panels = not child.frame.enclosed_panels
-            changes.append(f"frame.enclosed_panels={child.frame.enclosed_panels}")
-        elif m == "x_beam":
-            prof, mat = rng.choice(
-                [
-                    ("extrusion_2020", "aluminum_6063_t5"),
-                    ("cf_tube_20x20x1_5", "carbon_fiber_tube"),
-                    ("cf_tube_20x20x2", "carbon_fiber_tube"),
-                    ("cf_tube_25x25x2", "carbon_fiber_tube"),
-                    ("al_tube_20x20x2", "aluminum_6061_t6"),
-                ]
+            opts = ["none", "corner_gussets", "rear_cross", "full_truss"]
+            alts = [x for x in opts if x != child.frame.bracing] or opts
+            val = rng.choice(alts)
+            child.frame.bracing = val  # type: ignore[assignment]
+            changes.append(f"frame.bracing={val}")
+        elif m == "panel_config":
+            cur_panel = (
+                child.frame.panel_mounting if child.frame.enclosed_panels else "none",
+                child.frame.panel_material,
+                round(float(child.frame.panel_thickness_mm), 1),
             )
+            alts = [opt for opt in _PANEL_CONFIG_OPTIONS if opt != cur_panel] or list(_PANEL_CONFIG_OPTIONS)
+            mounting, p_mat, p_thick = rng.choice(alts)
+            child.frame.enclosed_panels = mounting != "none"
+            child.frame.panel_mounting = mounting  # type: ignore[assignment]
+            child.frame.panel_material = p_mat
+            child.frame.panel_thickness_mm = p_thick
+            child.frame.bolt_panels_to_gantry = (
+                mounting == "bolted_structural"
+            ) and (not child.is_flying_gantry)
+            changes.append(
+                "frame.panels=none"
+                if mounting == "none"
+                else f"frame.panels={mounting}/{p_mat}/{p_thick:.0f}mm"
+            )
+        elif m == "x_beam":
+            opts = [
+                ("extrusion_2020", "aluminum_6063_t5"),
+                ("cf_tube_20x20x1_5", "carbon_fiber_tube"),
+                ("cf_tube_20x20x2", "carbon_fiber_tube"),
+                ("cf_tube_25x25x2", "carbon_fiber_tube"),
+                ("al_tube_20x20x2", "aluminum_6061_t6"),
+            ]
+            cur_xb = (child.gantry.x_beam_profile, child.gantry.x_beam_material)
+            alts = [x for x in opts if x != cur_xb] or opts
+            prof, mat = rng.choice(alts)
             child.gantry.x_beam_profile = prof
             child.gantry.x_beam_material = mat
             changes.append(f"gantry.x_beam={prof}({mat})")
         elif m == "belt":
             btype = rng.choice(["gt2_6mm", "gt2_9mm", "gt2_12mm"])
             core = rng.choice(["fiberglass", "aramid", "steel"])
-            pret = rng.choice([25.0, 35.0, 45.0])
+            pret_opts = [25.0, 35.0, 45.0] if btype == "gt2_6mm" else [35.0, 45.0, 60.0]
+            pret = rng.choice(pret_opts)
             child.gantry.belt.type = btype  # type: ignore[assignment]
             child.gantry.belt.core = core  # type: ignore[assignment]
             child.gantry.belt.pretension_n = pret
+            if pret > 45.0:
+                child.gantry.double_shear_pulleys = True
             changes.append(f"belt={btype}/{core}@{pret:.0f}N")
         elif m == "hotend_melt":
             val = rng.choice([12.0, 16.0, 20.0, 24.0])
@@ -146,6 +190,46 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
             val = rng.choice([220.0, 280.0, 340.0, 420.0])
             child.toolhead.total_mass_g = val
             changes.append(f"toolhead.mass={val:.0f}g")
+        elif m == "toolhead_mount":
+            mount_mats = list(TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM.keys())
+            alts = [x for x in mount_mats if x != child.toolhead.mount_material] or mount_mats
+            mat = rng.choice(alts)
+            k_n_mm = TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM[mat]
+            child.toolhead.mount_material = mat  # type: ignore[assignment]
+            child.toolhead.internal_stiffness_n_per_mm = k_n_mm
+            changes.append(f"toolhead.mount={mat}({k_n_mm:.0f}N/mm)")
+        elif m == "bed_mount":
+            bed_mounts = ["kinematic_3pt", "floating_4pt", "silicone_4pt", "rigid_4pt"]
+            alts = [x for x in bed_mounts if x != child.bed.mount_type] or bed_mounts
+            val = rng.choice(alts)
+            child.bed.mount_type = val  # type: ignore[assignment]
+            changes.append(f"bed.mount_type={val}")
+        elif m == "gantry_brackets":
+            bkt_mats = ["abs_printed", "ppa_cf_printed", "aluminum_6061_t6"]
+            alts = [x for x in bkt_mats if x != child.gantry.bracket_material] or bkt_mats
+            val = rng.choice(alts)
+            child.gantry.bracket_material = val  # type: ignore[assignment]
+            changes.append(f"gantry.bracket_material={val}")
+        elif m == "extrusion_filling":
+            fillings = ["none", "silica_sand", "epoxy_granite"]
+            alts = [x for x in fillings if x != child.frame.extrusion_filling] or fillings
+            val = rng.choice(alts)
+            child.frame.extrusion_filling = val  # type: ignore[assignment]
+            changes.append(f"frame.extrusion_filling={val}")
+        elif m == "drive_mode":
+            val = "awd" if child.gantry.drive_mode != "awd" else "2wd"
+            child.gantry.drive_mode = val  # type: ignore[assignment]
+            if val == "awd":
+                child.gantry.double_shear_pulleys = True
+            changes.append(f"gantry.drive_mode={val}")
+        elif m == "bed_z_drive":
+            z_opts = ["leadscrew_triple", "belted_quad_z"]
+            alts = [x for x in z_opts if x != child.bed.z_drive] or z_opts
+            val = rng.choice(alts)
+            child.bed.z_drive = val  # type: ignore[assignment]
+            if child.frame.enclosed_panels and child.frame.panel_mounting == "bolted_structural":
+                child.frame.bolt_panels_to_gantry = not child.is_flying_gantry
+            changes.append(f"bed.z_drive={val}")
         elif m == "accel":
             val = rng.choice([4000.0, 7000.0, 10000.0, 14000.0, 18000.0])
             child.kinematics.max_accel_mm_s2 = val

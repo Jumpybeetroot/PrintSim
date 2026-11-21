@@ -19,7 +19,9 @@ from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
 from printsim.fea.topology import export_topology_stl, optimize_preset_topology
 from printsim.geometry import build_assembly, export_assembly_step, export_assembly_stl, generate_bom
 from printsim.schema import (
+    BED_MOUNT_CATALOG,
     EXTRUSION_FILLINGS,
+    FRAME_FEET_CATALOG,
     GANTRY_BRACKET_CATALOG,
     MATERIAL_CATALOG,
     PROFILE_CATALOG,
@@ -81,6 +83,20 @@ def _apply_dot_overrides(base_data: dict[str, Any], overrides: dict[str, Any]) -
     return out
 
 
+def _mode_impact_summary(mode: dict[str, Any]) -> dict[str, Any]:
+    """Return a compact print-impact summary dictionary for a serialized mode shape."""
+    return {
+        "mode_number": mode.get("mode_number"),
+        "frequency_hz": mode.get("frequency_hz"),
+        "mode_label": mode.get("mode_label"),
+        "print_impact_score": mode.get("print_impact_score"),
+        "print_impact_level": mode.get("print_impact_level"),
+        "nozzle_whip_ratio": mode.get("nozzle_whip_ratio"),
+        "toolhead_flop_pct": mode.get("toolhead_flop_pct"),
+        "subsystem_share_pct": mode.get("subsystem_share_pct"),
+    }
+
+
 def _summarize_printer(
     spec: PrinterSpec,
     filament_id: str = "pla",
@@ -115,8 +131,8 @@ TOOLS_SCHEMA = [
         "name": "list_catalog",
         "description": (
             "List all available engineering materials, structural profiles, filaments, steppers, "
-            "toolhead presets, extrusion fillings, gantry bracket materials, rail mount orientations, "
-            "solid part presets, and built-in YAML printer presets in PrintSim."
+            "toolhead presets, extrusion fillings, gantry bracket materials, bed mounts, frame feet, "
+            "rail mount orientations, solid part presets, and built-in YAML printer presets in PrintSim."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
@@ -138,8 +154,9 @@ TOOLS_SCHEMA = [
         "name": "evaluate_printer_yaml",
         "description": (
             "Run full multiphysics 3D printer simulation (static 3D frame FEA, modal resonance & "
-            "Klipper input shaper, kinematics/belt/torque, hotend FVM thermal & volumetric flow, "
-            "and virtual G-code print) on a YAML printer specification."
+            "print-impact ranking, Klipper input shaper, kinematics/belt/torque, hotend FVM thermal, "
+            "adjoint ROI subsystem breakdown, bed plate thermal/modal FEA, and virtual G-code print) "
+            "on a YAML printer specification."
         ),
         "inputSchema": {
             "type": "object",
@@ -158,6 +175,19 @@ TOOLS_SCHEMA = [
                     "maxItems": 3,
                     "default": [0.5, 0.5, 0.5],
                     "description": "Normalized [rx, ry, rz] toolhead/bed probe position in 0..1 inside the build volume",
+                },
+                "panel_mesh_n": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 8,
+                    "default": 2,
+                    "description": "MITC4 shell panel refinement grid per bay (2..8; default 2)",
+                },
+                "accel_override_mm_s2": {
+                    "type": "number",
+                    "minimum": 500.0,
+                    "maximum": 100000.0,
+                    "description": "Optional inertial acceleration override (mm/s^2) for static FEA probe",
                 },
             },
             "required": ["yaml_text"],
@@ -415,9 +445,10 @@ TOOLS_SCHEMA = [
     {
         "name": "analyze_sensitivity_hotspots",
         "description": (
-            "Run analytical structural adjoint and Fox-Kapoor modal sensitivity analysis alongside "
-            "coupled workspace FRF mapping, time-domain corner/ballbar metrology, and RCSA toolhead "
-            "whip diagnostics on a PrintSim YAML printer specification."
+            "Run analytical structural adjoint and Fox-Kapoor modal sensitivity analysis (with "
+            "subsystem_breakdown, primary_problem_subsystem, top stiffen/lighten targets, and "
+            "worst_print_mode_number) alongside coupled workspace FRF mapping, time-domain "
+            "corner/ballbar metrology, and RCSA toolhead whip diagnostics on a PrintSim YAML spec."
         ),
         "inputSchema": {
             "type": "object",
@@ -497,6 +528,8 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 }
                 for k, v in GANTRY_BRACKET_CATALOG.items()
             ],
+            "bed_mounts": list(BED_MOUNT_CATALOG.values()),
+            "frame_feet": list(FRAME_FEET_CATALOG.values()),
             "x_rail_mounts": ["front", "top", "bottom", "dual_top_bottom"],
             "y_rail_mounts": ["top", "inner", "bottom"],
             "drive_types": ["open_loop_stepper", "closed_loop_stepper", "foc_servo"],
@@ -538,13 +571,40 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             if len(raw_pos) != 3:
                 raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
             rel_pos = (float(raw_pos[0]), float(raw_pos[1]), float(raw_pos[2]))
+        panel_mesh_n = int(args.get("panel_mesh_n", 2))
+        if panel_mesh_n < 2 or panel_mesh_n > 8:
+            raise ValueError("panel_mesh_n must be an integer between 2 and 8")
+        raw_accel = args.get("accel_override_mm_s2")
+        accel_override = float(raw_accel) if raw_accel is not None else None
         report = evaluate_printer(
             spec,
             gcode_text=args.get("gcode_text"),
             toolhead_rel_pos=rel_pos,
             filament_id=args.get("filament_id", "pla"),
+            panel_mesh_n=panel_mesh_n,
+            accel_override_mm_s2=accel_override,
         )
-        return report.to_dict(include_toolpath_segments=False)
+        payload = report.to_dict(include_toolpath_segments=False)
+        modal_dict = payload.get("modal_fea") or {}
+        sens_dict = payload.get("sensitivity") or {}
+        bed_plate = payload.get("bed_plate_fea")
+        top_modes = [_mode_impact_summary(m) for m in (modal_dict.get("modes") or [])[:4]]
+        summary: dict[str, Any] = {
+            "composite_score": (payload.get("scores") or {}).get("composite"),
+            "worst_print_mode_number": modal_dict.get("worst_print_mode_number"),
+            "top_modes": top_modes,
+            "primary_problem_subsystem": sens_dict.get("primary_problem_subsystem"),
+            "subsystem_breakdown": sens_dict.get("subsystem_breakdown"),
+        }
+        if isinstance(bed_plate, dict):
+            summary["bed_plate_fea"] = {
+                "total_flatness_error_um": bed_plate.get("total_flatness_error_um"),
+                "taco_buckling_um": bed_plate.get("taco_buckling_um"),
+                "plate_first_mode_hz": bed_plate.get("plate_first_mode_hz"),
+                "first_layer_risk": bed_plate.get("first_layer_risk"),
+            }
+        payload["summary"] = summary
+        return payload
 
     if name == "mutate_and_compare_printer":
         base_spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
@@ -789,6 +849,12 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             filament_id=str(args.get("filament_id", "pla")),
         )
         sens = report.sensitivity.to_dict() if report.sensitivity is not None else {}
+        modal_dict = report.modal_fea.to_dict()
+        worst_mode_num = int(modal_dict.get("worst_print_mode_number", 1))
+        worst_mode = next(
+            (m for m in modal_dict.get("modes", []) if m.get("mode_number") == worst_mode_num),
+            None,
+        )
         wfrf = report.workspace_frf.to_dict() if report.workspace_frf is not None else {}
         tdm = (
             report.time_domain_metrology.to_dict()
@@ -799,6 +865,11 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {
             "printer_name": report.spec.name,
             "fundamental_freq_hz": round(float(report.modal_fea.fundamental_freq_hz), 2),
+            "worst_print_mode_number": worst_mode_num,
+            "worst_print_mode": _mode_impact_summary(worst_mode) if worst_mode is not None else None,
+            "primary_problem_subsystem": sens.get("primary_problem_subsystem"),
+            "subsystem_breakdown": sens.get("subsystem_breakdown", {}),
+            "summary_diagnosis": sens.get("summary_diagnosis", ""),
             "top_stiffen_targets": sens.get("top_stiffen_targets", []),
             "top_lighten_targets": sens.get("top_lighten_targets", []),
             "panel_bay_sensitivities": sens.get("panel_bay_sensitivities", {}),

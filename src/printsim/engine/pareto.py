@@ -17,7 +17,7 @@ from printsim.geometry.bom import PrinterBOM, generate_bom
 from printsim.schema import STEPPER_CATALOG, TOOLHEAD_PRESETS, PrinterSpec, StepperSpec
 
 # ---------------------------------------------------------------------------
-# Discrete Engineering Design Space (9 hardware upgrade genes)
+# Discrete Engineering Design Space (12 hardware upgrade genes)
 # ---------------------------------------------------------------------------
 
 FRAME_PROFILES: tuple[str, ...] = (
@@ -80,7 +80,35 @@ HOTEND_TIERS: tuple[tuple[float, float], ...] = (
     (26.0, 100.0),
 )
 
-_N_VARS = 9
+TOOLHEAD_MOUNT_OPTIONS: tuple[str, ...] = (
+    "abs_printed",
+    "ppa_cf_printed",
+    "aluminum_6061_t6",
+)
+
+TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM: dict[str, float] = {
+    "abs_printed": 380.0,
+    "pet_cf_printed": 650.0,
+    "pa12_cf_printed": 800.0,
+    "ppa_cf_printed": 1150.0,
+    "aluminum_6061_t6": 1850.0,
+}
+
+BED_MOUNT_OPTIONS: tuple[str, ...] = (
+    "springs_4pt",
+    "silicone_4pt",
+    "floating_4pt",
+    "kinematic_3pt",
+    "rigid_4pt",
+)
+
+BRACKET_OPTIONS: tuple[str, ...] = (
+    "abs_printed",
+    "ppa_cf_printed",
+    "aluminum_6061_t6",
+)
+
+_N_VARS = 12
 _XL = np.zeros(_N_VARS, dtype=int)
 _XU = np.array(
     [
@@ -93,6 +121,9 @@ _XU = np.array(
         len(STEPPER_SETUPS) - 1,
         len(TOOLHEAD_OPTIONS) - 1,
         len(HOTEND_TIERS) - 1,
+        len(TOOLHEAD_MOUNT_OPTIONS) - 1,
+        len(BED_MOUNT_OPTIONS) - 1,
+        len(BRACKET_OPTIONS) - 1,
     ],
     dtype=int,
 )
@@ -141,6 +172,7 @@ class ParetoPoint:
     total_mass_kg: float
     composite_score: float
     spec: PrinterSpec
+    primary_problem_subsystem: str | None = None
 
     def to_dict(self, include_spec: bool = True) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -155,6 +187,8 @@ class ParetoPoint:
             "total_mass_kg": round(float(self.total_mass_kg), 3),
             "composite_score": round(float(self.composite_score), 1),
         }
+        if self.primary_problem_subsystem is not None:
+            payload["primary_problem_subsystem"] = self.primary_problem_subsystem
         if include_spec:
             payload["spec"] = self.spec.model_dump(mode="json")
         return payload
@@ -195,8 +229,19 @@ def _normalize_gene_vector(x: np.ndarray | list[int] | tuple[int, ...], is_corex
     return tuple(int(v) for v in arr)
 
 
+def _encode_structural_polymer_or_cnc(mat_id: str, options: tuple[str, ...]) -> int:
+    """Map a mount/bracket material ID onto a discrete (abs, ppa_cf, aluminum_6061_t6) gene."""
+    if mat_id in options:
+        return options.index(mat_id)
+    if mat_id == "aluminum_7075_t6":
+        return 2
+    if mat_id in ("pet_cf_printed", "pa12_cf_printed", "pps_cf_printed"):
+        return 1
+    return 0
+
+
 def _encode_baseline_vector(spec: PrinterSpec) -> tuple[int, ...]:
-    """Map a baseline PrinterSpec to its closest discrete 9-gene vector for population seeding."""
+    """Map a baseline PrinterSpec to its closest discrete 12-gene vector for population seeding."""
     # x[0] frame profile
     x0 = FRAME_PROFILES.index(spec.frame.profile) if spec.frame.profile in FRAME_PROFILES else 0
     # x[1] bracing
@@ -256,8 +301,18 @@ def _encode_baseline_vector(spec: PrinterSpec) -> tuple[int, ...]:
         x8 = 1
     else:
         x8 = 0
+    # x[9] toolhead mount material
+    x9 = _encode_structural_polymer_or_cnc(spec.toolhead.mount_material, TOOLHEAD_MOUNT_OPTIONS)
+    # x[10] bed mount type
+    x10 = (
+        BED_MOUNT_OPTIONS.index(spec.bed.mount_type)
+        if spec.bed.mount_type in BED_MOUNT_OPTIONS
+        else BED_MOUNT_OPTIONS.index("kinematic_3pt")
+    )
+    # x[11] gantry bracket material
+    x11 = _encode_structural_polymer_or_cnc(spec.gantry.bracket_material, BRACKET_OPTIONS)
 
-    return (x0, x1, x2, x3, x4, x5, x6, x7, x8)
+    return (x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11)
 
 
 def _build_seed_vectors(baseline_spec: PrinterSpec, population_size: int, seed: int) -> np.ndarray:
@@ -269,21 +324,21 @@ def _build_seed_vectors(baseline_spec: PrinterSpec, population_size: int, seed: 
     anchors = [
         base_vec,
         # Ultra-budget open frame
-        (0, 0, 0, 0, 0, 0, 0, 0, 0),
-        # Budget lightweight open + compact toolhead
-        (0, 1, 0, 0, 0, 0, 0, 2, 0),
-        # Balanced structural ACM + CF X-beam + 9mm FG + 48V + Archetype
-        (0, 2, 2, 1, 0, 1, 1, 2, 1),
-        # Mid-high 3030 + rear cross + bolted ACM + 9mm aramid + low-L 48V
-        (1, 2, 2, 1, 0, 2, 2, 2, 2),
+        (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        # Budget lightweight open + compact toolhead + PPA-CF mounts
+        (0, 1, 0, 0, 0, 0, 0, 2, 0, 1, 2, 1),
+        # Balanced structural ACM + CF X-beam + 9mm FG + 48V + Archetype + Kinematic 3-pt
+        (0, 2, 2, 1, 0, 1, 1, 2, 1, 1, 3, 1),
+        # Mid-high 3030 + rear cross + bolted ACM + 9mm aramid + low-L 48V + CNC toolhead mount
+        (1, 2, 2, 1, 0, 2, 2, 2, 2, 2, 3, 1),
         # Fast AWD (or fast 2WD for non-CoreXY): 3030 + full truss + ACM + AWD + 9mm aramid + 0.9deg 48V
-        (1, 3, 2, 1, 1 if is_corexy else 0, 2, 4, 2, 2),
+        (1, 3, 2, 1, 1 if is_corexy else 0, 2, 4, 2, 2, 2, 3, 2),
         # High-stiffness AWD Al5052: 3030 + full truss + Al5052 + AWD + 12mm aramid + Kraken 48V
-        (1, 3, 3, 1, 1 if is_corexy else 0, 3, 3, 2, 2),
-        # Max-stiffness 4040 fortress + Al5052 + AWD + 12mm aramid + 0.9deg 48V
-        (2, 3, 3, 1, 1 if is_corexy else 0, 3, 4, 2, 2),
-        # Max-stiffness 4040 + bolted CF + AWD + 12mm aramid + Kraken 48V
-        (2, 3, 4, 1, 1 if is_corexy else 0, 3, 3, 2, 2),
+        (1, 3, 3, 1, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
+        # Max-stiffness 4040 fortress + Al5052 + AWD + 12mm aramid + 0.9deg 48V + rigid bed mount
+        (2, 3, 3, 1, 1 if is_corexy else 0, 3, 4, 2, 2, 2, 4, 2),
+        # Max-stiffness 4040 + bolted CF + AWD + 12mm aramid + Kraken 48V + kinematic 3-pt
+        (2, 3, 4, 1, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
     ]
 
     unique_seeds: list[tuple[int, ...]] = []
@@ -319,7 +374,7 @@ def _decode_candidate(
     baseline_spec: PrinterSpec,
     x: tuple[int, ...],
 ) -> tuple[PrinterSpec, list[str]]:
-    """Apply 9 discrete engineering choices onto a deep copy of baseline_spec and record diffs."""
+    """Apply 12 discrete engineering choices onto a deep copy of baseline_spec and record diffs."""
     spec = copy.deepcopy(baseline_spec)
     changes: list[str] = []
 
@@ -424,16 +479,12 @@ def _decode_candidate(
     spec.toolhead.total_mass_g = float(th_preset["total_mass_g"])
     spec.toolhead.cog_offset_mm = tuple(float(v) for v in th_preset["cog_offset_mm"])  # type: ignore[assignment]
     spec.toolhead.nozzle_offset_mm = tuple(float(v) for v in th_preset["nozzle_offset_mm"])  # type: ignore[assignment]
-    spec.toolhead.mount_material = th_preset["mount_material"]
 
     if (
         th_id != baseline_spec.toolhead.preset_id
         or abs(spec.toolhead.total_mass_g - baseline_spec.toolhead.total_mass_g) > 1.0
-        or spec.toolhead.mount_material != baseline_spec.toolhead.mount_material
     ):
-        changes.append(
-            f"Toolhead: {th_id} ({spec.toolhead.total_mass_g:.0f}g, {spec.toolhead.mount_material})"
-        )
+        changes.append(f"Toolhead: {th_id} ({spec.toolhead.total_mass_g:.0f}g)")
 
     # x[8]: Hotend melt/power tier
     melt_mm, heater_w = HOTEND_TIERS[x[8]]
@@ -445,6 +496,25 @@ def _decode_candidate(
         or abs(heater_w - base_he.heater_power_w) > 1.0
     ):
         changes.append(f"Hotend: {melt_mm:.0f}mm melt / {heater_w:.0f}W")
+
+    # x[9]: Toolhead mount material & internal carriage-to-nozzle stiffness
+    th_mount = TOOLHEAD_MOUNT_OPTIONS[x[9]]
+    spec.toolhead.mount_material = th_mount  # type: ignore[assignment]
+    spec.toolhead.internal_stiffness_n_per_mm = TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM[th_mount]
+    if th_mount != baseline_spec.toolhead.mount_material:
+        changes.append(f"toolhead mount -> {th_mount}")
+
+    # x[10]: Bed mount type
+    bed_mount = BED_MOUNT_OPTIONS[x[10]]
+    spec.bed.mount_type = bed_mount  # type: ignore[assignment]
+    if bed_mount != baseline_spec.bed.mount_type:
+        changes.append(f"bed mount -> {bed_mount}")
+
+    # x[11]: Gantry bracket material
+    bracket_mat = BRACKET_OPTIONS[x[11]]
+    spec.gantry.bracket_material = bracket_mat  # type: ignore[assignment]
+    if bracket_mat != baseline_spec.gantry.bracket_material:
+        changes.append(f"brackets -> {bracket_mat}")
 
     if not changes:
         changes.append("Baseline (unchanged)")
@@ -486,6 +556,20 @@ def _evaluate_spec_candidate(
     g3 = 1.0 if report.kinematics.shaft_bending_risk else -1.0
     feasible = (g1 <= 0.0) and (g2 <= 0.0) and (g3 <= 0.0)
 
+    primary_subsystem: str | None = None
+    if report.sensitivity is not None:
+        primary_subsystem = report.sensitivity.primary_problem_subsystem
+    elif report.modal_fea.modes:
+        worst_mode = next(
+            (
+                m
+                for m in report.modal_fea.modes
+                if m.mode_number == report.modal_fea.worst_print_mode_number
+            ),
+            report.modal_fea.modes[0],
+        )
+        primary_subsystem = worst_mode.dominant_problem_area
+
     point = ParetoPoint(
         id=point_id,
         label=label,
@@ -498,6 +582,7 @@ def _evaluate_spec_candidate(
         total_mass_kg=float(bom.total_mass_kg),
         composite_score=float(report.scores.composite),
         spec=spec,
+        primary_problem_subsystem=primary_subsystem,
     )
     return _EvaluatedCandidate(
         point=point,
@@ -686,6 +771,7 @@ def _extract_pareto_front(
                 total_mass_kg=cand.point.total_mass_kg,
                 composite_score=cand.point.composite_score,
                 spec=pt_spec,
+                primary_problem_subsystem=cand.point.primary_problem_subsystem,
             )
         )
     return front
@@ -768,7 +854,7 @@ def _run_numpy_nsga2(
     generations: int,
     seed: int,
 ) -> None:
-    """Clean pure-NumPy NSGA-II fallback operating on the discrete 9-gene vector."""
+    """Clean pure-NumPy NSGA-II fallback operating on the discrete 12-gene vector."""
     is_corexy = baseline_spec.architecture == "corexy"
     rng = np.random.default_rng(seed)
 
@@ -830,7 +916,7 @@ def optimize_pareto_front(
     ----------
     baseline_spec:
         Starting 3D printer specification. Architecture, build volume, and outer
-        frame dimensions are preserved while 9 hardware upgrade genes are optimized.
+        frame dimensions are preserved while 12 hardware upgrade genes are optimized.
     population_size:
         NSGA-II population size (minimum 4, default 16).
     generations:
