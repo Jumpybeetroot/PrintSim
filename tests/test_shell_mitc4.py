@@ -388,11 +388,11 @@ def test_benchmark5_deep_verify_convergence_bom_api_cli_and_mcp() -> None:
     assert sim["geometry"]["panel_mesh_n"] == 6
     assert len(sim["geometry"]["shell_panels"]) == deep_res["deep_summary"]["num_shell_elements"]
 
-    # FastAPI /api/health (v0.9.0) & POST /api/verify/deep
+    # FastAPI /api/health (v1.1.0) & POST /api/verify/deep
     client = TestClient(create_app())
     r_health = client.get("/api/health")
     assert r_health.status_code == 200
-    assert r_health.json()["version"] == "0.9.0"
+    assert r_health.json()["version"] == "1.1.0"
 
     r_verify = client.post("/api/verify/deep", json={"yaml_text": monolith_yaml})
     assert r_verify.status_code == 200
@@ -411,3 +411,40 @@ def test_benchmark5_deep_verify_convergence_bom_api_cli_and_mcp() -> None:
     assert mcp_res["deep_mesh_n"] == 6
     assert mcp_res["convergence"]["converged"] is True
     assert mcp_res["deep_summary"]["panel_max_von_mises_mpa"] > 0.0
+
+
+def test_benchmark6_aluminum_thickness_monotonic_no_shaper_cliffs() -> None:
+    """Al 5052 thickness sweep (1.5 -> 6.0 mm) climbs monotonically with zero mode-switch or shaper cliffs."""
+    thicknesses = (1.5, 2.0, 3.0, 4.0, 5.0, 6.0)
+
+    for yaml_name, mesh_ns in (("voron_monolith_awd.yaml", (2, 6)), ("voron_trident_300.yaml", (2,))):
+        base = PrinterSpec.from_yaml(EXAMPLES_DIR / yaml_name)
+        for mesh_n in mesh_ns:
+            prev_kx = 0.0
+            prev_fxs = 0.0
+            prev_ax = 0.0
+            prev_drum = 0.0
+            for thk in thicknesses:
+                s = base.model_copy(deep=True)
+                s.frame.enclosed_panels = True
+                s.frame.panel_mounting = "bolted_structural"
+                s.frame.panel_material = "aluminum_5052_sheet"
+                s.frame.panel_thickness_mm = thk
+                asm = build_assembly(s, panel_mesh_n=mesh_n)
+                st = solve_static_fea(asm)
+                mo = solve_modal_fea(asm)
+                assert mo.shaper_x is not None and mo.shaper_y is not None
+
+                kx = st.toolhead_stiffness_x_n_per_mm
+                fxs = mo.shaper_x.structural_freq_hz
+                ax = mo.shaper_x.max_accel_mm_s2
+                drum = mo.panel_drum_freq_hz
+
+                assert kx > prev_kx, f"{yaml_name} n={mesh_n} Al {thk}mm Kx {kx} <= {prev_kx}"
+                assert fxs > prev_fxs, f"{yaml_name} n={mesh_n} Al {thk}mm fXs {fxs} <= {prev_fxs}"
+                assert ax >= prev_ax, f"{yaml_name} n={mesh_n} Al {thk}mm AX {ax} < {prev_ax}"
+                assert drum > prev_drum, f"{yaml_name} n={mesh_n} Al {thk}mm drum {drum} <= {prev_drum}"
+                # Panel drum mode at 5-6mm must never hijack f1 downward
+                assert mo.fundamental_freq_hz > 100.0
+
+                prev_kx, prev_fxs, prev_ax, prev_drum = kx, fxs, ax, drum

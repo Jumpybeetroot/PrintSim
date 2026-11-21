@@ -44,6 +44,8 @@ class StructuralMember:
     is_truss: bool = False  # if True, reduced rotational coupling (rod/brace)
     fill_mass_kg: float = 0.0
     rail_mass_kg: float = 0.0
+    backer_mass_kg: float = 0.0
+    backer_material_id: str = ""
 
     def length_m(self, node_map: dict[str, StructuralNode]) -> float:
         p0 = node_map[self.start_id].position_m
@@ -706,12 +708,16 @@ def _apply_bolted_linear_rail(
     rail_material: MaterialSpec,
     mount_normals: list[np.ndarray],
     beam_shape: str | None = None,
+    bolt_pitch_m: float = 0.025,
+    l_eff_m: float | None = None,
+    track_as_rail: bool = True,
 ) -> tuple[float, float, float]:
-    """Model 1 or 2 steel linear rails bolted every ~25 mm (M3 fasteners) to beam face(s).
+    """Model 1 or 2 steel linear rails (or backer bar) bolted to beam face(s) via Newmark partial interaction.
 
     Applies transformed-section parallel-axis bending and torsional boosts to ``member.profile``
-    while keeping ``area_m2`` equal to the bare beam cross-section, and folds distributed rail
-    mass into ``member.material.density_kg_m3`` and ``member.rail_mass_kg`` with zero double-counting.
+    while keeping ``area_m2`` equal to the bare beam cross-section, and folds distributed rail/backer
+    mass into ``member.material.density_kg_m3`` and ``member.rail_mass_kg`` / ``member.backer_mass_kg``
+    with zero double-counting.
     """
     if not mount_normals:
         return 0.0, 0.0, 0.0
@@ -725,13 +731,25 @@ def _apply_bolted_linear_rail(
     ey, ez = _member_local_axes(p0, p1)
     shape = beam_shape or member.profile.shape
 
-    # Partial bolted composite shear transfer efficiency (M3 bolts on ~25 mm pitch)
+    # Newmark (1951) partial-interaction composite shear-lag factor gamma from M3 bolt pitch & substrate
     if member.profile.id.startswith("cf_"):
-        eta_rail = 0.35
+        sub_kind = "carbon_tube"
     elif shape == "solid_bar":
-        eta_rail = 0.55
+        sub_kind = "solid_bar"
     else:
-        eta_rail = 0.45
+        sub_kind = "extrusion"
+
+    from printsim.fea.components import newmark_rail_composite_gamma
+
+    eta_rail = newmark_rail_composite_gamma(
+        e_rail_pa=rail_material.youngs_modulus_pa,
+        a_rail_m2=rail_profile.area_m2,
+        e_beam_pa=member.material.youngs_modulus_pa,
+        a_beam_m2=member.profile.area_m2,
+        bolt_pitch_m=bolt_pitch_m,
+        l_eff_m=l_eff_m if l_eff_m is not None else length,
+        substrate_kind=sub_kind,
+    )
 
     n_e = rail_material.youngs_modulus_pa / max(member.material.youngs_modulus_pa, 1e6)
     n_g = rail_material.effective_shear_modulus_pa / max(
@@ -780,8 +798,81 @@ def _apply_bolted_linear_rail(
     member.material = member.material.model_copy(
         update={"density_kg_m3": member.material.density_kg_m3 + rho_delta}
     )
-    member.rail_mass_kg += m_rail_member
+    if track_as_rail:
+        member.rail_mass_kg += m_rail_member
+    else:
+        member.backer_mass_kg += m_rail_member
+        member.backer_material_id = rail_material.id
     return d_iy, d_iz, d_j
+
+
+def _make_x_backer_profile(
+    x_beam_prof: ProfileSpec, x_rail_prof: ProfileSpec, backer_thickness_mm: float
+) -> ProfileSpec:
+    """Create a rectangular bar profile for an opposite-face X-gantry thermal backer."""
+    w = min(x_beam_prof.width_m, max(x_rail_prof.width_m, 0.012))
+    h = max(backer_thickness_mm * 1e-3, 0.001)
+    area = w * h
+    iy = w * (h**3) / 12.0
+    iz = h * (w**3) / 12.0
+    a, b = max(w, h), min(w, h)
+    j_val = a * (b**3) * (1.0 / 3.0 - 0.21 * (b / a) * (1.0 - (b**4) / (12.0 * a**4)))
+    return ProfileSpec.model_construct(
+        id="x_rail_backer_bar",
+        name=f"Thermal Rail Backer ({w*1e3:.0f}x{backer_thickness_mm:.1f}mm)",
+        shape="solid_bar",
+        width_m=w,
+        height_m=h,
+        area_m2=area,
+        iy_m4=iy,
+        iz_m4=iz,
+        j_m4=j_val,
+    )
+
+
+def _apply_corner_joint_compliance(
+    members: list[StructuralMember],
+    spec: PrinterSpec,
+    col_length_m: float,
+) -> None:
+    """Apply semi-rigid corner joint end-fixity knockdown to unpaneled vertical frame columns."""
+    jtype = spec.frame.corner_joint_type
+    bolted_panels = spec.frame.enclosed_panels and spec.frame.panel_mounting == "bolted_structural"
+    if jtype == "rigid" or bolted_panels:
+        return
+
+    from printsim.fea.components import corner_joint_stiffness
+
+    cj = corner_joint_stiffness(spec.frame.profile, jtype)
+    kr_in = cj["k_r_inplane_nm_rad"]
+    kr_tor = cj["k_r_torsion_nm_rad"]
+    l_col = max(col_length_m, 0.15)
+
+    for member in members:
+        is_corexy_col = member.id.startswith("col_")
+        is_cart_col = member.id.startswith("z_col_")
+        if not (is_corexy_col or is_cart_col):
+            continue
+
+        e_pa = member.material.youngs_modulus_pa
+        g_pa = member.material.effective_shear_modulus_pa
+        eta_iy = 1.0 / (1.0 + (6.0 * e_pa * member.profile.iy_m4) / (l_col * kr_in))
+        eta_iz = 1.0 / (1.0 + (6.0 * e_pa * member.profile.iz_m4) / (l_col * kr_in))
+        eta_j = 1.0 / (1.0 + (2.0 * g_pa * member.profile.j_m4) / (l_col * kr_tor))
+
+        if is_cart_col:
+            # Bedslinger H-frame uprights bolt flat to base frame with tee plates
+            eta_iy = 1.0 - 0.06 * (1.0 - eta_iy)
+            eta_iz = 1.0 - 0.06 * (1.0 - eta_iz)
+            eta_j = 1.0 - 0.06 * (1.0 - eta_j)
+
+        member.profile = member.profile.model_copy(
+            update={
+                "iy_m4": member.profile.iy_m4 * eta_iy,
+                "iz_m4": member.profile.iz_m4 * eta_iz,
+                "j_m4": member.profile.j_m4 * eta_j,
+            }
+        )
 
 
 def _attach_toolhead_cog_and_nozzle(
@@ -855,9 +946,57 @@ def _attach_toolhead_cog_and_nozzle(
         )
     )
 
-    mount_mat = get_material(spec.toolhead.mount_material).model_copy(
-        update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0}
+    base_mount_mat = get_material(spec.toolhead.mount_material)
+    e_mount_eff = base_mount_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
+    mount_mat = base_mount_mat.model_copy(
+        update={
+            "youngs_modulus_pa": e_mount_eff,
+            "shear_modulus_pa": e_mount_eff / (2.0 * (1.0 + base_mount_mat.poisson_ratio)),
+            "density_kg_m3": 1e-3,
+            "cost_per_kg_usd": 0.0,
+        }
     )
+    iy_mount = 1.2e-8
+    iz_mount = 1.8e-8
+    j_mount = 1.4e-8
+
+    if spec.architecture != "delta":
+        from printsim.fea.components import hertzian_rail_carriage_stiffness
+
+        l_mount = max(float(np.linalg.norm(cog_pos - base_pos)), 0.004)
+        car = hertzian_rail_carriage_stiffness(
+            spec.gantry.x_rail_profile,
+            preload=spec.gantry.rail_preload,
+            block_type=spec.gantry.rail_block_type,
+        )
+        car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
+        g_mount = mount_mat.effective_shear_modulus_pa
+
+        # Series coupling: mount beam rotational/tip stiffness with 6-DOF Hertzian rail carriage
+        k_rot_car_y = car["k_rx_nm_rad"] * car_mult
+        k_rot_beam_y = e_mount_eff * iy_mount / l_mount
+        eta_rot_y = k_rot_car_y / max(k_rot_car_y + k_rot_beam_y, 1e-9)
+
+        k_tip_beam_y = 3.0 * e_mount_eff * iy_mount / (l_mount**3)
+        k_rad_car_y = car["k_zz_n_m"] * car_mult
+        eta_tip_y = k_rad_car_y / max(k_rad_car_y + k_tip_beam_y, 1e-9)
+
+        k_rot_car_z = 0.5 * (car["k_ry_nm_rad"] + car["k_rz_nm_rad"]) * car_mult
+        k_rot_beam_z = e_mount_eff * iz_mount / l_mount
+        eta_rot_z = k_rot_car_z / max(k_rot_car_z + k_rot_beam_z, 1e-9)
+
+        k_tip_beam_z = 3.0 * e_mount_eff * iz_mount / (l_mount**3)
+        k_rad_car_z = car["k_yy_n_m"] * car_mult
+        eta_tip_z = k_rad_car_z / max(k_rad_car_z + k_tip_beam_z, 1e-9)
+
+        k_tor_car = car["k_rz_nm_rad"] * car_mult
+        k_tor_beam = g_mount * j_mount / l_mount
+        eta_tor = k_tor_car / max(k_tor_car + k_tor_beam, 1e-9)
+
+        iy_mount *= eta_rot_y * eta_tip_y
+        iz_mount *= eta_rot_z * eta_tip_z
+        j_mount *= eta_tor
+
     mount_prof = ProfileSpec.model_construct(
         id="toolhead_mount_profile",
         name=f"Toolhead Carriage Mount ({spec.toolhead.mount_material})",
@@ -865,9 +1004,9 @@ def _attach_toolhead_cog_and_nozzle(
         width_m=0.026,
         height_m=0.018,
         area_m2=2.2e-4,
-        iy_m4=1.2e-8,
-        iz_m4=1.8e-8,
-        j_m4=1.4e-8,
+        iy_m4=iy_mount,
+        iz_m4=iz_mount,
+        j_m4=j_mount,
     )
     members.append(
         StructuralMember(
@@ -961,7 +1100,12 @@ def _apply_extrusion_filling(model: AssemblyModel) -> None:
     model.extrusion_fill_mass_kg = total_fill_mass_kg
     fill_boost = float(fill_spec["damping_boost"]) if (fill_id == "none" or filled_count > 0) else 0.0
     bracket_damping = -0.003 if bkt_info["cnc_machined"] else 0.004
-    model.frame_damping_ratio = max(0.025, min(0.12, 0.042 + fill_boost + bracket_damping))
+    from printsim.fea.components import iwan_joint_damping_delta
+
+    joint_damping = iwan_joint_damping_delta(model.spec.frame.corner_joint_type)
+    model.frame_damping_ratio = max(
+        0.025, min(0.12, 0.039 + joint_damping + fill_boost + bracket_damping)
+    )
 
 
 def build_assembly(
@@ -1086,6 +1230,8 @@ def _split_member_at_node(
         is_truss=orig.is_truss,
         fill_mass_kg=orig.fill_mass_kg * f_clamped,
         rail_mass_kg=orig.rail_mass_kg * f_clamped,
+        backer_mass_kg=orig.backer_mass_kg * f_clamped,
+        backer_material_id=orig.backer_material_id,
     )
     suffix = 1
     existing_ids = {m.id for m in members}
@@ -1103,6 +1249,8 @@ def _split_member_at_node(
         is_truss=orig.is_truss,
         fill_mass_kg=orig.fill_mass_kg * (1.0 - f_clamped),
         rail_mass_kg=orig.rail_mass_kg * (1.0 - f_clamped),
+        backer_mass_kg=orig.backer_mass_kg * (1.0 - f_clamped),
+        backer_material_id=orig.backer_material_id,
     )
     members[member_idx] = seg_a
     members.insert(member_idx + 1, seg_b)
@@ -1586,6 +1734,7 @@ def _build_corexy(
     y_mount = spec.gantry.y_rail_mount
     x_mount = spec.gantry.effective_x_rail_mount
     x_normals = _x_rail_mount_normals(x_mount)
+    bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
     member_by_id = {m.id: m for m in members}
 
     y_boost_iz = 0.0
@@ -1602,6 +1751,8 @@ def _build_corexy(
             rail_mat,
             _y_rail_mount_normals(y_mount, side),
             beam_shape=base_y_prof.shape,
+            bolt_pitch_m=bolt_pitch_m,
+            l_eff_m=d,
         )
         y_boost_iz = d_iz_y
 
@@ -1615,13 +1766,44 @@ def _build_corexy(
             rail_mat,
             x_normals,
             beam_shape=base_x_prof.shape,
+            bolt_pitch_m=bolt_pitch_m,
+            l_eff_m=w,
         )
-        x_boost_iy = d_iy_x
-        x_boost_iz = d_iz_x
+        x_boost_iy += d_iy_x
+        x_boost_iz += d_iz_x
+    x_boost_iy *= 0.5
+    x_boost_iz *= 0.5
+
+    if spec.gantry.rail_backer_material != "none" and not spec.gantry.effective_dual_x_rails:
+        backer_mat = get_material(spec.gantry.rail_backer_material)
+        backer_prof = _make_x_backer_profile(
+            base_x_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
+        )
+        backer_normals = [-x_normals[0]]
+        bk_iy_acc = 0.0
+        bk_iz_acc = 0.0
+        for mid in ("x_gantry_l", "x_gantry_r"):
+            d_iy_b, d_iz_b, _ = _apply_bolted_linear_rail(
+                member_by_id[mid],
+                nmap,
+                backer_prof,
+                backer_mat,
+                backer_normals,
+                beam_shape=base_x_prof.shape,
+                bolt_pitch_m=bolt_pitch_m,
+                l_eff_m=w,
+                track_as_rail=False,
+            )
+            bk_iy_acc += d_iy_b
+            bk_iz_acc += d_iz_b
+        x_boost_iy += 0.5 * bk_iy_acc
+        x_boost_iz += 0.5 * bk_iz_acc
 
     x_rail_ei_y_boost_pct = 100.0 * x_boost_iz / max(base_x_prof.iz_m4, 1e-18)
     x_rail_ei_z_boost_pct = 100.0 * x_boost_iy / max(base_x_prof.iy_m4, 1e-18)
     y_rail_ei_x_boost_pct = 100.0 * y_boost_iz / max(base_y_prof.iz_m4, 1e-18)
+
+    _apply_corner_joint_compliance(members, spec, col_length_m=h)
 
     # Enclosure / structural MITC4 shell panels + Huth CBUSH fastener springs across rear, side, and top bays
     panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
@@ -1645,22 +1827,24 @@ def _build_corexy(
             )
         )
 
-    # Calculate moving masses (strip composite rail mass from gantry beam before adding x_rail_mass)
+    # Calculate moving masses (strip composite rail & backer mass from gantry beam before adding x_rail_mass)
     x_beam_mass = sum(
-        max(m.mass_kg(nmap) - m.rail_mass_kg - m.fill_mass_kg, 0.0)
+        max(m.mass_kg(nmap) - m.rail_mass_kg - m.backer_mass_kg - m.fill_mass_kg, 0.0)
         for m in members
         if m.role == "gantry"
     )
+    x_backer_mass = sum(m.backer_mass_kg for m in members if m.role == "gantry")
     x_rail_mass = x_rail_prof.area_m2 * w * rail_mat.density_kg_m3
     if spec.gantry.effective_dual_x_rails:
         x_rail_mass *= 2.0
 
-    # In CoreXY, X moves toolhead; Y moves toolhead + X beam + X rail + Y carriages + gantry bracket delta
+    # In CoreXY, X moves toolhead; Y moves toolhead + X beam + X rail + backer + Y carriages + gantry bracket delta
     x_moving = toolhead_kg + 0.04  # plus belt segment
     y_moving = (
         toolhead_kg
         + x_beam_mass
         + x_rail_mass
+        + x_backer_mass
         + spec.gantry.carriage_mass_g * 1e-3
         + bkt_delta_kg
     )
@@ -1780,6 +1964,7 @@ def _build_cartesian_bedslinger(
     x_rail_prof = get_profile(spec.gantry.x_rail_profile)
     base_x_prof = get_profile(xp)
     x_normals = _x_rail_mount_normals(spec.gantry.effective_x_rail_mount)
+    bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
     member_by_id = {m.id: m for m in members}
     x_boost_iy = 0.0
     x_boost_iz = 0.0
@@ -1791,12 +1976,43 @@ def _build_cartesian_bedslinger(
             rail_mat,
             x_normals,
             beam_shape=base_x_prof.shape,
+            bolt_pitch_m=bolt_pitch_m,
+            l_eff_m=w,
         )
-        x_boost_iy = d_iy_x
-        x_boost_iz = d_iz_x
+        x_boost_iy += d_iy_x
+        x_boost_iz += d_iz_x
+    x_boost_iy *= 0.5
+    x_boost_iz *= 0.5
+
+    if spec.gantry.rail_backer_material != "none" and not spec.gantry.effective_dual_x_rails:
+        backer_mat = get_material(spec.gantry.rail_backer_material)
+        backer_prof = _make_x_backer_profile(
+            base_x_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
+        )
+        backer_normals = [-x_normals[0]]
+        bk_iy_acc = 0.0
+        bk_iz_acc = 0.0
+        for mid in ("x_gantry_l", "x_gantry_r"):
+            d_iy_b, d_iz_b, _ = _apply_bolted_linear_rail(
+                member_by_id[mid],
+                nmap,
+                backer_prof,
+                backer_mat,
+                backer_normals,
+                beam_shape=base_x_prof.shape,
+                bolt_pitch_m=bolt_pitch_m,
+                l_eff_m=w,
+                track_as_rail=False,
+            )
+            bk_iy_acc += d_iy_b
+            bk_iz_acc += d_iz_b
+        x_boost_iy += 0.5 * bk_iy_acc
+        x_boost_iz += 0.5 * bk_iz_acc
 
     x_rail_ei_y_boost_pct = 100.0 * x_boost_iz / max(base_x_prof.iz_m4, 1e-18)
     x_rail_ei_z_boost_pct = 100.0 * x_boost_iy / max(base_x_prof.iy_m4, 1e-18)
+
+    _apply_corner_joint_compliance(members, spec, col_length_m=h)
 
     # Bedslinger: X moves toolhead; Y moves the entire heavy heated bed + carriage!
     bed_kg = spec.bed.mass_g * 1e-3
@@ -1853,7 +2069,7 @@ def _build_cartesian_bedslinger(
         )
 
     l_arm = max(w * 0.5, 0.05)
-    k_y_target = 1.15e6 * ((spec.gantry.belt.stiffness_ea_n / 52000.0) ** 0.35)
+    k_y_target = 1.15e6 * ((spec.gantry.belt.stiffness_ea_n / 26000.0) ** 0.35)
     iz_y_carriage = k_y_target * (l_arm**3) / (24.0 * max(bed_vmat.youngs_modulus_pa, 1e6))
     bed_car_prof = ProfileSpec.model_construct(
         id="bed_carriage_arm_profile",
@@ -2040,11 +2256,13 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     for m in model.members:
         mk = m.mass_kg(nmap)
         frame_mass += mk
-        base_mk = max(mk - m.fill_mass_kg - m.rail_mass_kg, 0.0)
+        base_mk = max(mk - m.fill_mass_kg - m.rail_mass_kg - m.backer_mass_kg, 0.0)
         cost += base_mk * m.material.cost_per_kg_usd
         if m.rail_mass_kg > 0.0:
             total_rail_mass += m.rail_mass_kg
             cost += m.rail_mass_kg * rail_mat.cost_per_kg_usd
+        if m.backer_mass_kg > 0.0 and m.backer_material_id:
+            cost += m.backer_mass_kg * get_material(m.backer_material_id).cost_per_kg_usd
     model.total_rail_mass_kg = total_rail_mass
 
     if model.extrusion_fill_mass_kg > 0.0:

@@ -5,14 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import time
 
+from printsim.fea.components import ThermalStructuralReport, compute_thermal_structural_report
+from printsim.fea.mechatronics import (
+    DriveControlConfig,
+    WorkspaceFRFMap,
+    compute_workspace_frf_map,
+)
 from printsim.fea.modal import ModalResult, solve_modal_fea
+from printsim.fea.rcsa import RCSAResult, analyze_toolhead_rcsa
+from printsim.fea.sensitivity import SensitivityReport, compute_structural_sensitivities
 from printsim.fea.solver import StaticFEAResult, solve_static_fea
+from printsim.gcode.ballbar import TimeDomainMetrologyResult, simulate_time_domain_metrology
 from printsim.gcode.parser import generate_benchmark_gcode
 from printsim.gcode.simulator import VirtualPrintReport, simulate_gcode
 from printsim.geometry.builder import AssemblyModel, build_assembly
 from printsim.kinematics.collision import CollisionReport, check_frame_clearance
 from printsim.kinematics.solvers import KinematicsReport, analyze_kinematics
-from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec
+from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec, get_material
 from printsim.thermal.hotend import HotendThermalReport, simulate_hotend_thermal
 
 
@@ -47,7 +56,12 @@ class SimulationReport:
     thermal: HotendThermalReport
     virtual_print: VirtualPrintReport
     scores: ScoreBreakdown
+    thermal_structural: ThermalStructuralReport
     diagnostics: list[str] = field(default_factory=list)
+    workspace_frf: WorkspaceFRFMap | None = None
+    time_domain_metrology: TimeDomainMetrologyResult | None = None
+    rcsa: RCSAResult | None = None
+    sensitivity: SensitivityReport | None = None
 
     def to_dict(self, include_toolpath_segments: bool = True) -> dict:
         vp = self.virtual_print.to_dict(max_segments=1500 if include_toolpath_segments else 0)
@@ -62,7 +76,16 @@ class SimulationReport:
             "modal_fea": self.modal_fea.to_dict(),
             "kinematics": self.kinematics.to_dict(),
             "thermal": self.thermal.to_dict(),
+            "thermal_structural": self.thermal_structural.to_dict(),
             "virtual_print": vp,
+            "workspace_frf": self.workspace_frf.to_dict() if self.workspace_frf is not None else None,
+            "time_domain_metrology": (
+                self.time_domain_metrology.to_dict()
+                if self.time_domain_metrology is not None
+                else None
+            ),
+            "rcsa": self.rcsa.to_dict() if self.rcsa is not None else None,
+            "sensitivity": self.sensitivity.to_dict() if self.sensitivity is not None else None,
         }
 
 
@@ -75,6 +98,9 @@ def _compute_scores_and_diagnostics(
     kinematics: KinematicsReport,
     thermal: HotendThermalReport,
     vprint: VirtualPrintReport,
+    thermal_structural: ThermalStructuralReport | None = None,
+    workspace_frf: WorkspaceFRFMap | None = None,
+    rcsa: RCSAResult | None = None,
 ) -> tuple[ScoreBreakdown, list[str]]:
     diag: list[str] = []
 
@@ -199,6 +225,21 @@ def _compute_scores_and_diagnostics(
         )
     if not kinematics.delta_workspace_valid:
         diag.append("Delta arm length cannot reach full build volume corners; increase delta_arm_length_mm.")
+    if workspace_frf is not None:
+        if workspace_frf.worst_corner_drop_pct > 12.0:
+            diag.append(
+                f"CoreXY corner belt-span asymmetry drops workspace frequency by "
+                f"{workspace_frf.worst_corner_drop_pct:.1f}% (center {workspace_frf.center_freq_hz:.1f} Hz -> "
+                f"corner {workspace_frf.min_freq_hz:.1f} Hz, max X-Y cross-coupling {workspace_frf.max_cross_coupling_pct:.1f}%): "
+                "upgrade to 4-motor AWD or use a wide-notch 'ei' / 'smooth_ei' input shaper."
+            )
+        if workspace_frf.midband_instability_risk:
+            diag.append(
+                "Open-loop stepper mid-band resonance risk (negative electrical L/R damping at speed): "
+                "upgrade stepper supply to 48V, switch to lower-inductance motors, or enable closed-loop stepper / FOC servo drive."
+            )
+    if rcsa is not None and rcsa.whip_risk and rcsa.warning_message:
+        diag.append(rcsa.warning_message)
 
     # 3. Thermal score (volumetric flow, heatup speed, heat creep safety)
     flow_score = min(55.0, (thermal.max_volumetric_flow_mm3_s / 35.0) * 55.0)
@@ -215,6 +256,40 @@ def _compute_scores_and_diagnostics(
             f"Hotend volumetric flow capped at {thermal.max_volumetric_flow_mm3_s:.1f} mm^3/s "
             f"(limited by {thermal.flow_limiting_factor}): lengthen melt zone or increase heater wattage."
         )
+    if thermal_structural is not None:
+        if thermal_structural.gantry_bimetallic_bow_um > 40.0:
+            diag.append(
+                f"Bimetallic X-gantry thermal bow ({thermal_structural.gantry_bimetallic_bow_um:.1f} um at "
+                f"{thermal_structural.chamber_temp_c:.0f} C chamber): add a 'titanium_grade5' or 'steel_4140' "
+                "rail backer or switch to 'dual_top_bottom' X rails."
+            )
+        if (
+            thermal_structural.bed_mount_type == "rigid_4pt"
+            and thermal_structural.bed_buckling_taco_um > 30.0
+        ):
+            diag.append(
+                f"Rigid 4-point bed thermal taco buckling ({thermal_structural.bed_buckling_taco_um:.1f} um at "
+                f"{thermal_structural.bed_target_temp_c:.0f} C): switch bed.mount_type to a 3-point Maxwell "
+                "'kinematic_3pt' mount."
+            )
+        if thermal_structural.bracket_tg_warning:
+            diag.append(
+                f"Polymer bracket thermal softening near Tg ({spec.gantry.bracket_material} retains "
+                f"{thermal_structural.bracket_modulus_retention_pct:.1f}% modulus at "
+                f"{thermal_structural.chamber_temp_c:.0f} C chamber): upgrade to 'ppa_cf_printed', "
+                "'pps_cf_printed', or CNC Aluminum ('aluminum_6061_t6')."
+            )
+        elif spec.toolhead.mount_material != spec.gantry.bracket_material:
+            th_mat = get_material(spec.toolhead.mount_material)
+            th_ret = th_mat.modulus_retention_at_temp(thermal_structural.chamber_temp_c)
+            if th_mat.tg_c is not None and (
+                thermal_structural.chamber_temp_c >= th_mat.tg_c - 5.0 or th_ret < 0.80
+            ):
+                diag.append(
+                    f"Toolhead mount polymer thermal softening near Tg ({spec.toolhead.mount_material} retains "
+                    f"{th_ret * 100.0:.1f}% modulus at {thermal_structural.chamber_temp_c:.0f} C): "
+                    "upgrade toolhead.mount_material to 'ppa_cf_printed', 'pps_cf_printed', or CNC Aluminum."
+                )
 
     # 4. Print quality score (directly from virtual G-code print)
     print_quality = vprint.print_quality_score
@@ -277,6 +352,7 @@ def evaluate_printer(
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
     filament_id: str = "pla",
     panel_mesh_n: int = 2,
+    include_advanced_analysis: bool = True,
 ) -> SimulationReport:
     """Run the full multiphysics simulation suite on a PrinterSpec."""
     assembly = build_assembly(
@@ -289,6 +365,27 @@ def evaluate_printer(
     modal_fea = solve_modal_fea(assembly)
     kinematics = analyze_kinematics(assembly)
     thermal = simulate_hotend_thermal(spec, filament_id=filament_id)
+    thermal_structural = compute_thermal_structural_report(assembly)
+
+    workspace_frf: WorkspaceFRFMap | None = None
+    time_domain_metrology: TimeDomainMetrologyResult | None = None
+    rcsa: RCSAResult | None = None
+    sensitivity: SensitivityReport | None = None
+    if include_advanced_analysis:
+        drive_cfg = DriveControlConfig(
+            drive_type=spec.kinematics.drive_type,
+            servo_vel_bw_hz=spec.kinematics.servo_vel_bw_hz,
+            servo_pos_bw_hz=spec.kinematics.servo_pos_bw_hz,
+            notch_filter_hz=spec.kinematics.notch_filter_hz,
+        )
+        workspace_frf = compute_workspace_frf_map(
+            assembly, modal_fea, grid_n=5, drive_cfg=drive_cfg
+        )
+        time_domain_metrology = simulate_time_domain_metrology(
+            assembly, modal_fea, drive_cfg=drive_cfg
+        )
+        rcsa = analyze_toolhead_rcsa(assembly, modal_fea)
+        sensitivity = compute_structural_sensitivities(assembly, static_fea, modal_fea)
 
     if gcode_text is None:
         bx, by, _ = spec.kinematics.build_volume_mm
@@ -304,7 +401,17 @@ def evaluate_printer(
 
     vprint = simulate_gcode(gcode_text, assembly, modal_fea, kinematics, thermal)
     scores, diagnostics = _compute_scores_and_diagnostics(
-        spec, assembly, collision, static_fea, modal_fea, kinematics, thermal, vprint
+        spec,
+        assembly,
+        collision,
+        static_fea,
+        modal_fea,
+        kinematics,
+        thermal,
+        vprint,
+        thermal_structural=thermal_structural,
+        workspace_frf=workspace_frf,
+        rcsa=rcsa,
     )
 
     return SimulationReport(
@@ -317,7 +424,12 @@ def evaluate_printer(
         thermal=thermal,
         virtual_print=vprint,
         scores=scores,
+        thermal_structural=thermal_structural,
         diagnostics=diagnostics,
+        workspace_frf=workspace_frf,
+        time_domain_metrology=time_domain_metrology,
+        rcsa=rcsa,
+        sensitivity=sensitivity,
     )
 
 

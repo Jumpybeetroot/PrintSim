@@ -56,6 +56,9 @@ class StaticFEAResult:
     bed_deflection_um: float = 0.0
     panel_max_von_mises_mpa: float = 0.0
     nodal_displacements_mm: dict[str, list[float]] = field(default_factory=dict)
+    nodal_displacements_x_mm: dict[str, list[float]] = field(default_factory=dict)
+    nodal_displacements_y_mm: dict[str, list[float]] = field(default_factory=dict)
+    nodal_displacements_xy_mm: dict[str, list[float]] = field(default_factory=dict)
     member_stresses: list[MemberStressResult] = field(default_factory=list)
     shell_panel_stresses: list[ShellStressResult] = field(default_factory=list)
 
@@ -79,6 +82,9 @@ class StaticFEAResult:
             "peak_inertial_force_x_n": round(self.peak_inertial_force_x_n, 2),
             "peak_inertial_force_y_n": round(self.peak_inertial_force_y_n, 2),
             "nodal_displacements_mm": self.nodal_displacements_mm,
+            "nodal_displacements_x_mm": self.nodal_displacements_x_mm,
+            "nodal_displacements_y_mm": self.nodal_displacements_y_mm,
+            "nodal_displacements_xy_mm": self.nodal_displacements_xy_mm,
             "member_stresses": [
                 {
                     "member_id": ms.member_id,
@@ -296,6 +302,8 @@ def solve_static_fea(
     u_base = u_grav + u_belt
     u_comb = u_base + 0.7071 * u_x + 0.7071 * u_y
     best_peak = -1.0
+    u_xy_comb = 0.7071 * u_x + 0.7071 * u_y
+    best_xy_peak = -1.0
     for sx in (1.0, -1.0):
         for sy in (1.0, -1.0):
             cand = u_base + sx * 0.7071 * u_x + sy * 0.7071 * u_y
@@ -303,11 +311,22 @@ def solve_static_fea(
             if peak > best_peak:
                 best_peak = peak
                 u_comb = cand
+            cand_xy = sx * 0.7071 * u_x + sy * 0.7071 * u_y
+            xy_peak = float(np.linalg.norm(_rel_disp_vec(cand_xy)))
+            if xy_peak > best_xy_peak:
+                best_xy_peak = xy_peak
+                u_xy_comb = cand_xy
 
-    nodal_disp_mm: dict[str, list[float]] = {}
-    for i, node in enumerate(assembly.nodes):
-        d_vec = u_comb[6 * i : 6 * i + 3]
-        nodal_disp_mm[node.id] = [round(float(v) * 1e3, 6) for v in d_vec]
+    def _to_disp_map(u_vec: np.ndarray) -> dict[str, list[float]]:
+        return {
+            node.id: [round(float(v) * 1e3, 6) for v in u_vec[6 * i : 6 * i + 3]]
+            for i, node in enumerate(assembly.nodes)
+        }
+
+    nodal_disp_mm = _to_disp_map(u_comb)
+    nodal_disp_x_mm = _to_disp_map(u_x)
+    nodal_disp_y_mm = _to_disp_map(u_y)
+    nodal_disp_xy_mm = _to_disp_map(u_xy_comb)
 
     combined_nozzle_um = float(np.linalg.norm(_rel_disp_vec(u_comb))) * 1e6
     u_th_rel = u_comb[th_dof : th_dof + 3] - (
@@ -396,6 +415,9 @@ def solve_static_fea(
         peak_inertial_force_x_n=f_inertial_x,
         peak_inertial_force_y_n=f_inertial_y,
         nodal_displacements_mm=nodal_disp_mm,
+        nodal_displacements_x_mm=nodal_disp_x_mm,
+        nodal_displacements_y_mm=nodal_disp_y_mm,
+        nodal_displacements_xy_mm=nodal_disp_xy_mm,
         member_stresses=member_stresses,
         shell_panel_stresses=shell_panel_stresses,
     )

@@ -31,7 +31,25 @@ BracketMaterialType = Literal[
 DriveModeType = Literal["2wd", "awd"]
 XRailMountType = Literal["front", "top", "bottom", "dual_top_bottom"]
 YRailMountType = Literal["top", "inner", "bottom"]
-InputShaperType = Literal["auto", "none", "zv", "mzv", "ei", "2hump_ei"]
+DriveType = Literal["open_loop_stepper", "closed_loop_stepper", "foc_servo"]
+InputShaperType = Literal[
+    "auto",
+    "none",
+    "zv",
+    "mzv",
+    "ei",
+    "2hump_ei",
+    "3hump_ei",
+    "zvdd",
+    "smooth_zv",
+    "smooth_ei",
+]
+CornerJointType = Literal["rigid", "l_bracket", "blind_joint", "gusset_plate", "corner_cube"]
+RailPreloadType = Literal["ZF", "Z0", "Z1", "ZA", "ZB"]
+RailBlockType = Literal["C", "H"]
+RailBackerMaterialType = Literal["none", "steel_4140", "titanium_grade5"]
+BedMountType = Literal["kinematic_3pt", "floating_4pt", "rigid_4pt"]
+BearingClearanceType = Literal["C2", "CN", "C3"]
 
 # Engineering catalog for frame extrusion cavity fillings (SI units; literature / CNC casting data)
 EXTRUSION_FILLINGS: dict[str, dict] = {
@@ -263,6 +281,13 @@ class FrameSpec(BaseModel):
         "none",
         description="Frame extrusion cavity filling for damping & bonded core stiffness (none, pu_foam, silica_sand, lead_shot, epoxy_granite, uhpc_grout)",
     )
+    corner_joint_type: CornerJointType = Field(
+        "blind_joint",
+        description="Frame corner connection hardware: rigid, l_bracket, blind_joint, gusset_plate, corner_cube",
+    )
+    chamber_temp_c: float = Field(
+        25.0, ge=15.0, le=120.0, description="Ambient/heated enclosure chamber air temperature (C)"
+    )
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
 
@@ -275,12 +300,15 @@ class BeltSpec(BaseModel):
     pulley_teeth: int = Field(20, ge=12, le=40)
     pitch_mm: float = Field(2.0, gt=0)
     pretension_n: float = Field(25.0, gt=0, le=200.0)
+    wrap_angle_deg: float = Field(180.0, ge=60.0, le=240.0)
+    idler_shaft_diameter_mm: float = Field(5.0, ge=3.0, le=10.0)
+    bearing_clearance_class: BearingClearanceType = "CN"
 
     @property
     def stiffness_ea_n(self) -> float:
-        """Effective belt tensile modulus EA (Newtons) calibrated to Gates PowerGrip 2GT datasheets."""
+        """Dynamic secant tensile modulus EA (Newtons) calibrated to Gates PowerGrip 2M GT2 datasheets."""
         width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.5, "gt2_12mm": 2.0}[self.type]
-        core_base = {"fiberglass": 52000.0, "aramid": 74000.0, "steel": 110000.0}[self.core]
+        core_base = {"fiberglass": 26000.0, "aramid": 42000.0, "steel": 78000.0}[self.core]
         return core_base * width_scale
 
     @property
@@ -333,6 +361,21 @@ class GantrySpec(BaseModel):
         "top",
         description="Y-axis linear rail mounting face on the left/right Y extrusions: top (Voron standard), inner (side-mounted Monolith/VzBot, max X stiffness), or bottom (inverted)",
     )
+    rail_preload: RailPreloadType = Field(
+        "Z1", description="HIWIN MGN/HGH carriage ball preload class (ZF, Z0, Z1, ZA, ZB)"
+    )
+    rail_block_type: RailBlockType = Field(
+        "H", description="Linear carriage block length class (C standard vs H long)"
+    )
+    rail_bolt_pitch_mm: float = Field(
+        25.0, ge=15.0, le=100.0, description="Linear rail M3 mounting fastener spacing (mm)"
+    )
+    rail_backer_material: RailBackerMaterialType = Field(
+        "none", description="Optional X-beam opposite-face thermal bow cancellation backer"
+    )
+    rail_backer_thickness_mm: float = Field(
+        3.0, ge=1.0, le=8.0, description="Opposite-face rail backer bar thickness (mm)"
+    )
     dual_x_rails: bool = False
     carriage_mass_g: float = Field(140.0, gt=0, description="Combined X/Y gantry carriages & joints (g)")
     belt: BeltSpec = Field(default_factory=BeltSpec)
@@ -381,15 +424,20 @@ class StepperSpec(BaseModel):
         return self.holding_torque_nm * (math.tanh(1.1 * ratio) / math.tanh(1.1))
 
     def dynamic_voltage_efficiency(self, rpm: float = 250.0) -> float:
-        """Inductive current-tracking efficiency eta_V in (0, 1] at speed/vibration operating point."""
+        """Back-EMF + inductive current-tracking efficiency eta_V in (0, 1] at speed/vibration operating point."""
         import math
 
         l_h = self.inductance_mh * 1e-3
         omega_mech = max(rpm, 10.0) * (2.0 * math.pi / 60.0)
+        k_e = self.holding_torque_nm / max(self.rated_current_a, 0.1)
+        v_bemf = k_e * omega_mech
         v_inductive = omega_mech * self.pole_pairs * l_h * self.run_current_a
         v_res = self.run_current_a * self.phase_resistance_ohm
         v_headroom = max(self.supply_voltage_v - v_res, 1.0)
-        return 1.0 / math.sqrt(1.0 + (v_inductive / v_headroom) ** 2)
+        v_bus = max(self.supply_voltage_v, 1.0)
+        return 1.0 / math.sqrt(
+            1.0 + ((v_res + v_bemf) / v_bus) ** 2 + (v_inductive / v_headroom) ** 2
+        )
 
     def torsional_stiffness_nm_per_rad(self, rpm: float = 250.0) -> float:
         """Electromagnetic torsional stiffness k_theta = p * T_hold(I) * eta_V (N·m/rad)."""
@@ -487,6 +535,10 @@ class KinematicsSpec(BaseModel):
     max_z_accel_mm_s2: float = Field(300.0, gt=0)
     square_corner_velocity_mm_s: float = Field(5.0, gt=0)
     input_shaper: InputShaperType = "auto"
+    drive_type: DriveType = "open_loop_stepper"
+    servo_vel_bw_hz: float = Field(120.0, ge=20.0, le=500.0)
+    servo_pos_bw_hz: float = Field(25.0, ge=5.0, le=150.0)
+    notch_filter_hz: float | None = Field(None, ge=15.0, le=300.0)
     xy_stepper: StepperSpec = Field(default_factory=StepperSpec)
     z_stepper: StepperSpec = Field(
         default_factory=lambda: StepperSpec(
@@ -599,6 +651,11 @@ class BedSpec(BaseModel):
     z_drive: Literal[
         "leadscrew_single", "leadscrew_dual", "leadscrew_triple", "belted_quad_z"
     ] = "belted_quad_z"
+    target_temp_c: float = Field(60.0, ge=20.0, le=160.0, description="Heated bed target temperature (C)")
+    mount_type: BedMountType = Field(
+        "kinematic_3pt",
+        description="Bed frame attachment constraint: kinematic_3pt (Maxwell), floating_4pt, or rigid_4pt",
+    )
 
 
 class PrinterSpec(BaseModel):

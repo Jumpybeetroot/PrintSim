@@ -467,7 +467,11 @@ def _evaluate_spec_candidate(
     point_id: str,
     label: str = "",
 ) -> _EvaluatedCandidate:
-    report: SimulationReport = evaluate_printer(spec, filament_id=filament_id)
+    report: SimulationReport = evaluate_printer(
+        spec,
+        filament_id=filament_id,
+        include_advanced_analysis=False,
+    )
     bom: PrinterBOM = generate_bom(report.assembly)
 
     safe_accel = min(

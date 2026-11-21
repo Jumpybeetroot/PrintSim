@@ -23,6 +23,7 @@ from printsim.fea.solid_fem import (
     solve_solid_voxel_fea,
     voxelize_stl_bytes,
 )
+from printsim.fea.superelement import condense_parametric_bracket
 from printsim.fea.tet_fem import (
     solve_preset_tet_fea,
     solve_step_bytes_tet_fea,
@@ -151,6 +152,22 @@ class PartStepExportRequest(BaseModel):
     preset: PartPreset = "corner_gusset"
 
 
+class BracketSuperelementRequest(BaseModel):
+    bracket_type: Literal["corner_gusset", "motor_mount", "xy_joint_l_bracket"] = "corner_gusset"
+    material_id: str = "ppa_cf_printed"
+    arm_length_mm: float = Field(40.0, ge=25.0, le=90.0)
+    height_mm: float = Field(20.0, ge=10.0, le=60.0)
+    wall_thickness_mm: float = Field(6.0, ge=2.5, le=18.0)
+    rib_thickness_mm: float | None = Field(None, ge=0.0, le=18.0)
+    rib_count: int | None = Field(None, ge=0, le=6)
+    bolt_boss_thickness_mm: float | None = Field(None, ge=0.0, le=18.0)
+    bolt_hole_mm: float = Field(5.2, ge=0.0, le=10.0)
+    fillet_mm: float = Field(2.0, ge=0.0, le=6.0)
+    n_modes: int = Field(6, ge=0, le=24)
+    fdm_anisotropic: bool = False
+    interface_mode: Literal["rbe3", "rbe2"] = "rbe3"
+
+
 def _resolve_spec(spec: PrinterSpec | None, yaml_text: str | None) -> PrinterSpec:
     if spec is not None:
         return spec
@@ -177,8 +194,8 @@ def _load_presets() -> dict[str, PrinterSpec]:
 def create_app() -> FastAPI:
     api = FastAPI(
         title="PrintSim Multiphysics 3D Printer Simulator API",
-        version="0.9.0",
-        description="Frame, MITC4 Shell Panel & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), Huth CBUSH bolted fasteners, build123d STEP CAD, CoreXY AWD & structural panels, stepper electromagnetic stiffness, nozzle-tip CoG vibration, Klipper ADXL345 shaper PSD, pymoo NSGA-II Pareto optimization, SIMP topology optimization, manufacturable BOM, hotend FVM thermal, and virtual G-code API.",
+        version="1.1.0",
+        description="Frame, MITC4 Shell Panel & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), Craig-Bampton VPT superelements, Huth CBUSH bolted fasteners, Hertzian rail carriages, Newmark composite rails, Timoshenko thermal-structural coupling, coupled LPV mechatronics & workspace FRF maps, ZOH time-domain corner/ballbar metrology, RCSA toolhead whip, exact adjoint & Fox-Kapoor sensitivities, Klipper ADXL345 shaper PSD, pymoo NSGA-II Pareto optimization, SIMP topology optimization, manufacturable BOM, hotend FVM thermal, and virtual G-code API.",
     )
 
     api.add_middleware(
@@ -191,7 +208,7 @@ def create_app() -> FastAPI:
 
     @api.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "version": "0.9.0"}
+        return {"status": "ok", "version": "1.1.0"}
 
     @api.get("/api/catalog")
     def catalog() -> dict:
@@ -214,6 +231,71 @@ def create_app() -> FastAPI:
                 {"id": "top", "name": "Top Face (Voron Standard)", "short_name": "Top", "notes": "Bolted to top (+Z) face of Y extrusions: max Z stiffness + wide face resists X"},
                 {"id": "inner", "name": "Inner Side Face (Monolith / VzBot)", "short_name": "Inner Side", "notes": "Bolted to inner (±X) face of Y extrusions: max X-bending stiffness against gantry push"},
                 {"id": "bottom", "name": "Bottom Face (Inverted)", "short_name": "Bottom", "notes": "Bolted to bottom (-Z) face of Y extrusions: high Z stiffness & debris protection"},
+            ],
+            "corner_joints": [
+                {"id": "l_bracket", "name": "Internal/Stamped L-Bracket", "short_name": "L-Bracket"},
+                {"id": "blind_joint", "name": "Blind Joint (Voron Standard)", "short_name": "Blind Joint"},
+                {"id": "gusset_plate", "name": "External CNC Gusset Plate", "short_name": "Gusset Plate"},
+                {"id": "corner_cube", "name": "3-Way Cast/CNC Corner Cube", "short_name": "Corner Cube"},
+                {"id": "rigid", "name": "Idealized Rigid Welded Corner", "short_name": "Rigid"},
+            ],
+            "rail_preloads": [
+                {"id": "ZF", "name": "ZF (Slight Clearance)", "short_name": "ZF"},
+                {"id": "Z0", "name": "Z0 (Zero Clearance / Light)", "short_name": "Z0"},
+                {"id": "Z1", "name": "Z1 (Light Preload — Voron Recommended)", "short_name": "Z1"},
+                {"id": "ZA", "name": "ZA (Medium Preload)", "short_name": "ZA"},
+                {"id": "ZB", "name": "ZB (Heavy Preload)", "short_name": "ZB"},
+            ],
+            "rail_block_types": [
+                {"id": "C", "name": "C Block (Standard Length)", "short_name": "C"},
+                {"id": "H", "name": "H Block (Long Heavy-Load)", "short_name": "H"},
+            ],
+            "rail_backers": [
+                {"id": "none", "name": "None (Bare Extrusion Opposite Face)", "short_name": "None"},
+                {"id": "titanium_grade5", "name": "Ti-6Al-4V Grade 5 Backer", "short_name": "Titanium"},
+                {"id": "steel_4140", "name": "4140 Steel Backer", "short_name": "Steel 4140"},
+            ],
+            "bed_mounts": [
+                {"id": "kinematic_3pt", "name": "3-Point Maxwell Kinematic Mount", "short_name": "Kinematic 3-Pt"},
+                {"id": "floating_4pt", "name": "4-Point Floating / Silicone Spring", "short_name": "Floating 4-Pt"},
+                {"id": "rigid_4pt", "name": "4-Point Rigid Hard-Bolted", "short_name": "Rigid 4-Pt"},
+            ],
+            "bearing_clearances": [
+                {"id": "C2", "name": "ISO C2 Tight Clearance (3.5 um)", "short_name": "C2"},
+                {"id": "CN", "name": "ISO CN Normal Clearance (7.5 um)", "short_name": "CN"},
+                {"id": "C3", "name": "ISO C3 Loose Clearance (15.5 um)", "short_name": "C3"},
+            ],
+            "drive_types": [
+                {
+                    "id": "open_loop_stepper",
+                    "name": "Open-Loop Stepper (Standard Step/Dir)",
+                    "short_name": "Open-Loop Stepper",
+                    "notes": "Standard TMC2209/5160 step/dir drive; subject to Acarnley L/R mid-band negative damping at high stepping rates",
+                },
+                {
+                    "id": "closed_loop_stepper",
+                    "name": "Closed-Loop Stepper (Encoder FOC)",
+                    "short_name": "Closed-Loop Stepper",
+                    "notes": "Encoder-locked FOC microstepping suppresses mid-band resonance and adds active velocity damping",
+                },
+                {
+                    "id": "foc_servo",
+                    "name": "FOC AC/BLDC Servo (Velocity + Position Cascade)",
+                    "short_name": "FOC Servo",
+                    "notes": "High-bandwidth cascaded velocity/position FOC loop with active damping and optional biquad notch filter",
+                },
+            ],
+            "input_shapers": [
+                {"id": "auto", "name": "Auto (Klipper Optimal Score)", "short_name": "Auto"},
+                {"id": "none", "name": "None (Unshaped)", "short_name": "None"},
+                {"id": "zv", "name": "ZV (Zero Vibration)", "short_name": "ZV"},
+                {"id": "mzv", "name": "MZV (Modified Zero Vibration)", "short_name": "MZV"},
+                {"id": "ei", "name": "EI (Extra Insensitive)", "short_name": "EI"},
+                {"id": "2hump_ei", "name": "2HUMP_EI (Two-Hump EI)", "short_name": "2HUMP_EI"},
+                {"id": "3hump_ei", "name": "3HUMP_EI (Three-Hump EI)", "short_name": "3HUMP_EI"},
+                {"id": "zvdd", "name": "ZVDD (Zero Vibration Double-Derivative)", "short_name": "ZVDD"},
+                {"id": "smooth_zv", "name": "SMOOTH_ZV (Kalico C1/C2 Smooth ZV)", "short_name": "SMOOTH_ZV"},
+                {"id": "smooth_ei", "name": "SMOOTH_EI (Kalico C1/C2 Smooth EI)", "short_name": "SMOOTH_EI"},
             ],
             "part_presets": [
                 {"id": "corner_gusset", "name": "40mm L-Corner Gusset Bracket"},
@@ -300,6 +382,38 @@ def create_app() -> FastAPI:
                 fdm_anisotropic=req.fdm_anisotropic,
             )
             return res.to_dict()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/superelement/bracket")
+    def run_bracket_superelement(req: BracketSuperelementRequest) -> dict:
+        try:
+            if req.rib_thickness_mm is not None:
+                resolved_rib = req.rib_thickness_mm
+            elif req.rib_count is not None:
+                resolved_rib = 0.0 if req.rib_count == 0 else min(18.0, 3.5 + 1.5 * req.rib_count)
+            else:
+                resolved_rib = 5.0
+
+            resolved_wall = (
+                max(req.wall_thickness_mm, req.bolt_boss_thickness_mm)
+                if req.bolt_boss_thickness_mm is not None
+                else req.wall_thickness_mm
+            )
+            bracket_params = {
+                "bracket_type": req.bracket_type,
+                "arm_length_mm": req.arm_length_mm,
+                "height_mm": req.height_mm,
+                "wall_thickness_mm": resolved_wall,
+                "rib_thickness_mm": resolved_rib,
+                "bolt_hole_mm": req.bolt_hole_mm,
+                "fillet_mm": req.fillet_mm,
+                "n_modes": req.n_modes,
+                "fdm_anisotropic": req.fdm_anisotropic,
+                "interface_mode": req.interface_mode,
+            }
+            se = condense_parametric_bracket(bracket_params, material_id=req.material_id)
+            return se.to_dict()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

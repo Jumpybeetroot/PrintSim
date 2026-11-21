@@ -12,6 +12,7 @@ from scipy.linalg import eigh, solve
 
 from printsim.api.server import create_app
 from printsim.fea import assemble_global_matrices, solve_modal_fea, solve_static_fea
+from printsim.fea.components import newmark_rail_composite_gamma
 from printsim.geometry import (
     AssemblyModel,
     StructuralMember,
@@ -75,16 +76,25 @@ def test_bolted_rail_analytical_transformed_section_and_cantilever_fea() -> None
         j_m4=0.1406 * (0.020**4),
     )
 
-    # Check eta_rail = 0.45 (extrusion), 0.35 (cf_*), 0.55 (solid_bar) and dual symmetric flange action
+    # Check Newmark (1951) partial-interaction gamma across extrusion, cf_*, solid_bar and dual symmetric flange action
     cases = [
-        ("ext_front", ext2020, al_mat, 0.45, [np.array([0.0, -1.0, 0.0])]),
-        ("cf_top", cf2020, cf_mat, 0.35, [np.array([0.0, 0.0, 1.0])]),
-        ("solid_front", solid2020, al_mat, 0.55, [np.array([0.0, -1.0, 0.0])]),
-        ("ext_dual", ext2020, al_mat, 0.45, [np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])]),
+        ("ext_front", ext2020, al_mat, "extrusion", [np.array([0.0, -1.0, 0.0])]),
+        ("cf_top", cf2020, cf_mat, "carbon_tube", [np.array([0.0, 0.0, 1.0])]),
+        ("solid_front", solid2020, al_mat, "solid_bar", [np.array([0.0, -1.0, 0.0])]),
+        ("ext_dual", ext2020, al_mat, "extrusion", [np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])]),
     ]
-    for label, beam_prof, beam_mat, expected_eta, normals in cases:
+    for label, beam_prof, beam_mat, sub_kind, normals in cases:
         L = 0.48
         n_elems = 8
+        expected_eta = newmark_rail_composite_gamma(
+            e_rail_pa=steel.youngs_modulus_pa,
+            a_rail_m2=mgn12.area_m2,
+            e_beam_pa=beam_mat.youngs_modulus_pa,
+            a_beam_m2=beam_prof.area_m2,
+            bolt_pitch_m=0.025,
+            l_eff_m=L,
+            substrate_kind=sub_kind,
+        )
         nodes = [
             StructuralNode(
                 id=f"n{i}",
@@ -106,7 +116,9 @@ def test_bolted_rail_analytical_transformed_section_and_cantilever_fea() -> None
             for i in range(n_elems)
         ]
         for m in members:
-            _apply_bolted_linear_rail(m, nmap, mgn12, steel, normals, beam_shape=beam_prof.shape)
+            _apply_bolted_linear_rail(
+                m, nmap, mgn12, steel, normals, beam_shape=beam_prof.shape, l_eff_m=L
+            )
 
         # Analytical transformed-section prediction along +X beam (ey=[0,1,0], ez=[0,0,1])
         n_e = steel.youngs_modulus_pa / beam_mat.youngs_modulus_pa

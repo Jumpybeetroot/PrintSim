@@ -43,7 +43,7 @@ def test_mcp_server_metadata_and_enriched_list_catalog() -> None:
     tools_resp = handle_jsonrpc_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert tools_resp is not None
     tools = tools_resp["result"]["tools"]
-    assert len(tools) == 14
+    assert len(tools) == 16
     names = {t["name"] for t in tools}
     assert {
         "list_catalog",
@@ -60,6 +60,8 @@ def test_mcp_server_metadata_and_enriched_list_catalog() -> None:
         "export_printer_stl",
         "export_printer_step",
         "run_deep_frame_verify",
+        "analyze_sensitivity_hotspots",
+        "condense_bracket_superelement",
     } == names
 
     cat = _call_mcp("list_catalog")

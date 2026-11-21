@@ -14,6 +14,7 @@ from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_f
 from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.bracket_designer import design_and_evaluate_bracket
 from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
+from printsim.fea.superelement import condense_parametric_bracket
 from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
 from printsim.fea.topology import export_topology_stl, optimize_preset_topology
 from printsim.geometry import build_assembly, export_assembly_step, export_assembly_stl, generate_bom
@@ -411,6 +412,60 @@ TOOLS_SCHEMA = [
             "required": ["yaml_text"],
         },
     },
+    {
+        "name": "analyze_sensitivity_hotspots",
+        "description": (
+            "Run analytical structural adjoint and Fox-Kapoor modal sensitivity analysis alongside "
+            "coupled workspace FRF mapping, time-domain corner/ballbar metrology, and RCSA toolhead "
+            "whip diagnostics on a PrintSim YAML printer specification."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_text": {"type": "string", "description": "Declarative PrintSim YAML specification"},
+                "filament_id": {"type": "string", "default": "pla"},
+                "toolhead_rel_pos": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "default": [0.5, 0.5, 0.5],
+                },
+            },
+            "required": ["yaml_text"],
+        },
+    },
+    {
+        "name": "condense_bracket_superelement",
+        "description": (
+            "Run Craig-Bampton Component Mode Synthesis (CMS) and RBE3 Virtual Point Transformation (VPT) "
+            "condensation on a parametric 3D structural bracket, returning 6-DOF port stiffnesses, mass, "
+            "fixed-interface modal frequencies, and SHA256 cache hash."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bracket_type": {
+                    "type": "string",
+                    "enum": ["corner_gusset", "motor_mount", "xy_joint_l_bracket"],
+                    "default": "corner_gusset",
+                },
+                "material_id": {"type": "string", "default": "ppa_cf_printed"},
+                "arm_length_mm": {"type": "number", "default": 40.0, "minimum": 25.0, "maximum": 90.0},
+                "height_mm": {"type": "number", "default": 20.0, "minimum": 10.0, "maximum": 60.0},
+                "wall_thickness_mm": {"type": "number", "default": 6.0, "minimum": 2.5, "maximum": 18.0},
+                "rib_thickness_mm": {"type": "number", "default": 5.0, "minimum": 0.0, "maximum": 18.0},
+                "rib_count": {"type": "integer", "minimum": 0, "maximum": 6},
+                "bolt_boss_thickness_mm": {"type": "number", "minimum": 0.0, "maximum": 18.0},
+                "bolt_hole_mm": {"type": "number", "default": 5.2, "minimum": 0.0, "maximum": 10.0},
+                "fillet_mm": {"type": "number", "default": 2.0, "minimum": 0.0, "maximum": 6.0},
+                "n_modes": {"type": "integer", "default": 6, "minimum": 0, "maximum": 24},
+                "fdm_anisotropic": {"type": "boolean", "default": False},
+                "interface_mode": {"type": "string", "enum": ["rbe3", "rbe2"], "default": "rbe3"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -444,6 +499,19 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             ],
             "x_rail_mounts": ["front", "top", "bottom", "dual_top_bottom"],
             "y_rail_mounts": ["top", "inner", "bottom"],
+            "drive_types": ["open_loop_stepper", "closed_loop_stepper", "foc_servo"],
+            "input_shapers": [
+                "auto",
+                "none",
+                "zv",
+                "mzv",
+                "ei",
+                "2hump_ei",
+                "3hump_ei",
+                "zvdd",
+                "smooth_zv",
+                "smooth_ei",
+            ],
             "part_presets": ["corner_gusset", "xy_motor_mount", "toolhead_carriage", "cantilever_bar"],
             "presets": _list_preset_ids(),
         }
@@ -706,6 +774,101 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             filament_id=str(args.get("filament_id", "pla")),
             deep_mesh_n=int(args.get("deep_mesh_n", 6)),
         )
+
+    if name == "analyze_sensitivity_hotspots":
+        spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
+        raw_pos = args.get("toolhead_rel_pos")
+        rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
+        if raw_pos is not None:
+            if len(raw_pos) != 3:
+                raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
+            rel_pos = (float(raw_pos[0]), float(raw_pos[1]), float(raw_pos[2]))
+        report = evaluate_printer(
+            spec,
+            toolhead_rel_pos=rel_pos,
+            filament_id=str(args.get("filament_id", "pla")),
+        )
+        sens = report.sensitivity.to_dict() if report.sensitivity is not None else {}
+        wfrf = report.workspace_frf.to_dict() if report.workspace_frf is not None else {}
+        tdm = (
+            report.time_domain_metrology.to_dict()
+            if report.time_domain_metrology is not None
+            else {}
+        )
+        rcsa = report.rcsa.to_dict() if report.rcsa is not None else {}
+        return {
+            "printer_name": report.spec.name,
+            "fundamental_freq_hz": round(float(report.modal_fea.fundamental_freq_hz), 2),
+            "top_stiffen_targets": sens.get("top_stiffen_targets", []),
+            "top_lighten_targets": sens.get("top_lighten_targets", []),
+            "panel_bay_sensitivities": sens.get("panel_bay_sensitivities", {}),
+            "workspace_frf": {
+                "grid_n": wfrf.get("grid_n"),
+                "center_freq_hz": wfrf.get("center_freq_hz"),
+                "min_freq_hz": wfrf.get("min_freq_hz"),
+                "max_freq_hz": wfrf.get("max_freq_hz"),
+                "worst_corner_drop_pct": wfrf.get("worst_corner_drop_pct"),
+                "max_cross_coupling_pct": wfrf.get("max_cross_coupling_pct"),
+                "reflected_rotor_mass_g": wfrf.get("reflected_rotor_mass_g"),
+                "drive_type": wfrf.get("drive_type"),
+                "midband_instability_risk": wfrf.get("midband_instability_risk"),
+            },
+            "time_domain_metrology": {
+                "corner_rounding_um": tdm.get("corner_rounding_um"),
+                "corner_overshoot_um": tdm.get("corner_overshoot_um"),
+                "ringing_peak_to_peak_um": tdm.get("ringing_peak_to_peak_um"),
+                "ringing_unshaped_um": tdm.get("ringing_unshaped_um"),
+                "ringing_reduction_pct": tdm.get("ringing_reduction_pct"),
+                "ringing_decay_mm": tdm.get("ringing_decay_mm"),
+                "shaper_used": tdm.get("shaper_used"),
+                "shaper_freq_hz": tdm.get("shaper_freq_hz"),
+                "ballbar_radius_mm": tdm.get("ballbar_radius_mm"),
+                "ballbar_speed_mm_s": tdm.get("ballbar_speed_mm_s"),
+                "circularity_gxy_um": tdm.get("circularity_gxy_um"),
+                "mean_radial_lag_um": tdm.get("mean_radial_lag_um"),
+                "quadrant_glitch_um": tdm.get("quadrant_glitch_um"),
+            },
+            "rcsa": {
+                "sensor_peak_freq_hz": rcsa.get("sensor_peak_freq_hz"),
+                "nozzle_tip_peak_freq_hz": rcsa.get("nozzle_tip_peak_freq_hz"),
+                "nozzle_to_sensor_amp_ratio": rcsa.get("nozzle_to_sensor_amp_ratio"),
+                "hotend_bending_stiffness_n_per_mm": rcsa.get("hotend_bending_stiffness_n_per_mm"),
+                "whip_risk": rcsa.get("whip_risk"),
+                "warning_message": rcsa.get("warning_message"),
+            },
+        }
+
+    if name == "condense_bracket_superelement":
+        rib_count = args.get("rib_count")
+        if args.get("rib_thickness_mm") is not None:
+            resolved_rib = float(args["rib_thickness_mm"])
+        elif rib_count is not None:
+            rc = int(rib_count)
+            resolved_rib = 0.0 if rc == 0 else min(18.0, 3.5 + 1.5 * rc)
+        else:
+            resolved_rib = 5.0
+
+        wall_base = float(args.get("wall_thickness_mm", 6.0))
+        boss_t = args.get("bolt_boss_thickness_mm")
+        resolved_wall = max(wall_base, float(boss_t)) if boss_t is not None else wall_base
+
+        bracket_params = {
+            "bracket_type": str(args.get("bracket_type", "corner_gusset")),
+            "arm_length_mm": float(args.get("arm_length_mm", 40.0)),
+            "height_mm": float(args.get("height_mm", 20.0)),
+            "wall_thickness_mm": resolved_wall,
+            "rib_thickness_mm": resolved_rib,
+            "bolt_hole_mm": float(args.get("bolt_hole_mm", 5.2)),
+            "fillet_mm": float(args.get("fillet_mm", 2.0)),
+            "n_modes": int(args.get("n_modes", 6)),
+            "fdm_anisotropic": bool(args.get("fdm_anisotropic", False)),
+            "interface_mode": str(args.get("interface_mode", "rbe3")),
+        }
+        se = condense_parametric_bracket(
+            bracket_params,
+            material_id=str(args.get("material_id", "ppa_cf_printed")),
+        )
+        return se.to_dict()
 
     raise ValueError(f"Unknown MCP tool: {name}")
 

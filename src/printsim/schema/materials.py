@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel, Field
 
 
@@ -24,11 +26,55 @@ class MaterialSpec(BaseModel):
     cost_per_kg_usd: float = Field(10.0, ge=0, description="Estimated raw material cost (USD/kg)")
     color_hex: str = "#8a95a5"
 
+    # Orthotropic FDM / composite ratios and Mahieux-Reifsnider (2002) viscoelastic parameters
+    e2_ratio: float = Field(1.0, gt=0, le=1.5, description="Transverse in-plane E2 / E1 ratio")
+    e3_ratio: float = Field(1.0, gt=0, le=1.5, description="Interlayer Z-axis E3 / E1 ratio")
+    g12_ratio: float | None = Field(
+        None, gt=0, le=1.5, description="Optional in-plane shear G12 / E1 ratio"
+    )
+    tg_c: float | None = Field(None, description="Glass transition temperature Tg (C)")
+    hdt_c: float | None = Field(None, description="Heat deflection temperature HDT (C)")
+    e_rubbery_ratio: float = Field(
+        0.05, gt=0, le=1.0, description="Post-Tg rubbery plateau modulus ratio E_r / E_g"
+    )
+    mahieux_m: float = Field(
+        14.0, gt=1.0, le=40.0, description="Mahieux-Reifsnider Weibull transition exponent m"
+    )
+    is_printed_polymer: bool = False
+
     @property
     def effective_shear_modulus_pa(self) -> float:
         if self.shear_modulus_pa is not None:
             return self.shear_modulus_pa
         return self.youngs_modulus_pa / (2.0 * (1.0 + self.poisson_ratio))
+
+    def modulus_retention_at_temp(self, temp_c: float) -> float:
+        """Mahieux-Reifsnider (2002) Weibull E(T)/E(25 C) modulus retention factor.
+
+        Uses Kelvin ratio ``(1 - e_r) * exp(-(T_K / T_ref_K)^m) + e_r`` normalized to 1.0 at 25 C.
+        For semicrystalline CF-reinforced polymers where HDT far exceeds Tg (e.g. annealed PPS-CF),
+        crystalline/fiber load bridging shifts the effective viscoelastic inflection ``T_ref_K``.
+        Metals and thermoset CF plates (``tg_c is None``) return ``1.0``.
+        """
+        if self.tg_c is None:
+            return 1.0
+
+        hdt_val = self.hdt_c if self.hdt_c is not None else self.tg_c
+        t_ref_c = self.tg_c + 0.32 * max(0.0, hdt_val - self.tg_c - 80.0)
+        t_ref_k = max(t_ref_c + 273.15, 200.0)
+        e_r = self.e_rubbery_ratio
+        m = self.mahieux_m
+
+        def _weibull_val(tc: float) -> float:
+            t_k = max(tc + 273.15, 100.0)
+            return (1.0 - e_r) * math.exp(-((t_k / t_ref_k) ** m)) + e_r
+
+        ref_25 = max(_weibull_val(25.0), 1e-6)
+        return _weibull_val(temp_c) / ref_25
+
+    def effective_modulus_pa(self, temp_c: float = 25.0) -> float:
+        """Temperature-dependent effective Young's modulus E(T) in Pascals."""
+        return self.youngs_modulus_pa * self.modulus_retention_at_temp(temp_c)
 
 
 MATERIAL_CATALOG: dict[str, MaterialSpec] = {
@@ -200,6 +246,13 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.045,
         cost_per_kg_usd=24.0,
         color_hex="#e63946",
+        e2_ratio=0.88,
+        e3_ratio=0.75,
+        tg_c=102.0,
+        hdt_c=88.0,
+        e_rubbery_ratio=0.02,
+        mahieux_m=18.0,
+        is_printed_polymer=True,
     ),
     "pa12_cf_printed": MaterialSpec(
         id="pa12_cf_printed",
@@ -214,6 +267,13 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.038,
         cost_per_kg_usd=85.0,
         color_hex="#333840",
+        e2_ratio=0.42,
+        e3_ratio=0.32,
+        tg_c=56.0,
+        hdt_c=135.0,
+        e_rubbery_ratio=0.30,
+        mahieux_m=11.0,
+        is_printed_polymer=True,
     ),
     "pet_cf_printed": MaterialSpec(
         id="pet_cf_printed",
@@ -228,6 +288,13 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.036,
         cost_per_kg_usd=55.0,
         color_hex="#3b4252",
+        e2_ratio=0.45,
+        e3_ratio=0.34,
+        tg_c=78.0,
+        hdt_c=185.0,
+        e_rubbery_ratio=0.35,
+        mahieux_m=14.0,
+        is_printed_polymer=True,
     ),
     "ppa_cf_printed": MaterialSpec(
         id="ppa_cf_printed",
@@ -242,6 +309,13 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.032,
         cost_per_kg_usd=135.0,
         color_hex="#2d333b",
+        e2_ratio=0.42,
+        e3_ratio=0.33,
+        tg_c=130.0,
+        hdt_c=210.0,
+        e_rubbery_ratio=0.35,
+        mahieux_m=15.0,
+        is_printed_polymer=True,
     ),
     "pps_cf_printed": MaterialSpec(
         id="pps_cf_printed",
@@ -256,6 +330,13 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.030,
         cost_per_kg_usd=165.0,
         color_hex="#23272e",
+        e2_ratio=0.44,
+        e3_ratio=0.35,
+        tg_c=98.0,
+        hdt_c=252.0,
+        e_rubbery_ratio=0.42,
+        mahieux_m=15.0,
+        is_printed_polymer=True,
     ),
     # Structural & Enclosure Panel Materials (MatWeb / 3A Composites Dibond datasheets)
     "acrylic_pmma": MaterialSpec(

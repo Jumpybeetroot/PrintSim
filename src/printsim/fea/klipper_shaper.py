@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 
 SHAPER_NAMES: tuple[str, ...] = ("ZV", "MZV", "EI", "2HUMP_EI", "3HUMP_EI")
+ADVANCED_SHAPER_NAMES: tuple[str, ...] = ("ZVDD", "SMOOTH_ZV", "SMOOTH_EI")
 DEFAULT_SHAPER_DAMPING_RATIO: float = 0.1
 DEFAULT_TARGET_SMOOTHING: float = 0.12
 SHAPER_VIBRATION_REDUCTION: float = 20.0  # Klipper shaper_defs.SHAPER_VIBRATION_REDUCTION
@@ -149,7 +150,146 @@ def get_shaper_pulses(
         times = np.array([0.0, 0.5 * t_d, t_d, 1.5 * t_d, 2.0 * t_d], dtype=float)
         return amps, times
 
-    raise ValueError(f"Unknown Klipper shaper name '{name}'. Expected one of {SHAPER_NAMES}.")
+    if key == "ZVDD":
+        # Singhose (1994) 4-impulse Zero-Vibration Double-Derivative shaper
+        denom = (1.0 + k) ** 3
+        amps = np.array([1.0, 3.0 * k, 3.0 * k * k, k * k * k], dtype=float) / denom
+        times = np.array([0.0, 0.5 * t_d, t_d, 1.5 * t_d], dtype=float)
+        return amps, times
+
+    if key in ("SMOOTH_ZV", "SMOOTH_EI"):
+        base_name = "ZV" if key == "SMOOTH_ZV" else "EI"
+        return _build_smooth_shaper(base_name, shaper_freq_hz, damping_ratio)
+
+    valid = SHAPER_NAMES + ADVANCED_SHAPER_NAMES
+    raise ValueError(f"Unknown Klipper shaper name '{name}'. Expected one of {valid}.")
+
+
+def _build_smooth_shaper(
+    base_name: str,
+    shaper_freq_hz: float,
+    damping_ratio: float,
+    tau_cycles: float = 0.75,
+    steps_per_quarter_cycle: int = 8,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Kalico-style C1/C2 smooth kernel shaper over `[0, T_s]` eliminating jerk jumps & high harmonics."""
+    amps_base, times_base = get_shaper_pulses(base_name, shaper_freq_hz, damping_ratio=damping_ratio)
+    df = math.sqrt(1.0 - damping_ratio * damping_ratio)
+    t_d = 1.0 / (shaper_freq_hz * df)
+    dt = (0.25 * t_d) / float(steps_per_quarter_cycle)
+
+    n_win = int(round(tau_cycles * t_d / dt)) + 1
+    u = np.linspace(0.0, 1.0, n_win)
+    kernel = np.sin(math.pi * u) ** 2
+    if n_win > 2 and kernel[0] <= 1e-12 and kernel[-1] <= 1e-12:
+        kernel = kernel[1:-1]
+    kernel /= float(np.sum(kernel))
+
+    m = len(kernel)
+    t_last_base = float(times_base[-1])
+    n_total = int(round((t_last_base + (m - 1) * dt) / dt)) + 1
+    amps = np.zeros(n_total, dtype=float)
+    for a_b, t_b in zip(amps_base, times_base):
+        idx0 = int(round(float(t_b) / dt))
+        amps[idx0 : idx0 + m] += float(a_b) * kernel
+
+    times = np.arange(n_total, dtype=float) * dt
+    amps /= float(np.sum(amps))
+    return amps, times
+
+
+def convolve_shapers(
+    shaper_a: tuple[np.ndarray | Sequence[float], np.ndarray | Sequence[float]],
+    shaper_b: tuple[np.ndarray | Sequence[float], np.ndarray | Sequence[float]],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convolve two discrete input shapers for multi-mode vibration cancellation."""
+    amps_a = np.asarray(shaper_a[0], dtype=float)
+    times_a = np.asarray(shaper_a[1], dtype=float)
+    amps_b = np.asarray(shaper_b[0], dtype=float)
+    times_b = np.asarray(shaper_b[1], dtype=float)
+    if (
+        amps_a.size == 0
+        or amps_b.size == 0
+        or amps_a.size != times_a.size
+        or amps_b.size != times_b.size
+    ):
+        raise ValueError("Both shapers must contain matching non-empty amplitude and time arrays.")
+
+    raw_amps = (amps_a[:, None] * amps_b[None, :]).ravel()
+    raw_times = (times_a[:, None] + times_b[None, :]).ravel()
+    order = np.argsort(raw_times, kind="mergesort")
+    sorted_t = raw_times[order]
+    sorted_a = raw_amps[order]
+
+    merged_t: list[float] = []
+    merged_a: list[float] = []
+    for t_val, a_val in zip(sorted_t, sorted_a):
+        if merged_t and abs(float(t_val) - merged_t[-1]) <= 1e-12:
+            merged_a[-1] += float(a_val)
+        else:
+            merged_t.append(float(t_val))
+            merged_a.append(float(a_val))
+
+    amps_out = np.asarray(merged_a, dtype=float)
+    times_out = np.asarray(merged_t, dtype=float)
+    times_out -= times_out[0]
+    total_a = float(np.sum(amps_out))
+    if total_a > 0.0:
+        amps_out /= total_a
+    return amps_out, times_out
+
+
+def apply_shaper_to_trajectory(
+    t_s: np.ndarray | Sequence[float],
+    pos_m: np.ndarray | Sequence[float],
+    shaper: tuple[np.ndarray | Sequence[float], np.ndarray | Sequence[float]],
+) -> np.ndarray:
+    """Convolve trajectory `pos_m(t_s)` with shaper impulses via continuous linear interpolation."""
+    t_arr = np.asarray(t_s, dtype=float)
+    p_arr = np.asarray(pos_m, dtype=float)
+    amps = np.asarray(shaper[0], dtype=float)
+    times = np.asarray(shaper[1], dtype=float)
+    if t_arr.ndim != 1 or t_arr.size == 0:
+        raise ValueError("t_s must be a non-empty 1D time array.")
+    if p_arr.shape[0] != t_arr.size:
+        raise ValueError("pos_m first dimension must match len(t_s).")
+    amps_sum = float(np.sum(amps))
+    if amps_sum <= 0.0:
+        raise ValueError("Shaper impulse amplitudes must sum to a positive value.")
+    weights = amps / amps_sum
+
+    if p_arr.ndim == 1:
+        out = np.zeros_like(p_arr, dtype=float)
+        for w_i, tau_i in zip(weights, times):
+            out += w_i * np.interp(t_arr - tau_i, t_arr, p_arr, left=p_arr[0], right=p_arr[-1])
+        return out
+
+    flat = p_arr.reshape(t_arr.size, -1)
+    out_flat = np.zeros_like(flat, dtype=float)
+    for col in range(flat.shape[1]):
+        p_col = flat[:, col]
+        acc = np.zeros(t_arr.size, dtype=float)
+        for w_i, tau_i in zip(weights, times):
+            acc += w_i * np.interp(t_arr - tau_i, t_arr, p_col, left=p_col[0], right=p_col[-1])
+        out_flat[:, col] = acc
+    return out_flat.reshape(p_arr.shape)
+
+
+def apply_biquad_notch(
+    freqs_hz: np.ndarray | Sequence[float] | float,
+    f_notch_hz: float,
+    zeta_zero: float = 0.03,
+    zeta_pole: float = 0.35,
+) -> np.ndarray:
+    """Return 2nd-order biquad notch magnitude `|H_notch(jw)|` over `freqs_hz`."""
+    if f_notch_hz <= 0.0:
+        raise ValueError(f"f_notch_hz must be positive, got {f_notch_hz}")
+    freqs = np.asarray(freqs_hz, dtype=float)
+    r = freqs / float(f_notch_hz)
+    one_m_r2 = 1.0 - r * r
+    num = one_m_r2 * one_m_r2 + (2.0 * float(zeta_zero) * r) ** 2
+    den = one_m_r2 * one_m_r2 + (2.0 * float(zeta_pole) * r) ** 2
+    return np.sqrt(num / np.maximum(den, 1e-18))
 
 
 def estimate_shaper(
@@ -300,21 +440,43 @@ def estimate_psd_damping_ratio(freqs_hz: np.ndarray, raw_psd: np.ndarray) -> flo
                     pk_val = 1.0 / y_min
 
     half_power = 0.5 * pk_val
+    y_min_val = 1.0 / max(pk_val, 1e-12)
+    s_target = math.sqrt(y_min_val)
+
+    def _interp_half_power(f_a: float, p_a: float, f_b: float, p_b: float) -> float:
+        # For a Lorentzian resonance peak, s(f) = sqrt(1/P(f) - 1/P_max) is linear in |f - f_peak|,
+        # eliminating discrete 2 Hz bin-grid bias when the peak lands halfway between frequency bins.
+        s_a = math.sqrt(max(1.0 / max(p_a, 1e-12) - y_min_val, 0.0))
+        s_b = math.sqrt(max(1.0 / max(p_b, 1e-12) - y_min_val, 0.0))
+        denom = s_a - s_b
+        if abs(denom) > 1e-12:
+            alpha = (s_target - s_b) / denom
+            if 0.0 <= alpha <= 1.0:
+                return float(f_b + alpha * (f_a - f_b))
+        span = max(abs(p_b - p_a), 1e-12)
+        alpha = (half_power - p_a) / (p_b - p_a) if abs(p_b - p_a) > 1e-12 else 0.5
+        return float(f_a + max(0.0, min(1.0, alpha)) * (f_b - f_a))
 
     f_lo = float(freqs_hz[0])
     for idx in range(pk_idx, 0, -1):
         if raw_psd[idx - 1] <= half_power <= raw_psd[idx]:
-            span = max(float(raw_psd[idx] - raw_psd[idx - 1]), 1e-12)
-            alpha = (half_power - float(raw_psd[idx - 1])) / span
-            f_lo = float(freqs_hz[idx - 1] + alpha * (freqs_hz[idx] - freqs_hz[idx - 1]))
+            f_lo = _interp_half_power(
+                float(freqs_hz[idx - 1]),
+                float(raw_psd[idx - 1]),
+                float(freqs_hz[idx]),
+                float(raw_psd[idx]),
+            )
             break
 
     f_hi = float(freqs_hz[-1])
     for idx in range(pk_idx, len(freqs_hz) - 1):
         if raw_psd[idx + 1] <= half_power <= raw_psd[idx]:
-            span = max(float(raw_psd[idx] - raw_psd[idx + 1]), 1e-12)
-            alpha = (half_power - float(raw_psd[idx + 1])) / span
-            f_hi = float(freqs_hz[idx + 1] - alpha * (freqs_hz[idx + 1] - freqs_hz[idx]))
+            f_hi = _interp_half_power(
+                float(freqs_hz[idx + 1]),
+                float(raw_psd[idx + 1]),
+                float(freqs_hz[idx]),
+                float(raw_psd[idx]),
+            )
             break
 
     zeta_est = (f_hi - f_lo) / (2.0 * max(pk_freq, 1.0))
@@ -339,21 +501,36 @@ def _fit_single_shaper(
     best_attenuation: np.ndarray | None = None
     best_shaper: tuple[np.ndarray, np.ndarray] | None = None
 
-    for fc in candidate_freqs:
-        shaper = get_shaper_pulses(name, float(fc), damping_ratio=damping_ratio)
-        attenuation = estimate_shaper(shaper, freqs_hz, test_damping_ratio=damping_ratio)
-        rem_vib = float(np.sum(np.maximum(raw_psd * attenuation - vibr_threshold, 0.0)))
-        vib_ratio = rem_vib / all_vibrations
-        smoothing = get_shaper_smoothing(shaper, accel=5000.0, scv=scv)
-        score = smoothing * (vib_ratio ** 1.5 + vib_ratio * 0.2 + 0.01)
+    def _eval_grid(grid: np.ndarray) -> None:
+        nonlocal best_score, best_freq, best_vib_ratio, best_smoothing, best_attenuation, best_shaper
+        for fc in grid:
+            shaper = get_shaper_pulses(name, float(fc), damping_ratio=damping_ratio)
+            attenuation = estimate_shaper(shaper, freqs_hz, test_damping_ratio=damping_ratio)
+            rem_vib = float(np.sum(np.maximum(raw_psd * attenuation - vibr_threshold, 0.0)))
+            vib_ratio = rem_vib / all_vibrations
+            smoothing = get_shaper_smoothing(shaper, accel=5000.0, scv=scv)
+            score = smoothing * (vib_ratio ** 1.5 + vib_ratio * 0.2 + 0.01)
 
-        if score < best_score:
-            best_score = score
-            best_freq = float(fc)
-            best_vib_ratio = vib_ratio
-            best_smoothing = smoothing
-            best_attenuation = attenuation
-            best_shaper = shaper
+            if score < best_score:
+                best_score = score
+                best_freq = float(fc)
+                best_vib_ratio = vib_ratio
+                best_smoothing = smoothing
+                best_attenuation = attenuation
+                best_shaper = shaper
+
+    # Stage 1: coarse sweep across [lo_f, hi_f]
+    _eval_grid(candidate_freqs)
+
+    # Stage 2: 0.25 Hz fine local refinement around the best coarse basin
+    # (prevents narrow-notch shapers like ZV from aliasing between coarse grid bins)
+    if len(candidate_freqs) >= 2:
+        step_coarse = float(candidate_freqs[1] - candidate_freqs[0])
+        fine_lo = max(float(candidate_freqs[0]), best_freq - step_coarse)
+        fine_hi = min(float(candidate_freqs[-1]), best_freq + step_coarse)
+        if fine_hi > fine_lo + 0.1:
+            fine_grid = np.arange(fine_lo, fine_hi + 0.125, 0.25, dtype=float)
+            _eval_grid(fine_grid)
 
     assert best_shaper is not None and best_attenuation is not None
     max_accel = find_shaper_max_accel(best_shaper, scv=scv, target_smoothing=DEFAULT_TARGET_SMOOTHING)
@@ -442,6 +619,17 @@ def calibrate_axis_shapers(
         rec_accel = 0.9 * (max(float(primary_freq_hz), 5.0) ** 2)
     else:
         matched = next((c for c in candidates if c.name == choice_norm), None)
+        if matched is None and choice_norm in ADVANCED_SHAPER_NAMES:
+            matched = _fit_single_shaper(
+                name=choice_norm,
+                freqs_hz=freqs,
+                raw_psd=psd,
+                candidate_freqs=candidate_freqs,
+                vibr_threshold=vibr_threshold,
+                all_vibrations=all_vibrations,
+                scv=scv,
+                damping_ratio=damping_ratio,
+            )
         if matched is None:
             raise ValueError(f"Unsupported shaper_choice '{shaper_choice}'.")
         shaped_psd = psd * matched.attenuation_curve

@@ -7,6 +7,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from printsim.fea.components import (
+    belt_effective_ea_n,
+    gerbert_tooth_mesh_stiffness_n_m,
+    idler_shaft_and_bearing_stiffness,
+)
 from printsim.geometry.builder import AssemblyModel
 from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec, StepperSpec, get_material
 
@@ -44,6 +49,11 @@ class KinematicsReport:
     motor_voltage_efficiency_pct: float = 100.0
     motor_heat_w_each: float = 0.0
     motor_overcurrent_risk: bool = False
+    tooth_mesh_stiffness_n_per_mm: float = 0.0
+    idler_shaft_stiffness_n_per_mm: float = 0.0
+    idler_shaft_deflection_um: float = 0.0
+    bearing_play_um: float = 7.5
+    bracket_modulus_retention_pct: float = 100.0
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +88,11 @@ class KinematicsReport:
             "motor_voltage_efficiency_pct": round(self.motor_voltage_efficiency_pct, 1),
             "motor_heat_w_each": round(self.motor_heat_w_each, 2),
             "motor_overcurrent_risk": self.motor_overcurrent_risk,
+            "tooth_mesh_stiffness_n_per_mm": round(self.tooth_mesh_stiffness_n_per_mm, 1),
+            "idler_shaft_stiffness_n_per_mm": round(self.idler_shaft_stiffness_n_per_mm, 1),
+            "idler_shaft_deflection_um": round(self.idler_shaft_deflection_um, 2),
+            "bearing_play_um": round(self.bearing_play_um, 1),
+            "bracket_modulus_retention_pct": round(self.bracket_modulus_retention_pct, 1),
         }
 
 
@@ -157,9 +172,10 @@ def stepper_available_torque_nm(stepper: StepperSpec, rpm: float) -> float:
 
 
 def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
-    """Compute effective gantry bracket / motor-mount / XY-joint stiffness in series (N/m)."""
+    """Compute effective gantry bracket / motor-mount stiffness in series (N/m), scaled by E(T)."""
     spec = assembly.spec
-    e_bkt = get_material(spec.gantry.bracket_material).youngs_modulus_pa
+    bkt_mat = get_material(spec.gantry.bracket_material)
+    e_bkt = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
     k_ref = 2.6e5  # Base 2WD single-shear ABS bracket stiffness (260 N/mm) at 2.1 GPa
     ds_mult = 1.45 if spec.gantry.double_shear_pulleys else 1.0
     awd_mult = 1.65 if (spec.architecture == "corexy" and spec.gantry.drive_mode == "awd") else 1.0
@@ -168,35 +184,56 @@ def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
     return (k_mat * k_ceil) / max(k_mat + k_ceil, 1e-9)
 
 
-def compute_drive_stiffness_n_per_m(
+def compute_drive_stiffness_details_n_per_m(
     assembly: AssemblyModel, axis: str = "X"
-) -> tuple[float, float, float]:
-    """Compute (k_belt_n_m, k_motor_axis_n_m, k_drive_n_m) coupling belt, motor EM, & bracket springs in series."""
+) -> dict[str, object]:
+    """Compute detailed series drive-train stiffness components (cord, tooth mesh, idler, motor, bracket)."""
     spec = assembly.spec
     belt = spec.gantry.belt
     kin = spec.kinematics
     w = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
+    bkt_mat = get_material(spec.gantry.bracket_material)
+    e_bkt_eff = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
 
     if spec.architecture == "corexy":
         if spec.gantry.drive_mode == "awd":
-            # 4-motor AWD halves active belt span driving the toolhead with 4 parallel driven branches
-            span_len = max(0.52 * (w + d), 0.22)
-            k_belt = 4.0 * belt.stiffness_ea_n / span_len
+            # 4-motor AWD divides belt loops into 4 independent motor-to-carriage spans
+            span_len = max(0.25 * (w + d), 0.16)
+            ea_eff = belt_effective_ea_n(belt, span_len)
+            k_belt_cord = 4.0 * ea_eff / span_len
+            drive_branches = 4.0
         else:
-            # CoreXY belt loop spans roughly 2*W + 2*D; two parallel spans act on X or Y
-            span_len = max(w + d, 0.35)
-            k_belt = 2.0 * belt.stiffness_ea_n / span_len
+            # 2WD CoreXY: 2 parallel belts, each with short motor branch & long return loop in parallel
+            span_short = max(0.62 * (w + d), 0.22)
+            span_long = max(1.58 * (w + d), 0.55)
+            ea_short = belt_effective_ea_n(belt, span_short)
+            ea_long = belt_effective_ea_n(belt, span_long)
+            k_belt_cord = 2.0 * (ea_short / span_short + ea_long / span_long)
+            ea_eff = 0.5 * (ea_short + ea_long)
+            drive_branches = 2.0
     elif spec.architecture == "delta":
         span_len = max(spec.frame.height_mm * 1e-3, 0.45)
-        k_belt = 2.5 * belt.stiffness_ea_n / span_len
+        ea_eff = belt_effective_ea_n(belt, span_len)
+        k_belt_cord = 2.5 * ea_eff / span_len
+        drive_branches = 2.5
     else:
-        span_len = w if axis.upper() == "X" else d
-        k_belt = 2.0 * belt.stiffness_ea_n / max(span_len, 0.25)
+        span_len = max(w if axis.upper() == "X" else d, 0.25)
+        ea_eff = belt_effective_ea_n(belt, span_len)
+        k_belt_cord = 2.0 * ea_eff / span_len
+        drive_branches = 1.0
 
-    # Belt pretension stiffness coupling (Gates belt backlash/slack compliance factor)
-    tension_eff = min(1.08, 0.72 + 0.36 * min(belt.pretension_n / 45.0, 1.0))
-    k_belt *= tension_eff
+    k_tooth_mesh = drive_branches * gerbert_tooth_mesh_stiffness_n_m(belt, ea_eff)
+    idler_info = idler_shaft_and_bearing_stiffness(
+        belt, double_shear=spec.gantry.double_shear_pulleys, bracket_e_pa=e_bkt_eff
+    )
+    k_idler_shaft = drive_branches * idler_info["k_idler_n_m"]
+
+    k_belt_subsystem = 1.0 / (
+        1.0 / max(k_belt_cord, 1e-9)
+        + 1.0 / max(k_tooth_mesh, 1e-9)
+        + 1.0 / max(k_idler_shaft, 1e-9)
+    )
 
     r_p = belt.pitch_radius_m
     motor_lin_v = (kin.max_velocity_mm_s * 1e-3) * (
@@ -217,11 +254,33 @@ def compute_drive_stiffness_n_per_m(
     k_motor_axis = motor_factor * k_motor_single
     k_bracket = compute_bracket_stiffness_n_per_m(assembly)
     k_drive = 1.0 / (
-        1.0 / max(k_belt, 1e-9)
+        1.0 / max(k_belt_subsystem, 1e-9)
         + 1.0 / max(k_motor_axis, 1e-9)
         + 1.0 / max(k_bracket, 1e-9)
     )
-    return (k_belt, k_motor_axis, k_drive)
+    return {
+        "k_belt_cord_n_m": k_belt_cord,
+        "k_tooth_mesh_n_m": k_tooth_mesh,
+        "k_idler_shaft_n_m": k_idler_shaft,
+        "k_belt_subsystem_n_m": k_belt_subsystem,
+        "k_motor_axis_n_m": k_motor_axis,
+        "k_bracket_n_m": k_bracket,
+        "k_drive_n_m": k_drive,
+        "idler_info": idler_info,
+        "bracket_retention_pct": bkt_mat.modulus_retention_at_temp(spec.frame.chamber_temp_c) * 100.0,
+    }
+
+
+def compute_drive_stiffness_n_per_m(
+    assembly: AssemblyModel, axis: str = "X"
+) -> tuple[float, float, float]:
+    """Compute (k_belt_n_m, k_motor_axis_n_m, k_drive_n_m) coupling belt, tooth mesh, idler, motor, & bracket."""
+    details = compute_drive_stiffness_details_n_per_m(assembly, axis)
+    return (
+        float(details["k_belt_subsystem_n_m"]),
+        float(details["k_motor_axis_n_m"]),
+        float(details["k_drive_n_m"]),
+    )
 
 
 def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
@@ -284,15 +343,29 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     # Safe motor-limited acceleration with 1.35x dynamic safety factor
     max_safe_a = kin.max_accel_mm_s2 * (margin / 1.35)
 
-    # Belt dynamic tension: tight side = T0 + F/2, slack side = T0 - F/2 (slip if slack <= 0)
+    stepper = kin.xy_stepper
+    details = compute_drive_stiffness_details_n_per_m(assembly, "X")
+    k_belt_n_m = float(details["k_belt_subsystem_n_m"])
+    k_tooth_n_m = float(details["k_tooth_mesh_n_m"])
+    k_idler_n_m = float(details["k_idler_shaft_n_m"])
+    k_motor_n_m = float(details["k_motor_axis_n_m"])
+    k_bracket_n_m = float(details["k_bracket_n_m"])
+    k_drive_n_m = float(details["k_drive_n_m"])
+    idler_info: dict[str, float] = details["idler_info"]  # type: ignore[assignment]
+    bracket_ret_pct = float(details["bracket_retention_pct"])
+
+    # Belt dynamic tension: tight side = T0 + F/2, slack side = T0 - F/2 (Euler-Eytelwein + cam-out slip check)
     peak_tension = belt.pretension_n + 0.5 * peak_belt_force
     slack_tension = belt.pretension_n - 0.5 * peak_belt_force
-    belt_slip = slack_tension < 2.0
+    belt_slip = slack_tension < idler_info["min_slack_tension_n"]
 
     belt_pluck_150 = belt.pluck_freq_hz(150.0)
     belt_max_t = belt.max_working_tension_n
     belt_overtension = peak_tension > belt_max_t
-    shaft_bending = (belt.pretension_n > 45.0) and (not spec.gantry.double_shear_pulleys)
+    shaft_bending = (
+        idler_info["idler_shaft_deflection_um"] > 12.0
+        or ((belt.pretension_n > 45.0) and (not spec.gantry.double_shear_pulleys))
+    )
     frame_preload = 2.0 * belt.pretension_n * (2.0 if is_awd else 1.0)
 
     # Validate Delta reachability at perimeter corners if Delta
@@ -305,11 +378,8 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
                 except ValueError:
                     delta_ok = False
 
-    stepper = kin.xy_stepper
-    k_belt_n_m, k_motor_n_m, k_drive_n_m = compute_drive_stiffness_n_per_m(assembly, "X")
     bkt_id = spec.gantry.bracket_material
     bkt_info = GANTRY_BRACKET_CATALOG.get(bkt_id, GANTRY_BRACKET_CATALOG["abs_printed"])
-    k_bracket_n_m = compute_bracket_stiffness_n_per_m(assembly)
     bracket_creep = belt.pretension_n > float(bkt_info["creep_tension_limit_n"])
     motor_volt_eff_pct = stepper.dynamic_voltage_efficiency(max_rpm * 0.7) * 100.0
     motor_heat_w = stepper.power_dissipation_w
@@ -347,4 +417,9 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         motor_voltage_efficiency_pct=motor_volt_eff_pct,
         motor_heat_w_each=motor_heat_w,
         motor_overcurrent_risk=motor_overcurrent,
+        tooth_mesh_stiffness_n_per_mm=k_tooth_n_m * 1e-3,
+        idler_shaft_stiffness_n_per_mm=k_idler_n_m * 1e-3,
+        idler_shaft_deflection_um=idler_info["idler_shaft_deflection_um"],
+        bearing_play_um=idler_info["bearing_play_um"],
+        bracket_modulus_retention_pct=bracket_ret_pct,
     )
