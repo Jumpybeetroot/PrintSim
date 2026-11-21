@@ -4,6 +4,7 @@ import {
   AccelBottleneckShares,
   AxisShaperGraph,
   CompareMode,
+  DeepVerifyResponse,
   GeometryExtrusionFillingData,
   KlipperShaperCandidate,
   PrinterBOMResponse,
@@ -17,6 +18,11 @@ import {
 
 interface Props {
   sim: SimulationResponse | null;
+  deepVerifyResult: DeepVerifyResponse | null;
+  viewingDeepSim: boolean;
+  onToggleViewingDeepSim: (useDeep: boolean) => void;
+  onInspectDeepFea: () => void;
+  onDismissDeepVerify: () => void;
   baselineSim: SimulationResponse | null;
   baselineBom: PrinterBOMResponse | null;
   baselineLabel: string;
@@ -1185,8 +1191,191 @@ const AccelBottleneckCard: React.FC<{
   );
 };
 
+const DeepVerifyCard: React.FC<{
+  result: DeepVerifyResponse;
+  viewingDeepSim: boolean;
+  onToggleViewingDeepSim: (useDeep: boolean) => void;
+  onInspectDeepFea: () => void;
+  onDismiss: () => void;
+}> = ({
+  result,
+  viewingDeepSim,
+  onToggleViewingDeepSim,
+  onInspectDeepFea,
+  onDismiss,
+}) => {
+  const { fast_mesh_n, deep_mesh_n, fast_summary: fast, deep_summary: deep, convergence } = result;
+  const fmtSignedPct = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+  const deltaClass = (pct: number) =>
+    Math.abs(pct) <= 2.5 ? "tag-ok" : Math.abs(pct) <= 6.0 ? "tag-warn" : "tag-bad";
+
+  const hasDrum = fast.panel_drum_freq_hz > 0 || deep.panel_drum_freq_hz > 0;
+  const drumDelta = deep.panel_drum_freq_hz - fast.panel_drum_freq_hz;
+  const drumColor =
+    deep.panel_drum_freq_hz > 0
+      ? deep.panel_drum_freq_hz < 65
+        ? "tag-warn"
+        : deep.panel_drum_freq_hz >= 85
+          ? "tag-ok"
+          : ""
+      : "";
+
+  const hasPanelStress = fast.panel_max_von_mises_mpa > 0 || deep.panel_max_von_mises_mpa > 0;
+  const stressDelta = deep.panel_max_von_mises_mpa - fast.panel_max_von_mises_mpa;
+
+  return (
+    <div className={`section-card deep-verify-card ${convergence.converged ? "converged" : "refining"}`}>
+      <div className="deep-verify-header">
+        <span className="section-title" style={{ margin: 0 }}>
+          Deep Verify Convergence
+        </span>
+        <div className="deep-verify-header-right">
+          <span className={`badge-pill ${convergence.converged ? "ok" : "warn"}`}>
+            {convergence.converged ? "Converged" : "Mesh Sensitive"}
+          </span>
+          <button
+            type="button"
+            className="deep-verify-close"
+            onClick={onDismiss}
+            title="Dismiss Deep Verify results"
+            aria-label="Dismiss Deep Verify results"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      <div className="deep-verify-meta">
+        <span>
+          <strong>
+            {fast_mesh_n}×{fast_mesh_n} → {deep_mesh_n}×{deep_mesh_n}
+          </strong>{" "}
+          MITC4
+        </span>
+        <span>
+          <strong>{deep.num_shell_elements.toLocaleString()}</strong> shells •{" "}
+          <strong>{Math.round(deep.solve_time_ms)} ms</strong>
+        </span>
+      </div>
+
+      <table className="deep-verify-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th className="num">Fast</th>
+            <th className="num">Fine</th>
+            <th className="num">Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>f₁ Mode</td>
+            <td className="num">{fast.fundamental_freq_hz.toFixed(1)} Hz</td>
+            <td className="num">
+              <strong>{deep.fundamental_freq_hz.toFixed(1)} Hz</strong>
+            </td>
+            <td className={`num ${deltaClass(convergence.freq_diff_pct)}`}>
+              {fmtSignedPct(convergence.freq_diff_pct)}
+            </td>
+          </tr>
+          <tr>
+            <td>Nozzle–Bed Flex</td>
+            <td className="num">{fast.combined_max_deflection_um.toFixed(1)} µm</td>
+            <td className="num">
+              <strong>{deep.combined_max_deflection_um.toFixed(1)} µm</strong>
+            </td>
+            <td className={`num ${deltaClass(convergence.deflection_diff_pct)}`}>
+              {fmtSignedPct(convergence.deflection_diff_pct)}
+            </td>
+          </tr>
+          <tr>
+            <td>Safe Accel</td>
+            <td className="num">{Math.round(fast.recommended_max_accel_mm_s2).toLocaleString()}</td>
+            <td className="num">
+              <strong>{Math.round(deep.recommended_max_accel_mm_s2).toLocaleString()}</strong>
+            </td>
+            <td className={`num ${deltaClass(convergence.accel_diff_pct)}`}>
+              {fmtSignedPct(convergence.accel_diff_pct)}
+            </td>
+          </tr>
+          <tr>
+            <td>Panel Drum Mode</td>
+            <td className="num">
+              {fast.panel_drum_freq_hz > 0 ? `${fast.panel_drum_freq_hz.toFixed(1)} Hz` : "—"}
+            </td>
+            <td className={`num ${drumColor}`}>
+              <strong>
+                {deep.panel_drum_freq_hz > 0 ? `${deep.panel_drum_freq_hz.toFixed(1)} Hz` : "—"}
+              </strong>
+            </td>
+            <td className="num">
+              {hasDrum && fast.panel_drum_freq_hz > 0 && deep.panel_drum_freq_hz > 0
+                ? `${drumDelta > 0 ? "+" : ""}${drumDelta.toFixed(1)} Hz`
+                : "—"}
+            </td>
+          </tr>
+          <tr>
+            <td>Peak Panel Stress</td>
+            <td className="num">
+              {fast.panel_max_von_mises_mpa > 0
+                ? `${fast.panel_max_von_mises_mpa.toFixed(2)} MPa`
+                : "—"}
+            </td>
+            <td className="num">
+              <strong>
+                {deep.panel_max_von_mises_mpa > 0
+                  ? `${deep.panel_max_von_mises_mpa.toFixed(2)} MPa`
+                  : "—"}
+              </strong>
+            </td>
+            <td className="num">
+              {hasPanelStress && fast.panel_max_von_mises_mpa > 0 && deep.panel_max_von_mises_mpa > 0
+                ? `${stressDelta > 0 ? "+" : ""}${stressDelta.toFixed(2)}`
+                : "—"}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div className="deep-verify-actions">
+        <div className="impact-seg">
+          <button
+            type="button"
+            className={`impact-seg-btn ${!viewingDeepSim ? "active" : ""}`}
+            onClick={() => onToggleViewingDeepSim(false)}
+            title={`Show Fast ${fast_mesh_n}×${fast_mesh_n} MITC4 simulation in 3D viewport`}
+          >
+            Fast {fast_mesh_n}×{fast_mesh_n}
+          </button>
+          <button
+            type="button"
+            className={`impact-seg-btn ${viewingDeepSim ? "active" : ""}`}
+            onClick={() => onToggleViewingDeepSim(true)}
+            title={`Show Fine ${deep_mesh_n}×${deep_mesh_n} MITC4 simulation in 3D viewport`}
+          >
+            Fine {deep_mesh_n}×{deep_mesh_n}
+          </button>
+        </div>
+        <button
+          type="button"
+          className="deep-verify-cta"
+          onClick={onInspectDeepFea}
+          title="Switch 3D viewport to Frame FEA with the fine MITC4 shell stress heatmap"
+        >
+          View Fine Mesh in Frame FEA
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const MetricsPanel: React.FC<Props> = ({
   sim,
+  deepVerifyResult,
+  viewingDeepSim,
+  onToggleViewingDeepSim,
+  onInspectDeepFea,
+  onDismissDeepVerify,
   baselineSim,
   baselineBom,
   baselineLabel,
@@ -1228,6 +1417,12 @@ export const MetricsPanel: React.FC<Props> = ({
       setRightTab("simulation");
     }
   }, [tetFea, solidFea]);
+
+  useEffect(() => {
+    if (deepVerifyResult) {
+      setRightTab("simulation");
+    }
+  }, [deepVerifyResult]);
 
   const bomCategories = useMemo(() => {
     if (!bom) return [];
@@ -1332,6 +1527,10 @@ export const MetricsPanel: React.FC<Props> = ({
         (fea.nozzle_twist_amplification_pct ?? 0) -
           (compareSim.static_fea.nozzle_twist_amplification_pct ?? 0)
       ) >= 0.5 ||
+      Math.abs(
+        (fea.panel_max_von_mises_mpa ?? 0) -
+          (compareSim.static_fea.panel_max_von_mises_mpa ?? 0)
+      ) >= 0.02 ||
       Math.abs(scores.structural - compareSim.scores.structural) >= 0.05 ||
       Boolean(sim.geometry.panels?.bolted_to_gantry) !==
         Boolean(compareSim.geometry.panels?.bolted_to_gantry) ||
@@ -1359,6 +1558,9 @@ export const MetricsPanel: React.FC<Props> = ({
       Math.abs(
         (mod.nozzle_pitch_twist_freq_hz ?? 0) - (compareSim.modal_fea.nozzle_pitch_twist_freq_hz ?? 0)
       ) >= 0.05 ||
+      Math.abs(
+        (mod.panel_drum_freq_hz ?? 0) - (compareSim.modal_fea.panel_drum_freq_hz ?? 0)
+      ) >= 0.1 ||
       Math.abs(
         (mod.frame_damping_ratio ?? 0) - (compareSim.modal_fea.frame_damping_ratio ?? 0)
       ) >= 0.002 ||
@@ -1450,6 +1652,15 @@ export const MetricsPanel: React.FC<Props> = ({
 
         {rightTab === "simulation" && (
           <>
+            {deepVerifyResult && (
+              <DeepVerifyCard
+                result={deepVerifyResult}
+                viewingDeepSim={viewingDeepSim}
+                onToggleViewingDeepSim={onToggleViewingDeepSim}
+                onInspectDeepFea={onInspectDeepFea}
+                onDismiss={onDismissDeepVerify}
+              />
+            )}
             {viewMode === "topology" && topoResult && <TopologyOptCard topo={topoResult} />}
             {viewMode === "solid_part" && isTetActive && tetFea && <TetFEACard tet={tetFea} />}
             {viewMode === "solid_part" && !isTetActive && solidFea && <SolidHexFEACard solidFea={solidFea} />}
@@ -1825,6 +2036,24 @@ export const MetricsPanel: React.FC<Props> = ({
                 <span>Max von Mises Stress</span>
                 <span className="metric-val">{fea.max_von_mises_mpa.toFixed(2)} MPa</span>
               </div>
+              {(fea.panel_max_von_mises_mpa ?? 0) > 0 && (
+                <div className="metric-kv">
+                  <span>Panel Peak Stress (MITC4)</span>
+                  <span className="metric-val metric-val-with-delta">
+                    {compareSim?.static_fea.panel_max_von_mises_mpa != null &&
+                      compareSim.static_fea.panel_max_von_mises_mpa > 0 && (
+                        <InlineDeltaBadge
+                          oldVal={compareSim.static_fea.panel_max_von_mises_mpa}
+                          newVal={fea.panel_max_von_mises_mpa!}
+                          higherIsBetter={false}
+                          eps={0.01}
+                          formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(2)} MPa`}
+                        />
+                      )}
+                    {fea.panel_max_von_mises_mpa!.toFixed(2)} MPa
+                  </span>
+                </div>
+              )}
               <div className="metric-kv">
                 <span>Min Safety Factor</span>
                 <span className={`metric-val ${fea.min_safety_factor < 3 ? "tag-bad" : "tag-ok"}`}>
@@ -1896,6 +2125,32 @@ export const MetricsPanel: React.FC<Props> = ({
                             />
                           )}
                           {mod.nozzle_pitch_twist_freq_hz.toFixed(1)} Hz
+                        </span>
+                      </div>
+                    )}
+                    {(mod.panel_drum_freq_hz ?? 0) > 0 && (
+                      <div className="metric-kv">
+                        <span>Panel Drum Mode</span>
+                        <span
+                          className={`metric-val metric-val-with-delta ${
+                            mod.panel_drum_freq_hz! < 65
+                              ? "tag-warn"
+                              : mod.panel_drum_freq_hz! >= 85
+                                ? "tag-ok"
+                                : ""
+                          }`}
+                        >
+                          {compareSim?.modal_fea.panel_drum_freq_hz != null &&
+                            compareSim.modal_fea.panel_drum_freq_hz > 0 && (
+                              <InlineDeltaBadge
+                                oldVal={compareSim.modal_fea.panel_drum_freq_hz}
+                                newVal={mod.panel_drum_freq_hz!}
+                                higherIsBetter={true}
+                                eps={0.1}
+                                formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} Hz`}
+                              />
+                            )}
+                          {mod.panel_drum_freq_hz!.toFixed(1)} Hz
                         </span>
                       </div>
                     )}

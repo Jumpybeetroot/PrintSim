@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   GeometryMember,
+  ShellPanelGeometryData,
   SimulationResponse,
   SolidFeaEngine,
   SolidFEAResponse,
@@ -146,6 +147,12 @@ interface ModalContinuousBeam {
   undeformedAxis: THREE.Vector3;
   fixedStart: boolean;
   fixedEnd: boolean;
+}
+
+interface ModalShellMesh {
+  geometry: THREE.BufferGeometry;
+  wireGeometry: THREE.BufferGeometry;
+  vertNodeIds: string[];
 }
 
 /**
@@ -785,6 +792,7 @@ export const PrinterViewport: React.FC<Props> = ({
       endId: string;
     }>;
     modalContinuousBeams: ModalContinuousBeam[];
+    modalShellMeshes: ModalShellMesh[];
     modalToolhead?: THREE.Group;
     modalToolheadNodeId?: string;
     modalCogMarker?: THREE.Group;
@@ -801,6 +809,7 @@ export const PrinterViewport: React.FC<Props> = ({
   }>({
     modalMeshes: [],
     modalContinuousBeams: [],
+    modalShellMeshes: [],
     modalBedOffset: new THREE.Vector3(0, -0.04, 0),
     basePositions: {},
     modalVectors: {},
@@ -871,7 +880,9 @@ export const PrinterViewport: React.FC<Props> = ({
 
       if (
         stateRef.current.isModal &&
-        (stateRef.current.modalContinuousBeams.length > 0 || stateRef.current.modalMeshes.length > 0)
+        (stateRef.current.modalContinuousBeams.length > 0 ||
+          stateRef.current.modalMeshes.length > 0 ||
+          stateRef.current.modalShellMeshes.length > 0)
       ) {
         const t = clock.getElapsedTime();
         const phase = Math.sin(t * 7.5) * 0.38;
@@ -879,6 +890,7 @@ export const PrinterViewport: React.FC<Props> = ({
           basePositions,
           modalVectors,
           modalContinuousBeams,
+          modalShellMeshes,
           modalMeshes,
           modalToolhead,
           modalToolheadNodeId,
@@ -918,6 +930,25 @@ export const PrinterViewport: React.FC<Props> = ({
             beam.fixedEnd,
             false
           );
+        }
+
+        for (const shell of modalShellMeshes) {
+          const posAttr = shell.geometry.getAttribute("position") as THREE.BufferAttribute;
+          const posArr = posAttr.array as Float32Array;
+          const ids = shell.vertNodeIds;
+          for (let i = 0; i < ids.length; i++) {
+            getPosInto(ids[i], tmpPosA);
+            const o = i * 3;
+            posArr[o] = tmpPosA.x;
+            posArr[o + 1] = tmpPosA.y;
+            posArr[o + 2] = tmpPosA.z;
+          }
+          posAttr.needsUpdate = true;
+          shell.geometry.computeVertexNormals();
+
+          const wirePosAttr = shell.wireGeometry.getAttribute("position") as THREE.BufferAttribute;
+          (wirePosAttr.array as Float32Array).set(posArr);
+          wirePosAttr.needsUpdate = true;
         }
 
         for (const item of modalMeshes) {
@@ -983,6 +1014,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
     stateRef.current.modalMeshes = [];
     stateRef.current.modalContinuousBeams = [];
+    stateRef.current.modalShellMeshes = [];
     stateRef.current.modalToolhead = undefined;
     stateRef.current.modalToolheadNodeId = undefined;
     stateRef.current.modalCogMarker = undefined;
@@ -1337,7 +1369,11 @@ export const PrinterViewport: React.FC<Props> = ({
 
     // Stress lookup (member-level and smooth nodal averages for corner blending)
     const stressMap: Record<string, number> = {};
-    const maxStress = Math.max(sim.static_fea.max_von_mises_mpa, 0.05);
+    const maxStress = Math.max(
+      sim.static_fea.max_von_mises_mpa,
+      sim.static_fea.panel_max_von_mises_mpa ?? 0,
+      0.05
+    );
     for (const ms of sim.static_fea.member_stresses) {
       stressMap[ms.member_id] = ms.von_mises_mpa / maxStress;
     }
@@ -1545,15 +1581,197 @@ export const PrinterViewport: React.FC<Props> = ({
       ghostLineMat.dispose();
     }
 
-    // Foot anchor markers
+    // Foot anchor markers (exclude bed and MITC4 shell panel nodes)
     for (const n of geom.nodes) {
-      if (n.fixed && n.role !== "bed") {
+      if (n.fixed && n.role !== "bed" && n.role !== "panel") {
         const pad = new THREE.Mesh(
           new THREE.CylinderGeometry(0.14, 0.17, 0.08, 12),
           new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.5 })
         );
         pad.position.copy(basePos[n.id]);
         group.add(pad);
+      }
+    }
+
+    // TRUE 2D MITC4 Shell Panel 3D Stress Heatmaps (fea_stress) & Live 3D Panel Drum/Flex Modes (modal)
+    if (
+      (viewMode === "fea_stress" || viewMode === "modal") &&
+      geom.shell_panels &&
+      geom.shell_panels.length > 0
+    ) {
+      const validPanels = geom.shell_panels.filter(
+        (p) =>
+          p.node_ids.length === 4 &&
+          Boolean(basePos[p.node_ids[0]]) &&
+          Boolean(basePos[p.node_ids[1]]) &&
+          Boolean(basePos[p.node_ids[2]]) &&
+          Boolean(basePos[p.node_ids[3]])
+      );
+
+      if (validPanels.length > 0) {
+        // Nodal-averaged MITC4 shell von Mises stress per bay (and global fallback)
+        const panelStressSum: Record<string, number> = {};
+        const panelStressCount: Record<string, number> = {};
+        if (viewMode === "fea_stress" && sim.static_fea.shell_panel_stresses) {
+          for (const sps of sim.static_fea.shell_panel_stresses) {
+            const vm = sps.von_mises_mpa;
+            for (const nid of sps.node_ids) {
+              const bayKey = `${sps.bay}:${nid}`;
+              panelStressSum[bayKey] = (panelStressSum[bayKey] ?? 0) + vm;
+              panelStressCount[bayKey] = (panelStressCount[bayKey] ?? 0) + 1;
+              panelStressSum[nid] = (panelStressSum[nid] ?? 0) + vm;
+              panelStressCount[nid] = (panelStressCount[nid] ?? 0) + 1;
+            }
+          }
+        }
+
+        const addShellLayer = (panels: ShellPanelGeometryData[], opacity: number) => {
+          if (panels.length === 0) return;
+
+          // Key vertices by bay:nodeId so interior panel shading is smooth while 90° bay corners stay crisp
+          const keyToVertIdx = new Map<string, number>();
+          const vertNodeIds: string[] = [];
+          const vertBays: string[] = [];
+
+          const getVertIdx = (bay: string, nid: string): number => {
+            const key = `${bay}:${nid}`;
+            let idx = keyToVertIdx.get(key);
+            if (idx === undefined) {
+              idx = vertNodeIds.length;
+              keyToVertIdx.set(key, idx);
+              vertNodeIds.push(nid);
+              vertBays.push(bay);
+            }
+            return idx;
+          };
+
+          const quadVerts: Array<[number, number, number, number]> = [];
+          for (const panel of panels) {
+            const i0 = getVertIdx(panel.bay, panel.node_ids[0]);
+            const i1 = getVertIdx(panel.bay, panel.node_ids[1]);
+            const i2 = getVertIdx(panel.bay, panel.node_ids[2]);
+            const i3 = getVertIdx(panel.bay, panel.node_ids[3]);
+            quadVerts.push([i0, i1, i2, i3]);
+          }
+
+          const vertCount = vertNodeIds.length;
+          const positions = new Float32Array(vertCount * 3);
+          const colors = new Float32Array(vertCount * 3);
+
+          for (let i = 0; i < vertCount; i++) {
+            const nid = vertNodeIds[i];
+            const bay = vertBays[i];
+            const pt =
+              viewMode === "fea_stress"
+                ? deformedPos[nid] || basePos[nid]
+                : basePos[nid];
+            const o = i * 3;
+            positions[o] = pt.x;
+            positions[o + 1] = pt.y;
+            positions[o + 2] = pt.z;
+
+            let scalar = 0;
+            if (viewMode === "fea_stress") {
+              const bayKey = `${bay}:${nid}`;
+              const avgVm = panelStressCount[bayKey]
+                ? panelStressSum[bayKey] / panelStressCount[bayKey]
+                : panelStressCount[nid]
+                  ? panelStressSum[nid] / panelStressCount[nid]
+                  : 0;
+              scalar = avgVm / maxStress;
+            } else {
+              scalar = Math.min(1, (mVecs[nid]?.length() ?? 0) / modalAmpNorm);
+            }
+            stressColorInto(scalar, _beamCol);
+            colors[o] = _beamCol.r;
+            colors[o + 1] = _beamCol.g;
+            colors[o + 2] = _beamCol.b;
+          }
+
+          // 2 triangles per MITC4 quad: [n0, n1, n2] and [n0, n2, n3]
+          const triIndices =
+            vertCount <= 65535
+              ? new Uint16Array(quadVerts.length * 6)
+              : new Uint32Array(quadVerts.length * 6);
+          const edgeSeen = new Set<number>();
+          const edgeList: number[] = [];
+          const pushEdge = (a: number, b: number) => {
+            const lo = a < b ? a : b;
+            const hi = a < b ? b : a;
+            const k = lo * vertCount + hi;
+            if (!edgeSeen.has(k)) {
+              edgeSeen.add(k);
+              edgeList.push(lo, hi);
+            }
+          };
+
+          let tOff = 0;
+          for (const [i0, i1, i2, i3] of quadVerts) {
+            triIndices[tOff++] = i0;
+            triIndices[tOff++] = i1;
+            triIndices[tOff++] = i2;
+            triIndices[tOff++] = i0;
+            triIndices[tOff++] = i2;
+            triIndices[tOff++] = i3;
+            pushEdge(i0, i1);
+            pushEdge(i1, i2);
+            pushEdge(i2, i3);
+            pushEdge(i3, i0);
+          }
+
+          const shellGeo = new THREE.BufferGeometry();
+          shellGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          shellGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+          shellGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
+          shellGeo.computeVertexNormals();
+
+          const shellMat = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity,
+            depthWrite: false,
+            roughness: 0.36,
+            metalness: 0.14,
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1,
+          });
+          const shellMesh = new THREE.Mesh(shellGeo, shellMat);
+          shellMesh.renderOrder = 1;
+          group.add(shellMesh);
+
+          // Subtle dark MITC4 quad wireframe grid overlay (2×2 or 6×6)
+          const wirePositions = new Float32Array(positions);
+          const wireIndices =
+            vertCount <= 65535 ? new Uint16Array(edgeList) : new Uint32Array(edgeList);
+          const wireGeo = new THREE.BufferGeometry();
+          wireGeo.setAttribute("position", new THREE.BufferAttribute(wirePositions, 3));
+          wireGeo.setIndex(new THREE.BufferAttribute(wireIndices, 1));
+          const wireMat = new THREE.LineBasicMaterial({
+            color: 0x0f172a,
+            transparent: true,
+            opacity: opacity >= 0.5 ? 0.5 : 0.3,
+          });
+          const wireLines = new THREE.LineSegments(wireGeo, wireMat);
+          wireLines.renderOrder = 2;
+          group.add(wireLines);
+
+          if (viewMode === "modal") {
+            shellMesh.frustumCulled = false;
+            wireLines.frustumCulled = false;
+            stateRef.current.modalShellMeshes.push({
+              geometry: shellGeo,
+              wireGeometry: wireGeo,
+              vertNodeIds,
+            });
+          }
+        };
+
+        const sidePanels = validPanels.filter((p) => p.bay !== "top");
+        const topPanels = validPanels.filter((p) => p.bay === "top");
+        addShellLayer(sidePanels, 0.72);
+        addShellLayer(topPanels, 0.28);
       }
     }
 
@@ -2435,9 +2653,21 @@ export const PrinterViewport: React.FC<Props> = ({
       <div className="viewport-hud-bottom">
         {viewMode === "fea_stress" && sim && (
           <div className="hud-card">
+            {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
+              <span className="badge-pill">
+                MITC4 {sim.geometry.panel_mesh_n ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}` : "Shell"} ·{" "}
+                {sim.geometry.shell_panels.length} quads
+              </span>
+            )}
             <span>0 MPa</span>
             <div className="legend-gradient" />
-            <span>{sim.static_fea.max_von_mises_mpa.toFixed(2)} MPa</span>
+            <span>
+              {Math.max(
+                sim.static_fea.max_von_mises_mpa,
+                sim.static_fea.panel_max_von_mises_mpa ?? 0
+              ).toFixed(2)}{" "}
+              MPa
+            </span>
             <span style={{ color: "var(--muted)" }}>|</span>
             <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
               Deflection ×{feaScale}
@@ -2687,6 +2917,17 @@ export const PrinterViewport: React.FC<Props> = ({
                 {activeMode.toolhead_participation_xyz.map((v) => `${Math.round(v * 100)}%`).join(" / ")}
               </strong>
             </span>
+            {sim?.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
+              <>
+                <span style={{ color: "var(--muted)" }}>|</span>
+                <span className="badge-pill">
+                  MITC4 {sim.geometry.panel_mesh_n ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}` : "Shell"}
+                  {(sim.modal_fea.panel_drum_freq_hz ?? 0) > 0
+                    ? ` · Drum ${sim.modal_fea.panel_drum_freq_hz!.toFixed(1)} Hz`
+                    : ""}
+                </span>
+              </>
+            )}
             {sim?.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
               <>
                 <span style={{ color: "var(--muted)" }}>|</span>

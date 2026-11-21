@@ -6,6 +6,7 @@ import { PrinterViewport } from "./components/PrinterViewport";
 import {
   CatalogResponse,
   CompareMode,
+  DeepVerifyResponse,
   HistorySnapshot,
   ParetoOptResponse,
   ParetoPointData,
@@ -431,6 +432,9 @@ export default function App() {
   const [paretoLoading, setParetoLoading] = useState<boolean>(false);
   const [paretoData, setParetoData] = useState<ParetoOptResponse | null>(null);
   const [paretoError, setParetoError] = useState<string | null>(null);
+  const [deepVerifyLoading, setDeepVerifyLoading] = useState<boolean>(false);
+  const [deepVerifyResult, setDeepVerifyResult] = useState<DeepVerifyResponse | null>(null);
+  const [viewingDeepSim, setViewingDeepSim] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   // Baseline & change-tracking state
@@ -451,6 +455,7 @@ export default function App() {
   // Refs for atomic history capture & stale-request guarding
   const simReqIdRef = useRef<number>(0);
   const paretoReqIdRef = useRef<number>(0);
+  const deepVerifyReqIdRef = useRef<number>(0);
   const simRef = useRef<SimulationResponse | null>(null);
   const bomRef = useRef<PrinterBOMResponse | null>(null);
   const filamentRef = useRef<string>("pla");
@@ -486,6 +491,13 @@ export default function App() {
     []
   );
 
+  const clearDeepVerify = useCallback(() => {
+    deepVerifyReqIdRef.current += 1;
+    setDeepVerifyResult(null);
+    setViewingDeepSim(false);
+    setDeepVerifyLoading(false);
+  }, []);
+
   const runSimulate = useCallback(
     async (
       payload: { spec?: PrinterSpecData; yaml_text?: string },
@@ -499,6 +511,7 @@ export default function App() {
     ) => {
       const reqId = ++simReqIdRef.current;
       const activeFil = filOverride ?? filamentRef.current;
+      clearDeepVerify();
       setLoading(true);
       setBomLoading(true);
       setError(null);
@@ -574,7 +587,7 @@ export default function App() {
         }
       }
     },
-    [fetchBomForSpec]
+    [clearDeepVerify, fetchBomForSpec]
   );
 
   // Refresh BOM when user switches stock bar length (1000mm <-> 2000mm)
@@ -828,6 +841,7 @@ export default function App() {
     async (presetId: string) => {
       setSelectedPreset(presetId);
       setOptMessage(null);
+      clearDeepVerify();
       const res = await fetch(`/api/presets/${presetId}`);
       if (!res.ok) return;
       const data = await res.json();
@@ -838,7 +852,7 @@ export default function App() {
         baselineName: data.spec?.name,
       });
     },
-    [gcodeText, runSimulate]
+    [clearDeepVerify, gcodeText, runSimulate]
   );
 
   useEffect(() => {
@@ -888,6 +902,7 @@ export default function App() {
 
   const handleSpecChange = (next: PrinterSpecData, changeLabel?: string) => {
     const label = changeLabel || describeSpecDiff(spec, next, catalog);
+    clearDeepVerify();
     setSpec(next);
     setOptMessage(null);
     void runSimulate({ spec: next }, gcodeText, undefined, { changeLabel: label });
@@ -909,6 +924,7 @@ export default function App() {
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
     simReqIdRef.current += 1; // cancel any in-flight request
+    clearDeepVerify();
     const last = history[history.length - 1];
     const nextHistory = history.slice(0, -1);
     setHistory(nextHistory);
@@ -923,11 +939,12 @@ export default function App() {
     setError(null);
     setLoading(false);
     setBomLoading(false);
-  }, [history]);
+  }, [clearDeepVerify, history]);
 
   const handleResetToBaseline = useCallback(() => {
     if (!baselineSim || !baselineSpec) return;
     simReqIdRef.current += 1;
+    clearDeepVerify();
     setHistory([]);
     setSim(baselineSim);
     setBom(baselineBom);
@@ -941,7 +958,7 @@ export default function App() {
     setError(null);
     setLoading(false);
     setBomLoading(false);
-  }, [baselineBom, baselineFilamentId, baselineSim, baselineSpec]);
+  }, [baselineBom, baselineFilamentId, baselineSim, baselineSpec, clearDeepVerify]);
 
   const handleSetBaseline = useCallback(() => {
     if (!sim || !spec) return;
@@ -1026,6 +1043,54 @@ export default function App() {
     handleSpecChange(point.spec, `Applied Pareto Build: ${point.label}`);
   };
 
+  const runDeepVerify = useCallback(async () => {
+    if (!spec) return;
+    const reqId = ++deepVerifyReqIdRef.current;
+    setDeepVerifyLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/verify/deep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spec,
+          filament_id: filamentRef.current,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(errBody.detail || "Deep Verify failed");
+      }
+      const data: DeepVerifyResponse = await res.json();
+      if (reqId !== deepVerifyReqIdRef.current) return;
+      setDeepVerifyResult(data);
+      setViewingDeepSim(true);
+    } catch (e) {
+      if (reqId === deepVerifyReqIdRef.current) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (reqId === deepVerifyReqIdRef.current) {
+        setDeepVerifyLoading(false);
+      }
+    }
+  }, [spec]);
+
+  const handleInspectDeepFea = useCallback(() => {
+    if (!deepVerifyResult) return;
+    setViewingDeepSim(true);
+    setViewMode("fea_stress");
+  }, [deepVerifyResult]);
+
+  const displaySim: SimulationResponse | null =
+    viewingDeepSim && deepVerifyResult
+      ? {
+          ...deepVerifyResult.deep_simulation,
+          spec: deepVerifyResult.deep_simulation.spec ?? sim?.spec ?? (spec as PrinterSpecData),
+          yaml_text: deepVerifyResult.deep_simulation.yaml_text ?? sim?.yaml_text ?? yamlText,
+        }
+      : sim;
+
   const handleExportStl = async () => {
     if (!spec) return;
     const res = await fetch("/api/export/stl", {
@@ -1100,7 +1165,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-badge">PrintSim 0.7</span>
+          <span className="brand-badge">PrintSim 0.9</span>
           <span>Multiphysics 3D Printer Studio</span>
           {optMessage && (
             <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
@@ -1131,6 +1196,14 @@ export default function App() {
             title="Explore pymoo NSGA-II multi-goal Pareto trade-off frontier (Cost vs. Safe Accel vs. Stiffness)"
           >
             {paretoLoading ? "Searching Frontier..." : "Trade-Off Frontier"}
+          </button>
+          <button
+            className={`btn deep-verify ${deepVerifyResult ? "verified" : ""}`}
+            disabled={deepVerifyLoading || !spec}
+            onClick={runDeepVerify}
+            title="Run fine-mesh MITC4 shell convergence verification & inspect 3D panel stress/drum modes"
+          >
+            {deepVerifyLoading ? "Verifying..." : "Deep Verify"}
           </button>
           <button className="btn" disabled={!spec} onClick={handleExportStl}>
             Export STL
@@ -1184,7 +1257,7 @@ export default function App() {
         />
 
         <PrinterViewport
-          sim={sim}
+          sim={displaySim}
           solidFea={solidFea}
           tetFea={tetFea}
           activeSolidEngine={activeSolidEngine}
@@ -1200,7 +1273,12 @@ export default function App() {
         />
 
         <MetricsPanel
-          sim={sim}
+          sim={displaySim}
+          deepVerifyResult={deepVerifyResult}
+          viewingDeepSim={viewingDeepSim}
+          onToggleViewingDeepSim={setViewingDeepSim}
+          onInspectDeepFea={handleInspectDeepFea}
+          onDismissDeepVerify={clearDeepVerify}
           baselineSim={baselineSim}
           baselineBom={baselineBom}
           baselineLabel={baselineLabel}

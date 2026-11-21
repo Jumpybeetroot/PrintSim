@@ -432,6 +432,44 @@ export interface GeometryMember {
   mass_g: number;
 }
 
+export interface ShellPanelGeometryData {
+  id: string;
+  bay: string;
+  node_ids: [string, string, string, string];
+  thickness_mm: number;
+}
+
+export interface ShellPanelStressData {
+  id: string;
+  bay: string;
+  node_ids: [string, string, string, string];
+  von_mises_mpa: number;
+}
+
+export interface DeepVerifySummary {
+  fundamental_freq_hz: number;
+  recommended_max_accel_mm_s2: number;
+  combined_max_deflection_um: number;
+  panel_drum_freq_hz: number;
+  panel_max_von_mises_mpa: number;
+  num_shell_elements: number;
+  solve_time_ms: number;
+}
+
+export interface DeepVerifyResponse {
+  fast_mesh_n: number;
+  deep_mesh_n: number;
+  fast_summary: DeepVerifySummary;
+  deep_summary: DeepVerifySummary;
+  convergence: {
+    freq_diff_pct: number;
+    deflection_diff_pct: number;
+    accel_diff_pct: number;
+    converged: boolean;
+  };
+  deep_simulation: SimulationResponse;
+}
+
 export interface ModeShapeData {
   mode_number: number;
   frequency_hz: number;
@@ -610,6 +648,8 @@ export interface GeometryData {
   toolhead_envelope_mm: [number, number, number];
   nodes: GeometryNode[];
   members: GeometryMember[];
+  panel_mesh_n?: number;
+  shell_panels?: ShellPanelGeometryData[];
   mass_summary: {
     frame_mass_kg: number;
     total_mass_kg: number;
@@ -633,10 +673,12 @@ export interface StaticFeaData {
   toolhead_stiffness_y_n_per_mm: number;
   toolhead_stiffness_z_n_per_mm: number;
   max_von_mises_mpa: number;
+  panel_max_von_mises_mpa?: number;
   min_safety_factor: number;
   peak_inertial_force_x_n: number;
   peak_inertial_force_y_n: number;
   nodal_displacements_mm: Record<string, [number, number, number]>;
+  shell_panel_stresses?: ShellPanelStressData[];
   member_stresses: Array<{
     member_id: string;
     role: string;
@@ -652,6 +694,7 @@ export interface StaticFeaData {
 export interface ModalFeaData {
   fundamental_freq_hz: number;
   nozzle_pitch_twist_freq_hz?: number;
+  panel_drum_freq_hz?: number;
   frame_damping_ratio?: number;
   recommended_max_accel_mm_s2: number;
   accel_bottleneck?: AccelBottleneckData;

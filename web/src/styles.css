@@ -252,6 +252,24 @@ textarea.code-editor {
   border-color: #5eead4;
 }
 
+.btn.deep-verify {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(245, 158, 11, 0.2));
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #e0f2fe;
+  font-weight: 700;
+}
+
+.btn.deep-verify:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.34), rgba(245, 158, 11, 0.32));
+  border-color: #7dd3fc;
+}
+
+.btn.deep-verify.verified {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.24), rgba(14, 165, 233, 0.24));
+  border-color: rgba(34, 197, 94, 0.72);
+  color: #dcfce7;
+}
+
 .viewport-wrap {
   position: relative;
   width: 100%;
@@ -757,6 +775,12 @@ textarea.code-editor {
   background: rgba(34, 197, 94, 0.14);
   border-color: rgba(34, 197, 94, 0.45);
   color: var(--green);
+}
+
+.badge-pill.warn {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: var(--amber);
 }
 
 .badge-pill.bad {
@@ -2369,4 +2393,150 @@ textarea.code-editor {
   border-radius: 6px;
   background: rgba(56, 189, 248, 0.08);
   border-left: 3px solid var(--accent);
+}
+
+/* ==========================================================================
+   Deep Verify (Fine MITC4 Shell Convergence) Card
+   ========================================================================== */
+
+.deep-verify-card {
+  gap: 8px;
+  background: linear-gradient(160deg, rgba(14, 165, 233, 0.11), rgba(19, 25, 36, 0.96) 55%);
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.deep-verify-card.converged {
+  background: linear-gradient(160deg, rgba(34, 197, 94, 0.1), rgba(19, 25, 36, 0.96) 55%);
+  border-color: rgba(34, 197, 94, 0.52);
+}
+
+.deep-verify-card.refining {
+  background: linear-gradient(160deg, rgba(245, 158, 11, 0.11), rgba(19, 25, 36, 0.96) 55%);
+  border-color: rgba(245, 158, 11, 0.52);
+}
+
+.deep-verify-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.deep-verify-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deep-verify-close {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: #0d131d;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.deep-verify-close:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: #172132;
+}
+
+.deep-verify-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(11, 16, 24, 0.78);
+  border: 1px solid rgba(39, 50, 71, 0.85);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.deep-verify-meta strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.deep-verify-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.deep-verify-table th {
+  text-align: left;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 3px 4px 5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.deep-verify-table th.num,
+.deep-verify-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.deep-verify-table td {
+  padding: 4px 4px;
+  color: var(--muted);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.deep-verify-table td:first-child {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.deep-verify-table td strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.deep-verify-table tr:last-child td {
+  border-bottom: none;
+}
+
+.deep-verify-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.deep-verify-cta {
+  background: rgba(14, 165, 233, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  color: #e0f2fe;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.deep-verify-cta:hover {
+  background: rgba(14, 165, 233, 0.34);
+  border-color: var(--accent);
 }
