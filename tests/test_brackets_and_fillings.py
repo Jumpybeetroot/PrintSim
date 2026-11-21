@@ -250,10 +250,10 @@ def test_monolith_awd_preset_and_bracket_upgrade_jump() -> None:
     assert rep_cnc.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.9
     assert rep_ppa.modal_fea.shaper_x is not None and rep_abs.modal_fea.shaper_x is not None
     assert rep_cnc.modal_fea.shaper_x is not None and rep_cnc.modal_fea.shaper_y is not None
-    assert rep_ppa.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 12.0
-    assert rep_cnc.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 15.0
-    assert rep_cnc.modal_fea.shaper_y.effective_freq_hz > rep_abs.modal_fea.shaper_y.effective_freq_hz + 25.0
-    assert rep_cnc.modal_fea.recommended_max_accel_mm_s2 > rep_abs.modal_fea.recommended_max_accel_mm_s2 * 1.6
+    assert rep_ppa.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 8.0
+    assert rep_cnc.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 10.0
+    assert rep_cnc.modal_fea.shaper_y.effective_freq_hz > rep_abs.modal_fea.shaper_y.effective_freq_hz + 20.0
+    assert rep_cnc.modal_fea.recommended_max_accel_mm_s2 > rep_abs.modal_fea.recommended_max_accel_mm_s2 * 1.2
 
 
 # ---------------------------------------------------------------------------

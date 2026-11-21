@@ -34,16 +34,16 @@ def _call_mcp(tool_name: str, arguments: dict | None = None, req_id: int = 1) ->
 
 
 def test_mcp_server_metadata_and_enriched_list_catalog() -> None:
-    """Verify v0.8.0 MCP metadata, 13-tool schema, and enriched list_catalog fields."""
+    """Verify v0.9.0 MCP metadata, 14-tool schema, and enriched list_catalog fields."""
     init_resp = handle_jsonrpc_message({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
     assert init_resp is not None
     assert init_resp["result"]["serverInfo"]["name"] == "printsim-mcp"
-    assert init_resp["result"]["serverInfo"]["version"] == "0.8.0"
+    assert init_resp["result"]["serverInfo"]["version"] == "0.9.0"
 
     tools_resp = handle_jsonrpc_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert tools_resp is not None
     tools = tools_resp["result"]["tools"]
-    assert len(tools) == 13
+    assert len(tools) == 14
     names = {t["name"] for t in tools}
     assert {
         "list_catalog",
@@ -59,6 +59,7 @@ def test_mcp_server_metadata_and_enriched_list_catalog() -> None:
         "optimize_part_topology",
         "export_printer_stl",
         "export_printer_step",
+        "run_deep_frame_verify",
     } == names
 
     cat = _call_mcp("list_catalog")

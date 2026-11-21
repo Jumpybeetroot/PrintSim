@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.engine.evaluator import verify_printer_deep
 from printsim.geometry import (
     build_assembly,
     export_assembly_step,
@@ -104,6 +105,47 @@ def evaluate(
     console.print("\n[bold]Diagnostics:[/bold]")
     for d in report.diagnostics:
         console.print(f"  • {d}")
+
+
+@app.command()
+def verify(
+    spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
+    filament: str = typer.Option("pla", "--filament", "-f", help="Filament ID"),
+    mesh_n: int = typer.Option(6, "--mesh-n", "-m", min=4, max=10, help="Deep MITC4 shell grid density (n x n per bay)"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON deep verification report"),
+) -> None:
+    """Run deep 6x6 MITC4 shell + Huth CBUSH mesh convergence verification vs fast 2x2 mode."""
+    spec = PrinterSpec.from_yaml(spec_path)
+    res = verify_printer_deep(spec, filament_id=filament, deep_mesh_n=mesh_n)
+
+    if json_out:
+        print(json.dumps(res, indent=2))
+        return
+
+    fast = res["fast_summary"]
+    deep = res["deep_summary"]
+    conv = res["convergence"]
+    status = "[bold green]CONVERGED[/bold green]" if conv["converged"] else "[bold yellow]SHIFTED[/bold yellow]"
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{spec.name}[/bold cyan] ({spec.architecture})\n"
+            f"Mesh Refinement: {res['fast_mesh_n']}x{res['fast_mesh_n']} ({fast['num_shell_elements']} shells, {fast['solve_time_ms']:.1f} ms) "
+            f"-> {res['deep_mesh_n']}x{res['deep_mesh_n']} ({deep['num_shell_elements']} shells, {deep['solve_time_ms']:.1f} ms)\n"
+            f"Status: {status} | Freq delta: {conv['freq_diff_pct']:.2f}% | "
+            f"Defl delta: {conv['deflection_diff_pct']:.2f}% | Accel delta: {conv['accel_diff_pct']:.2f}%",
+            title="PrintSim Deep MITC4 Shell Verification",
+        )
+    )
+    tbl = Table(show_header=True, header_style="bold magenta")
+    tbl.add_column("Metric")
+    tbl.add_column(f"Fast ({res['fast_mesh_n']}x{res['fast_mesh_n']})", justify="right")
+    tbl.add_column(f"Deep ({res['deep_mesh_n']}x{res['deep_mesh_n']})", justify="right")
+    tbl.add_row("Fundamental Freq (Hz)", f"{fast['fundamental_freq_hz']:.2f}", f"{deep['fundamental_freq_hz']:.2f}")
+    tbl.add_row("Panel Drum Freq (Hz)", f"{fast['panel_drum_freq_hz']:.2f}", f"{deep['panel_drum_freq_hz']:.2f}")
+    tbl.add_row("Combined Deflection (um)", f"{fast['combined_max_deflection_um']:.2f}", f"{deep['combined_max_deflection_um']:.2f}")
+    tbl.add_row("Safe Max Accel (mm/s^2)", f"{fast['recommended_max_accel_mm_s2']:.0f}", f"{deep['recommended_max_accel_mm_s2']:.0f}")
+    tbl.add_row("Panel Max von Mises (MPa)", f"{fast['panel_max_von_mises_mpa']:.3f}", f"{deep['panel_max_von_mises_mpa']:.3f}")
+    console.print(tbl)
 
 
 @app.command()

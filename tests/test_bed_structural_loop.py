@@ -56,9 +56,10 @@ def test_bed_node_mass_accounting_zero_double_counting_and_bom(preset_name: str)
     expected_bed_kg = spec.bed.mass_g * 1e-3
     assert bed_node.lumped_mass_kg == pytest.approx(expected_bed_kg, rel=1e-9)
 
-    # Zero double-counting in total_mass_kg: bed mass is inside lumped_mass, NOT added twice
+    # Zero double-counting in total_mass_kg: bed mass is inside lumped_mass; MITC4 shells carry panel_mass_kg
     lumped_sum = sum(n.lumped_mass_kg for n in asm.nodes)
-    assert asm.total_mass_kg == pytest.approx(asm.frame_mass_kg + lumped_sum, rel=1e-9)
+    shell_panel_mass = asm.panel_mass_kg if asm.shell_elements else 0.0
+    assert asm.total_mass_kg == pytest.approx(asm.frame_mass_kg + lumped_sum + shell_panel_mass, rel=1e-9)
 
     # Virtual bed mount members have virtually zero mass & zero fill mass
     bed_members = [m for m in asm.members if m.role == "bed"]

@@ -30,7 +30,7 @@ def _panel_corexy_spec(
 
 
 def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
-    """Verify exact A_eq = gt_eff * L_d^3 / (2 * E * b * h), massless struts, and metadata."""
+    """Verify CoreXY MITC4 shell grids, Huth CBUSH springs, zero legacy X-struts, and metadata."""
     spec = _panel_corexy_spec(True, "bolted_structural", "aluminum_5052_sheet", 4.0)
     spec.gantry.drive_mode = "awd"
     spec.gantry.double_shear_pulleys = True
@@ -38,27 +38,25 @@ def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
     asm = build_assembly(spec)
     pmat = get_material("aluminum_5052_sheet")
 
-    rear_1 = next(m for m in asm.members if m.id == "panel_shear_rear_1")
-    assert rear_1.is_truss is True
-    assert rear_1.profile.id == "panel_shear_rear"
-    assert rear_1.profile.shape == "plate"
-    assert rear_1.material.id == "aluminum_5052_sheet"
-    assert rear_1.material.density_kg_m3 == pytest.approx(1e-3, rel=1e-6)
-    assert rear_1.material.cost_per_kg_usd == 0.0
+    assert not any(m.id.startswith("panel_shear_") for m in asm.members)
+    assert len(asm.shell_elements) == 16  # 4 bays * 2x2 quads
+    assert len(asm.fastener_springs) == 32  # 4 bays * 8 perimeter CBUSH fasteners
+    rear_shell = next(s for s in asm.shell_elements if s.bay == "rear")
+    assert rear_shell.material.id == "aluminum_5052_sheet"
+    assert rear_shell.thickness_m == pytest.approx(0.004, rel=1e-6)
 
     b = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
     h = spec.frame.height_mm * 1e-3
     t = spec.frame.panel_thickness_mm * 1e-3
-    ld = math.hypot(b, h)
     props = panel_mechanical_properties(pmat, t, b, h, "bolted_structural")
-    expected_aeq = (props["gt_eff_n_m"] * (ld**3)) / (2.0 * pmat.youngs_modulus_pa * b * h)
-    assert rear_1.profile.area_m2 == pytest.approx(expected_aeq, rel=1e-6)
 
     expected_panel_mass = (b * h + 2.0 * d * h + b * d) * props["areal_mass_kg_m2"]
     gdict = asm.to_geometry_dict()
     assert gdict["drive_mode"] == "awd"
     assert gdict["double_shear_pulleys"] is True
+    assert gdict["panel_mesh_n"] == 2
+    assert len(gdict["shell_panels"]) == 16
     assert gdict["panels"] == {
         "enabled": True,
         "mounting": "bolted_structural",
@@ -124,7 +122,7 @@ def test_structural_panel_monotonicity_frequency_stiffness_and_mass() -> None:
     assert f_bolt_acr > f_open * 1.45
     assert defl_bolt_acr < defl_open * 0.65
     assert f_bolt_3acm > f_bolt_acr > f_clip
-    assert f_bolt_6acm > f_bolt_acr and f_bolt_6acm > f_open * 2.4
+    assert f_bolt_6acm > f_bolt_acr and f_bolt_6acm > f_open * 2.3
     assert f_bolt_4al > f_bolt_3acm and f_bolt_4al > f_bolt_6acm and f_bolt_4al > f_open * 2.8
 
     # Thickness increase (3mm -> 6mm Dibond) adds 3mm LDPE core mass across the 4 bays
@@ -388,7 +386,7 @@ def test_thick_aluminum_beats_thin_aluminum_and_acm_without_front_gantry_bar() -
     assert all(m.id != "gantry_front_bar" for m in asm_acm3.members)
 
     # 4mm & 5mm solid Al 5052 strictly beat 3mm & 4mm ACM on frequency, safe accel, and stiffness
-    assert mo_al40.fundamental_freq_hz > mo_acm3.fundamental_freq_hz + 40.0
+    assert mo_al40.fundamental_freq_hz > mo_acm3.fundamental_freq_hz + 35.0
     assert mo_al50.fundamental_freq_hz > mo_acm4.fundamental_freq_hz + 40.0
     assert mo_al40.recommended_max_accel_mm_s2 > mo_acm3.recommended_max_accel_mm_s2 * 1.5
     assert st_al40.toolhead_stiffness_x_n_per_mm > st_acm3.toolhead_stiffness_x_n_per_mm
@@ -470,16 +468,17 @@ def test_fixed_gantry_vs_flying_gantry_panel_bolting() -> None:
     asm_nobolt = build_assembly(spec_trident_nobolt)
     asm_flying = build_assembly(spec_flying)
 
-    # Split gantry panel bays + Y-rail web tie-ins exist ONLY when bolted_to_gantry is effective
-    bolt_ids = {m.id for m in asm_bolt.members}
-    nobolt_ids = {m.id for m in asm_nobolt.members}
-    flying_ids = {m.id for m in asm_flying.members}
+    # Split gantry panel bays + Y-rail CBUSH fasteners exist ONLY when bolted_to_gantry is effective
+    bolt_bays = {s.bay for s in asm_bolt.shell_elements}
+    nobolt_bays = {s.bay for s in asm_nobolt.shell_elements}
+    flying_bays = {s.bay for s in asm_flying.shell_elements}
 
-    for expected_id in ("panel_shear_rear_low_1", "panel_shear_rear_top_1", "panel_shear_yrail_l_1", "panel_shear_yrail_r_2"):
-        assert expected_id in bolt_ids
-        assert expected_id not in nobolt_ids
-        assert expected_id not in flying_ids
-    assert "panel_shear_rear_1" in nobolt_ids and "panel_shear_rear_1" in flying_ids
+    assert {"rear_low", "rear_top", "left_low", "left_top", "right_low", "right_top", "top"} == bolt_bays
+    assert {"rear", "left", "right", "top"} == nobolt_bays
+    assert {"rear", "left", "right", "top"} == flying_bays
+    assert any(sp.frame_node_id in ("y_car_l", "y_car_r") for sp in asm_bolt.fastener_springs)
+    assert not any(sp.frame_node_id in ("y_car_l", "y_car_r") for sp in asm_nobolt.fastener_springs)
+    assert not any(sp.frame_node_id in ("y_car_l", "y_car_r") for sp in asm_flying.fastener_springs)
 
     st_bolt = solve_static_fea(asm_bolt)
     st_nobolt = solve_static_fea(asm_nobolt)

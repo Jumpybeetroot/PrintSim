@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
 from printsim.geometry.builder import AssemblyModel, StructuralMember
 
 
@@ -201,6 +202,39 @@ def assemble_global_matrices(
         elem_weight = member.profile.area_m2 * length * member.material.density_kg_m3 * g_acc
         F_grav[6 * i0 + 2] -= 0.5 * elem_weight
         F_grav[6 * i1 + 2] -= 0.5 * elem_weight
+
+    # Assemble 24-DOF MITC4 shell panel elements
+    for shell in assembly.shell_elements:
+        n_indices = [node_idx[nid] for nid in shell.node_ids]
+        coords = np.array([assembly.nodes[ni].position_m for ni in n_indices], dtype=float)
+        k_sh, m_sh, f_sh = mitc4_shell_matrices(
+            coords_3d=coords,
+            e_pa=shell.material.youngs_modulus_pa,
+            nu=shell.material.poisson_ratio,
+            thickness_m=shell.thickness_m,
+            areal_mass_kg_m2=shell.areal_mass_kg_m2,
+            d_bend_nm=shell.d_bend_nm,
+            g_transverse_h_n_m=shell.g_transverse_h_n_m,
+            e_mem_h_n_m=shell.e_mem_h_n_m,
+        )
+        dofs = [6 * ni + d for ni in n_indices for d in range(6)]
+        K[np.ix_(dofs, dofs)] += k_sh
+        M[np.ix_(dofs, dofs)] += m_sh
+        F_grav[dofs] += f_sh
+
+    # Assemble 12-DOF Huth-Schwarmann CBUSH fastener springs (shell perimeter <-> frame)
+    for spring in assembly.fastener_springs:
+        i_s = node_idx[spring.shell_node_id]
+        i_f = node_idx[spring.frame_node_id]
+        k_sp = fastener_spring_matrices(
+            k_shear_n_m=spring.k_shear_n_m,
+            k_normal_n_m=spring.k_normal_n_m,
+            k_rot_nm_rad=spring.k_rot_nm_rad,
+            normal_vec=np.asarray(spring.normal_vec, dtype=float),
+            offset_vec=np.asarray(spring.offset_m, dtype=float),
+        )
+        dofs = list(range(6 * i_s, 6 * i_s + 6)) + list(range(6 * i_f, 6 * i_f + 6))
+        K[np.ix_(dofs, dofs)] += k_sp
 
     # Add lumped nodal masses (motors, toolhead, gantry carriages) + tiny rotational inertia
     for i, node in enumerate(assembly.nodes):

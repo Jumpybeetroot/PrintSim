@@ -5,9 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.linalg import solve
+from scipy.linalg import cho_factor, cho_solve, solve
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import splu, spsolve
 
 from printsim.fea.beam3d import assemble_global_matrices, element_internal_forces
+from printsim.fea.shell_mitc4 import mitc4_shell_von_mises_mpa
 from printsim.geometry.builder import AssemblyModel
 
 
@@ -21,6 +24,14 @@ class MemberStressResult:
     yield_mpa: float
     safety_factor: float
     utilization: float  # von_mises / yield
+
+
+@dataclass
+class ShellStressResult:
+    id: str
+    bay: str
+    node_ids: tuple[str, str, str, str]
+    von_mises_mpa: float
 
 
 @dataclass
@@ -43,8 +54,10 @@ class StaticFEAResult:
     nozzle_twist_angle_mrad: float = 0.0
     nozzle_absolute_deflection_um: float = 0.0
     bed_deflection_um: float = 0.0
+    panel_max_von_mises_mpa: float = 0.0
     nodal_displacements_mm: dict[str, list[float]] = field(default_factory=dict)
     member_stresses: list[MemberStressResult] = field(default_factory=list)
+    shell_panel_stresses: list[ShellStressResult] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +74,7 @@ class StaticFEAResult:
             "toolhead_stiffness_y_n_per_mm": round(self.toolhead_stiffness_y_n_per_mm, 2),
             "toolhead_stiffness_z_n_per_mm": round(self.toolhead_stiffness_z_n_per_mm, 2),
             "max_von_mises_mpa": round(self.max_von_mises_mpa, 3),
+            "panel_max_von_mises_mpa": round(self.panel_max_von_mises_mpa, 3),
             "min_safety_factor": round(min(self.min_safety_factor, 999.0), 2),
             "peak_inertial_force_x_n": round(self.peak_inertial_force_x_n, 2),
             "peak_inertial_force_y_n": round(self.peak_inertial_force_y_n, 2),
@@ -78,7 +92,65 @@ class StaticFEAResult:
                 }
                 for ms in self.member_stresses
             ],
+            "shell_panel_stresses": [
+                {
+                    "id": s.id,
+                    "bay": s.bay,
+                    "node_ids": list(s.node_ids),
+                    "von_mises_mpa": round(s.von_mises_mpa, 3),
+                }
+                for s in self.shell_panel_stresses
+            ],
         }
+
+
+def _build_factorized_solver(K: np.ndarray, free_dofs: list[int]):
+    """Pre-factor K_ff once for fast multi-loadcase static solves."""
+    n_dof = K.shape[0]
+    if not free_dofs:
+        return lambda F: np.zeros(n_dof, dtype=float)
+    K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
+
+    if len(free_dofs) > 250:
+        try:
+            lu = splu(csc_matrix(K_ff))
+
+            def _solve_sparse(F: np.ndarray) -> np.ndarray:
+                u = np.zeros(n_dof, dtype=float)
+                u[free_dofs] = lu.solve(F[free_dofs])
+                return u
+
+            return _solve_sparse
+        except RuntimeError:
+            reg = 1e-6 * max(float(np.max(np.diag(K_ff))), 1.0)
+            lu = splu(csc_matrix(K_ff + reg * np.eye(len(free_dofs))))
+
+            def _solve_sparse_reg(F: np.ndarray) -> np.ndarray:
+                u = np.zeros(n_dof, dtype=float)
+                u[free_dofs] = lu.solve(F[free_dofs])
+                return u
+
+            return _solve_sparse_reg
+
+    try:
+        c_fac = cho_factor(K_ff, check_finite=False)
+
+        def _solve_chol(F: np.ndarray) -> np.ndarray:
+            u = np.zeros(n_dof, dtype=float)
+            u[free_dofs] = cho_solve(c_fac, F[free_dofs], check_finite=False)
+            return u
+
+        return _solve_chol
+    except np.linalg.LinAlgError:
+        reg = 1e-6 * max(float(np.max(np.diag(K_ff))), 1.0)
+        K_reg = K_ff + reg * np.eye(len(free_dofs))
+
+        def _solve_reg(F: np.ndarray) -> np.ndarray:
+            u = np.zeros(n_dof, dtype=float)
+            u[free_dofs] = solve(K_reg, F[free_dofs])
+            return u
+
+        return _solve_reg
 
 
 def _solve_linear_system(K: np.ndarray, F: np.ndarray, free_dofs: list[int]) -> np.ndarray:
@@ -87,6 +159,12 @@ def _solve_linear_system(K: np.ndarray, F: np.ndarray, free_dofs: list[int]) -> 
         return u
     K_ff = K[np.ix_(free_dofs, free_dofs)]
     F_f = F[free_dofs]
+    if len(free_dofs) > 250:
+        try:
+            u[free_dofs] = spsolve(csc_matrix(K_ff), F_f)
+            return u
+        except RuntimeError:
+            pass
     # Small Tikhonov regularization only if near-singular (e.g., unconstrained custom truss)
     try:
         u_f = solve(K_ff, F_f, assume_a="pos")
@@ -135,8 +213,10 @@ def solve_static_fea(
         accel_mm_s2 if accel_mm_s2 is not None else assembly.spec.kinematics.max_accel_mm_s2
     ) * 1e-3
 
+    solve_rhs = _build_factorized_solver(K, free_dofs)
+
     # 1. Gravity sag case (nozzle relative to bed)
-    u_grav = _solve_linear_system(K, F_grav, free_dofs)
+    u_grav = solve_rhs(F_grav)
     grav_sag_um = abs(float(_rel_disp_vec(u_grav)[2])) * 1e6
 
     # 2. Unit load compliance probing across structural loop (+1 N nozzle / -1 N bed in X, Y, Z)
@@ -145,7 +225,7 @@ def solve_static_fea(
         f_unit[noz_dof + axis] = 1.0
         if has_bed:
             f_unit[bed_dof + axis] = -1.0
-        u_unit = _solve_linear_system(K, f_unit, free_dofs)
+        u_unit = solve_rhs(f_unit)
         rel_disp = float(u_unit[noz_dof + axis] - (u_unit[bed_dof + axis] if has_bed else 0.0))
         disp_mm = abs(rel_disp) * 1e3
         return 1.0 / max(disp_mm, 1e-9)
@@ -163,7 +243,7 @@ def solve_static_fea(
     cog_z_m = assembly.spec.toolhead.cog_offset_mm[2] * 1e-3
     if not has_explicit_cog:
         F_x[th_dof + 4] = f_inertial_x * cog_z_m
-    u_x = _solve_linear_system(K, F_x, free_dofs)
+    u_x = solve_rhs(F_x)
     defl_x_um = float(np.linalg.norm(_rel_disp_vec(u_x))) * 1e6
 
     F_y = np.zeros(n_dof, dtype=float)
@@ -187,7 +267,7 @@ def solve_static_fea(
                 F_y[6 * node_idx[gid] + 1] += rem
         else:
             F_y[cog_dof + 1] = f_inertial_y
-    u_y = _solve_linear_system(K, F_y, free_dofs)
+    u_y = solve_rhs(F_y)
     defl_y_um = float(np.linalg.norm(_rel_disp_vec(u_y))) * 1e6
 
     # 4. Belt-induced frame preload (true CoreXY belt routing: self-equilibrating, sum F = 0)
@@ -210,7 +290,7 @@ def solve_static_fea(
                 bi = 6 * node_idx[nid]
                 F_belt[bi + 0] += fx
                 F_belt[bi + 1] += fy
-    u_belt = _solve_linear_system(K, F_belt, free_dofs)
+    u_belt = solve_rhs(F_belt)
 
     # 5. Combined worst-case envelope (gravity + belt preload + 0.707*(+-ux) + 0.707*(+-uy))
     u_base = u_grav + u_belt
@@ -267,6 +347,36 @@ def solve_static_fea(
             )
         )
 
+    # 2D MITC4 Shell panel stress recovery
+    shell_panel_stresses: list[ShellStressResult] = []
+    panel_max_vm = 0.0
+    for shell in assembly.shell_elements:
+        n_indices = [node_idx[nid] for nid in shell.node_ids]
+        coords = np.array([assembly.nodes[ni].position_m for ni in n_indices], dtype=float)
+        u_shell = np.concatenate([u_comb[6 * ni : 6 * ni + 6] for ni in n_indices])
+        vm_mpa = mitc4_shell_von_mises_mpa(
+            coords_3d=coords,
+            u_elem_global=u_shell,
+            e_pa=shell.material.youngs_modulus_pa,
+            nu=shell.material.poisson_ratio,
+            thickness_m=shell.thickness_m,
+            d_bend_nm=shell.d_bend_nm,
+            e_mem_h_n_m=shell.e_mem_h_n_m,
+        )
+        panel_max_vm = max(panel_max_vm, vm_mpa)
+        yield_mpa = shell.material.yield_strength_pa * 1e-6
+        max_vm = max(max_vm, vm_mpa)
+        if vm_mpa > 1e-6:
+            min_sf = min(min_sf, yield_mpa / vm_mpa)
+        shell_panel_stresses.append(
+            ShellStressResult(
+                id=shell.id,
+                bay=shell.bay,
+                node_ids=shell.node_ids,
+                von_mises_mpa=vm_mpa,
+            )
+        )
+
     return StaticFEAResult(
         gravity_sag_toolhead_um=grav_sag_um,
         accel_deflection_x_um=defl_x_um,
@@ -277,6 +387,7 @@ def solve_static_fea(
         nozzle_twist_angle_mrad=nozzle_twist_angle_mrad,
         nozzle_absolute_deflection_um=nozzle_abs_um,
         bed_deflection_um=bed_defl_um,
+        panel_max_von_mises_mpa=panel_max_vm,
         toolhead_stiffness_x_n_per_mm=stiff_x,
         toolhead_stiffness_y_n_per_mm=stiff_y,
         toolhead_stiffness_z_n_per_mm=stiff_z,
@@ -286,4 +397,5 @@ def solve_static_fea(
         peak_inertial_force_y_n=f_inertial_y,
         nodal_displacements_mm=nodal_disp_mm,
         member_stresses=member_stresses,
+        shell_panel_stresses=shell_panel_stresses,
     )

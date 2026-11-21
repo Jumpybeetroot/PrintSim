@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.solid_fem import (
     FaceName,
     PartPreset,
@@ -59,6 +60,15 @@ class SimulateRequest(BaseModel):
     filament_id: str = "pla"
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
     include_toolpath_segments: bool = True
+
+
+class DeepVerifyRequest(BaseModel):
+    spec: PrinterSpec | None = None
+    yaml_text: str | None = None
+    gcode_text: str | None = None
+    filament_id: str = "pla"
+    toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
+    deep_mesh_n: int = Field(6, ge=4, le=10)
 
 
 class OptimizeRequest(BaseModel):
@@ -167,8 +177,8 @@ def _load_presets() -> dict[str, PrinterSpec]:
 def create_app() -> FastAPI:
     api = FastAPI(
         title="PrintSim Multiphysics 3D Printer Simulator API",
-        version="0.7.0",
-        description="Frame & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), build123d STEP CAD, CoreXY AWD & structural panels, stepper electromagnetic stiffness, nozzle-tip CoG vibration, Klipper ADXL345 shaper PSD, pymoo NSGA-II Pareto optimization, SIMP topology optimization, manufacturable BOM, hotend FVM thermal, and virtual G-code API.",
+        version="0.9.0",
+        description="Frame, MITC4 Shell Panel & solid Hex8/Tet10 FEA (Gmsh + scikit-fem), Huth CBUSH bolted fasteners, build123d STEP CAD, CoreXY AWD & structural panels, stepper electromagnetic stiffness, nozzle-tip CoG vibration, Klipper ADXL345 shaper PSD, pymoo NSGA-II Pareto optimization, SIMP topology optimization, manufacturable BOM, hotend FVM thermal, and virtual G-code API.",
     )
 
     api.add_middleware(
@@ -181,7 +191,7 @@ def create_app() -> FastAPI:
 
     @api.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "version": "0.7.0"}
+        return {"status": "ok", "version": "0.9.0"}
 
     @api.get("/api/catalog")
     def catalog() -> dict:
@@ -258,6 +268,25 @@ def create_app() -> FastAPI:
             payload["spec"] = spec.model_dump(mode="json")
             payload["yaml_text"] = spec.to_yaml()
             return payload
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/verify/deep")
+    def run_deep_verify(req: DeepVerifyRequest) -> dict:
+        spec = _resolve_spec(req.spec, req.yaml_text)
+        try:
+            result = verify_printer_deep(
+                spec,
+                gcode_text=req.gcode_text,
+                toolhead_rel_pos=req.toolhead_rel_pos,
+                filament_id=req.filament_id,
+                deep_mesh_n=req.deep_mesh_n,
+            )
+            deep_sim = result.get("deep_simulation")
+            if isinstance(deep_sim, dict):
+                deep_sim.setdefault("spec", spec.model_dump(mode="json"))
+                deep_sim.setdefault("yaml_text", spec.to_yaml())
+            return result
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

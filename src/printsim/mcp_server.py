@@ -11,6 +11,7 @@ from typing import Any, Literal
 import yaml
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.bracket_designer import design_and_evaluate_bracket
 from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
 from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
@@ -27,7 +28,7 @@ from printsim.schema import (
 )
 from printsim.thermal import FILAMENT_CATALOG
 
-SERVER_INFO = {"name": "printsim-mcp", "version": "0.8.0"}
+SERVER_INFO = {"name": "printsim-mcp", "version": "0.9.0"}
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
@@ -386,6 +387,30 @@ TOOLS_SCHEMA = [
             "required": ["yaml_text"],
         },
     },
+    {
+        "name": "run_deep_frame_verify",
+        "description": (
+            "Run deep offline 6x6 MITC4 shell + Huth CBUSH bolted-fastener verification vs fast 2x2 "
+            "simulation on a PrintSim YAML printer specification, returning mesh convergence deltas, "
+            "panel drum resonance frequency, and shell panel von Mises stresses."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_text": {"type": "string", "description": "Declarative PrintSim YAML specification"},
+                "filament_id": {"type": "string", "default": "pla"},
+                "deep_mesh_n": {"type": "integer", "default": 6, "minimum": 4, "maximum": 10},
+                "toolhead_rel_pos": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "default": [0.5, 0.5, 0.5],
+                },
+            },
+            "required": ["yaml_text"],
+        },
+    },
 ]
 
 
@@ -666,6 +691,21 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             filament_id=args.get("filament_id", "pla"),
         )
         return res.to_dict(include_specs=False)
+
+    if name == "run_deep_frame_verify":
+        spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
+        raw_pos = args.get("toolhead_rel_pos")
+        rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
+        if raw_pos is not None:
+            if len(raw_pos) != 3:
+                raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
+            rel_pos = (float(raw_pos[0]), float(raw_pos[1]), float(raw_pos[2]))
+        return verify_printer_deep(
+            spec,
+            toolhead_rel_pos=rel_pos,
+            filament_id=str(args.get("filament_id", "pla")),
+            deep_mesh_n=int(args.get("deep_mesh_n", 6)),
+        )
 
     raise ValueError(f"Unknown MCP tool: {name}")
 

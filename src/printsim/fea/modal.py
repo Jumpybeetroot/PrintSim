@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.linalg import eigh
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
 from printsim.fea.beam3d import assemble_global_matrices
 from printsim.fea.klipper_shaper import AxisShaperGraph, calibrate_axis_shapers
@@ -67,6 +69,7 @@ class ModalResult:
     shaper_graph_y: AxisShaperGraph | None = None
     recommended_max_accel_mm_s2: float = 0.0
     nozzle_pitch_twist_freq_hz: float = 0.0
+    panel_drum_freq_hz: float = 0.0
     frame_damping_ratio: float = 0.042
     accel_bottleneck: dict | None = None
 
@@ -74,6 +77,7 @@ class ModalResult:
         return {
             "fundamental_freq_hz": round(self.fundamental_freq_hz, 2),
             "nozzle_pitch_twist_freq_hz": round(self.nozzle_pitch_twist_freq_hz, 2),
+            "panel_drum_freq_hz": round(self.panel_drum_freq_hz, 2),
             "frame_damping_ratio": round(self.frame_damping_ratio, 4),
             "recommended_max_accel_mm_s2": round(self.recommended_max_accel_mm_s2, 0),
             "accel_bottleneck": self.accel_bottleneck,
@@ -227,9 +231,44 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     m_floor = max(float(np.max(m_diag)) * 1e-12, 1e-12)
     M_ff = M_ff + np.diag(np.where(m_diag < m_floor, m_floor, 0.0))
 
+    panel_indices = [i for i, n in enumerate(assembly.nodes) if n.role == "panel"]
+    non_panel_indices = [i for i, n in enumerate(assembly.nodes) if n.role != "panel"]
+    gantry_indices = [
+        i
+        for i, n in enumerate(assembly.nodes)
+        if n.role in ("gantry", "toolhead", "nozzle", "cog")
+    ]
+    has_panels = len(panel_indices) > 0 and len(non_panel_indices) > 0
+
     k_ret = min(num_modes, n_free)
-    k_scan = min(max(num_modes, 16), n_free)
-    eigvals, eigvecs = eigh(K_ff, M_ff, subset_by_index=[0, k_scan - 1])
+    target_scan = 56 if has_panels else max(num_modes, 16)
+    k_scan = min(target_scan, n_free - 2 if n_free > 250 else n_free)
+
+    used_sparse = False
+    if n_free > 250 and 1 <= k_scan < n_free - 1:
+        try:
+            k_csc = csc_matrix(K_ff)
+            m_csc = csc_matrix(M_ff)
+            lu = splu(k_csc)
+            op = LinearOperator(K_ff.shape, matvec=lu.solve, dtype=float)
+            eigvals, eigvecs = eigsh(
+                k_csc,
+                k=k_scan,
+                M=m_csc,
+                sigma=0.0,
+                which="LM",
+                OPinv=op,
+            )
+            order = np.argsort(eigvals)
+            eigvals = eigvals[order]
+            eigvecs = eigvecs[:, order]
+            used_sparse = True
+        except RuntimeError:
+            used_sparse = False
+
+    if not used_sparse:
+        k_scan = min(target_scan, n_free)
+        eigvals, eigvecs = eigh(K_ff, M_ff, subset_by_index=[0, k_scan - 1])
 
     th_idx = node_idx[assembly.toolhead_node_id]
     noz_id = (
@@ -251,14 +290,23 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     m_tot_x = max(float(rx_f @ M_ff @ rx_f), 1e-12)
     m_tot_y = max(float(ry_f @ M_ff @ ry_f), 1e-12)
 
+    # Precompute panel-DOF mask in free_dofs space for fast modal kinetic energy ratio
+    free_panel_mask = np.zeros(n_free, dtype=bool)
+    if has_panels:
+        panel_dof_set = {6 * pi + d for pi in panel_indices for d in range(6)}
+        free_panel_mask = np.array([dof in panel_dof_set for dof in free_dofs], dtype=bool)
+
     modes: list[ModeShape] = []
+    fallback_modes: list[ModeShape] = []
     scanned_x: list[tuple[float, float]] = []
     scanned_y: list[tuple[float, float]] = []
     best_x_freq: float | None = None
     best_y_freq: float | None = None
     nozzle_twist_freq: float | None = None
+    panel_drum_freq: float | None = None
+    panel_drum_fallback_freq: float | None = None
 
-    for idx in range(k_scan):
+    for idx in range(len(eigvals)):
         lam = max(float(eigvals[idx]), 0.0)
         freq_hz = math.sqrt(lam) / (2.0 * math.pi)
         phi = eigvecs[:, idx]
@@ -272,62 +320,143 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         full_vec[free_dofs] = phi
 
         # Extract translational 3D displacements per node and normalize max translation to 1.0
-        trans = np.array([full_vec[6 * i : 6 * i + 3] for i in range(len(assembly.nodes))])
-        max_amp = float(np.max(np.linalg.norm(trans, axis=1)))
-        if max_amp > 1e-12:
-            trans /= max_amp
+        trans_raw = np.array([full_vec[6 * i : 6 * i + 3] for i in range(len(assembly.nodes))])
+        max_amp = float(np.max(np.linalg.norm(trans_raw, axis=1)))
+        trans = trans_raw / max_amp if max_amp > 1e-12 else trans_raw.copy()
 
-        noz_rel = np.abs(trans[noz_idx] - trans[bed_idx]) if bed_idx is not None else np.abs(trans[noz_idx])
+        noz_rel_all = (
+            np.abs(trans[noz_idx] - trans[bed_idx]) if bed_idx is not None else np.abs(trans[noz_idx])
+        )
+        noz_norm_all = float(np.linalg.norm(noz_rel_all))
+
+        if has_panels:
+            np_max = float(np.max(np.linalg.norm(trans[non_panel_indices], axis=1)))
+            gantry_max = (
+                float(np.max(np.linalg.norm(trans[gantry_indices], axis=1)))
+                if gantry_indices
+                else np_max
+            )
+            phi_p = np.where(free_panel_mask, phi, 0.0)
+            ke_panel = float(phi_p @ M_ff @ phi_p) / m_gen
+            if ke_panel > 0.50 and panel_drum_fallback_freq is None:
+                panel_drum_fallback_freq = freq_hz
+            is_isolated_panel_drum = (
+                (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.15)
+                or (np_max < 0.25 and gantry_max < 0.20)
+            )
+            if is_isolated_panel_drum and panel_drum_freq is None:
+                panel_drum_freq = freq_hz
+
+            # Normalize structural amplitudes against frame+gantry+nozzle nodes so local panel
+            # bulging never hides a true coupled frame/gantry resonance
+            tr_struct = trans_raw[non_panel_indices]
+            max_struct = max(float(np.max(np.linalg.norm(tr_struct, axis=1))), 1e-12)
+            noz_rel = (
+                np.abs(trans_raw[noz_idx] - trans_raw[bed_idx]) / max_struct
+                if bed_idx is not None
+                else np.abs(trans_raw[noz_idx]) / max_struct
+            )
+            th_rel = (
+                np.abs(trans_raw[th_idx] - trans_raw[bed_idx]) / max_struct
+                if bed_idx is not None
+                else np.abs(trans_raw[th_idx]) / max_struct
+            )
+            bed_z_amp = abs(float(trans_raw[bed_idx][2] / max_struct)) if bed_idx is not None else 0.0
+            axis_energy = np.sum(tr_struct**2, axis=0)
+        else:
+            is_isolated_panel_drum = False
+            noz_rel = noz_rel_all
+            th_rel = (
+                np.abs(trans[th_idx] - trans[bed_idx]) if bed_idx is not None else np.abs(trans[th_idx])
+            )
+            bed_z_amp = abs(float(trans[bed_idx][2])) if bed_idx is not None else 0.0
+            axis_energy = np.sum(trans**2, axis=0)
+
         noz_norm = float(np.linalg.norm(noz_rel))
-        th_rel = np.abs(trans[th_idx] - trans[bed_idx]) if bed_idx is not None else np.abs(trans[th_idx])
         th_norm = float(np.linalg.norm(th_rel))
         part = (noz_rel / noz_norm).tolist() if noz_norm > 1e-9 else [0.0, 0.0, 0.0]
 
-        scanned_x.append((freq_hz, float(noz_rel[0]) * meff_ratio_x))
-        scanned_y.append((freq_hz, float(noz_rel[1]) * meff_ratio_y))
-
-        axis_energy = np.sum(trans**2, axis=0)
         dom_axis = ["X", "Y", "Z"][int(np.argmax(axis_energy))]
         is_bed_z_mode = (
             bed_idx is not None
-            and abs(float(trans[bed_idx][2])) > 0.60
+            and bed_z_amp > 0.60
             and float(noz_rel[0]) < 0.20
             and float(noz_rel[1]) < 0.20
         )
 
-        if (
-            best_x_freq is None
-            and not is_bed_z_mode
-            and float(noz_rel[0]) > 0.20
-            and (dom_axis == "X" or (noz_norm > 0.25 and part[0] > 0.45))
-        ):
-            best_x_freq = freq_hz
-        if (
-            best_y_freq is None
-            and not is_bed_z_mode
-            and float(noz_rel[1]) > 0.20
-            and (dom_axis == "Y" or (noz_norm > 0.25 and part[1] > 0.45))
-        ):
-            best_y_freq = freq_hz
+        if not is_isolated_panel_drum:
+            scanned_x.append((freq_hz, float(noz_rel[0]) * meff_ratio_x))
+            scanned_y.append((freq_hz, float(noz_rel[1]) * meff_ratio_y))
 
-        if (
-            nozzle_twist_freq is None
-            and has_nozzle
-            and not is_bed_z_mode
-            and noz_norm > 0.25
-            and noz_norm > 1.25 * max(th_norm, 1e-6)
-            and (part[0] > 0.50 or part[1] > 0.50)
-        ):
-            nozzle_twist_freq = freq_hz
+            if (
+                best_x_freq is None
+                and not is_bed_z_mode
+                and (
+                    (
+                        float(noz_rel[0]) > 0.20
+                        and (dom_axis == "X" or (noz_norm > 0.25 and part[0] > 0.45))
+                    )
+                    or (
+                        has_panels
+                        and (
+                            (dom_axis == "X" and meff_ratio_x > 0.25 and float(noz_rel[0]) > 0.05)
+                            or (float(noz_rel[0]) > 0.25 and meff_ratio_x > 0.25)
+                        )
+                    )
+                )
+            ):
+                best_x_freq = freq_hz
+            if (
+                best_y_freq is None
+                and not is_bed_z_mode
+                and (
+                    (
+                        float(noz_rel[1]) > 0.20
+                        and (dom_axis == "Y" or (noz_norm > 0.25 and part[1] > 0.45))
+                    )
+                    or (
+                        has_panels
+                        and (
+                            (dom_axis == "Y" and meff_ratio_y > 0.25 and float(noz_rel[1]) > 0.05)
+                            or (float(noz_rel[1]) > 0.25 and meff_ratio_y > 0.25)
+                        )
+                    )
+                )
+            ):
+                best_y_freq = freq_hz
 
-        if idx < k_ret:
+            if (
+                nozzle_twist_freq is None
+                and has_nozzle
+                and not is_bed_z_mode
+                and noz_norm > 0.25
+                and noz_norm > 1.25 * max(th_norm, 1e-6)
+                and (part[0] > 0.50 or part[1] > 0.50)
+            ):
+                nozzle_twist_freq = freq_hz
+
+            if len(modes) < k_ret:
+                nodal_vectors = {
+                    node.id: [round(float(v), 4) for v in trans[i]]
+                    for i, node in enumerate(assembly.nodes)
+                }
+                modes.append(
+                    ModeShape(
+                        mode_number=len(modes) + 1,
+                        frequency_hz=freq_hz,
+                        dominant_axis=dom_axis,
+                        toolhead_participation_xyz=part,
+                        nodal_vectors=nodal_vectors,
+                    )
+                )
+        elif len(fallback_modes) < k_ret:
             nodal_vectors = {
                 node.id: [round(float(v), 4) for v in trans[i]]
                 for i, node in enumerate(assembly.nodes)
             }
-            modes.append(
+            fallback_modes.append(
                 ModeShape(
-                    mode_number=idx + 1,
+                    mode_number=len(fallback_modes) + 1,
                     frequency_hz=freq_hz,
                     dominant_axis=dom_axis,
                     toolhead_participation_xyz=part,
@@ -335,7 +464,14 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 )
             )
 
+    if not modes:
+        modes = fallback_modes
     fundamental = modes[0].frequency_hz if modes else 0.0
+    resolved_panel_drum = (
+        panel_drum_freq
+        if panel_drum_freq is not None
+        else (panel_drum_fallback_freq if panel_drum_fallback_freq is not None else 0.0)
+    )
     struct_x = best_x_freq if best_x_freq is not None else fundamental
     struct_y = best_y_freq if best_y_freq is not None else fundamental
     if nozzle_twist_freq is None:
@@ -404,6 +540,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         shaper_graph_y=shaper_graph_y,
         recommended_max_accel_mm_s2=min(shaper_x.max_accel_mm_s2, shaper_y.max_accel_mm_s2),
         nozzle_pitch_twist_freq_hz=nozzle_twist_freq,
+        panel_drum_freq_hz=resolved_panel_drum,
         frame_damping_ratio=assembly.frame_damping_ratio,
         accel_bottleneck=accel_bottleneck,
     )

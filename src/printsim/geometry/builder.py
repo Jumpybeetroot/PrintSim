@@ -55,12 +55,46 @@ class StructuralMember:
 
 
 @dataclass
+class ShellPanelElement:
+    """A 4-node 24-DOF MITC4 flat shell element representing an enclosure/structural panel quad."""
+
+    id: str
+    bay: str
+    node_ids: tuple[str, str, str, str]  # CCW ordered
+    material: MaterialSpec
+    thickness_m: float
+    areal_mass_kg_m2: float
+    d_bend_nm: float | None = None
+    g_transverse_h_n_m: float | None = None
+    e_mem_h_n_m: float | None = None
+    normal_vec: tuple[float, float, float] = (0.0, 0.0, 1.0)
+
+
+@dataclass
+class FastenerSpring:
+    """A 2-node 12-DOF 3D CBUSH spring connecting a shell perimeter node to a frame node."""
+
+    id: str
+    bay: str
+    shell_node_id: str
+    frame_node_id: str
+    k_shear_n_m: float
+    k_normal_n_m: float
+    k_rot_nm_rad: float
+    normal_vec: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    offset_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+@dataclass
 class AssemblyModel:
     """Complete physical 3D assembly model ready for FEA, kinematics, and visualization."""
 
     spec: PrinterSpec
     nodes: list[StructuralNode] = field(default_factory=list)
     members: list[StructuralMember] = field(default_factory=list)
+    shell_elements: list[ShellPanelElement] = field(default_factory=list)
+    fastener_springs: list[FastenerSpring] = field(default_factory=list)
+    panel_mesh_n: int = 2
     toolhead_node_id: str = "toolhead"
     toolhead_cog_node_id: str = "toolhead_cog"
     nozzle_node_id: str = "nozzle_tip"
@@ -190,6 +224,16 @@ class AssemblyModel:
                 ),
                 "total_panel_mass_kg": round(self.panel_mass_kg, 3) if panels_active else 0.0,
             },
+            "panel_mesh_n": self.panel_mesh_n,
+            "shell_panels": [
+                {
+                    "id": s.id,
+                    "bay": s.bay,
+                    "node_ids": list(s.node_ids),
+                    "thickness_mm": round(s.thickness_m * 1e3, 2),
+                }
+                for s in self.shell_elements
+            ],
             "frame_dims_mm": [
                 self.spec.frame.width_mm,
                 self.spec.frame.depth_mm,
@@ -923,6 +967,7 @@ def _apply_extrusion_filling(model: AssemblyModel) -> None:
 def build_assembly(
     spec: PrinterSpec,
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
+    panel_mesh_n: int = 2,
 ) -> AssemblyModel:
     """Construct a 3D FEA-ready structural assembly from a PrinterSpec.
 
@@ -933,18 +978,26 @@ def build_assembly(
     toolhead_rel_pos:
         Normalized (u, v, w) in [0, 1]^3 specifying where the toolhead is positioned
         inside the build volume for structural stiffness evaluation. Defaults to center.
+    panel_mesh_n:
+        Subdivision grid density (n x n MITC4 shells per CoreXY panel bay). Defaults to 2
+        for fast interactive solves; use 6 for deep offline verification.
     """
+    mesh_n = max(2, int(panel_mesh_n))
     if spec.frame.custom_nodes and spec.frame.custom_members:
-        return _build_custom_assembly(spec)
+        model = _build_custom_assembly(spec)
+        model.panel_mesh_n = mesh_n
+        return model
 
     if spec.architecture == "corexy":
-        model = _build_corexy(spec, toolhead_rel_pos)
+        model = _build_corexy(spec, toolhead_rel_pos, panel_mesh_n=mesh_n)
     elif spec.architecture == "cartesian_bedslinger":
         model = _build_cartesian_bedslinger(spec, toolhead_rel_pos)
     elif spec.architecture == "delta":
         model = _build_delta(spec, toolhead_rel_pos)
     else:
         raise ValueError(f"Unsupported architecture: {spec.architecture}")
+
+    model.panel_mesh_n = mesh_n
 
     # Append any supplemental custom nodes/members defined alongside a preset frame
     nmap = model.node_map
@@ -1014,8 +1067,288 @@ def _build_custom_assembly(spec: PrinterSpec) -> AssemblyModel:
     return model
 
 
+def _split_member_at_node(
+    members: list[StructuralMember],
+    member_idx: int,
+    split_node_id: str,
+    frac: float,
+) -> None:
+    """Split ``members[member_idx]`` into two collinear segments at ``split_node_id``."""
+    orig = members[member_idx]
+    f_clamped = max(1e-4, min(1.0 - 1e-4, float(frac)))
+    seg_a = StructuralMember(
+        id=orig.id,
+        start_id=orig.start_id,
+        end_id=split_node_id,
+        profile=orig.profile,
+        material=orig.material,
+        role=orig.role,
+        is_truss=orig.is_truss,
+        fill_mass_kg=orig.fill_mass_kg * f_clamped,
+        rail_mass_kg=orig.rail_mass_kg * f_clamped,
+    )
+    suffix = 1
+    existing_ids = {m.id for m in members}
+    seg_b_id = f"{orig.id}__s{suffix}"
+    while seg_b_id in existing_ids:
+        suffix += 1
+        seg_b_id = f"{orig.id}__s{suffix}"
+    seg_b = StructuralMember(
+        id=seg_b_id,
+        start_id=split_node_id,
+        end_id=orig.end_id,
+        profile=orig.profile,
+        material=orig.material,
+        role=orig.role,
+        is_truss=orig.is_truss,
+        fill_mass_kg=orig.fill_mass_kg * (1.0 - f_clamped),
+        rail_mass_kg=orig.rail_mass_kg * (1.0 - f_clamped),
+    )
+    members[member_idx] = seg_a
+    members.insert(member_idx + 1, seg_b)
+
+
+def _find_or_split_frame_node(
+    nodes: list[StructuralNode],
+    nmap: dict[str, StructuralNode],
+    members: list[StructuralMember],
+    p_target: np.ndarray,
+    snap_tol_m: float = 5e-4,
+) -> str:
+    """Locate an existing structural frame/rail node near ``p_target`` or split the spanning beam."""
+    best_id: str | None = None
+    best_dist = snap_tol_m
+    for n in nodes:
+        if n.role == "panel":
+            continue
+        dist = float(np.linalg.norm(n.position_m - p_target))
+        if dist < best_dist:
+            best_dist = dist
+            best_id = n.id
+    if best_id is not None:
+        return best_id
+
+    for idx, m in enumerate(members):
+        if m.role not in ("frame", "rail", "tower"):
+            continue
+        p0 = nmap[m.start_id].position_m
+        p1 = nmap[m.end_id].position_m
+        vec = p1 - p0
+        length = float(np.linalg.norm(vec))
+        if length < 1e-6:
+            continue
+        u = vec / length
+        proj = float(np.dot(p_target - p0, u))
+        if snap_tol_m < proj < length - snap_tol_m:
+            perp = float(np.linalg.norm((p_target - p0) - proj * u))
+            if perp < snap_tol_m:
+                split_id = f"fsplit_{len(nodes)}"
+                while split_id in nmap:
+                    split_id = f"fsplit_{len(nodes)}_{idx}"
+                node = StructuralNode(
+                    id=split_id,
+                    position_m=(p0 + proj * u).copy(),
+                    role="frame",
+                )
+                nodes.append(node)
+                nmap[split_id] = node
+                _split_member_at_node(members, idx, split_id, proj / length)
+                return split_id
+
+    # Fallback: closest frame/rail node
+    non_panel = [n for n in nodes if n.role != "panel"]
+    return min(non_panel, key=lambda n: float(np.linalg.norm(n.position_m - p_target))).id
+
+
+def _add_corexy_shell_panels(
+    spec: PrinterSpec,
+    nodes: list[StructuralNode],
+    nmap: dict[str, StructuralNode],
+    members: list[StructuralMember],
+    pmat: MaterialSpec,
+    panel_t_m: float,
+    mounting: str,
+    bolted_to_gantry: bool,
+    panel_mesh_n: int,
+) -> tuple[list[ShellPanelElement], list[FastenerSpring], float, dict[str, float] | None]:
+    """Generate MITC4 shell grids + Huth CBUSH fastener springs for CoreXY enclosure bays."""
+    h = spec.frame.height_mm * 1e-3
+    frame_prof = get_profile(spec.frame.profile)
+    d_c = 0.5 * frame_prof.width_m + 0.5 * panel_t_m
+
+    is_acm = pmat.id == "acm_dibond"
+    if is_acm:
+        t_skin = min(0.0003, 0.25 * panel_t_m)
+        t_core = max(panel_t_m - 2.0 * t_skin, 0.0)
+        e_al = 70.0e9
+        nu_al = 0.33
+        g_core = 0.17e9
+        e_core = 2.0 * (1.0 + 0.42) * g_core
+        e_mem_base = e_al * (2.0 * t_skin) + e_core * t_core
+        d_bend_base: float | None = e_al * (t_skin * (panel_t_m - t_skin) ** 2) / (
+            2.0 * (1.0 - nu_al**2)
+        )
+        g_trans_base: float | None = max(g_core * t_core, 1e3)
+        panel_mat_shell = pmat.model_copy(update={"poisson_ratio": nu_al})
+    else:
+        e_mem_base = pmat.youngs_modulus_pa * panel_t_m
+        d_bend_base = None
+        g_trans_base = None
+        panel_mat_shell = pmat
+
+    if bolted_to_gantry:
+        bays: tuple[tuple[str, str, str, str, str, tuple[float, float, float], float | None], ...] = (
+            ("rear_low", "b_rl", "b_rr", "g_rl", "g_rr", (0.0, 1.0, 0.0), h),
+            ("rear_top", "g_rl", "g_rr", "t_rl", "t_rr", (0.0, 1.0, 0.0), h),
+            ("left_low", "b_fl", "b_rl", "g_fl", "g_rl", (-1.0, 0.0, 0.0), h),
+            ("left_top", "g_fl", "g_rl", "t_fl", "t_rl", (-1.0, 0.0, 0.0), h),
+            ("right_low", "b_fr", "b_rr", "g_fr", "g_rr", (1.0, 0.0, 0.0), h),
+            ("right_top", "g_fr", "g_rr", "t_fr", "t_rr", (1.0, 0.0, 0.0), h),
+            ("top", "t_fl", "t_fr", "t_rl", "t_rr", (0.0, 0.0, 1.0), None),
+        )
+    else:
+        bays = (
+            ("rear", "b_rl", "b_rr", "t_rl", "t_rr", (0.0, 1.0, 0.0), None),
+            ("left", "b_fl", "b_rl", "t_fl", "t_rl", (-1.0, 0.0, 0.0), None),
+            ("right", "b_fr", "b_rr", "t_fr", "t_rr", (1.0, 0.0, 0.0), None),
+            ("top", "t_fl", "t_fr", "t_rl", "t_rr", (0.0, 0.0, 1.0), None),
+        )
+
+    clamp_eff = (
+        0.22
+        if is_acm
+        else (
+            0.30
+            if pmat.youngs_modulus_pa < 10.0e9
+            else (0.80 if pmat.id == "carbon_fiber_plate" else 1.0)
+        )
+    )
+    mesh_n = max(2, int(panel_mesh_n))
+
+    shell_elements: list[ShellPanelElement] = []
+    fastener_springs: list[FastenerSpring] = []
+    total_panel_mass_kg = 0.0
+    rep_panel_props: dict[str, float] | None = None
+
+    for bay, bl_id, br_id, tl_id, tr_id, n_tup, wall_h in bays:
+        p00 = nmap[bl_id].position_m
+        p10 = nmap[br_id].position_m
+        p01 = nmap[tl_id].position_m
+        p11 = nmap[tr_id].position_m
+        bw = float(np.linalg.norm(p10 - p00))
+        bh = float(np.linalg.norm(p01 - p00))
+        if bw <= 1e-6 or bh <= 1e-6:
+            continue
+
+        is_split_wall = wall_h is not None
+        prop_h = wall_h if (wall_h is not None and wall_h > bh) else bh
+        props = panel_mechanical_properties(
+            pmat,
+            panel_t_m,
+            bw,
+            prop_h,
+            mounting,
+            bolted_to_gantry=is_split_wall,
+        )
+        total_panel_mass_kg += bw * bh * props["areal_mass_kg_m2"]
+        if rep_panel_props is None and bay in ("rear_low", "rear"):
+            rep_panel_props = props
+
+        e_mem_eff = e_mem_base * props["psi_buckle"]
+        if mounting == "clip_enclosure":
+            k_shear_per_m = 2.0 * 28_000.0 / max(bw, 0.04)
+            k_normal_per_m = 2.5e5
+            k_rot_per_m = 0.2
+        else:
+            n_edge_w = max(3.0, round(bw / 0.085) + 1.0)
+            gantry_mult = 1.35 if is_split_wall else 1.0
+            k_mount_edge = n_edge_w * (props["k_mount_n_m"] / (0.5 * n_edge_w * gantry_mult))
+            k_shear_per_m = k_mount_edge / max(bw, 0.04)
+            k_normal_per_m = max(1.0e6, 2.0 * k_shear_per_m)
+            k_rot_per_m = 15.0 * clamp_eff
+
+        nx_g = mesh_n
+        ny_g = mesh_n if bh > 0.12 else max(1, mesh_n // 2)
+        nvec = np.asarray(n_tup, dtype=float)
+        off_nominal = d_c * nvec
+
+        grid = np.empty((ny_g + 1, nx_g + 1), dtype=object)
+        for j in range(ny_g + 1):
+            eta = j / ny_g
+            for i in range(nx_g + 1):
+                xi = i / nx_g
+                p_frame = (
+                    (1.0 - xi) * (1.0 - eta) * p00
+                    + xi * (1.0 - eta) * p10
+                    + xi * eta * p11
+                    + (1.0 - xi) * eta * p01
+                )
+                p_shell = p_frame + off_nominal
+                sid = f"pan_{bay}_{j}_{i}"
+                node = StructuralNode(id=sid, position_m=p_shell, role="panel")
+                nodes.append(node)
+                nmap[sid] = node
+                grid[j, i] = sid
+
+                if i in (0, nx_g) or j in (0, ny_g):
+                    fid = _find_or_split_frame_node(nodes, nmap, members, p_frame)
+                    ds = 0.0
+                    if j in (0, ny_g):
+                        ds += (bw / nx_g) * (0.5 if i in (0, nx_g) else 1.0)
+                    if i in (0, nx_g):
+                        ds += (bh / ny_g) * (0.5 if j in (0, ny_g) else 1.0)
+                    actual_off = p_shell - nmap[fid].position_m
+                    fastener_springs.append(
+                        FastenerSpring(
+                            id=f"cbush_{bay}_{j}_{i}",
+                            bay=bay,
+                            shell_node_id=sid,
+                            frame_node_id=fid,
+                            k_shear_n_m=k_shear_per_m * ds,
+                            k_normal_n_m=k_normal_per_m * ds,
+                            k_rot_nm_rad=k_rot_per_m * ds,
+                            normal_vec=n_tup,
+                            offset_m=(
+                                float(actual_off[0]),
+                                float(actual_off[1]),
+                                float(actual_off[2]),
+                            ),
+                        )
+                    )
+
+        for j in range(ny_g):
+            for i in range(nx_g):
+                n0 = str(grid[j, i])
+                n1 = str(grid[j, i + 1])
+                n2 = str(grid[j + 1, i + 1])
+                n3 = str(grid[j + 1, i])
+                c3 = np.array([nmap[nid].position_m for nid in (n0, n1, n2, n3)])
+                if float(np.dot(np.cross(c3[2] - c3[0], c3[3] - c3[1]), nvec)) < 0.0:
+                    nids = (n0, n3, n2, n1)
+                else:
+                    nids = (n0, n1, n2, n3)
+                shell_elements.append(
+                    ShellPanelElement(
+                        id=f"shell_{bay}_{j}_{i}",
+                        bay=bay,
+                        node_ids=nids,
+                        material=panel_mat_shell,
+                        thickness_m=panel_t_m,
+                        areal_mass_kg_m2=props["areal_mass_kg_m2"],
+                        d_bend_nm=d_bend_base,
+                        g_transverse_h_n_m=g_trans_base,
+                        e_mem_h_n_m=e_mem_eff,
+                        normal_vec=n_tup,
+                    )
+                )
+
+    return shell_elements, fastener_springs, total_panel_mass_kg, rep_panel_props
+
+
 def _build_corexy(
-    spec: PrinterSpec, toolhead_rel_pos: tuple[float, float, float]
+    spec: PrinterSpec,
+    toolhead_rel_pos: tuple[float, float, float],
+    panel_mesh_n: int = 2,
 ) -> AssemblyModel:
     w = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
@@ -1290,143 +1623,27 @@ def _build_corexy(
     x_rail_ei_z_boost_pct = 100.0 * x_boost_iy / max(base_x_prof.iy_m4, 1e-18)
     y_rail_ei_x_boost_pct = 100.0 * y_boost_iz / max(base_y_prof.iz_m4, 1e-18)
 
-    # Enclosure / structural shear panels across rear, side, and top bays
+    # Enclosure / structural MITC4 shell panels + Huth CBUSH fastener springs across rear, side, and top bays
     panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
+    shell_elements: list[ShellPanelElement] = []
+    fastener_springs: list[FastenerSpring] = []
     total_panel_mass_kg = 0.0
     rep_panel_props: dict[str, float] | None = None
     if panels_active:
         bolted_to_gantry = spec.panels_bolted_to_gantry_effective
-        if bolted_to_gantry:
-            bays = (
-                ("rear_low", "b_rl", "b_rr", "g_rl", "g_rr"),
-                ("rear_top", "g_rl", "g_rr", "t_rl", "t_rr"),
-                ("left_low", "b_fl", "b_rl", "g_fl", "g_rl"),
-                ("left_top", "g_fl", "g_rl", "t_fl", "t_rl"),
-                ("right_low", "b_fr", "b_rr", "g_fr", "g_rr"),
-                ("right_top", "g_fr", "g_rr", "t_fr", "t_rr"),
-                ("top", "t_fl", "t_fr", "t_rl", "t_rr"),
-            )
-        else:
-            bays = (
-                ("rear", "b_rl", "b_rr", "t_rl", "t_rr"),
-                ("left", "b_fl", "b_rl", "t_fl", "t_rl"),
-                ("right", "b_fr", "b_rr", "t_fr", "t_rr"),
-                ("top", "t_fl", "t_fr", "t_rl", "t_rr"),
-            )
-
-        bay_aeq: dict[str, float] = {}
-        for bay, bl_id, br_id, tl_id, tr_id in bays:
-            is_split_wall = bolted_to_gantry and bay != "top"
-            a_eq, bay_mass, props = _add_shear_panel_bay(
-                members,
-                nmap,
-                bay,
-                bl_id,
-                br_id,
-                tl_id,
-                tr_id,
-                pmat,
-                panel_t_m,
-                panel_mounting,
-                bolted_to_gantry=is_split_wall,
-                wall_height_m=h if is_split_wall else None,
-            )
-            bay_aeq[bay] = a_eq
-            total_panel_mass_kg += bay_mass
-            if rep_panel_props is None and bay in ("rear_low", "rear"):
-                rep_panel_props = props
-
-        if panel_mounting == "bolted_structural" and rep_panel_props is not None:
-            _apply_composite_panel_stiffening(
-                members,
-                nmap,
-                pmat,
-                panel_t_m,
-                rep_panel_props,
+        shell_elements, fastener_springs, total_panel_mass_kg, rep_panel_props = (
+            _add_corexy_shell_panels(
+                spec=spec,
+                nodes=nodes,
+                nmap=nmap,
+                members=members,
+                pmat=pmat,
+                panel_t_m=panel_t_m,
+                mounting=panel_mounting,
                 bolted_to_gantry=bolted_to_gantry,
+                panel_mesh_n=panel_mesh_n,
             )
-
-        if bolted_to_gantry:
-            virtual_mat = _make_panel_virtual_material(pmat)
-            for side, f_bot, r_bot, car_id, bay_key in (
-                ("l", "b_fl", "b_rl", "y_car_l", "left_low"),
-                ("r", "b_fr", "b_rr", "y_car_r", "right_low"),
-            ):
-                yrail_prof = ProfileSpec.model_construct(
-                    id=f"panel_shear_yrail_{side}",
-                    name=f"Gantry Y-Rail Panel Tie-In ({side}, {panel_t_m * 1e3:.1f}mm {pmat.id})",
-                    shape="plate",
-                    width_m=max(panel_t_m, 0.002),
-                    height_m=max(panel_t_m, 0.004),
-                    area_m2=max(0.30 * bay_aeq[bay_key], 1e-10),
-                    iy_m4=1e-11,
-                    iz_m4=1e-11,
-                    j_m4=1e-11,
-                )
-                members.append(
-                    StructuralMember(
-                        id=f"panel_shear_yrail_{side}_1",
-                        start_id=f_bot,
-                        end_id=car_id,
-                        profile=yrail_prof,
-                        material=virtual_mat,
-                        role="brace",
-                        is_truss=True,
-                    )
-                )
-                members.append(
-                    StructuralMember(
-                        id=f"panel_shear_yrail_{side}_2",
-                        start_id=r_bot,
-                        end_id=car_id,
-                        profile=yrail_prof,
-                        material=virtual_mat,
-                        role="brace",
-                        is_truss=True,
-                    )
-                )
-
-        if not is_flying and panel_mounting == "bolted_structural":
-            virtual_mat = _make_panel_virtual_material(pmat)
-            zbed_ties = (
-                ("l", "b_fl", "b_rl", "z_bed_fl", "left_low" if bolted_to_gantry else "left"),
-                ("r", "b_fr", "b_rr", "z_bed_fr", "right_low" if bolted_to_gantry else "right"),
-                ("rear", "b_rl", "b_rr", "z_bed_r", "rear_low" if bolted_to_gantry else "rear"),
-            )
-            for tag, p_a, p_b, z_nid, bay_key in zbed_ties:
-                zbed_prof = ProfileSpec.model_construct(
-                    id=f"panel_shear_zbed_{tag}",
-                    name=f"Z-Rail Panel Shear Tie-In ({tag}, {panel_t_m * 1e3:.1f}mm {pmat.id})",
-                    shape="plate",
-                    width_m=max(panel_t_m, 0.002),
-                    height_m=max(panel_t_m, 0.004),
-                    area_m2=max(0.35 * bay_aeq[bay_key], 1e-10),
-                    iy_m4=1e-11,
-                    iz_m4=1e-11,
-                    j_m4=1e-11,
-                )
-                members.append(
-                    StructuralMember(
-                        id=f"panel_shear_zbed_{tag}_1",
-                        start_id=p_a,
-                        end_id=z_nid,
-                        profile=zbed_prof,
-                        material=virtual_mat,
-                        role="brace",
-                        is_truss=True,
-                    )
-                )
-                members.append(
-                    StructuralMember(
-                        id=f"panel_shear_zbed_{tag}_2",
-                        start_id=p_b,
-                        end_id=z_nid,
-                        profile=zbed_prof,
-                        material=virtual_mat,
-                        role="brace",
-                        is_truss=True,
-                    )
-                )
+        )
 
     # Calculate moving masses (strip composite rail mass from gantry beam before adding x_rail_mass)
     x_beam_mass = sum(
@@ -1454,6 +1671,9 @@ def _build_corexy(
         spec=spec,
         nodes=nodes,
         members=members,
+        shell_elements=shell_elements,
+        fastener_springs=fastener_springs,
+        panel_mesh_n=max(2, int(panel_mesh_n)),
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",
@@ -1843,7 +2063,11 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     bed_mass = model.spec.bed.mass_g * 1e-3
     bed_node_mass = nmap[model.bed_node_id].lumped_mass_kg if has_bed_node else 0.0
     model.frame_mass_kg = frame_mass
-    model.total_mass_kg = frame_mass + lumped_mass + max(bed_mass - bed_node_mass, 0.0)
+    # Shell elements carry their physical panel mass via MITC4 element mass matrices (not node lumps)
+    shell_panel_mass = model.panel_mass_kg if model.shell_elements else 0.0
+    model.total_mass_kg = (
+        frame_mass + lumped_mass + shell_panel_mass + max(bed_mass - bed_node_mass, 0.0)
+    )
     if model.panel_mass_kg > 0.0:
         pmat = get_material(model.spec.frame.panel_material)
         cost += model.panel_mass_kg * pmat.cost_per_kg_usd

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 
 from printsim.fea.modal import ModalResult, solve_modal_fea
 from printsim.fea.solver import StaticFEAResult, solve_static_fea
@@ -99,6 +100,17 @@ def _compute_scores_and_diagnostics(
             f"High nozzle-tip lever-arm twist amplification (+{static_fea.nozzle_twist_amplification_pct:.1f}% vs X-beam center, "
             f"{static_fea.nozzle_twist_angle_mrad:.2f} mrad): lower toolhead CoG, shorten nozzle drop, "
             f"or upgrade carriage mount from '{spec.toolhead.mount_material}' to 'pa12_cf_printed' or 'aluminum_6061_t6'."
+        )
+    if (
+        spec.architecture == "corexy"
+        and spec.frame.enclosed_panels
+        and spec.frame.panel_mounting == "bolted_structural"
+        and 0.0 < modal_fea.panel_drum_freq_hz < 65.0
+    ):
+        diag.append(
+            f"Panel oil-canning / drum resonance risk ({modal_fea.panel_drum_freq_hz:.1f} Hz < 65 Hz): "
+            f"{spec.frame.panel_thickness_mm:.1f} mm {spec.frame.panel_material} panels vibrate out-of-plane "
+            "within print excitation bandwidth; step up to 4-5 mm Aluminum 5052 or >= 4 mm ACM Dibond."
         )
     if (
         structural < 80.0
@@ -264,9 +276,14 @@ def evaluate_printer(
     gcode_text: str | None = None,
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
     filament_id: str = "pla",
+    panel_mesh_n: int = 2,
 ) -> SimulationReport:
     """Run the full multiphysics simulation suite on a PrinterSpec."""
-    assembly = build_assembly(spec, toolhead_rel_pos=toolhead_rel_pos)
+    assembly = build_assembly(
+        spec,
+        toolhead_rel_pos=toolhead_rel_pos,
+        panel_mesh_n=panel_mesh_n,
+    )
     collision = check_frame_clearance(assembly)
     static_fea = solve_static_fea(assembly)
     modal_fea = solve_modal_fea(assembly)
@@ -302,3 +319,76 @@ def evaluate_printer(
         scores=scores,
         diagnostics=diagnostics,
     )
+
+
+def _extract_verify_summary(report: SimulationReport, solve_time_ms: float) -> dict:
+    return {
+        "fundamental_freq_hz": round(float(report.modal_fea.fundamental_freq_hz), 2),
+        "recommended_max_accel_mm_s2": round(float(report.modal_fea.recommended_max_accel_mm_s2), 0),
+        "combined_max_deflection_um": round(float(report.static_fea.combined_max_deflection_um), 2),
+        "panel_drum_freq_hz": round(float(report.modal_fea.panel_drum_freq_hz), 2),
+        "panel_max_von_mises_mpa": round(float(report.static_fea.panel_max_von_mises_mpa), 3),
+        "num_shell_elements": len(report.assembly.shell_elements),
+        "solve_time_ms": round(float(solve_time_ms), 1),
+    }
+
+
+def verify_printer_deep(
+    spec: PrinterSpec,
+    gcode_text: str | None = None,
+    toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
+    filament_id: str = "pla",
+    deep_mesh_n: int = 6,
+) -> dict:
+    """Compare fast 2x2 shell FEA vs deep nxn mesh verification and report convergence."""
+    fast_n = 2
+    deep_n = max(4, int(deep_mesh_n))
+
+    t0 = time.perf_counter()
+    fast_report = evaluate_printer(
+        spec,
+        gcode_text=gcode_text,
+        toolhead_rel_pos=toolhead_rel_pos,
+        filament_id=filament_id,
+        panel_mesh_n=fast_n,
+    )
+    fast_ms = (time.perf_counter() - t0) * 1000.0
+
+    t1 = time.perf_counter()
+    deep_report = evaluate_printer(
+        spec,
+        gcode_text=gcode_text,
+        toolhead_rel_pos=toolhead_rel_pos,
+        filament_id=filament_id,
+        panel_mesh_n=deep_n,
+    )
+    deep_ms = (time.perf_counter() - t1) * 1000.0
+
+    fast_summary = _extract_verify_summary(fast_report, fast_ms)
+    deep_summary = _extract_verify_summary(deep_report, deep_ms)
+
+    f_fast = fast_summary["fundamental_freq_hz"]
+    f_deep = deep_summary["fundamental_freq_hz"]
+    d_fast = fast_summary["combined_max_deflection_um"]
+    d_deep = deep_summary["combined_max_deflection_um"]
+    a_fast = fast_summary["recommended_max_accel_mm_s2"]
+    a_deep = deep_summary["recommended_max_accel_mm_s2"]
+
+    freq_diff_pct = round(abs(f_deep - f_fast) / max(f_deep, 1e-6) * 100.0, 2)
+    deflection_diff_pct = round(abs(d_deep - d_fast) / max(d_deep, 1e-6) * 100.0, 2)
+    accel_diff_pct = round(abs(a_deep - a_fast) / max(a_deep, 1e-6) * 100.0, 2)
+    converged = bool(freq_diff_pct <= 15.0 and deflection_diff_pct <= 15.0)
+
+    return {
+        "fast_mesh_n": fast_n,
+        "deep_mesh_n": deep_n,
+        "fast_summary": fast_summary,
+        "deep_summary": deep_summary,
+        "convergence": {
+            "freq_diff_pct": freq_diff_pct,
+            "deflection_diff_pct": deflection_diff_pct,
+            "accel_diff_pct": accel_diff_pct,
+            "converged": converged,
+        },
+        "deep_simulation": deep_report.to_dict(include_toolpath_segments=False),
+    }
