@@ -393,8 +393,11 @@ def panel_mechanical_properties(
         e_ext = 69.0e9
         a_huth = 2.0 / 3.0
         b_huth = 3.0 if (not is_acm and not is_polymer and not is_composite) else 4.2
+        # Clamp Huth bolt-bending lever thickness to ~1.5*t_ext so thick clamped plates (>= 4 mm Al)
+        # saturate monotonically at the extrusion T-slot flange stiffness instead of rolling over.
+        t_lever = min(t_bear, 1.5 * t_ext)
         c_bolt = (
-            (((t_bear + t_ext) / (2.0 * d_bolt)) ** a_huth)
+            (((t_lever + t_ext) / (2.0 * d_bolt)) ** a_huth)
             * b_huth
             * (
                 1.0 / (t_bear * e_bear)

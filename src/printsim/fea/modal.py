@@ -357,7 +357,8 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 panel_drum_fallback_freq = freq_hz
             is_isolated_panel_drum = (
                 (ke_panel > 0.55 and noz_norm_all < 0.12)
-                or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.15)
+                or (ke_panel > 0.58 and noz_norm_all < 0.25)
+                or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.28)
                 or (np_max < 0.25 and gantry_max < 0.20)
             )
             if is_isolated_panel_drum and panel_drum_freq is None:
