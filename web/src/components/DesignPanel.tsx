@@ -354,6 +354,13 @@ function mountMaterialShort(id?: string): string {
   return MOUNT_MATERIAL_OPTIONS.find((m) => m.id === id)?.shortLabel ?? "Printed ABS";
 }
 
+function toolheadStiffnessTier(k: number): { label: string; color: string } {
+  if (k < 250) return { label: "Soft Printed", color: "var(--amber)" };
+  if (k <= 700) return { label: "Standard Printed", color: "var(--muted)" };
+  if (k <= 1500) return { label: "Rigid CF-Polymer", color: "var(--accent)" };
+  return { label: "CNC Monoblock", color: "var(--green)" };
+}
+
 function shortMotorName(name: string): string {
   return name.split("(")[0].trim() || name;
 }
@@ -490,6 +497,11 @@ export const DesignPanel: React.FC<Props> = ({
   );
   const nozzleZTimerRef = useRef<number | null>(null);
 
+  const [toolheadStiffnessDraft, setToolheadStiffnessDraft] = useState<number>(
+    Math.round(spec?.toolhead.internal_stiffness_n_per_mm ?? 450)
+  );
+  const toolheadStiffnessTimerRef = useRef<number | null>(null);
+
   const [chamberTempDraft, setChamberTempDraft] = useState<number>(
     Math.round(spec?.frame.chamber_temp_c ?? 25)
   );
@@ -536,6 +548,12 @@ export const DesignPanel: React.FC<Props> = ({
 
   useEffect(() => {
     if (spec) {
+      setToolheadStiffnessDraft(Math.round(spec.toolhead.internal_stiffness_n_per_mm ?? 450));
+    }
+  }, [spec?.toolhead.internal_stiffness_n_per_mm]);
+
+  useEffect(() => {
+    if (spec) {
       setChamberTempDraft(Math.round(spec.frame.chamber_temp_c ?? 25));
     }
   }, [spec?.frame.chamber_temp_c]);
@@ -560,6 +578,7 @@ export const DesignPanel: React.FC<Props> = ({
       if (cogYTimerRef.current != null) window.clearTimeout(cogYTimerRef.current);
       if (cogZTimerRef.current != null) window.clearTimeout(cogZTimerRef.current);
       if (nozzleZTimerRef.current != null) window.clearTimeout(nozzleZTimerRef.current);
+      if (toolheadStiffnessTimerRef.current != null) window.clearTimeout(toolheadStiffnessTimerRef.current);
       if (chamberTempTimerRef.current != null) window.clearTimeout(chamberTempTimerRef.current);
       if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
     };
@@ -653,9 +672,10 @@ export const DesignPanel: React.FC<Props> = ({
   const specCogYAbs = Math.round(Math.abs(spec.toolhead.cog_offset_mm?.[1] ?? 18));
   const specCogZAbs = Math.round(Math.abs(spec.toolhead.cog_offset_mm?.[2] ?? 25));
   const specNozzleZAbs = Math.round(Math.abs(spec.toolhead.nozzle_offset_mm?.[2] ?? 62));
+  const specToolheadStiffness = Math.round(spec.toolhead.internal_stiffness_n_per_mm ?? 450);
 
   const commitCogY = (rawVal: number) => {
-    const val = Math.max(0, Math.min(45, Math.round(rawVal)));
+    const val = Math.max(0, Math.min(250, Math.round(rawVal)));
     if (cogYTimerRef.current != null) {
       window.clearTimeout(cogYTimerRef.current);
       cogYTimerRef.current = null;
@@ -664,7 +684,7 @@ export const DesignPanel: React.FC<Props> = ({
     update(
       (d) => {
         const cur = d.toolhead.cog_offset_mm || [0, -18, -25];
-        d.toolhead.cog_offset_mm = [cur[0], -val, cur[2]];
+        d.toolhead.cog_offset_mm = [cur[0], val === 0 ? 0 : -val, cur[2]];
         d.toolhead.preset_id = "custom";
       },
       `CoG Forward Y: ${specCogYAbs}mm → ${val}mm`
@@ -678,7 +698,7 @@ export const DesignPanel: React.FC<Props> = ({
   };
 
   const commitCogZ = (rawVal: number) => {
-    const val = Math.max(0, Math.min(55, Math.round(rawVal)));
+    const val = Math.max(0, Math.min(250, Math.round(rawVal)));
     if (cogZTimerRef.current != null) {
       window.clearTimeout(cogZTimerRef.current);
       cogZTimerRef.current = null;
@@ -687,7 +707,7 @@ export const DesignPanel: React.FC<Props> = ({
     update(
       (d) => {
         const cur = d.toolhead.cog_offset_mm || [0, -18, -25];
-        d.toolhead.cog_offset_mm = [cur[0], cur[1], -val];
+        d.toolhead.cog_offset_mm = [cur[0], cur[1], val === 0 ? 0 : -val];
         d.toolhead.preset_id = "custom";
       },
       `CoG Drop Z: ${specCogZAbs}mm → ${val}mm`
@@ -701,7 +721,7 @@ export const DesignPanel: React.FC<Props> = ({
   };
 
   const commitNozzleZ = (rawVal: number) => {
-    const val = Math.max(30, Math.min(95, Math.round(rawVal)));
+    const val = Math.max(0, Math.min(250, Math.round(rawVal)));
     if (nozzleZTimerRef.current != null) {
       window.clearTimeout(nozzleZTimerRef.current);
       nozzleZTimerRef.current = null;
@@ -710,7 +730,7 @@ export const DesignPanel: React.FC<Props> = ({
     update(
       (d) => {
         const cur = d.toolhead.nozzle_offset_mm || [0, -22, -62];
-        d.toolhead.nozzle_offset_mm = [cur[0], cur[1], -val];
+        d.toolhead.nozzle_offset_mm = [cur[0], cur[1], val === 0 ? 0 : -val];
         d.toolhead.preset_id = "custom";
       },
       `Nozzle Drop Z: ${specNozzleZAbs}mm → ${val}mm`
@@ -721,6 +741,33 @@ export const DesignPanel: React.FC<Props> = ({
     setNozzleZDraft(nextVal);
     if (nozzleZTimerRef.current != null) window.clearTimeout(nozzleZTimerRef.current);
     nozzleZTimerRef.current = window.setTimeout(() => commitNozzleZ(nextVal), 220);
+  };
+
+  const commitToolheadStiffness = (rawVal: number) => {
+    const val = Math.max(25, Math.min(20000, Math.round(rawVal)));
+    if (toolheadStiffnessTimerRef.current != null) {
+      window.clearTimeout(toolheadStiffnessTimerRef.current);
+      toolheadStiffnessTimerRef.current = null;
+    }
+    if (val === specToolheadStiffness) return;
+    update(
+      (d) => {
+        d.toolhead.internal_stiffness_n_per_mm = val;
+        d.toolhead.preset_id = "custom";
+      },
+      `Toolhead Stiffness: ${specToolheadStiffness} → ${val} N/mm`
+    );
+  };
+
+  const handleToolheadStiffnessSliderChange = (nextVal: number) => {
+    setToolheadStiffnessDraft(nextVal);
+    if (toolheadStiffnessTimerRef.current != null) {
+      window.clearTimeout(toolheadStiffnessTimerRef.current);
+    }
+    toolheadStiffnessTimerRef.current = window.setTimeout(
+      () => commitToolheadStiffness(nextVal),
+      220
+    );
   };
 
   const specChamberTempC = Math.round(spec.frame.chamber_temp_c ?? 25);
@@ -912,11 +959,14 @@ export const DesignPanel: React.FC<Props> = ({
       Math.round(Math.abs(tp.cog_offset_mm[1])) === specCogYAbs &&
       Math.round(Math.abs(tp.cog_offset_mm[2])) === specCogZAbs &&
       Math.round(Math.abs(tp.nozzle_offset_mm[2])) === specNozzleZAbs &&
-      tp.mount_material === currentMountMaterial
+      tp.mount_material === currentMountMaterial &&
+      (tp.internal_stiffness_n_per_mm == null ||
+        Math.round(tp.internal_stiffness_n_per_mm) === specToolheadStiffness)
   );
   const selectedToolheadPresetVal = matchedToolheadPreset
     ? matchedToolheadPreset.preset_id
     : "__custom__";
+  const stiffnessTier = toolheadStiffnessTier(toolheadStiffnessDraft);
 
   return (
     <aside className="sidebar">
@@ -2431,6 +2481,10 @@ export const DesignPanel: React.FC<Props> = ({
                         d.toolhead.cog_offset_mm = [...chosen.cog_offset_mm];
                         d.toolhead.nozzle_offset_mm = [...chosen.nozzle_offset_mm];
                         d.toolhead.mount_material = chosen.mount_material;
+                        if (chosen.internal_stiffness_n_per_mm != null) {
+                          d.toolhead.internal_stiffness_n_per_mm =
+                            chosen.internal_stiffness_n_per_mm;
+                        }
                       },
                       `Toolhead Preset: ${prevName} → ${chosen.name}`
                     );
@@ -2498,19 +2552,71 @@ export const DesignPanel: React.FC<Props> = ({
 
               <div className="slider-row">
                 <label>
+                  <span>Toolhead Internal Stiffness (N/mm)</span>
+                  <span className="tension-readout">
+                    <strong>{toolheadStiffnessDraft.toLocaleString()} N/mm</strong>
+                    <span className="kpi-sub" style={{ color: stiffnessTier.color }}>
+                      {stiffnessTier.label}
+                    </span>
+                  </span>
+                </label>
+                <div className="tension-control-row">
+                  <input
+                    type="range"
+                    min={50}
+                    max={3000}
+                    step={25}
+                    value={Math.max(50, Math.min(3000, toolheadStiffnessDraft))}
+                    onChange={(e) => handleToolheadStiffnessSliderChange(Number(e.target.value))}
+                    onPointerUp={() => commitToolheadStiffness(toolheadStiffnessDraft)}
+                    onKeyUp={() => commitToolheadStiffness(toolheadStiffnessDraft)}
+                  />
+                  <input
+                    type="number"
+                    className="tension-num-input"
+                    min={25}
+                    max={20000}
+                    step={25}
+                    value={toolheadStiffnessDraft}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      setToolheadStiffnessDraft(v);
+                      if (v >= 25 && v <= 20000) commitToolheadStiffness(v);
+                    }}
+                    onBlur={() => {
+                      const clamped = Math.max(25, Math.min(20000, Math.round(toolheadStiffnessDraft)));
+                      setToolheadStiffnessDraft(clamped);
+                      commitToolheadStiffness(clamped);
+                    }}
+                  />
+                </div>
+                {showHints && (
+                  <div className="hint-line">
+                    Accounts for flex inside the toolhead body &amp; hotend clamp (&lt;250 Soft
+                    Printed · 250–700 Standard Printed · 700–1500 Rigid CF-Polymer · &gt;1500 CNC
+                    Monoblock).
+                  </div>
+                )}
+              </div>
+
+              <div className="slider-row">
+                <label>
                   <span>CoG Forward Y (mm)</span>
                   <span className="tension-readout">
                     <strong>{cogYDraft} mm</strong>
-                    <span className="kpi-sub">in front of X-beam</span>
+                    <span className="kpi-sub">
+                      {cogYDraft === 0 ? "· centered on X-beam" : "in front of X-beam"}
+                    </span>
                   </span>
                 </label>
                 <div className="tension-control-row">
                   <input
                     type="range"
                     min={0}
-                    max={45}
+                    max={80}
                     step={1}
-                    value={Math.max(0, Math.min(45, cogYDraft))}
+                    value={Math.max(0, Math.min(80, cogYDraft))}
                     onChange={(e) => handleCogYSliderChange(Number(e.target.value))}
                     onPointerUp={() => commitCogY(cogYDraft)}
                     onKeyUp={() => commitCogY(cogYDraft)}
@@ -2519,16 +2625,20 @@ export const DesignPanel: React.FC<Props> = ({
                     type="number"
                     className="tension-num-input"
                     min={0}
-                    max={45}
+                    max={250}
                     step={1}
                     value={cogYDraft}
                     onChange={(e) => {
                       const v = Number(e.target.value);
                       if (!Number.isFinite(v)) return;
                       setCogYDraft(v);
-                      if (v >= 0 && v <= 45) commitCogY(v);
+                      if (v >= 0 && v <= 250) commitCogY(v);
                     }}
-                    onBlur={() => commitCogY(cogYDraft)}
+                    onBlur={() => {
+                      const clamped = Math.max(0, Math.min(250, Math.round(cogYDraft)));
+                      setCogYDraft(clamped);
+                      commitCogY(clamped);
+                    }}
                   />
                 </div>
               </div>
@@ -2538,16 +2648,18 @@ export const DesignPanel: React.FC<Props> = ({
                   <span>CoG Drop Z (mm)</span>
                   <span className="tension-readout">
                     <strong>{cogZDraft} mm</strong>
-                    <span className="kpi-sub">below X-beam</span>
+                    <span className="kpi-sub">
+                      {cogZDraft === 0 ? "· centered on X-beam" : "below X-beam"}
+                    </span>
                   </span>
                 </label>
                 <div className="tension-control-row">
                   <input
                     type="range"
                     min={0}
-                    max={55}
+                    max={100}
                     step={1}
-                    value={Math.max(0, Math.min(55, cogZDraft))}
+                    value={Math.max(0, Math.min(100, cogZDraft))}
                     onChange={(e) => handleCogZSliderChange(Number(e.target.value))}
                     onPointerUp={() => commitCogZ(cogZDraft)}
                     onKeyUp={() => commitCogZ(cogZDraft)}
@@ -2556,16 +2668,20 @@ export const DesignPanel: React.FC<Props> = ({
                     type="number"
                     className="tension-num-input"
                     min={0}
-                    max={55}
+                    max={250}
                     step={1}
                     value={cogZDraft}
                     onChange={(e) => {
                       const v = Number(e.target.value);
                       if (!Number.isFinite(v)) return;
                       setCogZDraft(v);
-                      if (v >= 0 && v <= 55) commitCogZ(v);
+                      if (v >= 0 && v <= 250) commitCogZ(v);
                     }}
-                    onBlur={() => commitCogZ(cogZDraft)}
+                    onBlur={() => {
+                      const clamped = Math.max(0, Math.min(250, Math.round(cogZDraft)));
+                      setCogZDraft(clamped);
+                      commitCogZ(clamped);
+                    }}
                   />
                 </div>
               </div>
@@ -2575,16 +2691,18 @@ export const DesignPanel: React.FC<Props> = ({
                   <span>Nozzle Drop Z (mm)</span>
                   <span className="tension-readout">
                     <strong style={{ color: "#fbbf24" }}>{nozzleZDraft} mm</strong>
-                    <span className="kpi-sub">lever arm</span>
+                    <span className="kpi-sub">
+                      {nozzleZDraft === 0 ? "· centered on X-beam" : "lever arm"}
+                    </span>
                   </span>
                 </label>
                 <div className="tension-control-row">
                   <input
                     type="range"
-                    min={30}
-                    max={95}
+                    min={0}
+                    max={120}
                     step={1}
-                    value={Math.max(30, Math.min(95, nozzleZDraft))}
+                    value={Math.max(0, Math.min(120, nozzleZDraft))}
                     onChange={(e) => handleNozzleZSliderChange(Number(e.target.value))}
                     onPointerUp={() => commitNozzleZ(nozzleZDraft)}
                     onKeyUp={() => commitNozzleZ(nozzleZDraft)}
@@ -2592,17 +2710,21 @@ export const DesignPanel: React.FC<Props> = ({
                   <input
                     type="number"
                     className="tension-num-input"
-                    min={30}
-                    max={95}
+                    min={0}
+                    max={250}
                     step={1}
                     value={nozzleZDraft}
                     onChange={(e) => {
                       const v = Number(e.target.value);
                       if (!Number.isFinite(v)) return;
                       setNozzleZDraft(v);
-                      if (v >= 30 && v <= 95) commitNozzleZ(v);
+                      if (v >= 0 && v <= 250) commitNozzleZ(v);
                     }}
-                    onBlur={() => commitNozzleZ(nozzleZDraft)}
+                    onBlur={() => {
+                      const clamped = Math.max(0, Math.min(250, Math.round(nozzleZDraft)));
+                      setNozzleZDraft(clamped);
+                      commitNozzleZ(clamped);
+                    }}
                   />
                 </div>
               </div>

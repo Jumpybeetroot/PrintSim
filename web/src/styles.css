@@ -2722,3 +2722,358 @@ textarea.code-editor {
   color: var(--muted);
   line-height: 1.3;
 }
+
+/* ==========================================================================
+   Plain-English Viewport Bottom HUD Guides (FEA, Modal, Adjoint ROI)
+   ========================================================================== */
+
+.hud-card.hud-guide-bar {
+  flex: 1 1 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 7px 11px;
+  background: rgba(11, 17, 27, 0.91);
+  border-color: rgba(56, 189, 248, 0.28);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.hud-card.hud-guide-bar.modal-guide {
+  border-color: rgba(56, 189, 248, 0.34);
+}
+
+.hud-card.hud-guide-bar.sens-guide {
+  border-color: rgba(251, 146, 60, 0.32);
+}
+
+.hud-guide-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+}
+
+.hud-guide-header {
+  justify-content: space-between;
+}
+
+.hud-guide-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.hud-guide-pill {
+  padding: 1px 7px;
+  font-size: 10px;
+}
+
+.hud-axis-pill {
+  padding: 1px 7px;
+  font-size: 10px;
+  background: rgba(148, 163, 184, 0.14);
+  border-color: rgba(148, 163, 184, 0.38);
+  color: #e2e8f0;
+}
+
+.hud-guide-title {
+  color: #f8fafc;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.hud-guide-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-guide-meta strong {
+  color: var(--text);
+}
+
+.hud-guide-lead {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.hud-guide-sub {
+  font-size: 10.5px;
+  color: #cbd5e1;
+  line-height: 1.35;
+  padding-top: 2px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.hud-guide-sub strong {
+  color: #f8fafc;
+}
+
+.hud-guide-line {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: #cbd5e1;
+}
+
+.hud-guide-key {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.hud-guide-val {
+  color: #e2e8f0;
+}
+
+.hud-fix-line {
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(16, 185, 129, 0.11);
+  border-left: 2.5px solid #2dd4bf;
+}
+
+.hud-fix-key {
+  color: #34d399;
+  font-weight: 700;
+}
+
+.hud-fix-val {
+  color: #a7f3d0;
+  font-weight: 500;
+}
+
+.hud-sens-legend {
+  gap: 4px 7px;
+  font-size: 10.5px;
+}
+
+.hud-sens-note {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.hud-sens-takeaway {
+  padding-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.09);
+  gap: 4px 12px;
+  font-size: 10.5px;
+}
+
+.hud-sens-item {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  color: #e2e8f0;
+}
+
+.hud-sens-tag {
+  font-weight: 800;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.hud-sens-tag.stiffen {
+  color: #fb923c;
+}
+
+.hud-sens-tag.lighten {
+  color: #22d3ee;
+}
+
+.hud-sens-stat {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   MetricsPanel Plain-English Sensitivity, FEA & Modal Fix Summaries
+   ========================================================================== */
+
+.sens-diagnosis-banner {
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.13), rgba(245, 158, 11, 0.09));
+  border: 1px solid rgba(56, 189, 248, 0.34);
+  border-left: 3px solid var(--accent);
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.38;
+  font-weight: 500;
+}
+
+.sens-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.sens-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sens-badge.gain {
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  color: #6ee7b7;
+}
+
+.sens-badge.flex {
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  color: #fca5a5;
+}
+
+.sens-badge.roi {
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.42);
+  color: #fcd34d;
+}
+
+.sens-badge.lighten-gain {
+  background: rgba(6, 182, 212, 0.16);
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  color: #67e8f9;
+}
+
+.sens-why {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.32;
+  margin-top: 2px;
+}
+
+.sens-fix {
+  font-size: 10.5px;
+  color: #d1fae5;
+  line-height: 1.34;
+  margin-top: 2px;
+}
+
+.sens-fix-prefix {
+  color: #34d399;
+  font-weight: 700;
+}
+
+.fea-explain-note {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.08);
+  border-left: 3px solid var(--accent);
+  font-size: 10.5px;
+  line-height: 1.36;
+  color: #cbd5e1;
+}
+
+.modal-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.modal-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.modal-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.modal-mode-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(11, 17, 27, 0.8);
+  border: 1px solid rgba(39, 50, 71, 0.85);
+  border-left: 3px solid var(--accent);
+}
+
+.modal-mode-item.critical {
+  border-left-color: var(--red);
+  background: rgba(239, 68, 68, 0.07);
+}
+
+.modal-mode-item.moderate {
+  border-left-color: var(--amber);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.modal-mode-item.stiff {
+  border-left-color: var(--green);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.modal-mode-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.modal-mode-title {
+  color: var(--text);
+  min-width: 0;
+}
+
+.modal-mode-freq {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal-mode-label {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.modal-sev-pill {
+  padding: 0 6px;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.modal-mode-fix {
+  font-size: 10px;
+  line-height: 1.34;
+  color: #a7f3d0;
+}
+
+.modal-mode-why {
+  font-size: 10px;
+  line-height: 1.34;
+  color: var(--muted);
+}

@@ -68,6 +68,20 @@ function formatElementLabel(elementType: string): string {
   return elementType;
 }
 
+function formatHzGain(hz: number): string {
+  return hz >= 0.1 ? hz.toFixed(1) : hz.toFixed(2);
+}
+
+function modeSeverityMeta(severity?: "critical" | "moderate" | "stiff"): {
+  label: string;
+  cls: string;
+} | null {
+  if (severity === "critical") return { label: "Limiting", cls: "bad" };
+  if (severity === "moderate") return { label: "Moderate", cls: "warn" };
+  if (severity === "stiff") return { label: "Stiff", cls: "ok" };
+  return null;
+}
+
 const CATEGORY_ORDER = ["frame", "motion", "motors", "hotend", "bed", "enclosure", "fasteners"];
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -1573,7 +1587,8 @@ const CncControlMetrologyCard: React.FC<{
   const topStiffen = sensitivity?.top_stiffen_targets?.slice(0, 3) ?? [];
   const topLighten = sensitivity?.top_lighten_targets?.slice(0, 2) ?? [];
   const hasSensitivity = Boolean(
-    sensitivity && (topStiffen.length > 0 || topLighten.length > 0)
+    sensitivity &&
+      (topStiffen.length > 0 || topLighten.length > 0 || Boolean(sensitivity.summary_diagnosis))
   );
 
   if (!hasMetrology && !hasWorkspace && !hasRcsa && !hasSensitivity) {
@@ -2019,25 +2034,42 @@ const CncControlMetrologyCard: React.FC<{
             </button>
           </div>
 
+          {sensitivity?.summary_diagnosis && (
+            <div className="sens-diagnosis-banner">{sensitivity.summary_diagnosis}</div>
+          )}
+
           {topStiffen.length > 0 && (
             <div className="sens-group">
-              <div className="sens-group-label stiffen">Top Stiffen Targets (+Hz/USD)</div>
+              <div className="sens-group-label stiffen">Top Stiffen Targets (Fix Flex First)</div>
               {topStiffen.map((t) => (
                 <div
                   key={`stiff-${t.id}`}
                   className="sens-row stiffen"
-                  title={t.action_hint || `${t.id} (${t.role})`}
+                  title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
                 >
                   <div className="sens-row-top">
                     <span className="sens-id">
-                      <strong>{t.id}</strong>
-                      <span className="sens-role">{t.role}</span>
-                    </span>
-                    <span className="sens-metric stiffen">
-                      +{t.hz_per_usd.toFixed(2)} Hz/$ · {t.compliance_share_pct.toFixed(0)}%
+                      <strong>{t.label ?? t.id}</strong>
+                      {!t.label && <span className="sens-role">{t.role}</span>}
                     </span>
                   </div>
-                  {t.action_hint && <div className="sens-hint">{t.action_hint}</div>}
+                  <div className="sens-badge-row">
+                    {(t.est_hz_gain ?? 0) > 0 && (
+                      <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
+                    )}
+                    {t.compliance_share_pct >= 1 && (
+                      <span className="sens-badge flex">
+                        {t.compliance_share_pct.toFixed(0)}% of flex
+                      </span>
+                    )}
+                    <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
+                  </div>
+                  {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+                  {t.action_hint && (
+                    <div className="sens-fix">
+                      <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -2045,26 +2077,35 @@ const CncControlMetrologyCard: React.FC<{
 
           {topLighten.length > 0 && (
             <div className="sens-group">
-              <div className="sens-group-label lighten">Top Lighten Targets (-Hz/100g)</div>
-              {topLighten.map((t) => (
-                <div
-                  key={`light-${t.id}`}
-                  className="sens-row lighten"
-                  title={t.action_hint || `${t.id} (${t.role})`}
-                >
-                  <div className="sens-row-top">
-                    <span className="sens-id">
-                      <strong>{t.id}</strong>
-                      <span className="sens-role">{t.role}</span>
-                    </span>
-                    <span className="sens-metric lighten">
-                      {t.hz_per_100g >= 0 ? "+" : ""}
-                      {t.hz_per_100g.toFixed(2)} Hz/100g
-                    </span>
+              <div className="sens-group-label lighten">Top Lighten Targets (Cut Moving Weight)</div>
+              {topLighten.map((t) => {
+                const gainPer100g = t.hz_gain_per_100g_saved ?? Math.abs(t.hz_per_100g);
+                return (
+                  <div
+                    key={`light-${t.id}`}
+                    className="sens-row lighten"
+                    title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+                  >
+                    <div className="sens-row-top">
+                      <span className="sens-id">
+                        <strong>{t.label ?? t.id}</strong>
+                        {!t.label && <span className="sens-role">{t.role}</span>}
+                      </span>
+                    </div>
+                    <div className="sens-badge-row">
+                      <span className="sens-badge lighten-gain">
+                        +{gainPer100g.toFixed(2)} Hz / 100g saved
+                      </span>
+                    </div>
+                    {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+                    {t.action_hint && (
+                      <div className="sens-fix">
+                        <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
+                      </div>
+                    )}
                   </div>
-                  {t.action_hint && <div className="sens-hint">{t.action_hint}</div>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -2763,7 +2804,12 @@ export const MetricsPanel: React.FC<Props> = ({
                 </span>
               </div>
               <div className="metric-kv">
-                <span>Max von Mises Stress</span>
+                <span>
+                  Max von Mises Stress
+                  {fea.peak_stress_part_label && (
+                    <span className="metric-sub-inline">Peak: {fea.peak_stress_part_label}</span>
+                  )}
+                </span>
                 <span className="metric-val">{fea.max_von_mises_mpa.toFixed(2)} MPa</span>
               </div>
               {(fea.panel_max_von_mises_mpa ?? 0) > 0 && (
@@ -2790,6 +2836,9 @@ export const MetricsPanel: React.FC<Props> = ({
                   {fea.min_safety_factor.toFixed(1)}×
                 </span>
               </div>
+              {fea.top_flex_explanation && (
+                <div className="fea-explain-note">{fea.top_flex_explanation}</div>
+              )}
             </div>
 
             {ts && (
@@ -3380,6 +3429,60 @@ export const MetricsPanel: React.FC<Props> = ({
                             ⚠ High tension (&gt;45 N) without double-shear pulleys
                           </div>
                         )}
+                      </div>
+                    )}
+                    {mod.modes && mod.modes.length > 0 && (
+                      <div className="modal-summary-block">
+                        <div className="modal-summary-head">
+                          <span>What&apos;s Vibrating &amp; How to Fix</span>
+                          <button
+                            type="button"
+                            className={`deep-verify-cta ${viewMode === "modal" ? "active" : ""}`}
+                            style={{ padding: "1px 7px", fontSize: 9.5 }}
+                            onClick={() => onViewModeChange("modal")}
+                            title="Animate 3D structural vibration modes in the viewport"
+                          >
+                            {viewMode === "modal" ? "Viewing Modal" : "View Modal 3D"}
+                          </button>
+                        </div>
+                        <div className="modal-summary-list">
+                          {mod.modes.slice(0, 3).map((m) => {
+                            const axisTag = m.excited_axis
+                              ? `${m.excited_axis}-Accel`
+                              : m.dominant_axis;
+                            const sevMeta = modeSeverityMeta(m.severity);
+                            return (
+                              <div
+                                key={m.mode_number}
+                                className={`modal-mode-item ${m.severity ?? ""}`}
+                              >
+                                <div className="modal-mode-top">
+                                  <span className="modal-mode-title">
+                                    <strong>Mode {m.mode_number}</strong>{" "}
+                                    <span className="modal-mode-freq">
+                                      ({m.frequency_hz.toFixed(1)} Hz · {axisTag})
+                                    </span>
+                                    {m.mode_label && (
+                                      <span className="modal-mode-label"> — {m.mode_label}</span>
+                                    )}
+                                  </span>
+                                  {sevMeta && (
+                                    <span className={`badge-pill modal-sev-pill ${sevMeta.cls}`}>
+                                      {sevMeta.label}
+                                    </span>
+                                  )}
+                                </div>
+                                {m.how_to_fix ? (
+                                  <div className="modal-mode-fix">
+                                    <span className="sens-fix-prefix">Fix:</span> {m.how_to_fix}
+                                  </div>
+                                ) : m.what_is_shaking ? (
+                                  <div className="modal-mode-why">{m.what_is_shaking}</div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
                   </>

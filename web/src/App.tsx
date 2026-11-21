@@ -431,6 +431,11 @@ function describeSpecDiff(
   if (prev.toolhead.total_mass_g !== next.toolhead.total_mass_g) {
     diffs.push(`Toolhead Mass: ${prev.toolhead.total_mass_g}g → ${next.toolhead.total_mass_g}g`);
   }
+  const prevThStiff = Math.round(prev.toolhead.internal_stiffness_n_per_mm ?? 450);
+  const nextThStiff = Math.round(next.toolhead.internal_stiffness_n_per_mm ?? 450);
+  if (prevThStiff !== nextThStiff) {
+    diffs.push(`Toolhead Stiffness: ${prevThStiff} → ${nextThStiff} N/mm`);
+  }
   const prevCogY = Math.round(Math.abs(prev.toolhead.cog_offset_mm?.[1] ?? 18));
   const nextCogY = Math.round(Math.abs(next.toolhead.cog_offset_mm?.[1] ?? 18));
   if (prevCogY !== nextCogY) {

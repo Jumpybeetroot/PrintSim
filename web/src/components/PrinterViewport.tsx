@@ -50,6 +50,40 @@ function formatElementLabel(elementType: string): string {
   return elementType;
 }
 
+const FEA_LOAD_META: Record<FeaLoadCase, { label: string; explanation: string }> = {
+  xy: {
+    label: "XY Accel",
+    explanation:
+      "Horizontal X+Y print acceleration (zero gravity droop) — shows real printing flex between nozzle & bed",
+  },
+  x: {
+    label: "X Accel",
+    explanation: "Pure horizontal X-axis acceleration from moving toolhead mass",
+  },
+  y: {
+    label: "Y Accel",
+    explanation: "Pure horizontal Y-axis acceleration from moving gantry / bed mass",
+  },
+  gravity: {
+    label: "+Gravity",
+    explanation: "Full static envelope including vertical gravity sag + belt preload + XY accel",
+  },
+};
+
+function modeSeverityMeta(severity?: "critical" | "moderate" | "stiff"): {
+  label: string;
+  cls: string;
+} | null {
+  if (severity === "critical") return { label: "Limiting", cls: "bad" };
+  if (severity === "moderate") return { label: "Moderate", cls: "warn" };
+  if (severity === "stiff") return { label: "Stiff", cls: "ok" };
+  return null;
+}
+
+function formatHzGain(hz: number): string {
+  return hz >= 0.1 ? hz.toFixed(1) : hz.toFixed(2);
+}
+
 function disposeGroupChildren(group: THREE.Group): void {
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
@@ -2751,23 +2785,16 @@ export const PrinterViewport: React.FC<Props> = ({
           <>
             <div className="hud-card">
               <span style={{ color: "var(--muted)", fontWeight: 600 }}>Load:</span>
-              {(
-                [
-                  ["xy", "XY Accel", "Combined horizontal X+Y print acceleration (zero gravity Z-sag)"],
-                  ["x", "X Accel", "Pure horizontal X-axis print acceleration (zero gravity Z-sag)"],
-                  ["y", "Y Accel", "Pure horizontal Y-axis print acceleration (zero gravity Z-sag)"],
-                  ["gravity", "+Gravity", "Full load envelope including static gravity Z-sag"],
-                ] as Array<[FeaLoadCase, string, string]>
-              ).map(([id, label, tip]) => (
+              {(["xy", "x", "y", "gravity"] as FeaLoadCase[]).map((id) => (
                 <button
                   key={id}
                   type="button"
                   className={`hud-pill ${feaLoadCase === id ? "active" : ""}`}
                   style={{ padding: "3px 8px", fontSize: 11 }}
-                  title={tip}
+                  title={FEA_LOAD_META[id].explanation}
                   onClick={() => onFeaLoadCaseChange(id)}
                 >
-                  {label}
+                  {FEA_LOAD_META[id].label}
                 </button>
               ))}
             </div>
@@ -2801,49 +2828,202 @@ export const PrinterViewport: React.FC<Props> = ({
                 />
               </label>
             </div>
+            <div className="hud-card hud-guide-bar">
+              <div className="hud-guide-row">
+                <span className="badge-pill hud-guide-pill">{FEA_LOAD_META[feaLoadCase].label}</span>
+                <span className="hud-guide-lead">{FEA_LOAD_META[feaLoadCase].explanation}</span>
+              </div>
+              {sim.static_fea.top_flex_explanation ? (
+                <div className="hud-guide-sub">
+                  {sim.static_fea.top_flex_explanation}
+                  {sim.static_fea.peak_stress_part_label &&
+                    !sim.static_fea.top_flex_explanation
+                      .toLowerCase()
+                      .includes(sim.static_fea.peak_stress_part_label.toLowerCase()) && (
+                      <>
+                        {" "}
+                        · Peak stress: <strong>{sim.static_fea.peak_stress_part_label}</strong>
+                      </>
+                    )}
+                </div>
+              ) : sim.static_fea.peak_stress_part_label ? (
+                <div className="hud-guide-sub">
+                  Peak von Mises stress in <strong>{sim.static_fea.peak_stress_part_label}</strong>
+                </div>
+              ) : null}
+            </div>
           </>
         )}
 
         {viewMode === "modal" && sim && (
-          <div className="hud-card">
-            <span>Mode:</span>
-            {sim.modal_fea.modes.slice(0, 6).map((m, idx) => {
-              const axisTag = m.excited_axis ? `${m.excited_axis}-Accel` : m.dominant_axis;
+          <>
+            <div className="hud-card">
+              <span style={{ color: "var(--muted)", fontWeight: 600 }}>Mode:</span>
+              {sim.modal_fea.modes.slice(0, 6).map((m, idx) => {
+                const axisTag = m.excited_axis ? `${m.excited_axis}-Accel` : m.dominant_axis;
+                return (
+                  <button
+                    key={m.mode_number}
+                    type="button"
+                    className={`hud-pill ${clampedModeIdx === idx ? "active" : ""}`}
+                    style={{ padding: "4px 8px" }}
+                    onClick={() => onSelectModeIdx(idx)}
+                    title={
+                      m.mode_label
+                        ? `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz · ${axisTag}) — ${m.mode_label}`
+                        : `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz) — excited by ${axisTag}`
+                    }
+                  >
+                    Mode {m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
+                  </button>
+                );
+              })}
+            </div>
+
+            {activeMode && (() => {
+              const axisTag = activeMode.excited_axis
+                ? `${activeMode.excited_axis}-Accel`
+                : activeMode.dominant_axis;
+              const sevMeta = modeSeverityMeta(activeMode.severity);
               return (
-                <button
-                  key={m.mode_number}
-                  type="button"
-                  className={`hud-pill ${clampedModeIdx === idx ? "active" : ""}`}
-                  style={{ padding: "4px 8px" }}
-                  onClick={() => onSelectModeIdx(idx)}
-                  title={`Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz) — excited by ${axisTag}`}
-                >
-                  Mode {m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
-                </button>
+                <div className="hud-card hud-guide-bar modal-guide">
+                  <div className="hud-guide-row hud-guide-header">
+                    <div className="hud-guide-badges">
+                      <span className="badge-pill hud-guide-pill">
+                        Mode {activeMode.mode_number} · {activeMode.frequency_hz.toFixed(1)} Hz
+                      </span>
+                      <span className="badge-pill hud-axis-pill">{axisTag}</span>
+                      {sevMeta && <span className={`badge-pill ${sevMeta.cls}`}>{sevMeta.label}</span>}
+                      {activeMode.mode_label && (
+                        <strong className="hud-guide-title">{activeMode.mode_label}</strong>
+                      )}
+                    </div>
+                    <div className="hud-guide-meta">
+                      <span>
+                        <strong style={{ color: "#f59e0b" }}>●</strong> CoG ·{" "}
+                        <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle
+                      </span>
+                      <span>·</span>
+                      <span>
+                        XYZ:{" "}
+                        <strong>
+                          {activeMode.toolhead_participation_xyz
+                            .map((v) => `${Math.round(v * 100)}%`)
+                            .join("/")}
+                        </strong>
+                      </span>
+                      {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>
+                            MITC4{" "}
+                            {sim.geometry.panel_mesh_n
+                              ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}`
+                              : "Shell"}
+                            {(sim.modal_fea.panel_drum_freq_hz ?? 0) > 0
+                              ? ` (${sim.modal_fea.panel_drum_freq_hz!.toFixed(0)} Hz)`
+                              : ""}
+                          </span>
+                        </>
+                      )}
+                      {sim.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
+                        <>
+                          <span>·</span>
+                          <span className="hud-fill-badge">
+                            <span
+                              className="swatch-dot"
+                              style={{ background: sim.geometry.extrusion_filling.color_hex }}
+                            />
+                            {sim.geometry.extrusion_filling.short_name} (ζ=
+                            {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {activeMode.what_is_shaking && (
+                    <div className="hud-guide-line">
+                      <span className="hud-guide-key">What&apos;s shaking:</span>{" "}
+                      <span className="hud-guide-val">{activeMode.what_is_shaking}</span>
+                    </div>
+                  )}
+                  {activeMode.how_to_fix && (
+                    <div className="hud-guide-line hud-fix-line">
+                      <span className="hud-fix-key">How to fix:</span>{" "}
+                      <span className="hud-fix-val">{activeMode.how_to_fix}</span>
+                    </div>
+                  )}
+                </div>
               );
-            })}
-          </div>
+            })()}
+          </>
         )}
 
-        {viewMode === "sensitivity" && sim && (
-          <div className="hud-card">
-            <div className="legend-gradient sensitivity" />
-            <span style={{ color: "#22d3ee", fontWeight: 700 }}>Cyan = Lighten Mass (-Hz/100g)</span>
-            <span style={{ color: "var(--muted)" }}>·</span>
-            <span style={{ color: "#94a3b8", fontWeight: 600 }}>Slate = Neutral</span>
-            <span style={{ color: "var(--muted)" }}>·</span>
-            <span style={{ color: "#f87171", fontWeight: 700 }}>Red = Stiffen Hotspot (+Hz/USD)</span>
-            {sim.sensitivity?.top_stiffen_targets?.[0] && (
-              <>
-                <span style={{ color: "var(--muted)" }}>|</span>
-                <span className="badge-pill warn">
-                  #1 Stiffen: {sim.sensitivity.top_stiffen_targets[0].id} (+
-                  {sim.sensitivity.top_stiffen_targets[0].hz_per_usd.toFixed(2)} Hz/$)
+        {viewMode === "sensitivity" && sim && (() => {
+          const topStiff = sim.sensitivity?.top_stiffen_targets?.[0];
+          const topLight = sim.sensitivity?.top_lighten_targets?.[0];
+          const stiffStatParts: string[] = [];
+          if (topStiff) {
+            if ((topStiff.est_hz_gain ?? 0) > 0) {
+              stiffStatParts.push(`+${formatHzGain(topStiff.est_hz_gain!)} Hz potential`);
+            }
+            if (topStiff.compliance_share_pct >= 1) {
+              stiffStatParts.push(`${topStiff.compliance_share_pct.toFixed(0)}% of flex`);
+            }
+            if (stiffStatParts.length === 0) {
+              stiffStatParts.push(`+${topStiff.hz_per_usd.toFixed(2)} Hz/$`);
+            }
+          }
+          const lightGain = topLight
+            ? (topLight.hz_gain_per_100g_saved ?? Math.abs(topLight.hz_per_100g))
+            : 0;
+
+          return (
+            <div className="hud-card hud-guide-bar sens-guide">
+              <div className="hud-guide-row hud-sens-legend">
+                <div className="legend-gradient sensitivity" />
+                <span style={{ color: "#22d3ee", fontWeight: 700 }}>
+                  Cyan = Lighten Mass{" "}
+                  <span className="hud-sens-note">(moving weight slowing you down)</span>
                 </span>
-              </>
-            )}
-          </div>
-        )}
+                <span style={{ color: "var(--muted)" }}>·</span>
+                <span style={{ color: "#94a3b8", fontWeight: 600 }}>Slate = Neutral</span>
+                <span style={{ color: "var(--muted)" }}>·</span>
+                <span style={{ color: "#fb923c", fontWeight: 700 }}>
+                  Red/Orange = Stiffen Hotspot{" "}
+                  <span className="hud-sens-note">(biggest Hz/$ gain)</span>
+                </span>
+              </div>
+
+              {(topStiff || topLight) && (
+                <div className="hud-guide-row hud-sens-takeaway">
+                  {topStiff && (
+                    <span className="hud-sens-item">
+                      <span className="hud-sens-tag stiffen">#1 Stiffen:</span>{" "}
+                      <strong>{topStiff.label ?? topStiff.id}</strong>{" "}
+                      <span className="hud-sens-stat">({stiffStatParts.join(" · ")})</span>
+                      {topStiff.action_hint && (
+                        <>
+                          {" "}
+                          <span className="hud-fix-key">Fix:</span>{" "}
+                          <span className="hud-fix-val">{topStiff.action_hint}</span>
+                        </>
+                      )}
+                    </span>
+                  )}
+                  {topLight && (
+                    <span className="hud-sens-item">
+                      <span className="hud-sens-tag lighten">#1 Lighten:</span>{" "}
+                      <strong>{topLight.label ?? topLight.id}</strong>{" "}
+                      <span className="hud-sens-stat">(+{lightGain.toFixed(2)} Hz / 100g)</span>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {viewMode === "toolpath" && sim && (
           <div className="hud-card">
@@ -3046,53 +3226,6 @@ export const PrinterViewport: React.FC<Props> = ({
             )}
             <span>|</span>
             <span>Drag to orbit • Scroll to zoom</span>
-          </div>
-        )}
-
-        {viewMode === "modal" && activeMode && (
-          <div className="hud-card">
-            {activeMode.excited_axis && (
-              <>
-                <span className="badge-pill">{activeMode.excited_axis}-Accel Excited</span>
-                <span style={{ color: "var(--muted)" }}>|</span>
-              </>
-            )}
-            <span>
-              <strong style={{ color: "#f59e0b" }}>●</strong> CoG &amp;{" "}
-              <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle Pitch
-            </span>
-            <span style={{ color: "var(--muted)" }}>|</span>
-            <span>
-              Participation XYZ:{" "}
-              <strong>
-                {activeMode.toolhead_participation_xyz.map((v) => `${Math.round(v * 100)}%`).join(" / ")}
-              </strong>
-            </span>
-            {sim?.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
-              <>
-                <span style={{ color: "var(--muted)" }}>|</span>
-                <span className="badge-pill">
-                  MITC4 {sim.geometry.panel_mesh_n ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}` : "Shell"}
-                  {(sim.modal_fea.panel_drum_freq_hz ?? 0) > 0
-                    ? ` · Drum ${sim.modal_fea.panel_drum_freq_hz!.toFixed(1)} Hz`
-                    : ""}
-                </span>
-              </>
-            )}
-            {sim?.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
-              <>
-                <span style={{ color: "var(--muted)" }}>|</span>
-                <span className="hud-fill-badge">
-                  <span
-                    className="swatch-dot"
-                    style={{ background: sim.geometry.extrusion_filling.color_hex }}
-                  />
-                  Fill: <strong>{sim.geometry.extrusion_filling.short_name}</strong> (+
-                  {sim.geometry.extrusion_filling.added_mass_kg.toFixed(1)} kg, ζ=
-                  {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
-                </span>
-              </>
-            )}
           </div>
         )}
       </div>

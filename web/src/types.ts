@@ -130,6 +130,7 @@ export interface ToolheadPresetItem {
   cog_offset_mm: [number, number, number];
   nozzle_offset_mm: [number, number, number];
   mount_material: ToolheadMountMaterial;
+  internal_stiffness_n_per_mm?: number;
 }
 
 export interface CatalogResponse {
@@ -415,6 +416,7 @@ export interface PrinterSpecData {
     cog_offset_mm: [number, number, number];
     nozzle_offset_mm?: [number, number, number];
     mount_material?: ToolheadMountMaterial;
+    internal_stiffness_n_per_mm?: number;
     envelope_mm: [number, number, number];
     hotend: {
       name: string;
@@ -519,6 +521,10 @@ export interface ModeShapeData {
   frequency_hz: number;
   dominant_axis: string;
   excited_axis?: string;
+  mode_label?: string;
+  what_is_shaking?: string;
+  how_to_fix?: string;
+  severity?: "critical" | "moderate" | "stiff";
   toolhead_participation_xyz: [number, number, number];
   nodal_vectors: Record<string, [number, number, number]>;
 }
@@ -719,6 +725,8 @@ export interface StaticFeaData {
   toolhead_stiffness_z_n_per_mm: number;
   max_von_mises_mpa: number;
   panel_max_von_mises_mpa?: number;
+  peak_stress_part_label?: string;
+  top_flex_explanation?: string;
   min_safety_factor: number;
   peak_inertial_force_x_n: number;
   peak_inertial_force_y_n: number;
@@ -872,6 +880,9 @@ export interface SensitivityEntryData {
 export interface SensitivityStiffenTarget {
   id: string;
   role: string;
+  label?: string;
+  why_it_hurts?: string;
+  est_hz_gain?: number;
   hz_per_usd: number;
   compliance_share_pct: number;
   action_hint: string;
@@ -880,12 +891,16 @@ export interface SensitivityStiffenTarget {
 export interface SensitivityLightenTarget {
   id: string;
   role: string;
+  label?: string;
+  why_it_hurts?: string;
+  hz_gain_per_100g_saved?: number;
   hz_per_100g: number;
   mass_sens_hz: number;
   action_hint: string;
 }
 
 export interface SensitivityData {
+  summary_diagnosis?: string;
   member_sensitivities: Record<string, SensitivityEntryData>;
   panel_bay_sensitivities: Record<string, SensitivityEntryData>;
   top_stiffen_targets: SensitivityStiffenTarget[];
