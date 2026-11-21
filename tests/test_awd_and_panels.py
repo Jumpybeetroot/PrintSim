@@ -40,7 +40,8 @@ def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
 
     assert not any(m.id.startswith("panel_shear_") for m in asm.members)
     assert len(asm.shell_elements) == 16  # 4 bays * 2x2 quads
-    assert len(asm.fastener_springs) == 32  # 4 bays * 8 perimeter CBUSH fasteners
+    panel_springs = [s for s in asm.fastener_springs if s.bay in ("left", "right", "rear", "top")]
+    assert len(panel_springs) == 32  # 4 bays * 8 perimeter CBUSH fasteners
     rear_shell = next(s for s in asm.shell_elements if s.bay == "rear")
     assert rear_shell.material.id == "aluminum_5052_sheet"
     assert rear_shell.thickness_m == pytest.approx(0.004, rel=1e-6)

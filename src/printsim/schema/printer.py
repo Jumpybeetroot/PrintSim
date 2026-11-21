@@ -48,8 +48,199 @@ CornerJointType = Literal["rigid", "l_bracket", "blind_joint", "gusset_plate", "
 RailPreloadType = Literal["ZF", "Z0", "Z1", "ZA", "ZB"]
 RailBlockType = Literal["C", "H"]
 RailBackerMaterialType = Literal["none", "steel_4140", "titanium_grade5"]
-BedMountType = Literal["kinematic_3pt", "floating_4pt", "rigid_4pt"]
+BedMountType = Literal[
+    "kinematic_3pt",
+    "whopping_pochard_kinematic",
+    "rigid_4pt",
+    "floating_4pt",
+    "silicone_4pt",
+    "springs_4pt",
+]
+FrameFeetType = Literal["rigid_bolted", "rubber_feet", "anti_vib_pads", "paver_on_foam"]
 BearingClearanceType = Literal["C2", "CN", "C3"]
+ZProbeType = Literal["static_eddy", "klicky_inductive", "cnc_tap", "printed_tap"]
+BeltRoutingType = Literal["stock_corexy", "monolith_short"]
+
+# Z-probe carriage architecture catalog (mass, forward CoG overhang shift, sliding-rail pitch compliance)
+Z_PROBE_CATALOG: dict[str, dict] = {
+    "static_eddy": {
+        "id": "static_eddy",
+        "name": "Static Eddy / Rigid (Beacon / Cartographer)",
+        "short_name": "Static Eddy",
+        "added_mass_g": 0.0,
+        "cog_y_shift_mm": 0.0,
+        "compliance_factor": 1.0,
+        "cost_usd": 75.0,
+        "notes": "Rigidly bolted non-contact eddy probe; zero carriage play and lowest moving mass",
+    },
+    "klicky_inductive": {
+        "id": "klicky_inductive",
+        "name": "Klicky / Inductive / Omron (Static Dock)",
+        "short_name": "Klicky / Inductive",
+        "added_mass_g": 12.0,
+        "cog_y_shift_mm": -1.5,
+        "compliance_factor": 0.98,
+        "cost_usd": 15.0,
+        "notes": "Docked microswitch or inductive probe; near-zero carriage compliance penalty",
+    },
+    "cnc_tap": {
+        "id": "cnc_tap",
+        "name": "CNC Voron Tap (ChaoticLab / Al Rail)",
+        "short_name": "CNC Tap",
+        "added_mass_g": 62.0,
+        "cog_y_shift_mm": -6.5,
+        "compliance_factor": 0.58,
+        "cost_usd": 55.0,
+        "notes": "Nozzle-probing CNC optical rail; adds ~62g mass, forward overhang, and sliding-block pitch compliance (~12-20 Hz drop)",
+    },
+    "printed_tap": {
+        "id": "printed_tap",
+        "name": "Printed Voron Tap (ABS/ASA Sliding Rail)",
+        "short_name": "Printed Tap",
+        "added_mass_g": 78.0,
+        "cog_y_shift_mm": -8.5,
+        "compliance_factor": 0.34,
+        "cost_usd": 18.0,
+        "notes": "Classic printed Tap carriage; adds ~78g and major sliding-mount flop (often 18-30 Hz resonance drop)",
+    },
+}
+
+# CoreXY belt routing & idler shaft architecture catalog
+BELT_ROUTING_CATALOG: dict[str, dict] = {
+    "stock_corexy": {
+        "id": "stock_corexy",
+        "name": "Stock CoreXY Routing (Standard Bolt Idlers)",
+        "short_name": "Stock CoreXY",
+        "span_factor": 1.0,
+        "idler_stiffness_factor": 1.0,
+        "notes": "Standard perimeter CoreXY belt path with conventional M5 bolt idlers",
+    },
+    "monolith_short": {
+        "id": "monolith_short",
+        "name": "Monolith Short Path + Live-Shaft Idlers",
+        "short_name": "Monolith Short",
+        "span_factor": 0.86,
+        "idler_stiffness_factor": 1.45,
+        "notes": "14% shorter belt path with press-fit live-shaft idlers eliminating M5 bolt bending",
+    },
+}
+
+# Bed frame mounting hardware catalog (SI-friendly explicit units; Slocum Hertzian kinematic vs elastomeric/spring stiffness)
+BED_MOUNT_CATALOG: dict[str, dict] = {
+    "kinematic_3pt": {
+        "id": "kinematic_3pt",
+        "name": "3-Point Maxwell Kinematic",
+        "short_name": "Kinematic 3-Pt",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 32000.0,
+        "k_lateral_n_per_mm": 24000.0,
+        "k_restraint_thermal": 0.0,
+        "damping_delta": 0.0,
+        "cost_usd": 45.0,
+        "notes": "Zero radial thermal constraint (no taco bow) with high Hertzian hardened-steel ball-groove stiffness",
+    },
+    "whopping_pochard_kinematic": {
+        "id": "whopping_pochard_kinematic",
+        "name": "Whopping Pochard Leaf-Spring Kinematic",
+        "short_name": "Whopping Pochard",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 24000.0,
+        "k_lateral_n_per_mm": 16000.0,
+        "k_restraint_thermal": 0.0,
+        "damping_delta": 0.002,
+        "cost_usd": 65.0,
+        "notes": "Preloaded spring-steel leaf kinematic mount: zero thermal taco bow and rated for Voron Tap probing loads",
+    },
+    "rigid_4pt": {
+        "id": "rigid_4pt",
+        "name": "4-Point Rigid Hard-Bolted Standoffs",
+        "short_name": "Rigid 4-Pt",
+        "mount_points": 4,
+        "k_axial_n_per_mm": 65000.0,
+        "k_lateral_n_per_mm": 40000.0,
+        "k_restraint_thermal": 8000.0,
+        "damping_delta": -0.002,
+        "cost_usd": 12.0,
+        "notes": "Highest mechanical rigidity (solid metal standoffs), but over-constrains thermal expansion (taco buckling above 80 C)",
+    },
+    "floating_4pt": {
+        "id": "floating_4pt",
+        "name": "4-Point Floating / Slotted Tabs",
+        "short_name": "Floating 4-Pt",
+        "mount_points": 4,
+        "k_axial_n_per_mm": 12000.0,
+        "k_lateral_n_per_mm": 6000.0,
+        "k_restraint_thermal": 18.0,
+        "damping_delta": 0.002,
+        "cost_usd": 22.0,
+        "notes": "Slotted/shoulder-bolt tabs relieve radial thermal expansion with solid vertical support",
+    },
+    "silicone_4pt": {
+        "id": "silicone_4pt",
+        "name": "4-Point Silicone Spacers (70A)",
+        "short_name": "Silicone 4-Pt",
+        "mount_points": 4,
+        "k_axial_n_per_mm": 48.0,
+        "k_lateral_n_per_mm": 16.0,
+        "k_restraint_thermal": 12.0,
+        "damping_delta": 0.008,
+        "cost_usd": 10.0,
+        "notes": "Compliant 70A silicone columns relieve thermal stress and add damping, but allow noticeable bed bounce/tilt",
+    },
+    "springs_4pt": {
+        "id": "springs_4pt",
+        "name": "4-Point Yellow Die Springs",
+        "short_name": "Springs 4-Pt",
+        "mount_points": 4,
+        "k_axial_n_per_mm": 16.0,
+        "k_lateral_n_per_mm": 4.5,
+        "k_restraint_thermal": 8.0,
+        "damping_delta": 0.004,
+        "cost_usd": 6.0,
+        "notes": "Classic leveling die springs; very low lateral & vertical stiffness prone to bed ringing and Z-bounce",
+    },
+}
+
+# Machine benchtop feet / anti-vibration pad catalog (per-foot vertical & lateral stiffness)
+FRAME_FEET_CATALOG: dict[str, dict] = {
+    "rigid_bolted": {
+        "id": "rigid_bolted",
+        "name": "Rigid Benchtop / Bolted",
+        "short_name": "Rigid Bolted",
+        "k_axial_n_per_mm": 0.0,
+        "k_lateral_n_per_mm": 0.0,
+        "damping_delta": 0.0,
+        "notes": "Idealized rigidly anchored frame feet",
+    },
+    "rubber_feet": {
+        "id": "rubber_feet",
+        "name": "Standard Rubber / TPU Feet",
+        "short_name": "Rubber Feet",
+        "k_axial_n_per_mm": 360.0,
+        "k_lateral_n_per_mm": 140.0,
+        "damping_delta": 0.006,
+        "notes": "Typical Voron/printer rubber feet; allows whole-frame benchtop rocking",
+    },
+    "anti_vib_pads": {
+        "id": "anti_vib_pads",
+        "name": "Soft Anti-Vibration Pads (HULA / Sorbothane)",
+        "short_name": "Anti-Vib Pads",
+        "k_axial_n_per_mm": 85.0,
+        "k_lateral_n_per_mm": 32.0,
+        "damping_delta": 0.015,
+        "notes": "Soft isolators lower whole-frame sway frequency while isolating table noise; frame & bed rock mostly together",
+    },
+    "paver_on_foam": {
+        "id": "paver_on_foam",
+        "name": "Concrete Paver on Foam Pad (18 kg Base)",
+        "short_name": "Paver + Foam",
+        "k_axial_n_per_mm": 240.0,
+        "k_lateral_n_per_mm": 95.0,
+        "damping_delta": 0.022,
+        "base_mass_kg": 18.0,
+        "notes": "Classic 18 kg concrete paver on dense foam: lowers CoG and strongly damps desk vibration while keeping frame & bed moving together",
+    },
+}
 
 # Engineering catalog for frame extrusion cavity fillings (SI units; literature / CNC casting data)
 EXTRUSION_FILLINGS: dict[str, dict] = {
@@ -285,6 +476,10 @@ class FrameSpec(BaseModel):
         "blind_joint",
         description="Frame corner connection hardware: rigid, l_bracket, blind_joint, gusset_plate, corner_cube",
     )
+    feet_type: FrameFeetType = Field(
+        "rigid_bolted",
+        description="Benchtop foot mounting compliance: rigid_bolted, rubber_feet, anti_vib_pads, or paver_on_foam",
+    )
     chamber_temp_c: float = Field(
         25.0, ge=15.0, le=120.0, description="Ambient/heated enclosure chamber air temperature (C)"
     )
@@ -340,6 +535,10 @@ class GantrySpec(BaseModel):
 
     drive_mode: DriveModeType = Field(
         "2wd", description="XY drive layout: 2wd (2-motor CoreXY) or awd (4-motor All-Wheel Drive)"
+    )
+    belt_routing: BeltRoutingType = Field(
+        "stock_corexy",
+        description="CoreXY belt routing & idler shaft architecture: stock_corexy or monolith_short",
     )
     double_shear_pulleys: bool = Field(
         False, description="Double-shear bearing supports on XY motor shafts & idlers for high belt tension"
@@ -605,6 +804,10 @@ class ToolheadSpec(BaseModel):
         le=20000.0,
         description="Overall internal toolhead structural stiffness from linear carriage to nozzle tip (N/mm), modeling flex inside the printed/CNC toolhead body, carriage plate, and hotend clamp.",
     )
+    z_probe_type: ZProbeType = Field(
+        "static_eddy",
+        description="Bed probing carriage architecture: static_eddy (Beacon/Cartographer), klicky_inductive, cnc_tap, or printed_tap",
+    )
     envelope_mm: tuple[float, float, float] = (68.0, 74.0, 95.0)
     hotend: HotendSpec = Field(default_factory=HotendSpec)
     extruder: ExtruderSpec = Field(default_factory=ExtruderSpec)
@@ -619,6 +822,17 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "nozzle_offset_mm": [0.0, -26.0, -66.0],
         "mount_material": "abs_printed",
         "internal_stiffness_n_per_mm": 350.0,
+        "z_probe_type": "static_eddy",
+    },
+    "stealthburner_tap": {
+        "preset_id": "stealthburner_tap",
+        "name": "Voron StealthBurner + Printed Tap",
+        "total_mass_g": 380.0,
+        "cog_offset_mm": [0.0, -22.0, -28.0],
+        "nozzle_offset_mm": [0.0, -26.0, -66.0],
+        "mount_material": "abs_printed",
+        "internal_stiffness_n_per_mm": 350.0,
+        "z_probe_type": "printed_tap",
     },
     "xol_compact": {
         "preset_id": "xol_compact",
@@ -628,6 +842,27 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "nozzle_offset_mm": [0.0, -18.0, -54.0],
         "mount_material": "pa12_cf_printed",
         "internal_stiffness_n_per_mm": 650.0,
+        "z_probe_type": "static_eddy",
+    },
+    "a4t_beacon": {
+        "preset_id": "a4t_beacon",
+        "name": "A4T / XOL 2 + Static Beacon",
+        "total_mass_g": 270.0,
+        "cog_offset_mm": [0.0, -13.0, -15.0],
+        "nozzle_offset_mm": [0.0, -16.0, -52.0],
+        "mount_material": "ppa_cf_printed",
+        "internal_stiffness_n_per_mm": 1150.0,
+        "z_probe_type": "static_eddy",
+    },
+    "dragon_burner": {
+        "preset_id": "dragon_burner",
+        "name": "Dragon Burner / Rapid Burner Compact",
+        "total_mass_g": 240.0,
+        "cog_offset_mm": [0.0, -14.0, -16.0],
+        "nozzle_offset_mm": [0.0, -16.0, -50.0],
+        "mount_material": "pa12_cf_printed",
+        "internal_stiffness_n_per_mm": 720.0,
+        "z_probe_type": "static_eddy",
     },
     "archetype_cpap": {
         "preset_id": "archetype_cpap",
@@ -637,6 +872,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "nozzle_offset_mm": [0.0, -14.0, -48.0],
         "mount_material": "aluminum_6061_t6",
         "internal_stiffness_n_per_mm": 1800.0,
+        "z_probe_type": "static_eddy",
     },
     "heavy_uhf_long": {
         "preset_id": "heavy_uhf_long",
@@ -646,6 +882,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "nozzle_offset_mm": [0.0, -28.0, -78.0],
         "mount_material": "abs_printed",
         "internal_stiffness_n_per_mm": 250.0,
+        "z_probe_type": "static_eddy",
     },
 }
 
@@ -664,7 +901,10 @@ class BedSpec(BaseModel):
     target_temp_c: float = Field(60.0, ge=20.0, le=160.0, description="Heated bed target temperature (C)")
     mount_type: BedMountType = Field(
         "kinematic_3pt",
-        description="Bed frame attachment constraint: kinematic_3pt (Maxwell), floating_4pt, or rigid_4pt",
+        description=(
+            "Bed frame attachment constraint: kinematic_3pt (Maxwell), whopping_pochard_kinematic, "
+            "rigid_4pt, floating_4pt, silicone_4pt, or springs_4pt"
+        ),
     )
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -13,7 +13,13 @@ from printsim.fea.components import (
     idler_shaft_and_bearing_stiffness,
 )
 from printsim.geometry.builder import AssemblyModel
-from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec, StepperSpec, get_material
+from printsim.schema import (
+    BELT_ROUTING_CATALOG,
+    GANTRY_BRACKET_CATALOG,
+    PrinterSpec,
+    StepperSpec,
+    get_material,
+)
 
 
 @dataclass
@@ -54,6 +60,10 @@ class KinematicsReport:
     idler_shaft_deflection_um: float = 0.0
     bearing_play_um: float = 7.5
     bracket_modulus_retention_pct: float = 100.0
+    belt_routing: str = "stock_corexy"
+    steel_core_fatigue_risk: bool = False
+    pulley_circumference_mm: float = 40.0
+    vfa_belt_tooth_speed_range_mm_s: list[float] = field(default_factory=lambda: [60.0, 110.0])
 
     def to_dict(self) -> dict:
         return {
@@ -72,10 +82,16 @@ class KinematicsReport:
             "belt_slip_risk": self.belt_slip_risk,
             "delta_workspace_valid": self.delta_workspace_valid,
             "drive_mode": self.drive_mode,
+            "belt_routing": self.belt_routing,
             "xy_motor_count": self.xy_motor_count,
             "belt_pluck_freq_150mm_hz": round(self.belt_pluck_freq_150mm_hz, 2),
             "belt_max_working_tension_n": round(self.belt_max_working_tension_n, 2),
             "belt_overtension_risk": self.belt_overtension_risk,
+            "steel_core_fatigue_risk": self.steel_core_fatigue_risk,
+            "pulley_circumference_mm": round(self.pulley_circumference_mm, 1),
+            "vfa_belt_tooth_speed_range_mm_s": [
+                round(float(v), 1) for v in self.vfa_belt_tooth_speed_range_mm_s
+            ],
             "shaft_bending_risk": self.shaft_bending_risk,
             "frame_belt_preload_n": round(self.frame_belt_preload_n, 2),
             "motor_run_current_a": round(self.motor_run_current_a, 2),
@@ -196,17 +212,24 @@ def compute_drive_stiffness_details_n_per_m(
     bkt_mat = get_material(spec.gantry.bracket_material)
     e_bkt_eff = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
 
+    routing_cfg = BELT_ROUTING_CATALOG.get(
+        spec.gantry.belt_routing, BELT_ROUTING_CATALOG["stock_corexy"]
+    )
+    span_factor = float(routing_cfg["span_factor"])
+    idler_factor = float(routing_cfg["idler_stiffness_factor"])
+    idler_stiffness_mult = idler_factor if spec.architecture == "corexy" else 1.0
+
     if spec.architecture == "corexy":
         if spec.gantry.drive_mode == "awd":
             # 4-motor AWD divides belt loops into 4 independent motor-to-carriage spans
-            span_len = max(0.25 * (w + d), 0.16)
+            span_len = max(0.25 * (w + d), 0.16) * span_factor
             ea_eff = belt_effective_ea_n(belt, span_len)
             k_belt_cord = 4.0 * ea_eff / span_len
             drive_branches = 4.0
         else:
             # 2WD CoreXY: 2 parallel belts, each with short motor branch & long return loop in parallel
-            span_short = max(0.62 * (w + d), 0.22)
-            span_long = max(1.58 * (w + d), 0.55)
+            span_short = max(0.62 * (w + d), 0.22) * span_factor
+            span_long = max(1.58 * (w + d), 0.55) * span_factor
             ea_short = belt_effective_ea_n(belt, span_short)
             ea_long = belt_effective_ea_n(belt, span_long)
             k_belt_cord = 2.0 * (ea_short / span_short + ea_long / span_long)
@@ -227,7 +250,12 @@ def compute_drive_stiffness_details_n_per_m(
     idler_info = idler_shaft_and_bearing_stiffness(
         belt, double_shear=spec.gantry.double_shear_pulleys, bracket_e_pa=e_bkt_eff
     )
-    k_idler_shaft = drive_branches * idler_info["k_idler_n_m"]
+    k_idler_shaft = drive_branches * idler_info["k_idler_n_m"] * idler_stiffness_mult
+    if idler_stiffness_mult != 1.0:
+        idler_info = dict(idler_info)
+        idler_info["idler_shaft_deflection_um"] = (
+            idler_info["idler_shaft_deflection_um"] / idler_stiffness_mult
+        )
 
     k_belt_subsystem = 1.0 / (
         1.0 / max(k_belt_cord, 1e-9)
@@ -385,6 +413,24 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     motor_heat_w = stepper.power_dissipation_w
     motor_overcurrent = stepper.run_current_a > stepper.rated_current_a * 1.05
 
+    steel_core_fatigue = belt.core == "steel" and belt.pulley_teeth <= 20
+    pulley_circ_mm = float(belt.pulley_teeth) * float(belt.pitch_mm)
+    m_x_eff = max(assembly.x_moving_mass_kg, 0.05)
+    m_y_eff = max(assembly.y_moving_mass_kg, 0.05)
+    k_drive_y_n_m = (
+        k_drive_n_m
+        if spec.architecture != "cartesian_bedslinger"
+        else float(compute_drive_stiffness_details_n_per_m(assembly, "Y")["k_drive_n_m"])
+    )
+    f_drive_x = math.sqrt(max(k_drive_n_m, 1.0) / m_x_eff) / (2.0 * math.pi)
+    f_drive_y = math.sqrt(max(k_drive_y_n_m, 1.0) / m_y_eff) / (2.0 * math.pi)
+    f_drive_ref = min(f_drive_x, f_drive_y)
+    v_vfa_center = min(max(float(belt.pitch_mm) * f_drive_ref, 35.0), 304.0)
+    vfa_range = [
+        round(max(30.0, 0.85 * v_vfa_center), 1),
+        round(min(350.0, 1.15 * v_vfa_center), 1),
+    ]
+
     return KinematicsReport(
         architecture=spec.architecture,
         build_volume_liters=build_l,
@@ -401,10 +447,14 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         belt_slip_risk=belt_slip,
         delta_workspace_valid=delta_ok,
         drive_mode=drive_mode,
+        belt_routing=spec.gantry.belt_routing,
         xy_motor_count=xy_motor_count,
         belt_pluck_freq_150mm_hz=belt_pluck_150,
         belt_max_working_tension_n=belt_max_t,
         belt_overtension_risk=belt_overtension,
+        steel_core_fatigue_risk=steel_core_fatigue,
+        pulley_circumference_mm=pulley_circ_mm,
+        vfa_belt_tooth_speed_range_mm_s=vfa_range,
         shaft_bending_risk=shaft_bending,
         frame_belt_preload_n=frame_preload,
         motor_run_current_a=stepper.run_current_a,

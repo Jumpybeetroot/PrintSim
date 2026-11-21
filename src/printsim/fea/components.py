@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from printsim.schema import get_material, get_profile
-from printsim.schema.printer import BeltSpec
+from printsim.schema.printer import BED_MOUNT_CATALOG, BeltSpec
 
 if TYPE_CHECKING:
     from printsim.geometry.builder import AssemblyModel
@@ -498,24 +498,18 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     dl_clearance = 0.00015  # 0.15 mm typical M4 mounting hole clearance
     dl_excess = max(0.0, dl_thermal - dl_clearance)
 
-    if bed_mount == "kinematic_3pt" or dl_excess <= 0.0:
+    mount_cfg = BED_MOUNT_CATALOG.get(bed_mount, BED_MOUNT_CATALOG["kinematic_3pt"])
+    k_restraint = float(mount_cfg["k_restraint_thermal"])
+    if k_restraint <= 0.0 or dl_excess <= 0.0:
         bed_buckle_um = 0.0
     else:
         # Elastica arch amplitude attenuated by mounting standoff flexibility & plate flexural rigidity D
         d_plate = bed_mat.youngs_modulus_pa * (t_bed**3) / (12.0 * (1.0 - bed_mat.poisson_ratio**2))
         k_plate_taco = 48.0 * d_plate * l_bed / (l_mount**3)
-        if bed_mount == "rigid_4pt":
-            k_restraint = 8.0e3  # rigid M4/M5 bolt & standoff shear restraint
-            w_elastica = (2.0 / math.pi) * math.sqrt(l_mount * dl_excess)
-            # Fraction of excess shortening absorbed into out-of-plane taco arch vs standoff/frame flex
-            arch_fraction = k_restraint / (k_restraint + k_plate_taco)
-            bed_buckle_um = w_elastica * math.sqrt(arch_fraction) * 1e6
-        else:
-            # floating_4pt (spring/silicone/slotted tabs relieve ~99% radial clamping)
-            k_restraint = 18.0
-            w_elastica = (2.0 / math.pi) * math.sqrt(l_mount * dl_excess)
-            arch_fraction = k_restraint / (k_restraint + k_plate_taco)
-            bed_buckle_um = w_elastica * math.sqrt(arch_fraction) * 1e6
+        w_elastica = (2.0 / math.pi) * math.sqrt(l_mount * dl_excess)
+        # Fraction of excess shortening absorbed into out-of-plane taco arch vs standoff/frame flex
+        arch_fraction = k_restraint / (k_restraint + k_plate_taco)
+        bed_buckle_um = w_elastica * math.sqrt(arch_fraction) * 1e6
 
     # 4. Vertical frame Z-drift (column CTE - Z-drive CTE) * H_active * delta_T
     if spec.bed.z_drive == "belted_quad_z":

@@ -46,6 +46,15 @@ class ModeShape:
     what_is_shaking: str = ""
     how_to_fix: str = ""
     severity: str = "moderate"
+    subsystem_share_pct: dict[str, float] = field(
+        default_factory=lambda: {"toolhead": 0.0, "gantry": 0.0, "frame": 0.0, "bed": 0.0}
+    )
+    nozzle_whip_ratio: float = 1.0
+    toolhead_flop_pct: float = 0.0
+    relative_nozzle_bed_amp: float = 0.0
+    print_impact_score: float = 0.0
+    print_impact_level: str = "low"
+    dominant_problem_area: str = "frame"
 
 
 @dataclass
@@ -77,6 +86,7 @@ class ModalResult:
     panel_drum_freq_hz: float = 0.0
     frame_damping_ratio: float = 0.042
     accel_bottleneck: dict | None = None
+    worst_print_mode_number: int = 1
 
     def to_dict(self) -> dict:
         return {
@@ -86,6 +96,7 @@ class ModalResult:
             "frame_damping_ratio": round(self.frame_damping_ratio, 4),
             "recommended_max_accel_mm_s2": round(self.recommended_max_accel_mm_s2, 0),
             "accel_bottleneck": self.accel_bottleneck,
+            "worst_print_mode_number": self.worst_print_mode_number,
             "shaper_x": _shaper_dict(self.shaper_x) if self.shaper_x else None,
             "shaper_y": _shaper_dict(self.shaper_y) if self.shaper_y else None,
             "shaper_graphs": {
@@ -104,6 +115,13 @@ class ModalResult:
                     "what_is_shaking": m.what_is_shaking,
                     "how_to_fix": m.how_to_fix,
                     "severity": m.severity,
+                    "subsystem_share_pct": m.subsystem_share_pct,
+                    "nozzle_whip_ratio": m.nozzle_whip_ratio,
+                    "toolhead_flop_pct": m.toolhead_flop_pct,
+                    "relative_nozzle_bed_amp": m.relative_nozzle_bed_amp,
+                    "print_impact_score": m.print_impact_score,
+                    "print_impact_level": m.print_impact_level,
+                    "dominant_problem_area": m.dominant_problem_area,
                 }
                 for m in self.modes
             ],
@@ -530,12 +548,14 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         free_panel_mask = np.array([dof in panel_dof_set for dof in free_dofs], dtype=bool)
 
     frame_node_indices = [
-        i for i, n in enumerate(assembly.nodes) if n.role in ("frame", "mount", "foot", "tower")
+        i
+        for i, n in enumerate(assembly.nodes)
+        if n.role in ("frame", "mount", "foot", "tower", "brace")
     ]
     active_frame_indices = [
         i
         for i, n in enumerate(assembly.nodes)
-        if n.role in ("frame", "mount", "tower") and not n.fixed
+        if n.role in ("frame", "mount", "tower", "foot") and not n.fixed
     ]
     gantry_only_indices = [i for i, n in enumerate(assembly.nodes) if n.role == "gantry"]
     th_all_indices = [
@@ -660,6 +680,9 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
         noz_norm = float(np.linalg.norm(noz_rel))
         th_norm = float(np.linalg.norm(th_rel))
+        noz_th_diff_norm = (
+            float(np.linalg.norm(tr_norm[noz_idx] - tr_norm[th_idx])) if has_nozzle else 0.0
+        )
         part = (noz_rel / noz_norm).tolist() if noz_norm > 1e-9 else [0.0, 0.0, 0.0]
 
         dom_axis = ["X", "Y", "Z"][int(np.argmax(axis_energy))]
@@ -699,6 +722,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 "noz_rel": noz_rel,
                 "noz_norm": noz_norm,
                 "th_norm": th_norm,
+                "noz_th_diff_norm": noz_th_diff_norm,
                 "is_isolated_panel_drum": is_isolated_panel_drum,
                 "is_bed_z_mode": is_bed_z_mode,
                 "rec_x": rec_x,
@@ -716,8 +740,114 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     rx_max = max((c["rec_x"] for c in candidates), default=0.0)
     ry_max = max((c["rec_y"] for c in candidates), default=0.0)
 
+    def _build_mode_shape(
+        c: dict,
+        mode_num: int,
+        dom_axis: str,
+        excited_axis: str,
+        noz_norm: float,
+        th_norm: float,
+        part: list[float],
+    ) -> tuple[ModeShape, float]:
+        freq_hz = float(c["freq_hz"])
+        frame_ke = max(0.0, float(c["frame_ke_share"]))
+        gantry_ke = max(0.0, float(c["gantry_ke_share"]))
+        th_ke = max(0.0, float(c["th_ke_share"]))
+        bed_ke = max(0.0, float(c["bed_ke_share"]))
+
+        raw_sub = {
+            "toolhead": th_ke,
+            "gantry": gantry_ke,
+            "frame": frame_ke,
+            "bed": bed_ke,
+        }
+        sub_tot = sum(raw_sub.values())
+        if sub_tot <= 1e-12:
+            raw_sub = {"toolhead": 0.0, "gantry": 0.0, "frame": 1.0, "bed": 0.0}
+            sub_tot = 1.0
+        sub_pct = {k: round(100.0 * v / sub_tot, 1) for k, v in raw_sub.items()}
+        dom_sub = max(raw_sub, key=lambda k: raw_sub[k])
+        diff_sub = round(100.0 - sum(sub_pct.values()), 1)
+        sub_pct[dom_sub] = round(sub_pct[dom_sub] + diff_sub, 1)
+
+        if not has_nozzle:
+            whip_ratio = 1.0
+            flop_pct = 0.0
+        else:
+            whip_ratio = round(min(10.0, max(0.0, noz_norm / max(th_norm, 1e-6))), 2)
+            if noz_norm < 1e-6:
+                flop_pct = 0.0
+            else:
+                flop_pct = round(
+                    min(100.0, 100.0 * float(c["noz_th_diff_norm"]) / max(noz_norm, 1e-9)),
+                    1,
+                )
+
+        rel_noz_bed = round(noz_norm, 3)
+
+        trans = c["trans"]
+        nodal_vectors = {
+            node.id: [round(float(v), 4) for v in trans[i]]
+            for i, node in enumerate(assembly.nodes)
+        }
+        m_lbl, m_shake, m_fix, m_sev = _classify_mode_diagnosis(
+            assembly=assembly,
+            freq_hz=freq_hz,
+            dom_axis=dom_axis,
+            excited_axis=excited_axis,
+            frame_ke_share=frame_ke,
+            gantry_ke_share=gantry_ke,
+            th_ke_share=th_ke,
+            bed_ke_share=bed_ke,
+            frame_amp=float(c["frame_amp"]),
+            gantry_amp=float(c["gantry_amp"]),
+            noz_amp=noz_norm,
+            th_amp=th_norm,
+            is_torsional=bool(c["is_torsional"]),
+        )
+
+        if (
+            flop_pct >= 35.0
+            or (whip_ratio >= 1.30 and noz_norm >= 0.35)
+            or th_ke > max(gantry_ke, frame_ke, bed_ke)
+        ):
+            dom_area = "toolhead"
+        elif m_lbl in ("Whole-Frame Y Sway", "Whole-Frame X Racking", "Frame Torsional Twist"):
+            dom_area = "frame"
+        elif m_lbl == "Bed Support Vibration":
+            dom_area = "bed"
+        elif m_lbl in ("Moving X-Gantry Flex", "Gantry & Y-Rail Flex", "Delta Tower & Arm Resonance"):
+            dom_area = "gantry"
+        else:
+            dom_area = max(
+                (("gantry", gantry_ke), ("frame", frame_ke), ("bed", bed_ke)),
+                key=lambda kv: kv[1],
+            )[0]
+
+        c_k = (float(c["rec_x"]) + float(c["rec_y"])) / max(freq_hz**2, 1.0)
+        ms = ModeShape(
+            mode_number=mode_num,
+            frequency_hz=freq_hz,
+            dominant_axis=dom_axis,
+            toolhead_participation_xyz=part,
+            nodal_vectors=nodal_vectors,
+            excited_axis=excited_axis,
+            mode_label=m_lbl,
+            what_is_shaking=m_shake,
+            how_to_fix=m_fix,
+            severity=m_sev,
+            subsystem_share_pct=sub_pct,
+            nozzle_whip_ratio=whip_ratio,
+            toolhead_flop_pct=flop_pct,
+            relative_nozzle_bed_amp=rel_noz_bed,
+            dominant_problem_area=dom_area,
+        )
+        return ms, c_k
+
     modes: list[ModeShape] = []
+    mode_cks: list[float] = []
     fallback_modes: list[ModeShape] = []
+    fallback_cks: list[float] = []
     nozzle_twist_freq: float | None = None
 
     for c in candidates:
@@ -763,78 +893,52 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 nozzle_twist_freq = freq_hz
 
             if len(modes) < k_ret:
-                trans = c["trans"]
-                nodal_vectors = {
-                    node.id: [round(float(v), 4) for v in trans[i]]
-                    for i, node in enumerate(assembly.nodes)
-                }
-                m_lbl, m_shake, m_fix, m_sev = _classify_mode_diagnosis(
-                    assembly=assembly,
-                    freq_hz=freq_hz,
-                    dom_axis=dom_axis,
-                    excited_axis=excited_axis,
-                    frame_ke_share=float(c["frame_ke_share"]),
-                    gantry_ke_share=float(c["gantry_ke_share"]),
-                    th_ke_share=float(c["th_ke_share"]),
-                    bed_ke_share=float(c["bed_ke_share"]),
-                    frame_amp=float(c["frame_amp"]),
-                    gantry_amp=float(c["gantry_amp"]),
-                    noz_amp=noz_norm,
-                    th_amp=th_norm,
-                    is_torsional=bool(c["is_torsional"]),
+                ms, c_k = _build_mode_shape(
+                    c, len(modes) + 1, dom_axis, excited_axis, noz_norm, th_norm, part
                 )
-                modes.append(
-                    ModeShape(
-                        mode_number=len(modes) + 1,
-                        frequency_hz=freq_hz,
-                        dominant_axis=dom_axis,
-                        toolhead_participation_xyz=part,
-                        nodal_vectors=nodal_vectors,
-                        excited_axis=excited_axis,
-                        mode_label=m_lbl,
-                        what_is_shaking=m_shake,
-                        how_to_fix=m_fix,
-                        severity=m_sev,
-                    )
-                )
+                modes.append(ms)
+                mode_cks.append(c_k)
         elif len(fallback_modes) < k_ret:
-            trans = c["trans"]
-            nodal_vectors = {
-                node.id: [round(float(v), 4) for v in trans[i]]
-                for i, node in enumerate(assembly.nodes)
-            }
-            m_lbl, m_shake, m_fix, m_sev = _classify_mode_diagnosis(
-                assembly=assembly,
-                freq_hz=freq_hz,
-                dom_axis=dom_axis,
-                excited_axis=excited_axis,
-                frame_ke_share=float(c["frame_ke_share"]),
-                gantry_ke_share=float(c["gantry_ke_share"]),
-                th_ke_share=float(c["th_ke_share"]),
-                bed_ke_share=float(c["bed_ke_share"]),
-                frame_amp=float(c["frame_amp"]),
-                gantry_amp=float(c["gantry_amp"]),
-                noz_amp=noz_norm,
-                th_amp=th_norm,
-                is_torsional=bool(c["is_torsional"]),
+            ms, c_k = _build_mode_shape(
+                c, len(fallback_modes) + 1, dom_axis, excited_axis, noz_norm, th_norm, part
             )
-            fallback_modes.append(
-                ModeShape(
-                    mode_number=len(fallback_modes) + 1,
-                    frequency_hz=freq_hz,
-                    dominant_axis=dom_axis,
-                    toolhead_participation_xyz=part,
-                    nodal_vectors=nodal_vectors,
-                    excited_axis=excited_axis,
-                    mode_label=m_lbl,
-                    what_is_shaking=m_shake,
-                    how_to_fix=m_fix,
-                    severity=m_sev,
-                )
-            )
+            fallback_modes.append(ms)
+            fallback_cks.append(c_k)
 
     if not modes:
         modes = fallback_modes
+        mode_cks = fallback_cks
+
+    c_max = max(mode_cks, default=0.0)
+    for m, c_k in zip(modes, mode_cks):
+        if c_max <= 1e-30 or m.relative_nozzle_bed_amp < 1e-6:
+            score = 0.0
+        else:
+            c_norm = max(0.0, c_k / c_max)
+            amp_factor = min(1.0, max(0.0, m.relative_nozzle_bed_amp) / 0.30)
+            freq_urgency = min(1.0, (140.0 / max(m.frequency_hz, 20.0)) ** 0.6)
+            whip_boost = (
+                1.0 + 0.15 * min(1.0, max(0.0, (m.nozzle_whip_ratio - 1.35) / 1.5))
+                if m.relative_nozzle_bed_amp >= 0.25
+                else 1.0
+            )
+            raw_score = 100.0 * (c_norm**0.5) * (0.15 + 0.85 * amp_factor) * freq_urgency * whip_boost
+            score = round(min(100.0, max(0.0, raw_score)), 1)
+        m.print_impact_score = score
+        if score >= 75.0:
+            m.print_impact_level = "critical"
+        elif score >= 45.0:
+            m.print_impact_level = "high"
+        elif score >= 20.0:
+            m.print_impact_level = "moderate"
+        else:
+            m.print_impact_level = "low"
+
+    worst_print_mode_number = (
+        max(modes, key=lambda m: (m.print_impact_score, -m.mode_number)).mode_number
+        if modes
+        else 1
+    )
     fundamental = modes[0].frequency_hz if modes else 0.0
     resolved_panel_drum = (
         panel_drum_freq
@@ -940,4 +1044,5 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         panel_drum_freq_hz=resolved_panel_drum,
         frame_damping_ratio=assembly.frame_damping_ratio,
         accel_bottleneck=accel_bottleneck,
+        worst_print_mode_number=worst_print_mode_number,
     )

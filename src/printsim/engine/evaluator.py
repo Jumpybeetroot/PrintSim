@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import time
 
+from printsim.fea.bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from printsim.fea.components import ThermalStructuralReport, compute_thermal_structural_report
 from printsim.fea.mechatronics import (
     DriveControlConfig,
@@ -62,6 +63,7 @@ class SimulationReport:
     time_domain_metrology: TimeDomainMetrologyResult | None = None
     rcsa: RCSAResult | None = None
     sensitivity: SensitivityReport | None = None
+    bed_plate_fea: BedPlateFEAResult | None = None
 
     def to_dict(self, include_toolpath_segments: bool = True) -> dict:
         vp = self.virtual_print.to_dict(max_segments=1500 if include_toolpath_segments else 0)
@@ -86,6 +88,9 @@ class SimulationReport:
             ),
             "rcsa": self.rcsa.to_dict() if self.rcsa is not None else None,
             "sensitivity": self.sensitivity.to_dict() if self.sensitivity is not None else None,
+            "bed_plate_fea": (
+                self.bed_plate_fea.to_dict() if self.bed_plate_fea is not None else None
+            ),
         }
 
 
@@ -101,6 +106,7 @@ def _compute_scores_and_diagnostics(
     thermal_structural: ThermalStructuralReport | None = None,
     workspace_frf: WorkspaceFRFMap | None = None,
     rcsa: RCSAResult | None = None,
+    bed_plate_fea: BedPlateFEAResult | None = None,
 ) -> tuple[ScoreBreakdown, list[str]]:
     diag: list[str] = []
 
@@ -127,6 +133,23 @@ def _compute_scores_and_diagnostics(
             f"{static_fea.nozzle_twist_angle_mrad:.2f} mrad): lower toolhead CoG, shorten nozzle drop, "
             f"or upgrade carriage mount from '{spec.toolhead.mount_material}' to 'pa12_cf_printed' or 'aluminum_6061_t6'."
         )
+    if spec.toolhead.z_probe_type in ("printed_tap", "cnc_tap"):
+        max_th_share = max(
+            (float(m.subsystem_share_pct.get("toolhead", 0.0)) for m in modal_fea.modes),
+            default=0.0,
+        )
+        max_flop = max((float(m.toolhead_flop_pct) for m in modal_fea.modes), default=0.0)
+        if (
+            max_th_share > 25.0
+            or max_flop > 25.0
+            or static_fea.nozzle_twist_amplification_pct > 25.0
+            or (rcsa is not None and rcsa.whip_risk)
+        ):
+            diag.append(
+                f"Voron Tap probe ('{spec.toolhead.z_probe_type}') adds moving mass and sliding-rail pitch compliance "
+                f"(toolhead compliance {max_th_share:.1f}%, nozzle whip +{static_fea.nozzle_twist_amplification_pct:.1f}%): "
+                "switching to a static eddy probe ('static_eddy', Beacon/Cartographer) raises X/Y resonance significantly."
+            )
     if (
         spec.architecture == "corexy"
         and spec.frame.enclosed_panels
@@ -194,10 +217,12 @@ def _compute_scores_and_diagnostics(
             f"Belt overtension risk (peak {kinematics.belt_peak_tension_n:.1f} N > rated "
             f"{kinematics.belt_max_working_tension_n:.1f} N): upgrade to 9mm/12mm EPDM Fiberglass or Aramid (Kevlar) belts."
         )
-    if spec.gantry.belt.core == "steel" and spec.gantry.belt.pulley_teeth <= 24:
+    if kinematics.steel_core_fatigue_risk or (
+        spec.gantry.belt.core == "steel" and spec.gantry.belt.pulley_teeth <= 24
+    ):
         diag.append(
-            f"Steel-core belt fatigue warning: steel-core GT2 belts suffer rapid bend-fatigue cracking on small "
-            f"{spec.gantry.belt.pulley_teeth}T pulleys (per Monolith/Voron community testing) — use Gates EPDM Fiberglass or Rubber+Aramid instead."
+            f"Steel-core belt fatigue fracture risk: steel-core GT2 belts suffer rapid bend-fatigue cracking on "
+            f"<=20T/{spec.gantry.belt.pulley_teeth}T pulleys — use Gates PowerGrip 2GT fiberglass or aramid (EPDM) instead."
         )
     if kinematics.bracket_creep_risk:
         bkt_info = GANTRY_BRACKET_CATALOG.get(
@@ -256,6 +281,12 @@ def _compute_scores_and_diagnostics(
             f"Hotend volumetric flow capped at {thermal.max_volumetric_flow_mm3_s:.1f} mm^3/s "
             f"(limited by {thermal.flow_limiting_factor}): lengthen melt zone or increase heater wattage."
         )
+    if spec.gantry.x_beam_material == "carbon_fiber_tube" and spec.frame.chamber_temp_c >= 65.0:
+        diag.append(
+            f"Standard epoxy carbon fiber X-beam softening/creep risk at {spec.frame.chamber_temp_c:.0f} C chamber "
+            "(>= 65 C): standard roll-wrapped CF tubes can soften and creep in heated enclosures — switch to "
+            "'carbon_fiber_high_tg' (Tg 125 C) or 'cnc_al_beam_20x20'."
+        )
     if thermal_structural is not None:
         if thermal_structural.gantry_bimetallic_bow_um > 40.0:
             diag.append(
@@ -290,6 +321,38 @@ def _compute_scores_and_diagnostics(
                     f"{th_ret * 100.0:.1f}% modulus at {thermal_structural.chamber_temp_c:.0f} C): "
                     "upgrade toolhead.mount_material to 'ppa_cf_printed', 'pps_cf_printed', or CNC Aluminum."
                 )
+
+    if bed_plate_fea is not None:
+        if bed_plate_fea.total_flatness_error_um >= 120.0:
+            if spec.architecture == "corexy" and spec.bed.z_drive == "leadscrew_single":
+                diag.append(
+                    f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk, gravity sag {bed_plate_fea.gravity_sag_um:.1f} um): "
+                    "single rear-cantilever Z leadscrew droops at the front edge; upgrade to 'leadscrew_triple' or 'belted_quad_z'."
+                )
+            elif bed_plate_fea.taco_buckling_um >= 30.0:
+                diag.append(
+                    f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk): over-constrained thermal bow "
+                    f"({bed_plate_fea.taco_buckling_um:.1f} um); switch to 'kinematic_3pt' or 'floating_4pt' mounts."
+                )
+            else:
+                diag.append(
+                    f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk): step up bed plate thickness "
+                    "to 6-8 mm MIC-6 cast aluminum or enable mesh bed leveling."
+                )
+        if bed_plate_fea.plate_first_mode_hz < 60.0:
+            if bed_plate_fea.plate_first_mode_type == "cantilever_flap":
+                bed_mode_fix = "upgrade Z-drive from 'leadscrew_single' to 'leadscrew_triple' or 'belted_quad_z'"
+            elif bed_plate_fea.plate_first_mode_type == "mount_bounce":
+                bed_mode_fix = "replace soft bed springs/silicone spacers with 'kinematic_3pt' or 'floating_4pt' mounts"
+            else:
+                bed_mode_fix = "increase bed plate thickness (6-8 mm MIC-6) or add multi-point bed support"
+            diag.append(
+                f"Low bed plate natural frequency ({bed_plate_fea.plate_first_mode_hz:.1f} Hz, "
+                f"{bed_plate_fea.plate_first_mode_type}): {bed_mode_fix}."
+            )
 
     # 4. Print quality score (directly from virtual G-code print)
     print_quality = vprint.print_quality_score
@@ -353,6 +416,7 @@ def evaluate_printer(
     filament_id: str = "pla",
     panel_mesh_n: int = 2,
     include_advanced_analysis: bool = True,
+    accel_override_mm_s2: float | None = None,
 ) -> SimulationReport:
     """Run the full multiphysics simulation suite on a PrinterSpec."""
     assembly = build_assembly(
@@ -361,7 +425,7 @@ def evaluate_printer(
         panel_mesh_n=panel_mesh_n,
     )
     collision = check_frame_clearance(assembly)
-    static_fea = solve_static_fea(assembly)
+    static_fea = solve_static_fea(assembly, accel_mm_s2=accel_override_mm_s2)
     modal_fea = solve_modal_fea(assembly)
     kinematics = analyze_kinematics(assembly)
     thermal = simulate_hotend_thermal(spec, filament_id=filament_id)
@@ -371,6 +435,7 @@ def evaluate_printer(
     time_domain_metrology: TimeDomainMetrologyResult | None = None
     rcsa: RCSAResult | None = None
     sensitivity: SensitivityReport | None = None
+    bed_plate_fea: BedPlateFEAResult | None = None
     if include_advanced_analysis:
         drive_cfg = DriveControlConfig(
             drive_type=spec.kinematics.drive_type,
@@ -386,6 +451,7 @@ def evaluate_printer(
         )
         rcsa = analyze_toolhead_rcsa(assembly, modal_fea)
         sensitivity = compute_structural_sensitivities(assembly, static_fea, modal_fea)
+        bed_plate_fea = solve_bed_plate_fem(spec)
 
     if gcode_text is None:
         bx, by, _ = spec.kinematics.build_volume_mm
@@ -412,6 +478,7 @@ def evaluate_printer(
         thermal_structural=thermal_structural,
         workspace_frf=workspace_frf,
         rcsa=rcsa,
+        bed_plate_fea=bed_plate_fea,
     )
 
     return SimulationReport(
@@ -430,6 +497,7 @@ def evaluate_printer(
         time_domain_metrology=time_domain_metrology,
         rcsa=rcsa,
         sensitivity=sensitivity,
+        bed_plate_fea=bed_plate_fea,
     )
 
 

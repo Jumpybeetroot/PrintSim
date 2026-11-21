@@ -1,4 +1,5 @@
 from .beam3d import assemble_global_matrices, element_internal_forces, local_beam_mass, local_beam_stiffness
+from .bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from .components import (
     ThermalStructuralReport,
     belt_effective_ea_n,
@@ -77,6 +78,8 @@ from .topology import (
 
 __all__ = [
     "assemble_global_matrices",
+    "BedPlateFEAResult",
+    "solve_bed_plate_fem",
     "element_internal_forces",
     "local_beam_mass",
     "local_beam_stiffness",

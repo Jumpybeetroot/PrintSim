@@ -50,6 +50,8 @@ class SensitivityReport:
     lumped_mass_sensitivities: dict[str, dict[str, Any]] = field(default_factory=dict)
     top_stiffen_targets: list[dict[str, Any]] = field(default_factory=list)
     top_lighten_targets: list[dict[str, Any]] = field(default_factory=list)
+    subsystem_breakdown: dict[str, dict[str, Any]] = field(default_factory=dict)
+    primary_problem_subsystem: str = "frame"
     summary_diagnosis: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,8 +66,18 @@ class SensitivityReport:
             "lumped_mass_sensitivities": self.lumped_mass_sensitivities,
             "top_stiffen_targets": self.top_stiffen_targets,
             "top_lighten_targets": self.top_lighten_targets,
+            "subsystem_breakdown": self.subsystem_breakdown,
+            "primary_problem_subsystem": self.primary_problem_subsystem,
             "summary_diagnosis": self.summary_diagnosis,
         }
+
+
+def _classify_sensitivity_group(member_id: str, role: str = "") -> tuple[str, str]:
+    """Local grouping helper extending ``classify_part_group`` with machine feet pads."""
+    mid = member_id.strip()
+    if mid.startswith("feet_") or role == "foot":
+        return "frame_feet", "Machine Feet & Benchtop Pads"
+    return classify_part_group(member_id, role)
 
 
 def _solve_eigen_modes(
@@ -183,6 +195,11 @@ def _member_mass_and_cost(
 
 def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> str:
     if spec is None:
+        if group_id == "frame_feet":
+            return (
+                "Switch Machine Feet to rigid bolted / stiff TPU pads (or direct frame-to-bench mounts) "
+                "to eliminate whole-printer rocking on soft isolation feet."
+            )
         if role == "toolhead" or group_id == "toolhead_mount":
             return "Upgrade toolhead carriage mount from polymer to CNC Al 6061 / PPA-CF or shorten nozzle overhang."
         if role == "rail" or group_id == "y_axis_rail_beams":
@@ -306,6 +323,12 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
             return "Use a stiffer Y-bed carriage frame, upgrade to 9 mm GT2 Y-belt, or step up cast bed plate thickness."
         return "Use 8–10 mm Cast MIC-6 Aluminum bed plate, shorter bed support arms, or stiffer rear Z-rail extrusions."
 
+    if group_id == "frame_feet":
+        return (
+            "Switch Machine Feet to rigid bolted / stiff TPU pads (or direct frame-to-bench mounts) "
+            "to eliminate whole-printer rocking on soft isolation feet."
+        )
+
     if group_id == "frame_bracing" or role == "brace":
         if spec.frame.bracing != "full_truss":
             return "Switch Frame Bracing -> full_truss (or rear_cross) with steel/carbon diagonal rods."
@@ -315,6 +338,13 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
 
 
 def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
+    if group_id == "frame_feet":
+        if est_hz_gain >= 0.4:
+            return (
+                f"Soft benchtop feet allow the printer base to rock, carrying {comp_pct:.0f}% of "
+                f"flex (+{est_hz_gain:.1f} Hz potential)"
+            )
+        return f"Soft benchtop feet allow base rocking/bounce ({comp_pct:.0f}% of structural loop flex)"
     if comp_pct >= 1.5 and est_hz_gain >= 0.4:
         if group_id in ("front_frame_columns", "rear_frame_columns", "frame_columns"):
             return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex & controls frame sway (+{est_hz_gain:.1f} Hz potential)"
@@ -326,6 +356,11 @@ def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
             return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex along Y & supports gantry inertia (+{est_hz_gain:.1f} Hz potential)"
         if group_id == "x_gantry_beam":
             return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex under X/Y acceleration (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "toolhead_mount":
+            return (
+                f"Carries {comp_pct:.0f}% of nozzle-to-bed flex via carriage pitch & nozzle overhang "
+                f"(+{est_hz_gain:.1f} Hz potential)"
+            )
         if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
             return f"Acts as a structural shear diaphragm carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
         return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex & boosts structural resonance (+{est_hz_gain:.1f} Hz potential)"
@@ -810,9 +845,10 @@ def compute_structural_sensitivities(
         b["_comp_raw"] += comp_raw
         b["n_elements"] += 1
 
-    # Fastener springs folded into their corresponding bay compliance & stiffness sens
+    # Fastener & joint springs: fold panel bays into bay_acc, and non-panel springs into raw_members
     for sp in assembly.fastener_springs:
-        bay_key = sp.bay.split("_")[0]
+        bay_raw = sp.bay
+        bay_prefix = bay_raw.split("_")[0]
         i_s = node_idx[sp.shell_node_id]
         i_f = node_idx[sp.frame_node_id]
         k_sp = fastener_spring_matrices(
@@ -828,14 +864,60 @@ def compute_structural_sensitivities(
         comp_raw = max(0.0, -dux / max(abs(u_rel_x), 1e-12)) + max(
             0.0, -duy / max(abs(u_rel_y), 1e-12)
         )
-        if bay_key in bay_acc:
-            b = bay_acc[bay_key]
+        pf = phi_fund[dofs]
+        px = phi_x[dofs]
+        py = phi_y[dofs]
+        stiff_f = float(pf @ k_sp @ pf) * inv_8pi2_fund
+        stiff_x = float(px @ k_sp @ px) * inv_8pi2_x
+        stiff_y = float(py @ k_sp @ py) * inv_8pi2_y
+
+        if bay_raw not in ("bed_mount", "toolhead", "feet") and bay_prefix in bay_acc:
+            b = bay_acc[bay_prefix]
             b["du_rel_x_dlnE_m"] += dux
             b["du_rel_y_dlnE_m"] += duy
             b["du_rel_dlnE_m"] += dux + duy
             b["_comp_raw"] += comp_raw
-            pf = phi_fund[dofs]
-            b["stiffness_sens_hz"] += float(pf @ k_sp @ pf) * inv_8pi2_fund
+            b["stiffness_sens_hz"] += stiff_f
+            b["stiffness_sens_x_hz"] += stiff_x
+            b["stiffness_sens_y_hz"] += stiff_y
+            continue
+
+        if bay_raw == "bed_mount":
+            sp_role, sp_cost, sp_ref_mass = "bed", 20.0, 0.25
+        elif bay_raw == "toolhead":
+            sp_role, sp_cost, sp_ref_mass = "toolhead", 25.0, 0.06
+        else:
+            sp_role, sp_cost, sp_ref_mass = "frame", 15.0, 0.10
+
+        raw_members.append(
+            {
+                "member_id": sp.id,
+                "role": sp_role,
+                "mass_kg": 0.0,
+                "ref_mass_kg": sp_ref_mass,
+                "cost_usd": sp_cost,
+                "cost_per_kg": sp_cost / sp_ref_mass,
+                "stiffness_sens_hz": stiff_f,
+                "mass_sens_hz": 0.0,
+                "stiffness_sens_x_hz": stiff_x,
+                "mass_sens_x_hz": 0.0,
+                "stiffness_sens_y_hz": stiff_y,
+                "mass_sens_y_hz": 0.0,
+                "du_rel_x_dlnE_m": dux,
+                "du_rel_y_dlnE_m": duy,
+                "du_rel_dlnE_m": dux + duy,
+                "hz_per_100g": 0.0,
+                "hz_per_usd": stiff_f / sp_cost,
+                "_comp_raw": comp_raw,
+                "_net_sens": stiff_f,
+            }
+        )
+
+    # Axis compliance weights for multi-mode print-impact scoring (softer axis weighs more)
+    w_x_raw = 1.0 / max(f_x**2, 100.0)
+    w_y_raw = 1.0 / max(f_y**2, 100.0)
+    w_x = w_x_raw / (w_x_raw + w_y_raw)
+    w_y = w_y_raw / (w_x_raw + w_y_raw)
 
     # Normalize compliance_share_pct across all structural elements (members + bays) to sum to 100.0%
     tot_comp_raw = sum(m["_comp_raw"] for m in raw_members) + sum(
@@ -843,24 +925,139 @@ def compute_structural_sensitivities(
     )
     comp_scale = 100.0 / max(tot_comp_raw, 1e-18)
 
-    # Compute normalized heat_score in [-1, +1]
-    all_net = [m["_net_sens"] for m in raw_members] + [
-        b["stiffness_sens_hz"] + b["mass_sens_hz"] for b in bay_acc.values() if b["n_elements"] > 0
-    ]
-    max_pos_net = max([v for v in all_net if v > 0.0], default=1e-9)
-    max_neg_mag = max([-v for v in all_net if v < 0.0], default=1e-9)
+    # Precompute XY-weighted metrics for members and bays
+    for m in raw_members:
+        m["_comp_pct"] = m["_comp_raw"] * comp_scale
+        m["_xy_stiff_hz"] = w_x * max(float(m["stiffness_sens_x_hz"]), 0.0) + w_y * max(
+            float(m["stiffness_sens_y_hz"]), 0.0
+        )
+        m["_xy_mass_hz"] = w_x * float(m["mass_sens_x_hz"]) + w_y * float(m["mass_sens_y_hz"])
+        m["_xy_net_hz"] = (
+            w_x * (float(m["stiffness_sens_x_hz"]) + float(m["mass_sens_x_hz"]))
+            + w_y * (float(m["stiffness_sens_y_hz"]) + float(m["mass_sens_y_hz"]))
+        )
 
-    def _heat_score(net_val: float) -> float:
-        if net_val > 0.0:
-            return float(min(1.0, net_val / max(max_pos_net, 1e-12)))
-        if net_val < 0.0:
-            return float(max(-1.0, net_val / max(max_neg_mag, 1e-12)))
-        return 0.0
+    for b in bay_acc.values():
+        b["_comp_pct"] = b["_comp_raw"] * comp_scale
+        b["_xy_stiff_hz"] = w_x * max(float(b["stiffness_sens_x_hz"]), 0.0) + w_y * max(
+            float(b["stiffness_sens_y_hz"]), 0.0
+        )
+        b["_xy_mass_hz"] = w_x * float(b["mass_sens_x_hz"]) + w_y * float(b["mass_sens_y_hz"])
+        b["_xy_net_hz"] = (
+            w_x * (float(b["stiffness_sens_x_hz"]) + float(b["mass_sens_x_hz"]))
+            + w_y * (float(b["stiffness_sens_y_hz"]) + float(b["mass_sens_y_hz"]))
+        )
+
+    # Lumped nodal mass sensitivities computed before mass normalization so toolhead_cog sets the scale
+    lumped_mass_sensitivities: dict[str, dict[str, Any]] = {}
+    for i, node in enumerate(assembly.nodes):
+        if node.lumped_mass_kg <= 0.0 or node.fixed:
+            continue
+        base = 6 * i
+        rot_i = node.lumped_mass_kg * (0.025**2)
+        m_diag_nd = np.array(
+            [node.lumped_mass_kg, node.lumped_mass_kg, node.lumped_mass_kg, rot_i, rot_i, rot_i],
+            dtype=float,
+        )
+        pf = phi_fund[base : base + 6]
+        px = phi_x[base : base + 6]
+        py = phi_y[base : base + 6]
+        ms_f = -eig_fund * float(np.sum(m_diag_nd * (pf**2))) * inv_8pi2_fund
+        ms_x = -eig_x * float(np.sum(m_diag_nd * (px**2))) * inv_8pi2_x
+        ms_y = -eig_y * float(np.sum(m_diag_nd * (py**2))) * inv_8pi2_y
+        xy_mass_nd = w_x * ms_x + w_y * ms_y
+        lumped_mass_sensitivities[node.id] = {
+            "node_id": node.id,
+            "role": node.role,
+            "mass_kg": round(node.lumped_mass_kg, 5),
+            "mass_sens_hz": float(ms_f),
+            "mass_sens_x_hz": float(ms_x),
+            "mass_sens_y_hz": float(ms_y),
+            "hz_per_100g": round(0.1 * ms_f / max(node.lumped_mass_kg, 1e-5), 4),
+            "_xy_mass_hz": xy_mass_nd,
+        }
+
+    active_bays = [b for b in bay_acc.values() if b["n_elements"] > 0]
+    max_comp_pct = max(
+        [m["_comp_pct"] for m in raw_members] + [b["_comp_pct"] for b in active_bays],
+        default=1e-9,
+    )
+    max_comp_pct = max(max_comp_pct, 1e-9)
+
+    max_xy_stiff = max(
+        [m["_xy_stiff_hz"] for m in raw_members] + [b["_xy_stiff_hz"] for b in active_bays],
+        default=1e-9,
+    )
+    max_xy_stiff = max(max_xy_stiff, 1e-9)
+
+    max_mass_pen = max(
+        [-min(0.0, m["_xy_mass_hz"]) for m in raw_members]
+        + [-min(0.0, b["_xy_mass_hz"]) for b in active_bays]
+        + [-min(0.0, ld["_xy_mass_hz"]) for ld in lumped_mass_sensitivities.values()],
+        default=1e-9,
+    )
+    max_mass_pen = max(max_mass_pen, 1e-9)
+
+    all_xy_net_struct = [m["_xy_net_hz"] for m in raw_members] + [b["_xy_net_hz"] for b in active_bays]
+    max_pos_xy_net = max([v for v in all_xy_net_struct if v > 0.0], default=1e-9)
+    max_neg_xy_net = max([-v for v in all_xy_net_struct if v < 0.0], default=1e-9)
+
+    def _raw_pos_score(comp_pct: float, xy_stiff: float) -> float:
+        h_comp = min(1.0, max(0.0, comp_pct / max_comp_pct))
+        return 0.65 * h_comp + 0.35 * max(0.0, xy_stiff / max_xy_stiff)
+
+    max_pos_score = max(
+        [_raw_pos_score(m["_comp_pct"], m["_xy_stiff_hz"]) for m in raw_members]
+        + [_raw_pos_score(b["_comp_pct"], b["_xy_stiff_hz"]) for b in active_bays],
+        default=1e-9,
+    )
+    max_pos_score = max(max_pos_score, 1e-9)
+
+    def _compute_lens_scores(
+        comp_pct: float,
+        xy_stiff: float,
+        xy_mass: float,
+        xy_net: float,
+        is_moving_elem: bool,
+    ) -> tuple[float, float, float, float]:
+        h_comp = min(1.0, max(0.0, comp_pct / max_comp_pct))
+        if xy_net > 0.0:
+            h_modal = min(1.0, xy_net / max(max_pos_xy_net, 1e-12))
+        elif xy_net < 0.0:
+            h_modal = max(-1.0, xy_net / max(max_neg_xy_net, 1e-12))
+        else:
+            h_modal = 0.0
+
+        h_mass = 0.0 if xy_mass >= 0.0 else max(-1.0, xy_mass / max_mass_pen)
+
+        pos_score = _raw_pos_score(comp_pct, xy_stiff)
+        neg_score = abs(h_mass) if ((is_moving_elem or xy_net < 0.0) and h_comp < 0.30) else 0.0
+        if pos_score >= 0.45 * neg_score and pos_score > 0.02:
+            h_impact = min(1.0, pos_score / max_pos_score)
+        elif neg_score > 0.02:
+            h_impact = -min(1.0, neg_score)
+        else:
+            h_impact = 0.0
+        return (
+            round(h_impact, 4) + 0.0,
+            round(h_comp, 4) + 0.0,
+            round(h_modal, 4) + 0.0,
+            round(h_mass, 4) + 0.0,
+        )
 
     member_sensitivities: dict[str, dict[str, Any]] = {}
     for m in raw_members:
-        comp_pct = m["_comp_raw"] * comp_scale
-        hs = _heat_score(m["_net_sens"])
+        comp_pct = m["_comp_pct"]
+        is_moving_mem = m["role"] in ("gantry", "toolhead", "bed") or m["member_id"].startswith(
+            ("x_gantry", "x_beam", "arm_", "bed_")
+        )
+        hs, hs_comp, hs_modal, hs_mass = _compute_lens_scores(
+            comp_pct=comp_pct,
+            xy_stiff=m["_xy_stiff_hz"],
+            xy_mass=m["_xy_mass_hz"],
+            xy_net=m["_xy_net_hz"],
+            is_moving_elem=is_moving_mem,
+        )
         member_sensitivities[m["member_id"]] = {
             "member_id": m["member_id"],
             "role": m["role"],
@@ -878,22 +1075,31 @@ def compute_structural_sensitivities(
             "du_rel_y_dlnE_m": float(m["du_rel_y_dlnE_m"]),
             "du_rel_dlnE_m": float(m["du_rel_dlnE_m"]),
             "compliance_share_pct": round(comp_pct, 3),
-            "heat_score": round(hs, 4),
+            "heat_score": hs,
+            "heat_score_compliance": hs_comp,
+            "heat_score_modal": hs_modal,
+            "heat_score_mass": hs_mass,
         }
 
     panel_bay_sensitivities: dict[str, dict[str, Any]] = {}
     for bay_key, b in bay_acc.items():
+        comp_pct_b = b["_comp_pct"]
         if b["n_elements"] > 0 and b["mass_kg"] > 1e-6:
             net_b = b["stiffness_sens_hz"] + b["mass_sens_hz"]
             df_dm_b = net_b / b["mass_kg"]
             hz_100g_b = 0.1 * df_dm_b
             hz_usd_b = df_dm_b / max(b["cost_per_kg"], 0.5)
-            hs_b = _heat_score(net_b)
+            hs_b, hs_comp_b, hs_modal_b, hs_mass_b = _compute_lens_scores(
+                comp_pct=comp_pct_b,
+                xy_stiff=b["_xy_stiff_hz"],
+                xy_mass=b["_xy_mass_hz"],
+                xy_net=b["_xy_net_hz"],
+                is_moving_elem=False,
+            )
         else:
             hz_100g_b = 0.0
             hz_usd_b = 0.0
-            hs_b = 0.0
-        comp_pct_b = b["_comp_raw"] * comp_scale
+            hs_b, hs_comp_b, hs_modal_b, hs_mass_b = 0.0, 0.0, 0.0, 0.0
         panel_bay_sensitivities[bay_key] = {
             "bay": bay_key,
             "n_elements": int(b["n_elements"]),
@@ -911,41 +1117,97 @@ def compute_structural_sensitivities(
             "du_rel_y_dlnE_m": float(b["du_rel_y_dlnE_m"]),
             "du_rel_dlnE_m": float(b["du_rel_dlnE_m"]),
             "compliance_share_pct": round(comp_pct_b, 3),
-            "heat_score": round(hs_b, 4),
+            "heat_score": hs_b,
+            "heat_score_compliance": hs_comp_b,
+            "heat_score_modal": hs_modal_b,
+            "heat_score_mass": hs_mass_b,
         }
 
-    # 4. Lumped nodal mass sensitivities (for toolhead, carriages, motors, bed)
-    lumped_mass_sensitivities: dict[str, dict[str, Any]] = {}
-    for i, node in enumerate(assembly.nodes):
-        if node.lumped_mass_kg <= 0.0 or node.fixed:
-            continue
-        base = 6 * i
-        rot_i = node.lumped_mass_kg * (0.025**2)
-        m_diag_nd = np.array(
-            [node.lumped_mass_kg, node.lumped_mass_kg, node.lumped_mass_kg, rot_i, rot_i, rot_i],
-            dtype=float,
-        )
-        pf = phi_fund[base : base + 6]
-        px = phi_x[base : base + 6]
-        py = phi_y[base : base + 6]
-        ms_f = -eig_fund * float(np.sum(m_diag_nd * (pf**2))) * inv_8pi2_fund
-        ms_x = -eig_x * float(np.sum(m_diag_nd * (px**2))) * inv_8pi2_x
-        ms_y = -eig_y * float(np.sum(m_diag_nd * (py**2))) * inv_8pi2_y
-        lumped_mass_sensitivities[node.id] = {
-            "node_id": node.id,
-            "role": node.role,
-            "mass_kg": round(node.lumped_mass_kg, 5),
-            "mass_sens_hz": float(ms_f),
-            "mass_sens_x_hz": float(ms_x),
-            "mass_sens_y_hz": float(ms_y),
-            "hz_per_100g": round(0.1 * ms_f / max(node.lumped_mass_kg, 1e-5), 4),
+    # Finalize 4-lens heat scores on lumped_mass_sensitivities
+    for ld in lumped_mass_sensitivities.values():
+        xy_m = float(ld.pop("_xy_mass_hz"))
+        hm = 0.0 if xy_m >= 0.0 else max(-1.0, xy_m / max_mass_pen)
+        hm_r = round(hm, 4) + 0.0
+        ld["heat_score"] = hm_r
+        ld["heat_score_compliance"] = 0.0
+        ld["heat_score_modal"] = hm_r
+        ld["heat_score_mass"] = hm_r
+        ld["_xy_mass_hz"] = xy_m
+
+    # 4b. Subsystem breakdown ('toolhead', 'gantry', 'frame', 'bed')
+    _SUBSYSTEM_LABELS: dict[str, str] = {
+        "toolhead": "Toolhead & Mount",
+        "gantry": "X/Y Gantry & Rails",
+        "frame": "Outer Frame & Panels",
+        "bed": "Bed & Z-Mount",
+    }
+
+    def _role_to_subsystem(role: str) -> str:
+        if role in ("toolhead", "cog", "nozzle"):
+            return "toolhead"
+        if role in ("gantry", "rail"):
+            return "gantry"
+        if role == "bed":
+            return "bed"
+        return "frame"
+
+    sub_acc: dict[str, dict[str, float]] = {
+        sid: {"comp_pct": 0.0, "stiff_xy": 0.0, "mass_xy": 0.0}
+        for sid in ("toolhead", "gantry", "frame", "bed")
+    }
+    for m in raw_members:
+        sid = _role_to_subsystem(m["role"])
+        sub_acc[sid]["comp_pct"] += float(m["_comp_pct"])
+        sub_acc[sid]["stiff_xy"] += float(m["_xy_stiff_hz"])
+        sub_acc[sid]["mass_xy"] += float(m["_xy_mass_hz"])
+    for b in active_bays:
+        sub_acc["frame"]["comp_pct"] += float(b["_comp_pct"])
+        sub_acc["frame"]["stiff_xy"] += float(b["_xy_stiff_hz"])
+        sub_acc["frame"]["mass_xy"] += float(b["_xy_mass_hz"])
+    for ld in lumped_mass_sensitivities.values():
+        sid = _role_to_subsystem(ld["role"])
+        sub_acc[sid]["mass_xy"] += float(ld.pop("_xy_mass_hz"))
+
+    tot_sub_comp = sum(v["comp_pct"] for v in sub_acc.values())
+    if tot_sub_comp <= 1e-9:
+        sub_acc["frame"]["comp_pct"] = 100.0
+
+    primary_problem_subsystem = max(
+        ("toolhead", "gantry", "frame", "bed"),
+        key=lambda sid: (sub_acc[sid]["comp_pct"], sub_acc[sid]["stiff_xy"]),
+    )
+    rounded_sub_comp = {sid: round(sub_acc[sid]["comp_pct"], 1) for sid in sub_acc}
+    diff_sub_comp = round(100.0 - sum(rounded_sub_comp.values()), 1)
+    rounded_sub_comp[primary_problem_subsystem] = round(
+        rounded_sub_comp[primary_problem_subsystem] + diff_sub_comp, 1
+    )
+
+    def _sub_severity(pct: float) -> str:
+        if pct >= 35.0:
+            return "critical"
+        if pct >= 20.0:
+            return "high"
+        if pct >= 8.0:
+            return "moderate"
+        return "low"
+
+    subsystem_breakdown: dict[str, dict[str, Any]] = {
+        sid: {
+            "id": sid,
+            "label": _SUBSYSTEM_LABELS[sid],
+            "compliance_share_pct": rounded_sub_comp[sid],
+            "modal_stiff_hz": round(sub_acc[sid]["stiff_xy"], 2),
+            "modal_mass_hz": round(sub_acc[sid]["mass_xy"], 2),
+            "severity": _sub_severity(rounded_sub_comp[sid]),
         }
+        for sid in ("toolhead", "gantry", "frame", "bed")
+    }
 
     # 5. Top 5 stiffening ROI hotspots & Top 3 weight-reduction hotspots (grouped by physical part)
     spec = assembly.spec
     group_acc: dict[str, dict[str, Any]] = {}
     for m in raw_members:
-        gid, label = classify_part_group(m["member_id"], m["role"])
+        gid, label = _classify_sensitivity_group(m["member_id"], m["role"])
         g = group_acc.setdefault(
             gid,
             {
@@ -954,6 +1216,10 @@ def compute_structural_sensitivities(
                 "role": m["role"],
                 "stiffness_sens_hz": 0.0,
                 "mass_sens_hz": 0.0,
+                "stiffness_sens_x_hz": 0.0,
+                "mass_sens_x_hz": 0.0,
+                "stiffness_sens_y_hz": 0.0,
+                "mass_sens_y_hz": 0.0,
                 "compliance_share_pct": 0.0,
                 "cost_usd": 0.0,
                 "mass_kg": 0.0,
@@ -961,14 +1227,18 @@ def compute_structural_sensitivities(
         )
         g["stiffness_sens_hz"] += float(m["stiffness_sens_hz"])
         g["mass_sens_hz"] += float(m["mass_sens_hz"])
-        g["compliance_share_pct"] += float(m["_comp_raw"] * comp_scale)
+        g["stiffness_sens_x_hz"] += float(m["stiffness_sens_x_hz"])
+        g["mass_sens_x_hz"] += float(m["mass_sens_x_hz"])
+        g["stiffness_sens_y_hz"] += float(m["stiffness_sens_y_hz"])
+        g["mass_sens_y_hz"] += float(m["mass_sens_y_hz"])
+        g["compliance_share_pct"] += float(m["_comp_pct"])
         g["cost_usd"] += float(m["cost_usd"])
         g["mass_kg"] += float(m["mass_kg"])
 
     for bay_key, b in bay_acc.items():
         if b["n_elements"] <= 0:
             continue
-        gid, label = classify_part_group(f"bay_{bay_key}", "panel")
+        gid, label = _classify_sensitivity_group(f"bay_{bay_key}", "panel")
         g = group_acc.setdefault(
             gid,
             {
@@ -977,6 +1247,10 @@ def compute_structural_sensitivities(
                 "role": "panel",
                 "stiffness_sens_hz": 0.0,
                 "mass_sens_hz": 0.0,
+                "stiffness_sens_x_hz": 0.0,
+                "mass_sens_x_hz": 0.0,
+                "stiffness_sens_y_hz": 0.0,
+                "mass_sens_y_hz": 0.0,
                 "compliance_share_pct": 0.0,
                 "cost_usd": 0.0,
                 "mass_kg": 0.0,
@@ -984,22 +1258,42 @@ def compute_structural_sensitivities(
         )
         g["stiffness_sens_hz"] += float(b["stiffness_sens_hz"])
         g["mass_sens_hz"] += float(b["mass_sens_hz"])
-        g["compliance_share_pct"] += float(b["_comp_raw"] * comp_scale)
+        g["stiffness_sens_x_hz"] += float(b["stiffness_sens_x_hz"])
+        g["mass_sens_x_hz"] += float(b["mass_sens_x_hz"])
+        g["stiffness_sens_y_hz"] += float(b["stiffness_sens_y_hz"])
+        g["mass_sens_y_hz"] += float(b["mass_sens_y_hz"])
+        g["compliance_share_pct"] += float(b["_comp_pct"])
         g["cost_usd"] += float(b["cost_usd"])
         g["mass_kg"] += float(b["mass_kg"])
 
     stiffen_pool: list[dict[str, Any]] = []
     for gid, g in group_acc.items():
-        stiff_hz = float(g["stiffness_sens_hz"])
-        mass_hz = float(g["mass_sens_hz"])
-        net_hz = stiff_hz + mass_hz
+        stiff_fund = float(g["stiffness_sens_hz"])
+        mass_fund = float(g["mass_sens_hz"])
+        stiff_x = float(g["stiffness_sens_x_hz"])
+        stiff_y = float(g["stiffness_sens_y_hz"])
+        mass_x = float(g["mass_sens_x_hz"])
+        mass_y = float(g["mass_sens_y_hz"])
+        net_fund = stiff_fund + mass_fund
+        xy_net = w_x * (stiff_x + mass_x) + w_y * (stiff_y + mass_y)
+        f_min_xy = min(f_x, f_y)
+        eff_stiff_hz = max(
+            stiff_fund,
+            w_x * max(stiff_x, 0.0) + w_y * max(stiff_y, 0.0),
+            max(
+                stiff_x * (f_min_xy / max(f_x, 1.0)),
+                stiff_y * (f_min_xy / max(f_y, 1.0)),
+            )
+            * 0.75,
+        )
+        eff_net_hz = max(net_fund, xy_net)
         comp_pct = float(g["compliance_share_pct"])
         cost_usd = max(float(g["cost_usd"]), 1.0)
-        if not ((stiff_hz > 1e-4 and (net_hz > 0.0 or comp_pct > 0.5)) or comp_pct > 1.0):
+        if not ((eff_stiff_hz > 1e-4 and (eff_net_hz > 0.0 or comp_pct > 0.5)) or comp_pct > 1.0):
             continue
-        est_hz_gain = round(0.5 * max(stiff_hz, 0.0), 1)
-        hz_per_usd = net_hz / cost_usd
-        impact_score = max(est_hz_gain, 0.1) * (1.0 + comp_pct / 25.0) + 0.05 * comp_pct
+        est_hz_gain = round(0.5 * max(eff_stiff_hz, 0.0), 1)
+        hz_per_usd = eff_net_hz / cost_usd
+        impact_score = comp_pct * 0.65 + est_hz_gain * (1.2 + comp_pct / 20.0)
         stiffen_pool.append(
             {
                 "id": gid,
@@ -1103,7 +1397,7 @@ def compute_structural_sensitivities(
         elif ld["role"] == "bed":
             lgid, llabel, lrole = "moving_y_bed", "Moving Heated Bed", "bed"
         else:
-            lgid, llabel = classify_part_group(nid, ld["role"])
+            lgid, llabel = _classify_sensitivity_group(nid, ld["role"])
             lrole = ld["role"]
         _add_lighten_group(
             gid=lgid,
@@ -1143,6 +1437,23 @@ def compute_structural_sensitivities(
     ]
 
     summary_parts: list[str] = []
+    th_sub_pct = subsystem_breakdown["toolhead"]["compliance_share_pct"]
+    ga_sub_pct = subsystem_breakdown["gantry"]["compliance_share_pct"]
+    fr_sub_pct = subsystem_breakdown["frame"]["compliance_share_pct"]
+    be_sub_pct = subsystem_breakdown["bed"]["compliance_share_pct"]
+    if primary_problem_subsystem == "toolhead" or th_sub_pct > fr_sub_pct:
+        summary_parts.append(
+            f"Toolhead & Mount drives {th_sub_pct:.1f}% of nozzle-to-bed flex (vs {fr_sub_pct:.1f}% outer frame)."
+        )
+    elif primary_problem_subsystem == "gantry" or ga_sub_pct > fr_sub_pct:
+        summary_parts.append(
+            f"X/Y Gantry & Rails drives {ga_sub_pct:.1f}% of nozzle-to-bed flex (vs {fr_sub_pct:.1f}% outer frame)."
+        )
+    elif primary_problem_subsystem == "bed":
+        summary_parts.append(
+            f"Bed & Z-Mount drives {be_sub_pct:.1f}% of nozzle-to-bed flex (vs {fr_sub_pct:.1f}% outer frame)."
+        )
+
     if top_stiffen_targets:
         s0 = top_stiffen_targets[0]
         summary_parts.append(
@@ -1168,5 +1479,7 @@ def compute_structural_sensitivities(
         lumped_mass_sensitivities=lumped_mass_sensitivities,
         top_stiffen_targets=top_stiffen_targets,
         top_lighten_targets=top_lighten_targets,
+        subsystem_breakdown=subsystem_breakdown,
+        primary_problem_subsystem=primary_problem_subsystem,
         summary_diagnosis=summary_diagnosis,
     )

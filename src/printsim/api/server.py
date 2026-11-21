@@ -40,12 +40,16 @@ from printsim.geometry import (
     generate_bom,
 )
 from printsim.schema import (
+    BED_MOUNT_CATALOG,
+    BELT_ROUTING_CATALOG,
     EXTRUSION_FILLINGS,
+    FRAME_FEET_CATALOG,
     GANTRY_BRACKET_CATALOG,
     MATERIAL_CATALOG,
     PROFILE_CATALOG,
     STEPPER_CATALOG,
     TOOLHEAD_PRESETS,
+    Z_PROBE_CATALOG,
     PrinterSpec,
 )
 from printsim.thermal import FILAMENT_CATALOG
@@ -61,6 +65,8 @@ class SimulateRequest(BaseModel):
     filament_id: str = "pla"
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
     include_toolpath_segments: bool = True
+    panel_mesh_n: int = Field(2, ge=2, le=8)
+    accel_override_mm_s2: float | None = Field(None, ge=500.0, le=100000.0)
 
 
 class DeepVerifyRequest(BaseModel):
@@ -255,11 +261,10 @@ def create_app() -> FastAPI:
                 {"id": "titanium_grade5", "name": "Ti-6Al-4V Grade 5 Backer", "short_name": "Titanium"},
                 {"id": "steel_4140", "name": "4140 Steel Backer", "short_name": "Steel 4140"},
             ],
-            "bed_mounts": [
-                {"id": "kinematic_3pt", "name": "3-Point Maxwell Kinematic Mount", "short_name": "Kinematic 3-Pt"},
-                {"id": "floating_4pt", "name": "4-Point Floating / Silicone Spring", "short_name": "Floating 4-Pt"},
-                {"id": "rigid_4pt", "name": "4-Point Rigid Hard-Bolted", "short_name": "Rigid 4-Pt"},
-            ],
+            "bed_mounts": list(BED_MOUNT_CATALOG.values()),
+            "frame_feet": list(FRAME_FEET_CATALOG.values()),
+            "z_probes": list(Z_PROBE_CATALOG.values()),
+            "belt_routings": list(BELT_ROUTING_CATALOG.values()),
             "bearing_clearances": [
                 {"id": "C2", "name": "ISO C2 Tight Clearance (3.5 um)", "short_name": "C2"},
                 {"id": "CN", "name": "ISO CN Normal Clearance (7.5 um)", "short_name": "CN"},
@@ -345,6 +350,8 @@ def create_app() -> FastAPI:
                 gcode_text=req.gcode_text,
                 toolhead_rel_pos=req.toolhead_rel_pos,
                 filament_id=req.filament_id,
+                panel_mesh_n=req.panel_mesh_n,
+                accel_override_mm_s2=req.accel_override_mm_s2,
             )
             payload = report.to_dict(include_toolpath_segments=req.include_toolpath_segments)
             payload["spec"] = spec.model_dump(mode="json")

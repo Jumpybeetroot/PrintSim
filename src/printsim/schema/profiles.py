@@ -142,6 +142,28 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         iz_m4=9.30e-8,
         j_m4=5.80e-8,
     ),
+    "extrusion_3060": ProfileSpec(
+        id="extrusion_3060",
+        name="3060 Heavy T-Slot Extrusion (30x60mm)",
+        shape="extrusion",
+        width_m=0.030,
+        height_m=0.060,
+        area_m2=6.80e-4,
+        iy_m4=21.2e-8,
+        iz_m4=5.80e-8,
+        j_m4=6.40e-8,
+    ),
+    "cnc_al_beam_20x20": ProfileSpec(
+        id="cnc_al_beam_20x20",
+        name="CNC Pocketed 7075/6061 Aluminum X-Beam (20x20mm)",
+        shape="tube",
+        width_m=0.020,
+        height_m=0.020,
+        area_m2=1.18e-4,  # 27% lighter than 2020 extrusion (1.62e-4)
+        iy_m4=0.64e-8,
+        iz_m4=0.64e-8,
+        j_m4=0.68e-8,  # closed box torsional stiffness > open T-slot
+    ),
     "cf_tube_20x20x1_5": _hollow_square_tube(
         "cf_tube_20x20x1_5", "Carbon Fiber Tube 20x20x1.5mm", 20.0, 1.5
     ),
@@ -151,11 +173,17 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "cf_tube_25x25x2": _hollow_square_tube(
         "cf_tube_25x25x2", "Carbon Fiber Tube 25x25x2.0mm", 25.0, 2.0
     ),
+    "ti_tube_20x20x1_2": _hollow_square_tube(
+        "ti_tube_20x20x1_2", "Titanium Square Tube 20x20x1.2mm", 20.0, 1.2
+    ),
     "al_tube_20x20x2": _hollow_square_tube(
         "al_tube_20x20x2", "Aluminum Square Tube 20x20x2.0mm", 20.0, 2.0
     ),
     "al_tube_30x30x3": _hollow_square_tube(
         "al_tube_30x30x3", "Aluminum Square Tube 30x30x3.0mm", 30.0, 3.0
+    ),
+    "steel_tube_25x25x2": _hollow_square_tube(
+        "steel_tube_25x25x2", "Steel Square Tube 25x25x2.0mm", 25.0, 2.0
     ),
     "mgn9_rail": _solid_rect("mgn9_rail", "MGN9H Linear Rail (9x6.5mm)", 9.0, 6.5, "rail"),
     "mgn12_rail": _solid_rect("mgn12_rail", "MGN12H Linear Rail (12x8mm)", 12.0, 8.0, "rail"),
