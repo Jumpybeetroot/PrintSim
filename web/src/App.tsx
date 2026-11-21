@@ -3,6 +3,7 @@ import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
+import { QuickFixAction } from "./utils/quickFixes";
 import {
   CatalogResponse,
   CompareMode,
@@ -115,6 +116,34 @@ const DRIVE_TYPE_LABELS: Record<string, string> = {
   foc_servo: "FOC Servo (Closed-Loop)",
 };
 
+const BED_MOUNT_LABELS: Record<string, string> = {
+  kinematic_3pt: "3-Pt Kinematic",
+  whopping_pochard_kinematic: "Whopping Pochard Leaf-Spring",
+  rigid_4pt: "4-Pt Rigid",
+  floating_4pt: "4-Pt Floating",
+  silicone_4pt: "4-Pt Silicone",
+  springs_4pt: "4-Pt Springs",
+};
+
+const FRAME_FEET_LABELS: Record<string, string> = {
+  rigid_bolted: "Rigid Bolted",
+  rubber_feet: "Rubber / TPU Feet",
+  anti_vib_pads: "Anti-Vib Pads / HULA",
+  paver_on_foam: "Concrete Paver on Foam",
+};
+
+const Z_PROBE_LABELS: Record<string, string> = {
+  static_eddy: "Static Eddy (Beacon)",
+  klicky_inductive: "Klicky / Inductive",
+  cnc_tap: "CNC Voron Tap",
+  printed_tap: "Printed Voron Tap",
+};
+
+const BELT_ROUTING_LABELS: Record<string, string> = {
+  stock_corexy: "Stock CoreXY Routing",
+  monolith_short: "Monolith Short Path",
+};
+
 function formatPanelDesc(frame: PrinterSpecData["frame"]): string {
   const mounting = !frame.enclosed_panels ? "none" : frame.panel_mounting || "bolted_structural";
   if (!frame.enclosed_panels || mounting === "none") return "Open";
@@ -201,6 +230,15 @@ function describeSpecDiff(
       `Corner Joint: ${prev.frame.corner_joint_type ?? "blind_joint"} → ${next.frame.corner_joint_type ?? "blind_joint"}`
     );
   }
+  const prevFeet = prev.frame.feet_type ?? "rigid_bolted";
+  const nextFeet = next.frame.feet_type ?? "rigid_bolted";
+  if (prevFeet !== nextFeet) {
+    diffs.push(
+      `Benchtop Feet: ${FRAME_FEET_LABELS[prevFeet] ?? prevFeet} → ${
+        FRAME_FEET_LABELS[nextFeet] ?? nextFeet
+      }`
+    );
+  }
   if (Math.round(prev.frame.chamber_temp_c ?? 25) !== Math.round(next.frame.chamber_temp_c ?? 25)) {
     diffs.push(
       `Chamber Temp: ${Math.round(prev.frame.chamber_temp_c ?? 25)}°C → ${Math.round(next.frame.chamber_temp_c ?? 25)}°C`
@@ -211,9 +249,27 @@ function describeSpecDiff(
       `Bed Temp: ${Math.round(prev.bed.target_temp_c ?? 60)}°C → ${Math.round(next.bed.target_temp_c ?? 60)}°C`
     );
   }
-  if ((prev.bed.mount_type ?? "kinematic_3pt") !== (next.bed.mount_type ?? "kinematic_3pt")) {
+  const prevBedMount = prev.bed.mount_type ?? "kinematic_3pt";
+  const nextBedMount = next.bed.mount_type ?? "kinematic_3pt";
+  if (prevBedMount !== nextBedMount) {
     diffs.push(
-      `Bed Mount: ${prev.bed.mount_type ?? "kinematic_3pt"} → ${next.bed.mount_type ?? "kinematic_3pt"}`
+      `Bed Mount: ${BED_MOUNT_LABELS[prevBedMount] ?? prevBedMount} → ${
+        BED_MOUNT_LABELS[nextBedMount] ?? nextBedMount
+      }`
+    );
+  }
+  if (prev.bed.plate_thickness_mm !== next.bed.plate_thickness_mm) {
+    diffs.push(`Plate Thickness: ${prev.bed.plate_thickness_mm} → ${next.bed.plate_thickness_mm} mm`);
+  }
+  if (prev.bed.mass_g !== next.bed.mass_g) {
+    diffs.push(`Bed Mass: ${prev.bed.mass_g}g → ${next.bed.mass_g}g`);
+  }
+  if (prev.bed.plate_material !== next.bed.plate_material) {
+    diffs.push(
+      `Plate Material: ${shortCatalogName(prev.bed.plate_material, catalog?.materials)} → ${shortCatalogName(
+        next.bed.plate_material,
+        catalog?.materials
+      )}`
     );
   }
   if (prev.bed.z_drive !== next.bed.z_drive) {
@@ -247,6 +303,19 @@ function describeSpecDiff(
     diffs.push(
       `Drive Mode: ${formatDriveMode(prev.gantry.drive_mode)} → ${formatDriveMode(next.gantry.drive_mode)}`
     );
+  }
+  const prevBeltRouting = prev.gantry.belt_routing ?? "stock_corexy";
+  const nextBeltRouting = next.gantry.belt_routing ?? "stock_corexy";
+  if (prevBeltRouting !== nextBeltRouting) {
+    const prevLbl =
+      catalog?.belt_routings?.find((r) => r.id === prevBeltRouting)?.short_name ??
+      BELT_ROUTING_LABELS[prevBeltRouting] ??
+      prevBeltRouting;
+    const nextLbl =
+      catalog?.belt_routings?.find((r) => r.id === nextBeltRouting)?.short_name ??
+      BELT_ROUTING_LABELS[nextBeltRouting] ??
+      nextBeltRouting;
+    diffs.push(`Belt Path: ${prevLbl} → ${nextLbl}`);
   }
   if (Boolean(prev.gantry.double_shear_pulleys) !== Boolean(next.gantry.double_shear_pulleys)) {
     diffs.push(
@@ -428,6 +497,19 @@ function describeSpecDiff(
       }`
     );
   }
+  const prevZProbe = prev.toolhead.z_probe_type ?? "static_eddy";
+  const nextZProbe = next.toolhead.z_probe_type ?? "static_eddy";
+  if (prevZProbe !== nextZProbe) {
+    const prevLbl =
+      catalog?.z_probes?.find((p) => p.id === prevZProbe)?.short_name ??
+      Z_PROBE_LABELS[prevZProbe] ??
+      prevZProbe;
+    const nextLbl =
+      catalog?.z_probes?.find((p) => p.id === nextZProbe)?.short_name ??
+      Z_PROBE_LABELS[nextZProbe] ??
+      nextZProbe;
+    diffs.push(`Z-Probe: ${prevLbl} → ${nextLbl}`);
+  }
   if (prev.toolhead.total_mass_g !== next.toolhead.total_mass_g) {
     diffs.push(`Toolhead Mass: ${prev.toolhead.total_mass_g}g → ${next.toolhead.total_mass_g}g`);
   }
@@ -526,6 +608,9 @@ export default function App() {
   const [feaScale, setFeaScale] = useState<number>(600);
   const [feaLoadCase, setFeaLoadCase] = useState<FeaLoadCase>("xy");
   const [layerLimit, setLayerLimit] = useState<number>(999);
+  const [toolheadRelPos, setToolheadRelPos] = useState<[number, number, number]>([0.5, 0.5, 0.5]);
+  const [panelMeshN, setPanelMeshN] = useState<number>(2);
+  const [showBedWarp, setShowBedWarp] = useState<boolean>(false);
 
   // Refs for atomic history capture & stale-request guarding
   const simReqIdRef = useRef<number>(0);
@@ -537,6 +622,8 @@ export default function App() {
   const lastChangeRef = useRef<string | null>(null);
   const catalogRef = useRef<CatalogResponse | null>(null);
   const stockLengthRef = useRef<number>(1000);
+  const toolheadRelPosRef = useRef<[number, number, number]>([0.5, 0.5, 0.5]);
+  const panelMeshNRef = useRef<number>(2);
 
   simRef.current = sim;
   bomRef.current = bom;
@@ -544,6 +631,8 @@ export default function App() {
   lastChangeRef.current = lastChangeSummary;
   catalogRef.current = catalog;
   stockLengthRef.current = stockLengthMm;
+  toolheadRelPosRef.current = toolheadRelPos;
+  panelMeshNRef.current = panelMeshN;
 
   const prevSnapshot = history.length > 0 ? history[history.length - 1] : null;
   const prevSim = prevSnapshot?.sim ?? null;
@@ -582,10 +671,14 @@ export default function App() {
         changeLabel?: string;
         isBaselineReset?: boolean;
         baselineName?: string;
+        toolheadRelPosOverride?: [number, number, number];
+        panelMeshNOverride?: number;
       }
     ) => {
       const reqId = ++simReqIdRef.current;
       const activeFil = filOverride ?? filamentRef.current;
+      const activeRelPos = options?.toolheadRelPosOverride ?? toolheadRelPosRef.current;
+      const activePanelMeshN = options?.panelMeshNOverride ?? panelMeshNRef.current;
       clearDeepVerify();
       setLoading(true);
       setBomLoading(true);
@@ -598,6 +691,8 @@ export default function App() {
             ...payload,
             filament_id: activeFil,
             gcode_text: customGcode && customGcode.trim().length > 0 ? customGcode : null,
+            toolhead_rel_pos: activeRelPos,
+            panel_mesh_n: activePanelMeshN,
           }),
         });
         if (!res.ok) {
@@ -975,13 +1070,33 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSpecChange = (next: PrinterSpecData, changeLabel?: string) => {
-    const label = changeLabel || describeSpecDiff(spec, next, catalog);
-    clearDeepVerify();
-    setSpec(next);
-    setOptMessage(null);
-    void runSimulate({ spec: next }, gcodeText, undefined, { changeLabel: label });
-  };
+  const handleSpecChange = useCallback(
+    (next: PrinterSpecData, changeLabel?: string) => {
+      const label = changeLabel || describeSpecDiff(spec, next, catalog);
+      clearDeepVerify();
+      setSpec(next);
+      setOptMessage(null);
+      void runSimulate({ spec: next }, gcodeText, undefined, { changeLabel: label });
+    },
+    [catalog, clearDeepVerify, gcodeText, runSimulate, spec]
+  );
+
+  const handleApplyQuickFix = useCallback(
+    (fix: QuickFixAction) => {
+      const currentSpec = spec ?? simRef.current?.spec;
+      if (!currentSpec) return;
+      const nextSpec = fix.apply(currentSpec);
+      handleSpecChange(nextSpec, fix.summary);
+    },
+    [handleSpecChange, spec]
+  );
+
+  const handleInspectBedWarp = useCallback(() => {
+    setShowBedWarp(true);
+    setViewMode((prev) =>
+      prev === "toolpath" || prev === "solid_part" || prev === "topology" ? "assembly" : prev
+    );
+  }, []);
 
   const handleFilamentChange = (nextFil: string) => {
     if (nextFil === filamentId) return;
@@ -993,6 +1108,39 @@ export default function App() {
     setFilamentId(nextFil);
     if (spec) {
       void runSimulate({ spec }, gcodeText, nextFil, { changeLabel: label });
+    }
+  };
+
+  const handleToolheadRelPosChange = (nextPos: [number, number, number], changeLabel?: string) => {
+    const clamped: [number, number, number] = [
+      Math.max(0.1, Math.min(0.9, Number(nextPos[0].toFixed(2)))),
+      Math.max(0.1, Math.min(0.9, Number(nextPos[1].toFixed(2)))),
+      Math.max(0.1, Math.min(0.9, Number(nextPos[2].toFixed(2)))),
+    ];
+    setToolheadRelPos(clamped);
+    toolheadRelPosRef.current = clamped;
+    if (spec) {
+      const pctLabel = `Test Pos: (${Math.round(clamped[0] * 100)}%, ${Math.round(
+        clamped[1] * 100
+      )}%, ${Math.round(clamped[2] * 100)}%)`;
+      void runSimulate({ spec }, gcodeText, undefined, {
+        changeLabel: changeLabel || pctLabel,
+        toolheadRelPosOverride: clamped,
+      });
+    }
+  };
+
+  const handlePanelMeshNChange = (nextN: number) => {
+    const clamped = Math.max(2, Math.min(8, Math.round(nextN)));
+    if (clamped === panelMeshN) return;
+    const prevN = panelMeshN;
+    setPanelMeshN(clamped);
+    panelMeshNRef.current = clamped;
+    if (spec) {
+      void runSimulate({ spec }, gcodeText, undefined, {
+        changeLabel: `Panel Shell Mesh: ${prevN}×${prevN} → ${clamped}×${clamped}`,
+        panelMeshNOverride: clamped,
+      });
     }
   };
 
@@ -1314,6 +1462,10 @@ export default function App() {
           onFilamentChange={handleFilamentChange}
           spec={spec}
           onSpecChange={handleSpecChange}
+          toolheadRelPos={toolheadRelPos}
+          onToolheadRelPosChange={handleToolheadRelPosChange}
+          panelMeshN={panelMeshN}
+          onPanelMeshNChange={handlePanelMeshNChange}
           yamlText={yamlText}
           onYamlChange={setYamlText}
           onSimulateYaml={() => runSimulate({ yaml_text: yamlText }, gcodeText)}
@@ -1346,6 +1498,9 @@ export default function App() {
           onFeaLoadCaseChange={setFeaLoadCase}
           layerLimit={layerLimit}
           onLayerLimitChange={setLayerLimit}
+          showBedWarp={showBedWarp}
+          onToggleBedWarp={setShowBedWarp}
+          onApplyFix={handleApplyQuickFix}
         />
 
         <MetricsPanel
@@ -1378,6 +1533,9 @@ export default function App() {
           stockLengthMm={stockLengthMm}
           onStockLengthChange={handleStockLengthChange}
           onDownloadBomCsv={handleExportBomCsv}
+          showBedWarp={showBedWarp}
+          onInspectBedWarp={handleInspectBedWarp}
+          onApplyFix={handleApplyQuickFix}
           error={error}
         />
       </main>

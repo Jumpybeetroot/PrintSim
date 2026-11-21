@@ -86,9 +86,49 @@ export type RailBackerMaterialType = "none" | "steel_4140" | "titanium_grade5";
 
 export type BearingClearanceClass = "C2" | "CN" | "C3";
 
-export type BedMountType = "kinematic_3pt" | "floating_4pt" | "rigid_4pt";
+export type BedMountType =
+  | "kinematic_3pt"
+  | "whopping_pochard_kinematic"
+  | "rigid_4pt"
+  | "floating_4pt"
+  | "silicone_4pt"
+  | "springs_4pt";
+
+export type FrameFeetType =
+  | "rigid_bolted"
+  | "rubber_feet"
+  | "anti_vib_pads"
+  | "paver_on_foam";
+
+export type ZProbeType = "static_eddy" | "klicky_inductive" | "cnc_tap" | "printed_tap";
+
+export type BeltRoutingType = "stock_corexy" | "monolith_short";
+
+export type AdjointLens = "print_impact" | "compliance" | "modal" | "mass";
+
+export type SubsystemKey = "toolhead" | "gantry" | "frame" | "bed";
 
 export type DriveType = "open_loop_stepper" | "closed_loop_stepper" | "foc_servo";
+
+export interface BedMountCatalogItem {
+  id: BedMountType;
+  name: string;
+  short_name: string;
+  mount_points?: number;
+  k_axial_n_per_mm?: number;
+  k_lateral_n_per_mm?: number;
+  cost_usd?: number;
+  notes?: string;
+}
+
+export interface FrameFeetCatalogItem {
+  id: FrameFeetType;
+  name: string;
+  short_name: string;
+  k_axial_n_per_mm?: number;
+  k_lateral_n_per_mm?: number;
+  notes?: string;
+}
 
 export interface RailMountOption<T extends string = string> {
   id: T;
@@ -123,6 +163,21 @@ export interface GantryBracketInfo {
   color_hex: string;
 }
 
+export interface ZProbeCatalogItem {
+  id: ZProbeType;
+  name: string;
+  short_name: string;
+  added_mass_g?: number;
+  notes?: string;
+}
+
+export interface BeltRoutingCatalogItem {
+  id: BeltRoutingType;
+  name: string;
+  short_name: string;
+  notes?: string;
+}
+
 export interface ToolheadPresetItem {
   preset_id: string;
   name: string;
@@ -131,6 +186,7 @@ export interface ToolheadPresetItem {
   nozzle_offset_mm: [number, number, number];
   mount_material: ToolheadMountMaterial;
   internal_stiffness_n_per_mm?: number;
+  z_probe_type?: ZProbeType;
 }
 
 export interface CatalogResponse {
@@ -145,7 +201,13 @@ export interface CatalogResponse {
   gantry_brackets?: GantryBracketInfo[];
   x_rail_mounts?: RailMountOption<XRailMountType>[];
   y_rail_mounts?: RailMountOption<YRailMountType>[];
+  bed_mounts?: BedMountCatalogItem[];
+  frame_feet?: FrameFeetCatalogItem[];
+  z_probes?: ZProbeCatalogItem[];
+  belt_routings?: BeltRoutingCatalogItem[];
 }
+
+export type CatalogData = CatalogResponse;
 
 export interface SolidVoxelData {
   center_mm: [number, number, number];
@@ -341,6 +403,7 @@ export interface PrinterSpecData {
     bolt_panels_to_gantry?: boolean;
     extrusion_filling?: ExtrusionFillingType;
     corner_joint_type?: CornerJointType;
+    feet_type?: FrameFeetType;
     chamber_temp_c?: number;
   };
   gantry: {
@@ -358,6 +421,7 @@ export interface PrinterSpecData {
     rail_backer_material?: RailBackerMaterialType;
     rail_backer_thickness_mm?: number;
     drive_mode: "2wd" | "awd";
+    belt_routing?: BeltRoutingType;
     double_shear_pulleys: boolean;
     bracket_material?: BracketMaterialType;
     carriage_mass_g: number;
@@ -417,6 +481,7 @@ export interface PrinterSpecData {
     nozzle_offset_mm?: [number, number, number];
     mount_material?: ToolheadMountMaterial;
     internal_stiffness_n_per_mm?: number;
+    z_probe_type?: ZProbeType;
     envelope_mm: [number, number, number];
     hotend: {
       name: string;
@@ -525,6 +590,18 @@ export interface ModeShapeData {
   what_is_shaking?: string;
   how_to_fix?: string;
   severity?: "critical" | "moderate" | "stiff";
+  subsystem_share_pct?: {
+    toolhead: number;
+    gantry: number;
+    frame: number;
+    bed: number;
+  };
+  nozzle_whip_ratio?: number;
+  toolhead_flop_pct?: number;
+  relative_nozzle_bed_amp?: number;
+  print_impact_score?: number;
+  print_impact_level?: "critical" | "high" | "moderate" | "low";
+  dominant_problem_area?: SubsystemKey;
   toolhead_participation_xyz: [number, number, number];
   nodal_vectors: Record<string, [number, number, number]>;
 }
@@ -690,6 +767,11 @@ export interface GeometryData {
   bed_size_mm: [number, number];
   bed_center_mm: [number, number, number];
   bed_node_id?: string;
+  bed_frame_node_id?: string;
+  bed_mount_type?: BedMountType;
+  bed_z_drive?: string;
+  feet_type?: FrameFeetType;
+  bed_support_points_mm?: [number, number, number][];
   toolhead_node_id: string;
   nozzle_node_id?: string;
   toolhead_cog_node_id?: string;
@@ -753,6 +835,7 @@ export interface ModalFeaData {
   panel_drum_freq_hz?: number;
   frame_damping_ratio?: number;
   recommended_max_accel_mm_s2: number;
+  worst_print_mode_number?: number;
   accel_bottleneck?: AccelBottleneckData;
   shaper_x: ShaperData | null;
   shaper_y: ShaperData | null;
@@ -796,6 +879,10 @@ export interface KinematicsData {
   idler_shaft_deflection_um?: number;
   bearing_play_um?: number;
   bracket_modulus_retention_pct?: number;
+  belt_routing?: BeltRoutingType;
+  steel_core_fatigue_risk?: boolean;
+  pulley_circumference_mm?: number;
+  vfa_belt_tooth_speed_range_mm_s?: [number, number];
   delta_workspace_valid: boolean;
 }
 
@@ -875,6 +962,27 @@ export interface SensitivityEntryData {
   mass_sens_hz: number;
   compliance_share_pct: number;
   heat_score: number;
+  heat_score_compliance?: number;
+  heat_score_modal?: number;
+  heat_score_mass?: number;
+}
+
+export interface LumpedMassSensitivityData {
+  heat_score?: number;
+  heat_score_compliance?: number;
+  heat_score_modal?: number;
+  heat_score_mass?: number;
+  hz_per_100g: number;
+  mass_sens_hz: number;
+}
+
+export interface SubsystemBreakdownEntry {
+  id: string;
+  label: string;
+  compliance_share_pct: number;
+  modal_stiff_hz: number;
+  modal_mass_hz: number;
+  severity: "critical" | "high" | "moderate" | "low";
 }
 
 export interface SensitivityStiffenTarget {
@@ -903,8 +1011,35 @@ export interface SensitivityData {
   summary_diagnosis?: string;
   member_sensitivities: Record<string, SensitivityEntryData>;
   panel_bay_sensitivities: Record<string, SensitivityEntryData>;
+  lumped_mass_sensitivities?: Record<string, LumpedMassSensitivityData>;
+  subsystem_breakdown?: Record<SubsystemKey, SubsystemBreakdownEntry>;
+  primary_problem_subsystem?: SubsystemKey;
   top_stiffen_targets: SensitivityStiffenTarget[];
   top_lighten_targets: SensitivityLightenTarget[];
+}
+
+export interface BedPlateFeaData {
+  grid_nx: number;
+  grid_ny: number;
+  grid_x_rel: number[];
+  grid_y_rel: number[];
+  mount_points_rel: [number, number][];
+  z_gravity_um: number[];
+  z_thermal_um: number[];
+  z_total_um: number[];
+  mode1_shape_z: number[];
+  gravity_sag_um: number;
+  thermal_peak_to_valley_um: number;
+  taco_buckling_um: number;
+  total_flatness_error_um: number;
+  probe_center_deflection_um: number;
+  probe_corner_deflection_um: number;
+  plate_first_mode_hz: number;
+  plate_first_mode_type: "elastic_drum" | "mount_bounce" | "cantilever_flap";
+  plate_modes_hz: number[];
+  mesh_bed_leveling_required: boolean;
+  first_layer_risk: "low" | "moderate" | "high" | "critical";
+  summary: string;
 }
 
 export interface SimulationResponse {
@@ -933,6 +1068,7 @@ export interface SimulationResponse {
   modal_fea: ModalFeaData;
   kinematics: KinematicsData;
   thermal_structural?: ThermalStructuralReport;
+  bed_plate_fea?: BedPlateFeaData | null;
   workspace_frf?: WorkspaceFRFData;
   time_domain_metrology?: TimeDomainMetrologyData;
   rcsa?: RCSAData;

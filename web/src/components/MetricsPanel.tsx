@@ -3,22 +3,30 @@ import {
   AccelBottleneckData,
   AccelBottleneckShares,
   AxisShaperGraph,
+  BedPlateFeaData,
   CompareMode,
   DeepVerifyResponse,
   GeometryExtrusionFillingData,
   KlipperShaperCandidate,
   PrinterBOMResponse,
+  PrinterSpecData,
   RCSAData,
   SensitivityData,
   SimulationResponse,
   SolidFeaEngine,
   SolidFEAResponse,
+  SubsystemKey,
   TetFEAResponse,
   TimeDomainMetrologyData,
   TopologyOptResponse,
   ViewMode,
   WorkspaceFRFData,
 } from "../types";
+import {
+  getQuickFixForMode,
+  getQuickFixForTarget,
+  QuickFixAction,
+} from "../utils/quickFixes";
 
 interface Props {
   sim: SimulationResponse | null;
@@ -50,6 +58,9 @@ interface Props {
   stockLengthMm: number;
   onStockLengthChange: (lenMm: number) => void;
   onDownloadBomCsv: () => void;
+  showBedWarp?: boolean;
+  onInspectBedWarp?: () => void;
+  onApplyFix?: (fix: QuickFixAction) => void;
   error: string | null;
 }
 
@@ -80,6 +91,35 @@ function modeSeverityMeta(severity?: "critical" | "moderate" | "stiff"): {
   if (severity === "moderate") return { label: "Moderate", cls: "warn" };
   if (severity === "stiff") return { label: "Stiff", cls: "ok" };
   return null;
+}
+
+const SUBSYSTEM_ORDER: SubsystemKey[] = ["toolhead", "gantry", "frame", "bed"];
+
+const SUBSYSTEM_DISPLAY: Record<
+  SubsystemKey,
+  { short: string; full: string; color: string }
+> = {
+  toolhead: { short: "Toolhead", full: "Toolhead & Mount", color: "#f43f5e" },
+  gantry: { short: "Gantry", full: "X/Y Gantry", color: "#f59e0b" },
+  frame: { short: "Frame", full: "Outer Frame", color: "#38bdf8" },
+  bed: { short: "Bed", full: "Bed & Z-Mount", color: "#a855f7" },
+};
+
+function impactLevelCls(level?: "critical" | "high" | "moderate" | "low", score?: number): string {
+  const eff =
+    level ??
+    (score != null
+      ? score >= 75
+        ? "critical"
+        : score >= 50
+          ? "high"
+          : score >= 25
+            ? "moderate"
+            : "low"
+      : "low");
+  if (eff === "critical") return "bad";
+  if (eff === "high" || eff === "moderate") return "warn";
+  return "ok";
 }
 
 const CATEGORY_ORDER = ["frame", "motion", "motors", "hotend", "bed", "enclosure", "fasteners"];
@@ -1419,9 +1459,11 @@ const CncControlMetrologyCard: React.FC<{
   workspaceFrf?: WorkspaceFRFData;
   rcsa?: RCSAData;
   sensitivity?: SensitivityData;
+  spec: PrinterSpecData;
+  onApplyFix?: (fix: QuickFixAction) => void;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
-}> = ({ metrology, workspaceFrf, rcsa, sensitivity, viewMode, onViewModeChange }) => {
+}> = ({ metrology, workspaceFrf, rcsa, sensitivity, spec, onApplyFix, viewMode, onViewModeChange }) => {
   const ballbarSvg = useMemo(() => {
     const angles = metrology?.ballbar_angles_deg;
     const errs = metrology?.ballbar_radial_error_um;
@@ -1588,7 +1630,10 @@ const CncControlMetrologyCard: React.FC<{
   const topLighten = sensitivity?.top_lighten_targets?.slice(0, 2) ?? [];
   const hasSensitivity = Boolean(
     sensitivity &&
-      (topStiffen.length > 0 || topLighten.length > 0 || Boolean(sensitivity.summary_diagnosis))
+      (topStiffen.length > 0 ||
+        topLighten.length > 0 ||
+        Boolean(sensitivity.summary_diagnosis) ||
+        Boolean(sensitivity.subsystem_breakdown))
   );
 
   if (!hasMetrology && !hasWorkspace && !hasRcsa && !hasSensitivity) {
@@ -2038,40 +2083,143 @@ const CncControlMetrologyCard: React.FC<{
             <div className="sens-diagnosis-banner">{sensitivity.summary_diagnosis}</div>
           )}
 
+          {sensitivity?.subsystem_breakdown && (() => {
+            const bd = sensitivity.subsystem_breakdown;
+            const primary = sensitivity.primary_problem_subsystem;
+            const thPct = bd.toolhead?.compliance_share_pct ?? 0;
+            const ganPct = bd.gantry?.compliance_share_pct ?? 0;
+            const frPct = bd.frame?.compliance_share_pct ?? 0;
+            const bedPct = bd.bed?.compliance_share_pct ?? 0;
+
+            let calloutText: string | null = null;
+            if (thPct > frPct && thPct >= ganPct && thPct >= 15) {
+              calloutText = `Toolhead Flop (${Math.round(thPct)}%) > Outer Frame (${Math.round(
+                frPct
+              )}%) — stiffen toolhead mount before adding frame braces`;
+            } else if (ganPct > frPct && ganPct >= 15) {
+              calloutText = `X/Y Gantry Flex (${Math.round(ganPct)}%) > Outer Frame (${Math.round(
+                frPct
+              )}%) — stiffen X-beam/gantry before adding frame braces`;
+            } else if (bedPct > frPct && bedPct >= 15) {
+              calloutText = `Bed & Z-Mount (${Math.round(bedPct)}%) > Outer Frame (${Math.round(
+                frPct
+              )}%) — stiffen bed mount / Z-supports before adding frame braces`;
+            }
+
+            return (
+              <div className="sens-breakdown-card">
+                <div className="sens-breakdown-head">
+                  <span>4-Subsystem Nozzle-Error Share</span>
+                  {primary && (
+                    <span className="badge-pill bad" style={{ padding: "0 6px", fontSize: 9.5 }}>
+                      #1 {SUBSYSTEM_DISPLAY[primary]?.short ?? primary}
+                    </span>
+                  )}
+                </div>
+
+                <div className="subsystem-bar-track">
+                  {SUBSYSTEM_ORDER.map((k) => {
+                    const pct = Math.max(0, bd[k]?.compliance_share_pct ?? 0);
+                    if (pct <= 0.5) return null;
+                    return (
+                      <div
+                        key={k}
+                        className="subsystem-bar-seg"
+                        style={{ width: `${pct}%`, background: SUBSYSTEM_DISPLAY[k].color }}
+                        title={`${bd[k]?.label ?? SUBSYSTEM_DISPLAY[k].full}: ${Math.round(pct)}% of flex`}
+                      />
+                    );
+                  })}
+                </div>
+
+                <div className="sens-subsystem-grid">
+                  {SUBSYSTEM_ORDER.map((k) => {
+                    const entry = bd[k];
+                    const sev = entry?.severity ?? "low";
+                    const isPrimary = primary === k;
+                    return (
+                      <div
+                        key={k}
+                        className={`sens-sub-chip sev-${sev} ${isPrimary ? "primary" : ""}`}
+                        title={
+                          entry
+                            ? `${entry.label}: ${entry.compliance_share_pct.toFixed(1)}% flex • Stiff sens ${entry.modal_stiff_hz.toFixed(
+                                2
+                              )} Hz • Mass sens ${entry.modal_mass_hz.toFixed(2)} Hz`
+                            : SUBSYSTEM_DISPLAY[k].full
+                        }
+                      >
+                        <span className="sens-sub-chip-top">
+                          <span className="sens-sub-chip-name">
+                            <span
+                              className="swatch-dot"
+                              style={{ background: SUBSYSTEM_DISPLAY[k].color }}
+                            />
+                            {SUBSYSTEM_DISPLAY[k].full}
+                          </span>
+                          <strong className="sens-sub-chip-pct">
+                            {Math.round(entry?.compliance_share_pct ?? 0)}%
+                          </strong>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {calloutText && <div className="sens-priority-callout">⚡ {calloutText}</div>}
+              </div>
+            );
+          })()}
+
           {topStiffen.length > 0 && (
             <div className="sens-group">
               <div className="sens-group-label stiffen">Top Stiffen Targets (Fix Flex First)</div>
-              {topStiffen.map((t) => (
-                <div
-                  key={`stiff-${t.id}`}
-                  className="sens-row stiffen"
-                  title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
-                >
-                  <div className="sens-row-top">
-                    <span className="sens-id">
-                      <strong>{t.label ?? t.id}</strong>
-                      {!t.label && <span className="sens-role">{t.role}</span>}
-                    </span>
-                  </div>
-                  <div className="sens-badge-row">
-                    {(t.est_hz_gain ?? 0) > 0 && (
-                      <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
-                    )}
-                    {t.compliance_share_pct >= 1 && (
-                      <span className="sens-badge flex">
-                        {t.compliance_share_pct.toFixed(0)}% of flex
+              {topStiffen.map((t) => {
+                const quickFix = getQuickFixForTarget(t.id, spec);
+                return (
+                  <div
+                    key={`stiff-${t.id}`}
+                    className="sens-row stiffen"
+                    title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+                  >
+                    <div className="sens-row-top">
+                      <span className="sens-id">
+                        <strong>{t.label ?? t.id}</strong>
+                        {!t.label && <span className="sens-role">{t.role}</span>}
                       </span>
-                    )}
-                    <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
-                  </div>
-                  {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
-                  {t.action_hint && (
-                    <div className="sens-fix">
-                      <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div className="sens-badge-row">
+                      {(t.est_hz_gain ?? 0) > 0 && (
+                        <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
+                      )}
+                      {t.compliance_share_pct >= 1 && (
+                        <span className="sens-badge flex">
+                          {t.compliance_share_pct.toFixed(0)}% of flex
+                        </span>
+                      )}
+                      <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
+                    </div>
+                    {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+                    {t.action_hint && (
+                      <div className="sens-fix">
+                        <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
+                      </div>
+                    )}
+                    {quickFix && onApplyFix && (
+                      <div className="quick-fix-row">
+                        <button
+                          type="button"
+                          className="quick-fix-btn"
+                          onClick={() => onApplyFix(quickFix)}
+                          title={quickFix.summary}
+                        >
+                          ⚡ {quickFix.buttonLabel}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -2080,6 +2228,9 @@ const CncControlMetrologyCard: React.FC<{
               <div className="sens-group-label lighten">Top Lighten Targets (Cut Moving Weight)</div>
               {topLighten.map((t) => {
                 const gainPer100g = t.hz_gain_per_100g_saved ?? Math.abs(t.hz_per_100g);
+                const lightenTargetId =
+                  t.id === "toolhead" || t.id === "toolhead_cog" ? "toolhead_assembly" : t.id;
+                const quickFix = getQuickFixForTarget(lightenTargetId, spec);
                 return (
                   <div
                     key={`light-${t.id}`}
@@ -2103,10 +2254,142 @@ const CncControlMetrologyCard: React.FC<{
                         <span className="sens-fix-prefix">Fix:</span> {t.action_hint}
                       </div>
                     )}
+                    {quickFix && onApplyFix && (
+                      <div className="quick-fix-row">
+                        <button
+                          type="button"
+                          className="quick-fix-btn"
+                          onClick={() => onApplyFix(quickFix)}
+                          title={quickFix.summary}
+                        >
+                          ⚡ {quickFix.buttonLabel}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const BED_MODE_TYPE_LABELS: Record<BedPlateFeaData["plate_first_mode_type"], string> = {
+  elastic_drum: "Elastic Drum",
+  mount_bounce: "Mount Bounce",
+  cantilever_flap: "Cantilever Flap",
+};
+
+const BED_RISK_META: Record<
+  BedPlateFeaData["first_layer_risk"],
+  { label: string; cls: string }
+> = {
+  low: { label: "Low", cls: "ok" },
+  moderate: { label: "Moderate", cls: "warn" },
+  high: { label: "High", cls: "bad" },
+  critical: { label: "Critical", cls: "bad" },
+};
+
+const BedPlateFemStrip: React.FC<{
+  bedFea: BedPlateFeaData;
+  cmpBedFea?: BedPlateFeaData | null;
+  spec: PrinterSpecData;
+  showBedWarp?: boolean;
+  onInspectBedWarp?: () => void;
+  onApplyFix?: (fix: QuickFixAction) => void;
+}> = ({ bedFea, cmpBedFea, spec, showBedWarp, onInspectBedWarp, onApplyFix }) => {
+  const riskMeta = BED_RISK_META[bedFea.first_layer_risk] ?? BED_RISK_META.low;
+  const modeTypeLabel =
+    BED_MODE_TYPE_LABELS[bedFea.plate_first_mode_type] ?? bedFea.plate_first_mode_type;
+  const isHighRisk =
+    bedFea.first_layer_risk === "high" || bedFea.first_layer_risk === "critical";
+  const bedFix = isHighRisk ? getQuickFixForTarget("bed_plate", spec) : null;
+
+  return (
+    <div className={`bed-fem-strip risk-${bedFea.first_layer_risk}`}>
+      <div className="bed-fem-head">
+        <span>2D MITC4 Bed Plate FEM</span>
+        <span className="badge-pill-row" style={{ gap: 4 }}>
+          <span className={`badge-pill ${riskMeta.cls}`} style={{ padding: "1px 6px", fontSize: 9.5 }}>
+            {riskMeta.label} Risk
+          </span>
+          {bedFea.mesh_bed_leveling_required && (
+            <span className="badge-pill warn" style={{ padding: "1px 6px", fontSize: 9.5 }}>
+              Mesh Leveling Needed
+            </span>
+          )}
+        </span>
+      </div>
+
+      <div className="metric-kv">
+        <span>Flatness Error (Total)</span>
+        <span
+          className={`metric-val metric-val-with-delta ${
+            isHighRisk
+              ? "tag-bad"
+              : bedFea.first_layer_risk === "moderate"
+                ? "tag-warn"
+                : "tag-ok"
+          }`}
+        >
+          {cmpBedFea && (
+            <InlineDeltaBadge
+              oldVal={cmpBedFea.total_flatness_error_um}
+              newVal={bedFea.total_flatness_error_um}
+              higherIsBetter={false}
+              eps={0.2}
+              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+            />
+          )}
+          <strong>{bedFea.total_flatness_error_um.toFixed(1)} µm</strong>
+        </span>
+      </div>
+
+      <div className="metric-kv">
+        <span>2 N Probe Deflection</span>
+        <span className="metric-val">
+          Center: {bedFea.probe_center_deflection_um.toFixed(1)} µm · Corner:{" "}
+          {bedFea.probe_corner_deflection_um.toFixed(1)} µm
+        </span>
+      </div>
+
+      <div className="metric-kv">
+        <span>Plate 1st Mode</span>
+        <span className="metric-val">
+          {bedFea.plate_first_mode_hz.toFixed(0)} Hz{" "}
+          <span style={{ color: "var(--muted)", fontWeight: 500, fontSize: 10.5 }}>
+            ({modeTypeLabel})
+          </span>
+        </span>
+      </div>
+
+      {bedFea.summary && <div className="bed-fem-summary">{bedFea.summary}</div>}
+
+      {(onInspectBedWarp || (bedFix && onApplyFix)) && (
+        <div className="bed-fem-actions">
+          {onInspectBedWarp && (
+            <button
+              type="button"
+              className={`deep-verify-cta ${showBedWarp ? "active" : ""}`}
+              style={{ padding: "3px 8px", fontSize: 10 }}
+              onClick={onInspectBedWarp}
+              title="Highlight 3D MITC4 heated bed thermal & gravity warp surface in the viewport"
+            >
+              {showBedWarp ? "Viewing 3D Bed Warp" : "View 3D Bed Warp"}
+            </button>
+          )}
+          {bedFix && onApplyFix && (
+            <button
+              type="button"
+              className="quick-fix-btn"
+              onClick={() => onApplyFix(bedFix)}
+              title={bedFix.summary}
+            >
+              ⚡ {bedFix.buttonLabel}
+            </button>
           )}
         </div>
       )}
@@ -2144,6 +2427,9 @@ export const MetricsPanel: React.FC<Props> = ({
   stockLengthMm,
   onStockLengthChange,
   onDownloadBomCsv,
+  showBedWarp,
+  onInspectBedWarp,
+  onApplyFix,
   error,
 }) => {
   const [rightTab, setRightTab] = useState<"simulation" | "bom">("simulation");
@@ -2345,29 +2631,35 @@ export const MetricsPanel: React.FC<Props> = ({
       Math.abs(scores.thermal - compareSim.scores.thermal) >= 0.05);
   const ts = sim.thermal_structural;
   const cmpTs = compareSim?.thermal_structural;
+  const bedFea = sim.bed_plate_fea ?? null;
+  const cmpBedFea = compareSim?.bed_plate_fea ?? null;
   const thermalStructChanged =
     compareSim != null &&
-    ts != null &&
-    (cmpTs == null ||
-      Math.abs(ts.gantry_bimetallic_bow_um - cmpTs.gantry_bimetallic_bow_um) >= 0.2 ||
-      Math.abs(ts.bed_gradient_bow_um - cmpTs.bed_gradient_bow_um) >= 0.2 ||
-      Math.abs(ts.bed_buckling_taco_um - cmpTs.bed_buckling_taco_um) >= 0.2 ||
-      Math.abs(ts.frame_z_drift_um - cmpTs.frame_z_drift_um) >= 0.2 ||
-      Math.abs(ts.total_thermal_z_error_um - cmpTs.total_thermal_z_error_um) >= 0.2 ||
-      Math.abs(ts.bracket_modulus_retention_pct - cmpTs.bracket_modulus_retention_pct) >= 0.5 ||
-      Math.abs(ts.rail_newmark_gamma - cmpTs.rail_newmark_gamma) >= 0.005 ||
-      Math.abs(ts.rail_carriage_roll_nm_per_rad - cmpTs.rail_carriage_roll_nm_per_rad) >= 10 ||
-      Math.abs(
-        (kin.tooth_mesh_stiffness_n_per_mm ?? 0) -
-          (compareSim.kinematics.tooth_mesh_stiffness_n_per_mm ?? 0)
-      ) >= 1 ||
-      Math.abs(
-        (kin.idler_shaft_deflection_um ?? 0) -
-          (compareSim.kinematics.idler_shaft_deflection_um ?? 0)
-      ) >= 0.1 ||
-      Math.abs(
-        (kin.bearing_play_um ?? 0) - (compareSim.kinematics.bearing_play_um ?? 0)
-      ) >= 0.1);
+    ((ts != null &&
+      (cmpTs == null ||
+        Math.abs(ts.gantry_bimetallic_bow_um - cmpTs.gantry_bimetallic_bow_um) >= 0.2 ||
+        Math.abs(ts.bed_gradient_bow_um - cmpTs.bed_gradient_bow_um) >= 0.2 ||
+        Math.abs(ts.bed_buckling_taco_um - cmpTs.bed_buckling_taco_um) >= 0.2 ||
+        Math.abs(ts.frame_z_drift_um - cmpTs.frame_z_drift_um) >= 0.2 ||
+        Math.abs(ts.total_thermal_z_error_um - cmpTs.total_thermal_z_error_um) >= 0.2 ||
+        Math.abs(ts.bracket_modulus_retention_pct - cmpTs.bracket_modulus_retention_pct) >= 0.5 ||
+        Math.abs(ts.rail_newmark_gamma - cmpTs.rail_newmark_gamma) >= 0.005 ||
+        Math.abs(ts.rail_carriage_roll_nm_per_rad - cmpTs.rail_carriage_roll_nm_per_rad) >= 10 ||
+        Math.abs(
+          (kin.tooth_mesh_stiffness_n_per_mm ?? 0) -
+            (compareSim.kinematics.tooth_mesh_stiffness_n_per_mm ?? 0)
+        ) >= 1 ||
+        Math.abs(
+          (kin.idler_shaft_deflection_um ?? 0) -
+            (compareSim.kinematics.idler_shaft_deflection_um ?? 0)
+        ) >= 0.1 ||
+        Math.abs(
+          (kin.bearing_play_um ?? 0) - (compareSim.kinematics.bearing_play_um ?? 0)
+        ) >= 0.1)) ||
+      (bedFea != null &&
+        (cmpBedFea == null ||
+          Math.abs(bedFea.total_flatness_error_um - cmpBedFea.total_flatness_error_um) >= 0.2 ||
+          Math.abs(bedFea.plate_first_mode_hz - cmpBedFea.plate_first_mode_hz) >= 0.5)));
   const printChanged =
     compareSim != null &&
     (Math.abs(vp.total_time_s - compareSim.virtual_print.total_time_s) >= 0.05 ||
@@ -3016,6 +3308,34 @@ export const MetricsPanel: React.FC<Props> = ({
                     </span>
                   </div>
                 </div>
+
+                {bedFea && (
+                  <BedPlateFemStrip
+                    bedFea={bedFea}
+                    cmpBedFea={cmpBedFea}
+                    spec={sim.spec}
+                    showBedWarp={showBedWarp}
+                    onInspectBedWarp={onInspectBedWarp}
+                    onApplyFix={onApplyFix}
+                  />
+                )}
+              </div>
+            )}
+
+            {!ts && bedFea && (
+              <div className={`section-card ${thermalStructChanged ? "card-changed" : ""}`}>
+                <div className="section-title">
+                  <span>Heated Bed Plate FEM</span>
+                  {thermalStructChanged && <span className="changed-dot-label">Updated</span>}
+                </div>
+                <BedPlateFemStrip
+                  bedFea={bedFea}
+                  cmpBedFea={cmpBedFea}
+                  spec={sim.spec}
+                  showBedWarp={showBedWarp}
+                  onInspectBedWarp={onInspectBedWarp}
+                  onApplyFix={onApplyFix}
+                />
               </div>
             )}
 
@@ -3037,6 +3357,8 @@ export const MetricsPanel: React.FC<Props> = ({
               workspaceFrf={sim.workspace_frf}
               rcsa={sim.rcsa}
               sensitivity={sim.sensitivity}
+              spec={sim.spec}
+              onApplyFix={onApplyFix}
               viewMode={viewMode}
               onViewModeChange={onViewModeChange}
             />
@@ -3061,6 +3383,9 @@ export const MetricsPanel: React.FC<Props> = ({
                       <span>Drive Mode</span>
                       <span className="metric-val" style={{ color: isAwd ? "var(--accent)" : undefined }}>
                         {isAwd ? `AWD (${motorCount} Motors)` : `2WD (${motorCount} Motors)`}
+                        {(kin.belt_routing ?? sim.spec.gantry.belt_routing) === "monolith_short"
+                          ? " • Monolith Short"
+                          : ""}
                         {sim.spec.gantry.double_shear_pulleys ? " • Double-Shear" : ""}
                       </span>
                     </div>
@@ -3404,11 +3729,36 @@ export const MetricsPanel: React.FC<Props> = ({
                         <span className="metric-val">{Math.round(kin.frame_belt_preload_n)} N</span>
                       </div>
                     )}
+                    {kin.vfa_belt_tooth_speed_range_mm_s && (
+                      <div
+                        className="metric-kv"
+                        title="Speed band where 2mm GT2 belt-tooth meshing excites stepper resonance (VFAs)"
+                      >
+                        <span>VFA Tooth Band</span>
+                        <span className="metric-val">
+                          {Math.round(kin.vfa_belt_tooth_speed_range_mm_s[0])}–
+                          {Math.round(kin.vfa_belt_tooth_speed_range_mm_s[1])} mm/s
+                          {kin.pulley_circumference_mm != null
+                            ? ` · ${
+                                Number.isInteger(kin.pulley_circumference_mm)
+                                  ? kin.pulley_circumference_mm
+                                  : kin.pulley_circumference_mm.toFixed(1)
+                              }mm/rev`
+                            : ""}
+                        </span>
+                      </div>
+                    )}
                     {(kin.motor_overcurrent_risk ||
                       kin.belt_overtension_risk ||
                       kin.shaft_bending_risk ||
-                      kin.bracket_creep_risk) && (
+                      kin.bracket_creep_risk ||
+                      kin.steel_core_fatigue_risk) && (
                       <div className="warning-pill-stack">
+                        {kin.steel_core_fatigue_risk && (
+                          <div className="warning-pill warn">
+                            ⚠ Steel-Core Fatigue on ≤20T Pulley
+                          </div>
+                        )}
                         {kin.bracket_creep_risk && (
                           <div className="warning-pill bad">
                             ⚠ Belt tension exceeds gantry bracket creep limit — upgrade to PPA-CF/PPS-CF or CNC Aluminum
@@ -3446,42 +3796,136 @@ export const MetricsPanel: React.FC<Props> = ({
                           </button>
                         </div>
                         <div className="modal-summary-list">
-                          {mod.modes.slice(0, 3).map((m) => {
-                            const axisTag = m.excited_axis
-                              ? `${m.excited_axis}-Accel`
-                              : m.dominant_axis;
-                            const sevMeta = modeSeverityMeta(m.severity);
-                            return (
-                              <div
-                                key={m.mode_number}
-                                className={`modal-mode-item ${m.severity ?? ""}`}
-                              >
-                                <div className="modal-mode-top">
-                                  <span className="modal-mode-title">
-                                    <strong>Mode {m.mode_number}</strong>{" "}
-                                    <span className="modal-mode-freq">
-                                      ({m.frequency_hz.toFixed(1)} Hz · {axisTag})
+                          {(() => {
+                            const baseModes = mod.modes.slice(0, 3);
+                            const worstNum = mod.worst_print_mode_number;
+                            const worstExtra =
+                              worstNum != null && !baseModes.some((x) => x.mode_number === worstNum)
+                                ? mod.modes.find((x) => x.mode_number === worstNum)
+                                : undefined;
+                            const shownModes = worstExtra ? [...baseModes, worstExtra] : baseModes;
+                            return shownModes.map((m) => {
+                              const axisTag = m.excited_axis
+                                ? `${m.excited_axis}-Accel`
+                                : m.dominant_axis;
+                              const sevMeta = modeSeverityMeta(m.severity);
+                              const isWorst = worstNum === m.mode_number;
+                              const hasImpact = m.print_impact_score != null;
+                              const impCls = impactLevelCls(
+                                m.print_impact_level,
+                                m.print_impact_score
+                              );
+                              const share = m.subsystem_share_pct;
+                              const shareParts = share
+                                ? SUBSYSTEM_ORDER.map((k) => ({
+                                    key: k,
+                                    label: SUBSYSTEM_DISPLAY[k].short,
+                                    color: SUBSYSTEM_DISPLAY[k].color,
+                                    pct: Math.round(share[k] ?? 0),
+                                  })).filter((p) => p.pct >= 3)
+                                : [];
+
+                              return (
+                                <div
+                                  key={m.mode_number}
+                                  className={`modal-mode-item ${m.severity ?? ""} ${
+                                    isWorst ? "worst-mode" : ""
+                                  }`}
+                                >
+                                  <div className="modal-mode-top">
+                                    <span className="modal-mode-title">
+                                      {isWorst && (
+                                        <span className="worst-star-inline" title="Worst print-impact mode">
+                                          ★{" "}
+                                        </span>
+                                      )}
+                                      <strong>Mode {m.mode_number}</strong>{" "}
+                                      <span className="modal-mode-freq">
+                                        ({m.frequency_hz.toFixed(1)} Hz · {axisTag})
+                                      </span>
+                                      {m.mode_label && (
+                                        <span className="modal-mode-label"> — {m.mode_label}</span>
+                                      )}
                                     </span>
-                                    {m.mode_label && (
-                                      <span className="modal-mode-label"> — {m.mode_label}</span>
-                                    )}
-                                  </span>
-                                  {sevMeta && (
-                                    <span className={`badge-pill modal-sev-pill ${sevMeta.cls}`}>
-                                      {sevMeta.label}
+                                    <span className="modal-mode-badges">
+                                      {hasImpact ? (
+                                        <span className={`badge-pill modal-sev-pill ${impCls}`}>
+                                          Impact {Math.round(m.print_impact_score!)}/100
+                                        </span>
+                                      ) : (
+                                        sevMeta && (
+                                          <span className={`badge-pill modal-sev-pill ${sevMeta.cls}`}>
+                                            {sevMeta.label}
+                                          </span>
+                                        )
+                                      )}
                                     </span>
-                                  )}
-                                </div>
-                                {m.how_to_fix ? (
-                                  <div className="modal-mode-fix">
-                                    <span className="sens-fix-prefix">Fix:</span> {m.how_to_fix}
                                   </div>
-                                ) : m.what_is_shaking ? (
-                                  <div className="modal-mode-why">{m.what_is_shaking}</div>
-                                ) : null}
-                              </div>
-                            );
-                          })}
+
+                                  {((m.nozzle_whip_ratio ?? 0) >= 1.25 ||
+                                    shareParts.length > 0 ||
+                                    isWorst) && (
+                                    <div className="modal-mode-meta-row">
+                                      {isWorst && (
+                                        <span className="sens-badge flex">★ Worst Print Mode</span>
+                                      )}
+                                      {(m.nozzle_whip_ratio ?? 0) >= 1.25 && (
+                                        <span
+                                          className={`sens-badge ${
+                                            (m.nozzle_whip_ratio ?? 0) >= 1.8 ? "flex" : "roi"
+                                          }`}
+                                          title="Nozzle-to-carriage dynamic whip amplification"
+                                        >
+                                          {m.nozzle_whip_ratio!.toFixed(1)}× whip
+                                        </span>
+                                      )}
+                                      {shareParts.length > 0 && (
+                                        <span className="modal-sub-pills">
+                                          {shareParts.map((sp, i) => (
+                                            <React.Fragment key={sp.key}>
+                                              {i > 0 && <span className="modal-sub-dot">·</span>}
+                                              <span className="modal-sub-pill-item">
+                                                <span
+                                                  className="swatch-dot"
+                                                  style={{ background: sp.color }}
+                                                />
+                                                {sp.label} {sp.pct}%
+                                              </span>
+                                            </React.Fragment>
+                                          ))}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {m.how_to_fix ? (
+                                    <div className="modal-mode-fix">
+                                      <span className="sens-fix-prefix">Fix:</span> {m.how_to_fix}
+                                    </div>
+                                  ) : m.what_is_shaking ? (
+                                    <div className="modal-mode-why">{m.what_is_shaking}</div>
+                                  ) : null}
+
+                                  {(() => {
+                                    const modeFix = getQuickFixForMode(m, sim.spec);
+                                    if (!modeFix || !onApplyFix) return null;
+                                    return (
+                                      <div className="quick-fix-row">
+                                        <button
+                                          type="button"
+                                          className="quick-fix-btn"
+                                          onClick={() => onApplyFix(modeFix)}
+                                          title={modeFix.summary}
+                                        >
+                                          ⚡ {modeFix.buttonLabel}
+                                        </button>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            });
+                          })()}
                         </div>
                       </div>
                     )}

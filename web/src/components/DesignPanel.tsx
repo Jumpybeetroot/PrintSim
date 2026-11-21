@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   BearingClearanceClass,
   BedMountType,
+  BeltRoutingType,
   BracketMaterialType,
   CatalogResponse,
   CornerJointType,
   DriveType,
   ExtrusionFillingInfo,
   ExtrusionFillingType,
+  FrameFeetType,
   GantryBracketInfo,
   PrinterSpecData,
   RailBackerMaterialType,
@@ -20,6 +22,7 @@ import {
   TopoOptRequestParams,
   XRailMountType,
   YRailMountType,
+  ZProbeType,
 } from "../types";
 
 interface Props {
@@ -31,6 +34,10 @@ interface Props {
   onFilamentChange: (id: string) => void;
   spec: PrinterSpecData | null;
   onSpecChange: (next: PrinterSpecData, changeLabel?: string) => void;
+  toolheadRelPos: [number, number, number];
+  onToolheadRelPosChange: (pos: [number, number, number], changeLabel?: string) => void;
+  panelMeshN: number;
+  onPanelMeshNChange: (n: number) => void;
   yamlText: string;
   onYamlChange: (txt: string) => void;
   onSimulateYaml: () => void;
@@ -426,11 +433,194 @@ const BEARING_CLEARANCE_OPTIONS: Array<{ id: BearingClearanceClass; label: strin
   { id: "C3", label: "C3 Loose", shortLabel: "C3" },
 ];
 
-const BED_MOUNT_OPTIONS: Array<{ id: BedMountType; label: string; shortLabel: string }> = [
-  { id: "kinematic_3pt", label: "3-Pt Kinematic (Maxwell)", shortLabel: "3-Pt Kinematic" },
-  { id: "floating_4pt", label: "4-Pt Floating", shortLabel: "4-Pt Floating" },
-  { id: "rigid_4pt", label: "4-Pt Rigid (Over-Constrained)", shortLabel: "4-Pt Rigid" },
+const BED_MOUNT_OPTIONS: Array<{
+  id: BedMountType;
+  label: string;
+  shortLabel: string;
+  hint: string;
+}> = [
+  {
+    id: "kinematic_3pt",
+    label: "3-Pt Kinematic (Maxwell)",
+    shortLabel: "3-Pt Kinematic",
+    hint: "Zero thermal taco buckling at high bed temps with high axial/lateral stiffness.",
+  },
+  {
+    id: "whopping_pochard_kinematic",
+    label: "Whopping Pochard Leaf-Spring (Tap-Rated)",
+    shortLabel: "Whopping Pochard",
+    hint: "Zero-play kinematic leaf-spring mount — eliminates thermal taco while staying rigid under Voron Tap probing.",
+  },
+  {
+    id: "rigid_4pt",
+    label: "4-Pt Rigid (Hard Spacers)",
+    shortLabel: "4-Pt Rigid",
+    hint: "Stiffest mechanically, but over-constrains thermal expansion and tacos above 80°C.",
+  },
+  {
+    id: "floating_4pt",
+    label: "4-Pt Floating (1 Fixed + 3 Slotted)",
+    shortLabel: "4-Pt Floating",
+    hint: "Stiff vertically while slotted corners relieve thermal expansion without buckling.",
+  },
+  {
+    id: "silicone_4pt",
+    label: "4-Pt Silicone Spacers",
+    shortLabel: "4-Pt Silicone",
+    hint: "Thermally decoupled with moderate damping; softer than kinematic/rigid mounts.",
+  },
+  {
+    id: "springs_4pt",
+    label: "4-Pt Bed Springs (Yellow)",
+    shortLabel: "4-Pt Springs",
+    hint: "Low-cost leveling springs; softest mount with highest bed-bounce under Y accel.",
+  },
 ];
+
+const FRAME_FEET_OPTIONS: Array<{
+  id: FrameFeetType;
+  label: string;
+  shortLabel: string;
+  hint: string;
+}> = [
+  {
+    id: "rigid_bolted",
+    label: "Rigid Bolted",
+    shortLabel: "Rigid Bolted",
+    hint: "Frame rigidly anchored to heavy benchtop — suppresses whole-frame sway so all modes are internal structural flex.",
+  },
+  {
+    id: "rubber_feet",
+    label: "Rubber / TPU Feet",
+    shortLabel: "Rubber Feet",
+    hint: "Compliant benchtop feet allow low-Hz whole-frame rocking (low nozzle-to-bed error!) while isolating bench vibrations.",
+  },
+  {
+    id: "anti_vib_pads",
+    label: "Anti-Vib Pads / HULA",
+    shortLabel: "Anti-Vib Pads",
+    hint: "Ultra-soft omnidirectional isolation (HULA/sorbothane) lets the whole chassis float together with minimal nozzle-to-bed print error.",
+  },
+  {
+    id: "paver_on_foam",
+    label: "Concrete Paver on Foam (18 kg Inert Base)",
+    shortLabel: "Paver on Foam",
+    hint: "18 kg concrete paver over acoustic foam decouples benchtop noise while adding massive base inertia to resist frame rocking.",
+  },
+];
+
+const Z_PROBE_OPTIONS: Array<{
+  id: ZProbeType;
+  label: string;
+  shortLabel: string;
+  hint: string;
+}> = [
+  {
+    id: "static_eddy",
+    label: "Static Eddy (Beacon/Cartographer)",
+    shortLabel: "Static Eddy",
+    hint: "Rigid direct-bolt carriage (~5g) — avoids Voron Tap's +62–78g mass and sliding-rail resonance penalty.",
+  },
+  {
+    id: "klicky_inductive",
+    label: "Klicky / Inductive",
+    shortLabel: "Klicky / Inductive",
+    hint: "Rigid carriage mount (~12g) — avoids Tap's sliding-rail compliance penalty while keeping high nozzle resonance.",
+  },
+  {
+    id: "cnc_tap",
+    label: "CNC Voron Tap (+62g)",
+    shortLabel: "CNC Tap",
+    hint: "Nozzle-tap MGN9 sliding rail adds +62g moving mass and extra carriage compliance — cuts resonance vs a rigid Beacon/eddy mount.",
+  },
+  {
+    id: "printed_tap",
+    label: "Printed Voron Tap (+78g, soft)",
+    shortLabel: "Printed Tap",
+    hint: "Printed sliding-rail Tap adds +78g and soft compliance in the nozzle load path — sharp resonance drop vs a rigid Beacon/eddy mount.",
+  },
+];
+
+const BELT_ROUTING_OPTIONS: Array<{
+  id: BeltRoutingType;
+  label: string;
+  shortLabel: string;
+  hint: string;
+}> = [
+  {
+    id: "stock_corexy",
+    label: "Stock CoreXY Routing",
+    shortLabel: "Stock CoreXY",
+    hint: "Standard full-perimeter CoreXY belt loop with conventional fixed-pin idlers.",
+  },
+  {
+    id: "monolith_short",
+    label: "Monolith Short Path + Live-Shaft Idlers",
+    shortLabel: "Monolith Short",
+    hint: "Shortened belt spans + rigid live-shaft idler bearings boost belt frequency and curb idler deflection.",
+  },
+];
+
+const PLATE_MATERIAL_FALLBACKS: Array<{ id: string; name: string }> = [
+  { id: "mic6_aluminum", name: "MIC-6 Cast Aluminum Plate" },
+  { id: "atp5_aluminum", name: "ATP-5 Cast Aluminum Plate" },
+  { id: "aluminum_6061_t6", name: "Aluminum 6061-T6" },
+  { id: "aluminum_7075_t6", name: "Aluminum 7075-T6" },
+  { id: "steel_mild", name: "Mild Steel (A36)" },
+  { id: "carbon_fiber_quasi", name: "Carbon Fiber (Quasi-Isotropic)" },
+];
+
+const PLATE_MATERIAL_IDS = new Set([
+  "mic6_aluminum",
+  "atp5_aluminum",
+  "aluminum_6061_t6",
+  "aluminum_7075_t6",
+  "aluminum_5052_sheet",
+  "steel_mild",
+  "steel_4140",
+  "stainless_304",
+  "titanium_grade5",
+  "carbon_fiber_quasi",
+  "carbon_fiber_plate",
+  "brass_c360",
+  "copper_c110",
+]);
+
+const TEST_POS_PRESETS: Array<{
+  id: string;
+  label: string;
+  pos: [number, number, number];
+}> = [
+  { id: "center", label: "Center", pos: [0.5, 0.5, 0.5] },
+  { id: "front_left", label: "Front-Left", pos: [0.15, 0.15, 0.5] },
+  { id: "top_z", label: "Top Z", pos: [0.5, 0.5, 0.85] },
+  { id: "low_z", label: "Low Z", pos: [0.5, 0.5, 0.15] },
+];
+
+function bedZTopologyMeta(arch: PrinterSpecData["architecture"], zDrive: string): {
+  badge: string;
+  caption: string;
+} {
+  if (arch === "cartesian_bedslinger") {
+    return { badge: "Moving Y-Bed", caption: "Y-axis bed carriage on linear rails/rods" };
+  }
+  if (arch === "delta") {
+    return { badge: "Fixed Delta Base", caption: "Stationary circular plate anchored to bottom triangle" };
+  }
+  if (zDrive === "belted_quad_z") {
+    return { badge: "Fixed Base Bed", caption: "Voron 2.4 style — bed fixed to base extrusions, flying XY gantry" };
+  }
+  if (zDrive === "leadscrew_triple") {
+    return { badge: "3-Pt Trident Z", caption: "3 independent Z leadscrews (front-left, front-right, rear-center)" };
+  }
+  if (zDrive === "leadscrew_dual") {
+    return { badge: "2-Pt Left/Right Z", caption: "Dual left/right Z leadscrews & linear guides" };
+  }
+  if (zDrive === "leadscrew_single") {
+    return { badge: "Cantilever Rear-Z", caption: "Single rear Z rail/screw — test front/low Z for cantilever droop" };
+  }
+  return { badge: zDrive, caption: "Z-axis bed support" };
+}
 
 export const DesignPanel: React.FC<Props> = ({
   catalog,
@@ -441,6 +631,10 @@ export const DesignPanel: React.FC<Props> = ({
   onFilamentChange,
   spec,
   onSpecChange,
+  toolheadRelPos,
+  onToolheadRelPosChange,
+  panelMeshN,
+  onPanelMeshNChange,
   yamlText,
   onYamlChange,
   onSimulateYaml,
@@ -516,6 +710,13 @@ export const DesignPanel: React.FC<Props> = ({
     spec?.kinematics.notch_filter_hz != null ? String(Math.round(spec.kinematics.notch_filter_hz)) : ""
   );
 
+  const [posDraft, setPosDraft] = useState<[number, number, number]>(toolheadRelPos);
+  const posTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setPosDraft(toolheadRelPos);
+  }, [toolheadRelPos[0], toolheadRelPos[1], toolheadRelPos[2]]);
+
   useEffect(() => {
     if (spec?.gantry.belt.pretension_n != null) {
       setTensionDraft(spec.gantry.belt.pretension_n);
@@ -581,6 +782,7 @@ export const DesignPanel: React.FC<Props> = ({
       if (toolheadStiffnessTimerRef.current != null) window.clearTimeout(toolheadStiffnessTimerRef.current);
       if (chamberTempTimerRef.current != null) window.clearTimeout(chamberTempTimerRef.current);
       if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
+      if (posTimerRef.current != null) window.clearTimeout(posTimerRef.current);
     };
   }, []);
 
@@ -822,7 +1024,66 @@ export const DesignPanel: React.FC<Props> = ({
   const currentIdlerShaftMm: number = spec.gantry.belt.idler_shaft_diameter_mm ?? 5;
   const currentBearingClass: BearingClearanceClass = spec.gantry.belt.bearing_clearance_class ?? "CN";
   const currentBedMount: BedMountType = spec.bed.mount_type ?? "kinematic_3pt";
+  const currentFeetType: FrameFeetType = spec.frame.feet_type ?? "rigid_bolted";
   const currentDriveType: DriveType = spec.kinematics.drive_type ?? "open_loop_stepper";
+  const currentBeltRouting: BeltRoutingType = spec.gantry.belt_routing ?? "stock_corexy";
+  const currentZProbe: ZProbeType = spec.toolhead.z_probe_type ?? "static_eddy";
+
+  const bedMountCatalogEntry = catalog.bed_mounts?.find((m) => m.id === currentBedMount);
+  const bedMountOptionMeta =
+    BED_MOUNT_OPTIONS.find((o) => o.id === currentBedMount) ?? BED_MOUNT_OPTIONS[0];
+  const frameFeetCatalogEntry = catalog.frame_feet?.find((f) => f.id === currentFeetType);
+  const frameFeetOptionMeta =
+    FRAME_FEET_OPTIONS.find((o) => o.id === currentFeetType) ?? FRAME_FEET_OPTIONS[0];
+  const beltRoutingCatalogEntry = catalog.belt_routings?.find((r) => r.id === currentBeltRouting);
+  const beltRoutingOptionMeta =
+    BELT_ROUTING_OPTIONS.find((o) => o.id === currentBeltRouting) ?? BELT_ROUTING_OPTIONS[0];
+  const zProbeCatalogEntry = catalog.z_probes?.find((p) => p.id === currentZProbe);
+  const zProbeOptionMeta =
+    Z_PROBE_OPTIONS.find((o) => o.id === currentZProbe) ?? Z_PROBE_OPTIONS[0];
+
+  const plateMaterialOptions = (() => {
+    const filtered = catalog.materials
+      .filter((m) => PLATE_MATERIAL_IDS.has(m.id) || m.id === spec.bed.plate_material)
+      .map((m) => ({ id: m.id, name: m.name }));
+    const existingIds = new Set(filtered.map((m) => m.id));
+    for (const fb of PLATE_MATERIAL_FALLBACKS) {
+      if (!existingIds.has(fb.id)) {
+        filtered.push(fb);
+        existingIds.add(fb.id);
+      }
+    }
+    if (!existingIds.has(spec.bed.plate_material)) {
+      filtered.unshift({ id: spec.bed.plate_material, name: spec.bed.plate_material });
+    }
+    return filtered;
+  })();
+
+  const zTopoMeta = bedZTopologyMeta(spec.architecture, spec.bed.z_drive);
+
+  const commitToolheadRelPos = (nextPos: [number, number, number], label?: string) => {
+    if (posTimerRef.current != null) {
+      window.clearTimeout(posTimerRef.current);
+      posTimerRef.current = null;
+    }
+    if (
+      Math.abs(nextPos[0] - toolheadRelPos[0]) < 0.005 &&
+      Math.abs(nextPos[1] - toolheadRelPos[1]) < 0.005 &&
+      Math.abs(nextPos[2] - toolheadRelPos[2]) < 0.005
+    ) {
+      return;
+    }
+    onToolheadRelPosChange(nextPos, label);
+  };
+
+  const handlePosAxisSlider = (axisIdx: 0 | 1 | 2, pctVal: number) => {
+    const frac = Math.max(0.1, Math.min(0.9, Math.round(pctVal) / 100));
+    const next: [number, number, number] = [posDraft[0], posDraft[1], posDraft[2]];
+    next[axisIdx] = frac;
+    setPosDraft(next);
+    if (posTimerRef.current != null) window.clearTimeout(posTimerRef.current);
+    posTimerRef.current = window.setTimeout(() => commitToolheadRelPos(next), 240);
+  };
   const currentServoVelBw: number = spec.kinematics.servo_vel_bw_hz ?? 120;
 
   const commitNotchFilter = (raw: string) => {
@@ -960,6 +1221,7 @@ export const DesignPanel: React.FC<Props> = ({
       Math.round(Math.abs(tp.cog_offset_mm[2])) === specCogZAbs &&
       Math.round(Math.abs(tp.nozzle_offset_mm[2])) === specNozzleZAbs &&
       tp.mount_material === currentMountMaterial &&
+      (tp.z_probe_type ?? "static_eddy") === currentZProbe &&
       (tp.internal_stiffness_n_per_mm == null ||
         Math.round(tp.internal_stiffness_n_per_mm) === specToolheadStiffness)
   );
@@ -1988,6 +2250,53 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="hint-line">Wider/stiffer belts reduce stretch and sharpen corners</div>
               )}
 
+              {spec.architecture === "corexy" && (
+                <div className="field-row">
+                  <label>
+                    <span>Belt Path &amp; Idlers</span>
+                    <span
+                      style={{
+                        color: currentBeltRouting === "monolith_short" ? "var(--accent)" : "var(--muted)",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {beltRoutingOptionMeta.shortLabel}
+                    </span>
+                  </label>
+                  <select
+                    value={currentBeltRouting}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as BeltRoutingType;
+                      const prevLbl =
+                        BELT_ROUTING_OPTIONS.find((o) => o.id === currentBeltRouting)?.shortLabel ??
+                        currentBeltRouting;
+                      const nextLbl =
+                        BELT_ROUTING_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                      update(
+                        (d) => {
+                          d.gantry.belt_routing = nextVal;
+                        },
+                        `Belt Path: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {BELT_ROUTING_OPTIONS.map((opt) => {
+                      const catItem = catalog.belt_routings?.find((r) => r.id === opt.id);
+                      return (
+                        <option key={opt.id} value={opt.id}>
+                          {catItem?.name ?? opt.label}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {showHints && (
+                    <div className="hint-line">
+                      {beltRoutingCatalogEntry?.notes || beltRoutingOptionMeta.hint}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="field-grid-2">
                 <div className="field-row">
                   <label>Belt Width</label>
@@ -2481,6 +2790,7 @@ export const DesignPanel: React.FC<Props> = ({
                         d.toolhead.cog_offset_mm = [...chosen.cog_offset_mm];
                         d.toolhead.nozzle_offset_mm = [...chosen.nozzle_offset_mm];
                         d.toolhead.mount_material = chosen.mount_material;
+                        d.toolhead.z_probe_type = chosen.z_probe_type ?? "static_eddy";
                         if (chosen.internal_stiffness_n_per_mm != null) {
                           d.toolhead.internal_stiffness_n_per_mm =
                             chosen.internal_stiffness_n_per_mm;
@@ -2501,6 +2811,58 @@ export const DesignPanel: React.FC<Props> = ({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="field-row">
+                <label>
+                  <span>Z-Probe / Carriage Interface</span>
+                  <span
+                    style={{
+                      color:
+                        currentZProbe === "printed_tap" || currentZProbe === "cnc_tap"
+                          ? "var(--amber)"
+                          : "var(--accent)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {zProbeOptionMeta.shortLabel}
+                  </span>
+                </label>
+                <select
+                  value={currentZProbe}
+                  onChange={(e) => {
+                    const nextVal = e.target.value as ZProbeType;
+                    const prevLbl =
+                      Z_PROBE_OPTIONS.find((o) => o.id === currentZProbe)?.shortLabel ??
+                      currentZProbe;
+                    const nextLbl =
+                      Z_PROBE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                    update(
+                      (d) => {
+                        d.toolhead.z_probe_type = nextVal;
+                      },
+                      `Z-Probe: ${prevLbl} → ${nextLbl}`
+                    );
+                  }}
+                >
+                  {Z_PROBE_OPTIONS.map((opt) => {
+                    const catItem = catalog.z_probes?.find((p) => p.id === opt.id);
+                    return (
+                      <option key={opt.id} value={opt.id}>
+                        {catItem?.name ?? opt.label}
+                      </option>
+                    );
+                  })}
+                </select>
+                {showHints && (
+                  <div
+                    className={`hint-line ${
+                      currentZProbe === "printed_tap" || currentZProbe === "cnc_tap" ? "warn" : ""
+                    }`}
+                  >
+                    {zProbeCatalogEntry?.notes || zProbeOptionMeta.hint}
+                  </div>
+                )}
               </div>
 
               <div className="field-grid-2">
@@ -2844,12 +3206,11 @@ export const DesignPanel: React.FC<Props> = ({
                 <span className="sub-block-tag">{bedTempDraft}°C</span>
               </div>
 
-              {showHints && (
-                <div className="hint-line">
-                  Rigid 4-point mounts constrain aluminum expansion at high bed temps, causing thermal
-                  &quot;taco&quot; buckling; 3-point Maxwell kinematic mounts keep the plate flat.
-                </div>
-              )}
+              <div className="inline-readout-strip" title={zTopoMeta.caption}>
+                <strong style={{ color: "var(--accent)" }}>{zTopoMeta.badge}</strong>
+                <span>·</span>
+                <span>{zTopoMeta.caption}</span>
+              </div>
 
               <div className="slider-row">
                 <label>
@@ -2890,7 +3251,14 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="field-row">
-                <label>Bed Mount</label>
+                <label>
+                  <span>Bed Mount</span>
+                  {bedMountCatalogEntry?.k_axial_n_per_mm != null && (
+                    <span style={{ fontSize: 10, color: "var(--muted)" }}>
+                      k_z {Math.round(bedMountCatalogEntry.k_axial_n_per_mm)} N/mm
+                    </span>
+                  )}
+                </label>
                 <select
                   value={currentBedMount}
                   onChange={(e) => {
@@ -2908,12 +3276,229 @@ export const DesignPanel: React.FC<Props> = ({
                     );
                   }}
                 >
-                  {BED_MOUNT_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.label}
+                  {BED_MOUNT_OPTIONS.map((opt) => {
+                    const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
+                    return (
+                      <option key={opt.id} value={opt.id}>
+                        {catItem?.name ?? opt.label}
+                      </option>
+                    );
+                  })}
+                </select>
+                {showHints && (
+                  <div className="hint-line">
+                    {bedMountCatalogEntry?.notes || bedMountOptionMeta.hint}
+                  </div>
+                )}
+              </div>
+
+              <div className="field-grid-2">
+                <div className="field-row">
+                  <label>Plate Thickness (mm)</label>
+                  <input
+                    type="number"
+                    min={4}
+                    max={12}
+                    step={1}
+                    value={spec.bed.plate_thickness_mm}
+                    onChange={(e) =>
+                      updatePositiveNum(
+                        e.target.value,
+                        (d, v) => {
+                          d.bed.plate_thickness_mm = Math.max(4, Math.min(12, v));
+                        },
+                        (v) =>
+                          `Plate Thickness: ${spec.bed.plate_thickness_mm} → ${Math.max(
+                            4,
+                            Math.min(12, v)
+                          )} mm`
+                      )
+                    }
+                  />
+                </div>
+                <div className="field-row">
+                  <label>Bed Mass (g)</label>
+                  <input
+                    type="number"
+                    min={800}
+                    max={6000}
+                    step={100}
+                    value={spec.bed.mass_g}
+                    onChange={(e) =>
+                      updatePositiveNum(
+                        e.target.value,
+                        (d, v) => {
+                          d.bed.mass_g = Math.max(800, Math.min(6000, Math.round(v)));
+                        },
+                        (v) =>
+                          `Bed Mass: ${spec.bed.mass_g}g → ${Math.max(
+                            800,
+                            Math.min(6000, Math.round(v))
+                          )}g`
+                      )
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="field-row">
+                <label>Plate Material</label>
+                <select
+                  value={spec.bed.plate_material}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    update(
+                      (d) => {
+                        d.bed.plate_material = nextVal;
+                      },
+                      `Plate Material: ${materialLabel(spec.bed.plate_material)} → ${materialLabel(
+                        nextVal
+                      )}`
+                    );
+                  }}
+                >
+                  {plateMaterialOptions.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
                     </option>
                   ))}
                 </select>
+              </div>
+            </div>
+
+            <div className="section-card">
+              <div className="section-title">
+                <span>Simulation &amp; Anchoring</span>
+                <span className="sub-block-tag">{panelMeshN}×{panelMeshN} Shell</span>
+              </div>
+
+              <div className="field-row">
+                <label>
+                  <span>Benchtop Feet</span>
+                  <span style={{ color: currentFeetType === "rigid_bolted" ? "var(--muted)" : "var(--accent)", fontWeight: 600 }}>
+                    {frameFeetOptionMeta.shortLabel}
+                  </span>
+                </label>
+                <select
+                  value={currentFeetType}
+                  onChange={(e) => {
+                    const nextVal = e.target.value as FrameFeetType;
+                    const prevLbl =
+                      FRAME_FEET_OPTIONS.find((o) => o.id === currentFeetType)?.shortLabel ??
+                      currentFeetType;
+                    const nextLbl =
+                      FRAME_FEET_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                    update(
+                      (d) => {
+                        d.frame.feet_type = nextVal;
+                      },
+                      `Benchtop Feet: ${prevLbl} → ${nextLbl}`
+                    );
+                  }}
+                >
+                  {FRAME_FEET_OPTIONS.map((opt) => {
+                    const catItem = catalog.frame_feet?.find((f) => f.id === opt.id);
+                    return (
+                      <option key={opt.id} value={opt.id}>
+                        {catItem?.name ?? opt.label}
+                      </option>
+                    );
+                  })}
+                </select>
+                {showHints && (
+                  <div className="hint-line">
+                    {frameFeetCatalogEntry?.notes || frameFeetOptionMeta.hint}
+                  </div>
+                )}
+              </div>
+
+              <div className="sub-block">
+                <div className="sub-block-title">
+                  <span>Test Position (X, Y, Z)</span>
+                  <span className="sub-block-tag">
+                    {Math.round(posDraft[0] * 100)} / {Math.round(posDraft[1] * 100)} /{" "}
+                    {Math.round(posDraft[2] * 100)}%
+                  </span>
+                </div>
+
+                <div className="chip-group">
+                  {TEST_POS_PRESETS.map((preset) => {
+                    const isActive =
+                      Math.abs(posDraft[0] - preset.pos[0]) < 0.03 &&
+                      Math.abs(posDraft[1] - preset.pos[1]) < 0.03 &&
+                      Math.abs(posDraft[2] - preset.pos[2]) < 0.03;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className={`chip-btn ${isActive ? "active" : ""}`}
+                        onClick={() => {
+                          setPosDraft(preset.pos);
+                          commitToolheadRelPos(preset.pos, `Test Position: ${preset.label}`);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="pos-slider-grid">
+                  {(
+                    [
+                      [0, "X"],
+                      [1, "Y"],
+                      [2, "Z"],
+                    ] as Array<[0 | 1 | 2, string]>
+                  ).map(([idx, axisName]) => {
+                    const pct = Math.round(posDraft[idx] * 100);
+                    return (
+                      <div key={axisName} className="pos-slider-row">
+                        <span className="pos-axis-lbl">{axisName}</span>
+                        <input
+                          type="range"
+                          min={10}
+                          max={90}
+                          step={5}
+                          value={pct}
+                          onChange={(e) => handlePosAxisSlider(idx, Number(e.target.value))}
+                          onPointerUp={() => commitToolheadRelPos(posDraft)}
+                          onKeyUp={() => commitToolheadRelPos(posDraft)}
+                        />
+                        <span className="pos-axis-val">{pct}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {showHints && (
+                  <div className="hint-line">
+                    Probe corners or Top/Low Z to reveal cantilever bed droop, Z-column flex, or
+                    asymmetric gantry modes.
+                  </div>
+                )}
+              </div>
+
+              <div className="field-row">
+                <label>Panel Shell Mesh (MITC4)</label>
+                <div className="engine-toggle engine-toggle-3">
+                  {(
+                    [
+                      [2, "2×2 Fast"],
+                      [4, "4×4 Med"],
+                      [6, "6×6 Fine"],
+                    ] as Array<[number, string]>
+                  ).map(([n, label]) => (
+                    <button
+                      key={n}
+                      type="button"
+                      className={`engine-toggle-btn ${panelMeshN === n ? "active" : ""}`}
+                      onClick={() => onPanelMeshNChange(n)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </>

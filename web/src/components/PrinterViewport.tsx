@@ -2,18 +2,49 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  AdjointLens,
+  BedMountType,
   FeaLoadCase,
+  FrameFeetType,
   GeometryMember,
   ShellPanelGeometryData,
   SimulationResponse,
   SolidFeaEngine,
   SolidFEAResponse,
+  SubsystemKey,
   TetFEAResponse,
   TopologyOptResponse,
   ViewMode,
   XRailMountType,
   YRailMountType,
 } from "../types";
+import {
+  classifyPartGroup,
+  getQuickFixForTarget,
+  QuickFixAction,
+} from "../utils/quickFixes";
+
+interface InspectedPartInfo {
+  key: string;
+  name: string;
+  subsystem: SubsystemKey;
+  partGroupId: string;
+  role: string;
+  material?: string;
+  profile?: string;
+  complianceSharePct?: number;
+  heatScore?: number;
+  stressMpa?: number;
+  yieldMpa?: number;
+  estHzGain?: number;
+  hzPer100g?: number;
+  whyItHurts?: string;
+  actionHint?: string;
+  bedFlatnessUm?: number;
+  bedTacoUm?: number;
+  bedModeHz?: number;
+  bedRisk?: "low" | "moderate" | "high" | "critical";
+}
 
 interface Props {
   sim: SimulationResponse | null;
@@ -31,6 +62,9 @@ interface Props {
   onFeaLoadCaseChange: (lc: FeaLoadCase) => void;
   layerLimit: number;
   onLayerLimitChange: (l: number) => void;
+  showBedWarp?: boolean;
+  onToggleBedWarp?: (show: boolean) => void;
+  onApplyFix?: (fix: QuickFixAction) => void;
 }
 
 const SCALE = 0.01; // 100 mm = 1 Three.js unit
@@ -82,6 +116,83 @@ function modeSeverityMeta(severity?: "critical" | "moderate" | "stiff"): {
 
 function formatHzGain(hz: number): string {
   return hz >= 0.1 ? hz.toFixed(1) : hz.toFixed(2);
+}
+
+const ADJOINT_LENS_OPTIONS: Array<{ id: AdjointLens; label: string; title: string }> = [
+  {
+    id: "print_impact",
+    label: "Print Impact",
+    title: "Combined nozzle-to-bed flex, XY print-excited modal Hz & moving-mass penalty",
+  },
+  {
+    id: "compliance",
+    label: "Static Flex %",
+    title: "Pure static nozzle-to-bed compliance share (0 to +1)",
+  },
+  {
+    id: "modal",
+    label: "Modal Hz",
+    title: "XY print-excited modal frequency sensitivity (-1 to +1)",
+  },
+  {
+    id: "mass",
+    label: "Moving Mass",
+    title: "Moving-mass frequency penalty — cyan highlights parts to lighten",
+  },
+];
+
+const SUBSYSTEM_ORDER: SubsystemKey[] = ["toolhead", "gantry", "frame", "bed"];
+
+const SUBSYSTEM_META: Record<SubsystemKey, { label: string; color: string }> = {
+  toolhead: { label: "Toolhead", color: "#f43f5e" },
+  gantry: { label: "Gantry", color: "#f59e0b" },
+  frame: { label: "Frame", color: "#38bdf8" },
+  bed: { label: "Bed", color: "#a855f7" },
+};
+
+function getLensScore(
+  entry:
+    | {
+        heat_score?: number;
+        heat_score_compliance?: number;
+        heat_score_modal?: number;
+        heat_score_mass?: number;
+        hz_per_100g?: number;
+      }
+    | undefined,
+  lens: AdjointLens
+): number {
+  if (!entry) return 0;
+  if (lens === "compliance") {
+    return entry.heat_score_compliance ?? Math.max(0, entry.heat_score ?? 0);
+  }
+  if (lens === "modal") {
+    return entry.heat_score_modal ?? entry.heat_score ?? 0;
+  }
+  if (lens === "mass") {
+    if (entry.heat_score_mass != null) return entry.heat_score_mass;
+    if (entry.heat_score != null && entry.heat_score < 0) return entry.heat_score;
+    if (entry.hz_per_100g != null && entry.hz_per_100g < 0) {
+      return Math.max(-1, entry.hz_per_100g / 6);
+    }
+    return 0;
+  }
+  if (entry.heat_score != null) return entry.heat_score;
+  if (entry.hz_per_100g != null && entry.hz_per_100g < 0) {
+    return Math.max(-1, entry.hz_per_100g / 6);
+  }
+  return 0;
+}
+
+function impactLevelMeta(level?: "critical" | "high" | "moderate" | "low"): {
+  label: string;
+  cls: string;
+  dotColor: string;
+} {
+  if (level === "critical") return { label: "Critical", cls: "bad", dotColor: "#ef4444" };
+  if (level === "high") return { label: "High", cls: "warn", dotColor: "#f59e0b" };
+  if (level === "moderate") return { label: "Moderate", cls: "warn", dotColor: "#eab308" };
+  return { label: "Low", cls: "ok", dotColor: "#64748b" };
 }
 
 function disposeGroupChildren(group: THREE.Group): void {
@@ -171,6 +282,49 @@ function sensitivityColorInto(score: number, out: THREE.Color): THREE.Color {
     }
   }
   return out;
+}
+
+const BED_WARP_VALLEY = new THREE.Color("#3b82f6");
+const BED_WARP_FLAT = new THREE.Color("#10b981");
+const BED_WARP_CROWN = new THREE.Color("#f59e0b");
+const BED_WARP_SEVERE = new THREE.Color("#ef4444");
+
+function bedWarpColorInto(t: number, out: THREE.Color): THREE.Color {
+  const c = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0.5));
+  if (c < 0.42) {
+    out.lerpColors(BED_WARP_VALLEY, BED_WARP_FLAT, c / 0.42);
+  } else if (c < 0.76) {
+    out.lerpColors(BED_WARP_FLAT, BED_WARP_CROWN, (c - 0.42) / 0.34);
+  } else {
+    out.lerpColors(BED_WARP_CROWN, BED_WARP_SEVERE, (c - 0.76) / 0.24);
+  }
+  return out;
+}
+
+const INSPECT_HIGHLIGHT_COLOR = new THREE.Color("#38bdf8");
+
+function applyInspectHighlight(
+  mesh: THREE.Mesh | null | undefined,
+  mode: "none" | "hover" | "pin",
+  pulse = 0
+): void {
+  if (!mesh) return;
+  const mat = mesh.material;
+  if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+  if (mesh.userData._origEmissiveHex === undefined) {
+    mesh.userData._origEmissiveHex = mat.emissive.getHex();
+    mesh.userData._origEmissiveIntensity = mat.emissiveIntensity;
+  }
+  if (mode === "none") {
+    mat.emissive.setHex(mesh.userData._origEmissiveHex as number);
+    mat.emissiveIntensity = mesh.userData._origEmissiveIntensity as number;
+  } else if (mode === "hover") {
+    mat.emissive.copy(INSPECT_HIGHLIGHT_COLOR);
+    mat.emissiveIntensity = Math.max((mesh.userData._origEmissiveIntensity as number) || 0, 0.28);
+  } else {
+    mat.emissive.copy(INSPECT_HIGHLIGHT_COLOR);
+    mat.emissiveIntensity = 0.36 + 0.16 * pulse;
+  }
 }
 
 function toThree(ptMm: [number, number, number], cx: number, cy: number): THREE.Vector3 {
@@ -839,9 +993,27 @@ export const PrinterViewport: React.FC<Props> = ({
   onFeaLoadCaseChange,
   layerLimit,
   onLayerLimitChange,
+  showBedWarp: showBedWarpProp,
+  onToggleBedWarp,
+  onApplyFix,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(true);
+  const [adjointLens, setAdjointLens] = useState<AdjointLens>("print_impact");
+  const [modalColorMode, setModalColorMode] = useState<"relative" | "global">("relative");
+  const [internalShowBedWarp, setInternalShowBedWarp] = useState<boolean>(false);
+  const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
+  const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
+
+  const showBedWarp = showBedWarpProp ?? internalShowBedWarp;
+  const setShowBedWarp = (next: boolean) => {
+    if (onToggleBedWarp) {
+      onToggleBedWarp(next);
+    } else {
+      setInternalShowBedWarp(next);
+    }
+  };
+
   const stateRef = useRef<{
     renderer?: THREE.WebGLRenderer;
     scene?: THREE.Scene;
@@ -850,6 +1022,11 @@ export const PrinterViewport: React.FC<Props> = ({
     dynamicGroup?: THREE.Group;
     animFrame?: number;
     lastFramedKey?: string;
+    inspectableMeshes: THREE.Mesh[];
+    hoveredMesh: THREE.Mesh | null;
+    pinnedMesh: THREE.Mesh | null;
+    pinnedKey: string | null;
+    hoveredKey: string | null;
     modalMeshes: Array<{
       mesh: THREE.Mesh;
       startId: string;
@@ -871,6 +1048,11 @@ export const PrinterViewport: React.FC<Props> = ({
     modalVectors: Record<string, THREE.Vector3>;
     isModal: boolean;
   }>({
+    inspectableMeshes: [],
+    hoveredMesh: null,
+    pinnedMesh: null,
+    pinnedKey: null,
+    hoveredKey: null,
     modalMeshes: [],
     modalContinuousBeams: [],
     modalShellMeshes: [],
@@ -879,6 +1061,21 @@ export const PrinterViewport: React.FC<Props> = ({
     modalVectors: {},
     isModal: false,
   });
+
+  const handleCloseInspector = () => {
+    if (stateRef.current.pinnedMesh) {
+      const prevPinned = stateRef.current.pinnedMesh;
+      stateRef.current.pinnedMesh = null;
+      stateRef.current.pinnedKey = null;
+      applyInspectHighlight(
+        prevPinned,
+        stateRef.current.hoveredMesh === prevPinned ? "hover" : "none"
+      );
+    } else {
+      stateRef.current.pinnedKey = null;
+    }
+    setPinnedPart(null);
+  };
 
   const showTetPart = Boolean(tetFea) && (activeSolidEngine === "tet10" || !solidFea);
   const showHexPart = !showTetPart && Boolean(solidFea);
@@ -924,6 +1121,129 @@ export const PrinterViewport: React.FC<Props> = ({
     stateRef.current.controls = controls;
     stateRef.current.dynamicGroup = dynamicGroup;
 
+    // Interactive 3D raycasting for Part Inspector (click vs orbit-drag safe)
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
+    let pointerDownPos: { x: number; y: number; button: number } | null = null;
+    let lastMoveTs = 0;
+
+    const pickInspectableMesh = (clientX: number, clientY: number): THREE.Mesh | null => {
+      const targets = stateRef.current.inspectableMeshes;
+      if (!targets.length) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNdc, camera);
+      const hits = raycaster.intersectObjects(targets, false);
+      for (const hit of hits) {
+        const obj = hit.object as THREE.Mesh;
+        if (obj.userData?.inspectInfo) {
+          return obj;
+        }
+      }
+      return null;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button === 0) {
+        pointerDownPos = { x: e.clientX, y: e.clientY, button: e.button };
+      } else {
+        pointerDownPos = null;
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const now = performance.now();
+      if (now - lastMoveTs < 30) return;
+      lastMoveTs = now;
+      if (e.buttons !== 0) {
+        // User is actively orbiting/panning — clear hover indicator cleanly
+        if (stateRef.current.hoveredMesh) {
+          const oldHover = stateRef.current.hoveredMesh;
+          stateRef.current.hoveredMesh = null;
+          if (oldHover !== stateRef.current.pinnedMesh) {
+            applyInspectHighlight(oldHover, "none");
+          }
+        }
+        if (stateRef.current.hoveredKey !== null) {
+          stateRef.current.hoveredKey = null;
+          setHoveredPart(null);
+        }
+        renderer.domElement.style.cursor = "";
+        return;
+      }
+
+      const hitMesh = pickInspectableMesh(e.clientX, e.clientY);
+      const info = (hitMesh?.userData?.inspectInfo as InspectedPartInfo | undefined) ?? null;
+      renderer.domElement.style.cursor = info ? "pointer" : "";
+
+      if (hitMesh !== stateRef.current.hoveredMesh) {
+        const prevHover = stateRef.current.hoveredMesh;
+        stateRef.current.hoveredMesh = hitMesh;
+        if (prevHover && prevHover !== stateRef.current.pinnedMesh) {
+          applyInspectHighlight(prevHover, "none");
+        }
+        if (hitMesh && hitMesh !== stateRef.current.pinnedMesh) {
+          applyInspectHighlight(hitMesh, "hover");
+        }
+      }
+
+      const nextKey = info?.key ?? null;
+      if (nextKey !== stateRef.current.hoveredKey) {
+        stateRef.current.hoveredKey = nextKey;
+        setHoveredPart(info);
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!pointerDownPos || e.button !== 0) return;
+      const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+      pointerDownPos = null;
+      if (dist >= 5) return; // orbit drag, not a part click
+
+      const hitMesh = pickInspectableMesh(e.clientX, e.clientY);
+      const info = (hitMesh?.userData?.inspectInfo as InspectedPartInfo | undefined) ?? null;
+      const prevPinned = stateRef.current.pinnedMesh;
+
+      if (prevPinned && prevPinned !== hitMesh) {
+        applyInspectHighlight(
+          prevPinned,
+          stateRef.current.hoveredMesh === prevPinned ? "hover" : "none"
+        );
+      }
+
+      if (hitMesh && info) {
+        stateRef.current.pinnedMesh = hitMesh;
+        stateRef.current.pinnedKey = info.key;
+        applyInspectHighlight(hitMesh, "pin", 0.5);
+        setPinnedPart(info);
+      } else {
+        stateRef.current.pinnedMesh = null;
+        stateRef.current.pinnedKey = null;
+        setPinnedPart(null);
+      }
+    };
+
+    const onPointerLeave = () => {
+      pointerDownPos = null;
+      renderer.domElement.style.cursor = "";
+      const prevHover = stateRef.current.hoveredMesh;
+      stateRef.current.hoveredMesh = null;
+      if (prevHover && prevHover !== stateRef.current.pinnedMesh) {
+        applyInspectHighlight(prevHover, "none");
+      }
+      if (stateRef.current.hoveredKey !== null) {
+        stateRef.current.hoveredKey = null;
+        setHoveredPart(null);
+      }
+    };
+
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+    renderer.domElement.addEventListener("pointerleave", onPointerLeave);
+
     const onResize = () => {
       if (!el) return;
       camera.aspect = el.clientWidth / el.clientHeight;
@@ -942,13 +1262,18 @@ export const PrinterViewport: React.FC<Props> = ({
       stateRef.current.animFrame = requestAnimationFrame(animate);
       controls.update();
 
+      const t = clock.getElapsedTime();
+      if (stateRef.current.pinnedMesh) {
+        const pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
+        applyInspectHighlight(stateRef.current.pinnedMesh, "pin", pulse);
+      }
+
       if (
         stateRef.current.isModal &&
         (stateRef.current.modalContinuousBeams.length > 0 ||
           stateRef.current.modalMeshes.length > 0 ||
           stateRef.current.modalShellMeshes.length > 0)
       ) {
-        const t = clock.getElapsedTime();
         const phase = Math.sin(t * 7.5) * 0.38;
         const {
           basePositions,
@@ -1057,6 +1382,10 @@ export const PrinterViewport: React.FC<Props> = ({
 
     return () => {
       window.removeEventListener("resize", onResize);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
+      renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
       if (stateRef.current.animFrame) cancelAnimationFrame(stateRef.current.animFrame);
       disposeGroupChildren(dynamicGroup);
       grid.geometry.dispose();
@@ -1075,6 +1404,16 @@ export const PrinterViewport: React.FC<Props> = ({
 
     // Dispose and clear previous meshes cleanly
     disposeGroupChildren(group);
+
+    stateRef.current.inspectableMeshes = [];
+    stateRef.current.hoveredMesh = null;
+    stateRef.current.pinnedMesh = null;
+    stateRef.current.hoveredKey = null;
+    setHoveredPart(null);
+    if (viewMode === "solid_part" || viewMode === "topology") {
+      stateRef.current.pinnedKey = null;
+      setPinnedPart(null);
+    }
 
     stateRef.current.modalMeshes = [];
     stateRef.current.modalContinuousBeams = [];
@@ -1444,8 +1783,27 @@ export const PrinterViewport: React.FC<Props> = ({
     const modalAmpNorm = maxModalAmp > 1e-6 ? maxModalAmp : 1.0;
     stateRef.current.modalVectors = mVecs;
 
+    const bedNodeIdEarly = geom.bed_node_id || "bed_surface";
+    const bedModalVec = mVecs[bedNodeIdEarly] ?? new THREE.Vector3(0, 0, 0);
+    let maxRelModalAmp = 0;
+    for (const n of geom.nodes) {
+      const mv = mVecs[n.id];
+      const relAmp = mv ? mv.distanceTo(bedModalVec) : bedModalVec.length();
+      if (relAmp > maxRelModalAmp) maxRelModalAmp = relAmp;
+    }
+    const relModalNorm = Math.max(modalAmpNorm, maxRelModalAmp, 1e-6);
+    const getModalNodeScalar = (nid: string): number => {
+      const mv = mVecs[nid];
+      if (modalColorMode === "relative") {
+        const relDist = mv ? mv.distanceTo(bedModalVec) : bedModalVec.length();
+        return Math.min(1, relDist / relModalNorm);
+      }
+      return Math.min(1, (mv?.length() ?? 0) / modalAmpNorm);
+    };
+
     // Stress lookup (member-level and smooth nodal averages for corner blending)
     const stressMap: Record<string, number> = {};
+    const memberStressById: Record<string, SimulationResponse["static_fea"]["member_stresses"][number]> = {};
     const maxStress = Math.max(
       sim.static_fea.max_von_mises_mpa,
       sim.static_fea.panel_max_von_mises_mpa ?? 0,
@@ -1453,13 +1811,28 @@ export const PrinterViewport: React.FC<Props> = ({
     );
     for (const ms of sim.static_fea.member_stresses) {
       stressMap[ms.member_id] = ms.von_mises_mpa / maxStress;
+      memberStressById[ms.member_id] = ms;
     }
 
-    // Exclude virtual bed-mount / Z-rail backing members (role === "bed") and solver-internal
-    // equivalent shear-panel X-struts (panel_shear_*) from rendered structural extrusions so the
-    // real 3D panel sheets, heated bed plate, and continuous curved frame beams render cleanly.
+    const stiffenById: Record<string, NonNullable<SimulationResponse["sensitivity"]>["top_stiffen_targets"][number]> = {};
+    for (const t of sim.sensitivity?.top_stiffen_targets ?? []) {
+      stiffenById[t.id] = t;
+    }
+    const lightenById: Record<string, NonNullable<SimulationResponse["sensitivity"]>["top_lighten_targets"][number]> = {};
+    for (const t of sim.sensitivity?.top_lighten_targets ?? []) {
+      lightenById[t.id] = t;
+    }
+
+    const tagInspectable = (mesh: THREE.Mesh, info: InspectedPartInfo) => {
+      mesh.userData.inspectInfo = info;
+      stateRef.current.inspectableMeshes.push(mesh);
+    };
+
+    // Include bed spider arms & Z-rail posts (role === "bed") so real 3D bed supports render cleanly,
+    // while excluding toolhead lever-arm members (rendered as sleek carriage->CoG->nozzle struts)
+    // and solver-internal equivalent shear-panel X-struts (panel_shear_*).
     const structuralMembers = geom.members.filter(
-      (m) => m.role !== "bed" && !m.id.startsWith("panel_shear_")
+      (m) => m.role !== "toolhead" && !m.id.startsWith("panel_shear_")
     );
 
     const nodalStressSum: Record<string, number> = {};
@@ -1515,14 +1888,23 @@ export const PrinterViewport: React.FC<Props> = ({
       const lastId = chain.nodeIds[chain.nodeIds.length - 1];
       if (!basePos[firstId] || !basePos[lastId]) continue;
 
-      const w = Math.max(m.width_mm * SCALE, 0.06);
-      const h = Math.max(m.height_mm * SCALE, 0.06);
+      const isBedMember = m.role === "bed";
+      const isBedPost =
+        isBedMember &&
+        (m.id.includes("z_rail") ||
+          m.id.includes("z_post") ||
+          m.id.includes("leadscrew") ||
+          m.id.includes("z_column"));
+      const rawW = Math.max(m.width_mm * SCALE, isBedMember ? 0.05 : 0.06);
+      const rawH = Math.max(m.height_mm * SCALE, isBedMember ? 0.05 : 0.06);
+      const w = isBedMember ? Math.min(rawW, isBedPost ? 0.13 : 0.11) : rawW;
+      const h = isBedMember ? Math.min(rawH, isBedPost ? 0.13 : 0.11) : rawH;
 
       // Compute smooth nodal scalar values for FEA stress & Modal heatmap gradients
       const controlValues: number[] = [];
       if (viewMode === "modal") {
         for (const nid of chain.nodeIds) {
-          controlValues.push(Math.min(1, (mVecs[nid]?.length() ?? 0) / modalAmpNorm));
+          controlValues.push(getModalNodeScalar(nid));
         }
       } else if (viewMode === "fea_stress") {
         const nCount = chain.nodeIds.length;
@@ -1559,12 +1941,12 @@ export const PrinterViewport: React.FC<Props> = ({
       let sensEmissiveIntensity = 0;
 
       if (viewMode === "sensitivity") {
-        const heatScore = memberSensMap[m.id]?.heat_score ?? 0;
+        const heatScore = getLensScore(memberSensMap[m.id], adjointLens);
         sensitivityColorInto(heatScore, matColor);
         const absScore = Math.min(1, Math.abs(heatScore));
         if (absScore > 0.2) {
           sensEmissive.copy(matColor);
-          sensEmissiveIntensity = absScore * 0.28;
+          sensEmissiveIntensity = absScore * 0.3;
         }
       } else if (!useVertexColors) {
         matColor = new THREE.Color(m.color_hex);
@@ -1574,6 +1956,12 @@ export const PrinterViewport: React.FC<Props> = ({
           matColor = m.material.includes("carbon")
             ? new THREE.Color("#1f2937")
             : new THREE.Color("#f59e0b");
+        } else if (m.role === "bed") {
+          matColor = isBedPost
+            ? new THREE.Color("#7c8aa0")
+            : m.id.includes("spring")
+              ? new THREE.Color("#94a3b8")
+              : new THREE.Color("#475569");
         }
       }
 
@@ -1602,6 +1990,49 @@ export const PrinterViewport: React.FC<Props> = ({
         opacity: frameOpacity,
       });
 
+      const grp = classifyPartGroup(m.id, m.role);
+      let chainMaxVm = 0;
+      let chainYield: number | undefined;
+      let chainCompShare = 0;
+      let chainHeatScore = 0;
+      let chainHzPer100g = 0;
+      let hasSensEntry = false;
+      for (const cm of chain.members) {
+        const ms = memberStressById[cm.id];
+        if (ms && ms.von_mises_mpa >= chainMaxVm) {
+          chainMaxVm = ms.von_mises_mpa;
+          chainYield = ms.yield_mpa;
+        }
+        const se = memberSensMap[cm.id];
+        if (se) {
+          hasSensEntry = true;
+          chainCompShare += se.compliance_share_pct ?? 0;
+          const sc = getLensScore(se, adjointLens);
+          if (Math.abs(sc) > Math.abs(chainHeatScore)) chainHeatScore = sc;
+          chainHzPer100g += se.hz_per_100g ?? 0;
+        }
+      }
+      const stiffTarget = stiffenById[grp.id] ?? stiffenById[m.id];
+      const lightTarget = lightenById[grp.id] ?? lightenById[m.id];
+      const chainInspectInfo: InspectedPartInfo = {
+        key: `beam:${chain.members.map((cm) => cm.id).join("+")}`,
+        name: stiffTarget?.label ?? lightTarget?.label ?? grp.label,
+        subsystem: grp.subsystem,
+        partGroupId: grp.id,
+        role: m.role,
+        material: m.material,
+        profile: m.profile,
+        complianceSharePct:
+          stiffTarget?.compliance_share_pct ?? (hasSensEntry ? chainCompShare : undefined),
+        heatScore: hasSensEntry ? chainHeatScore : undefined,
+        stressMpa: chainMaxVm > 0 ? chainMaxVm : undefined,
+        yieldMpa: chainYield,
+        estHzGain: stiffTarget?.est_hz_gain,
+        hzPer100g: lightTarget?.hz_per_100g ?? (hasSensEntry ? chainHzPer100g : undefined),
+        whyItHurts: stiffTarget?.why_it_hurts ?? lightTarget?.why_it_hurts,
+        actionHint: stiffTarget?.action_hint ?? lightTarget?.action_hint,
+      };
+
       if (chain.isRod) {
         const geo = new THREE.CylinderGeometry(w * 0.5, w * 0.5, 1, 10, useVertexColors ? 6 : 1);
         if (useVertexColors) {
@@ -1611,6 +2042,7 @@ export const PrinterViewport: React.FC<Props> = ({
         const p0 = viewMode === "fea_stress" ? deformedPos[firstId] : basePos[firstId];
         const p1 = viewMode === "fea_stress" ? deformedPos[lastId] : basePos[lastId];
         orientBeamMesh(mesh, p0, p1);
+        tagInspectable(mesh, chainInspectInfo);
         group.add(mesh);
 
         if (viewMode === "modal") {
@@ -1660,6 +2092,7 @@ export const PrinterViewport: React.FC<Props> = ({
             fixedEnd,
           });
         }
+        tagInspectable(mesh, chainInspectInfo);
         group.add(mesh);
 
         // Continuous T-slot core accent strip on filled stationary frame extrusions (Assembly mode only)
@@ -1695,15 +2128,121 @@ export const PrinterViewport: React.FC<Props> = ({
       ghostLineMat.dispose();
     }
 
-    // Foot anchor markers (exclude bed and MITC4 shell panel nodes)
-    for (const n of geom.nodes) {
-      if (n.fixed && n.role !== "bed" && n.role !== "panel") {
-        const pad = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.14, 0.17, 0.08, 12),
-          new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.5 })
-        );
-        pad.position.copy(basePos[n.id]);
-        group.add(pad);
+    // Foot anchor markers & benchtop isolator pads (exclude bed and MITC4 shell panel nodes)
+    const feetType: FrameFeetType = geom.feet_type ?? sim.spec.frame.feet_type ?? "rigid_bolted";
+    const footCandidates = geom.nodes.filter(
+      (n) =>
+        (n.fixed || n.id.startsWith("foot_") || n.id.startsWith("ground_")) &&
+        n.role !== "bed" &&
+        n.role !== "panel" &&
+        Boolean(basePos[n.id])
+    );
+    const footSeen = new Set<string>();
+    const footNodes = footCandidates.filter((n) => {
+      const p = basePos[n.id];
+      const key = `${Math.round(p.x * 10)},${Math.round(p.z * 10)}`;
+      if (footSeen.has(key)) return false;
+      footSeen.add(key);
+      return true;
+    });
+    if (footNodes.length > 0) {
+      const feetStiff = stiffenById["frame_feet"];
+      let feetCompShare = 0;
+      let feetHeatScore = 0;
+      let hasFeetSens = false;
+      for (const [mid, entry] of Object.entries(memberSensMap)) {
+        if (mid.startsWith("feet_")) {
+          hasFeetSens = true;
+          feetCompShare += entry.compliance_share_pct ?? 0;
+          const sc = getLensScore(entry, adjointLens);
+          if (Math.abs(sc) > Math.abs(feetHeatScore)) feetHeatScore = sc;
+        }
+      }
+      const feetInspectInfo: InspectedPartInfo = {
+        key: "frame_feet",
+        name: feetStiff?.label ?? "Machine Feet & Benchtop Pads",
+        subsystem: "frame",
+        partGroupId: "frame_feet",
+        role: "foot",
+        material: feetType.replace(/_/g, " "),
+        complianceSharePct:
+          feetStiff?.compliance_share_pct ?? (hasFeetSens ? feetCompShare : undefined),
+        heatScore: hasFeetSens ? feetHeatScore : undefined,
+        estHzGain: feetStiff?.est_hz_gain,
+        whyItHurts: feetStiff?.why_it_hurts,
+        actionHint:
+          feetStiff?.action_hint ??
+          (feetType !== "rigid_bolted"
+            ? "Switch benchtop feet to Rigid Bolted to eliminate whole-printer rocking."
+            : undefined),
+      };
+
+      if (feetType === "rubber_feet") {
+        const rubberBodyGeo = new THREE.CylinderGeometry(0.15, 0.19, 0.14, 14);
+        const rubberBodyMat = new THREE.MeshStandardMaterial({
+          color: 0x1e293b,
+          roughness: 0.86,
+          metalness: 0.08,
+        });
+        const rubberRingGeo = new THREE.CylinderGeometry(0.17, 0.17, 0.032, 14);
+        const rubberRingMat = new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          roughness: 0.55,
+          metalness: 0.15,
+        });
+        for (const n of footNodes) {
+          const p = basePos[n.id];
+          const footGrp = new THREE.Group();
+          const body = new THREE.Mesh(rubberBodyGeo, rubberBodyMat);
+          body.position.y = -0.05;
+          tagInspectable(body, feetInspectInfo);
+          footGrp.add(body);
+          const ring = new THREE.Mesh(rubberRingGeo, rubberRingMat);
+          ring.position.y = -0.02;
+          footGrp.add(ring);
+          footGrp.position.copy(p);
+          group.add(footGrp);
+        }
+      } else if (feetType === "anti_vib_pads") {
+        const plateGeo = new THREE.CylinderGeometry(0.19, 0.19, 0.035, 16);
+        const plateMat = new THREE.MeshStandardMaterial({
+          color: 0x334155,
+          metalness: 0.65,
+          roughness: 0.35,
+        });
+        const isoCoreGeo = new THREE.CylinderGeometry(0.165, 0.165, 0.09, 16);
+        const isoCoreMat = new THREE.MeshStandardMaterial({
+          color: 0x06b6d4,
+          emissive: 0x0891b2,
+          emissiveIntensity: 0.25,
+          roughness: 0.65,
+          metalness: 0.1,
+        });
+        for (const n of footNodes) {
+          const p = basePos[n.id];
+          const hulaGrp = new THREE.Group();
+          const topPlate = new THREE.Mesh(plateGeo, plateMat);
+          topPlate.position.y = 0.0;
+          hulaGrp.add(topPlate);
+          const core = new THREE.Mesh(isoCoreGeo, isoCoreMat);
+          core.position.y = -0.06;
+          tagInspectable(core, feetInspectInfo);
+          hulaGrp.add(core);
+          const botPlate = new THREE.Mesh(plateGeo, plateMat);
+          botPlate.position.y = -0.12;
+          hulaGrp.add(botPlate);
+          hulaGrp.position.copy(p);
+          group.add(hulaGrp);
+        }
+      } else {
+        const boltPadGeo = new THREE.CylinderGeometry(0.14, 0.17, 0.08, 12);
+        const boltPadMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.5 });
+        for (const n of footNodes) {
+          const pad = new THREE.Mesh(boltPadGeo, boltPadMat);
+          pad.position.copy(basePos[n.id]);
+          tagInspectable(pad, feetInspectInfo);
+          group.add(pad);
+        }
       }
     }
 
@@ -1740,7 +2279,18 @@ export const PrinterViewport: React.FC<Props> = ({
           }
         }
 
-        const addShellLayer = (panels: ShellPanelGeometryData[], opacity: number) => {
+        const bayMaxVmMap: Record<string, number> = {};
+        if (sim.static_fea.shell_panel_stresses) {
+          for (const sps of sim.static_fea.shell_panel_stresses) {
+            bayMaxVmMap[sps.bay] = Math.max(bayMaxVmMap[sps.bay] ?? 0, sps.von_mises_mpa);
+          }
+        }
+
+        const addShellLayer = (
+          panels: ShellPanelGeometryData[],
+          opacity: number,
+          bayName: string
+        ) => {
           if (panels.length === 0) return;
 
           // Key vertices by bay:nodeId so interior panel shading is smooth while 90° bay corners stay crisp
@@ -1786,7 +2336,10 @@ export const PrinterViewport: React.FC<Props> = ({
             positions[o + 2] = pt.z;
 
             if (viewMode === "sensitivity") {
-              const bayScore = sim.sensitivity?.panel_bay_sensitivities?.[bay]?.heat_score ?? 0;
+              const bayScore = getLensScore(
+                sim.sensitivity?.panel_bay_sensitivities?.[bay],
+                adjointLens
+              );
               sensitivityColorInto(bayScore, _beamCol);
             } else {
               let scalar = 0;
@@ -1799,7 +2352,7 @@ export const PrinterViewport: React.FC<Props> = ({
                     : 0;
                 scalar = avgVm / maxStress;
               } else {
-                scalar = Math.min(1, (mVecs[nid]?.length() ?? 0) / modalAmpNorm);
+                scalar = getModalNodeScalar(nid);
               }
               stressColorInto(scalar, _beamCol);
             }
@@ -1859,6 +2412,27 @@ export const PrinterViewport: React.FC<Props> = ({
           });
           const shellMesh = new THREE.Mesh(shellGeo, shellMat);
           shellMesh.renderOrder = 1;
+
+          const bayGrp = classifyPartGroup(`bay_${bayName}`, "panel");
+          const baySens = sim.sensitivity?.panel_bay_sensitivities?.[bayName];
+          const bayStiff = stiffenById[bayGrp.id] ?? stiffenById[`bay_${bayName}`];
+          const bayLabel = `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
+          tagInspectable(shellMesh, {
+            key: `panel:${bayName}`,
+            name: bayLabel,
+            subsystem: "frame",
+            partGroupId: bayGrp.id,
+            role: "panel",
+            material: geom.panels?.material_name ?? sim.spec.frame.panel_material,
+            profile: `${panels[0]?.thickness_mm ?? sim.spec.frame.panel_thickness_mm}mm MITC4 shell`,
+            complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
+            heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
+            stressMpa: bayMaxVmMap[bayName] > 0 ? bayMaxVmMap[bayName] : undefined,
+            estHzGain: bayStiff?.est_hz_gain,
+            hzPer100g: baySens?.hz_per_100g,
+            whyItHurts: bayStiff?.why_it_hurts,
+            actionHint: bayStiff?.action_hint,
+          });
           group.add(shellMesh);
 
           // Subtle dark MITC4 quad wireframe grid overlay (2×2 or 6×6)
@@ -1888,10 +2462,16 @@ export const PrinterViewport: React.FC<Props> = ({
           }
         };
 
-        const sidePanels = validPanels.filter((p) => p.bay !== "top");
-        const topPanels = validPanels.filter((p) => p.bay === "top");
-        addShellLayer(sidePanels, viewMode === "sensitivity" ? 0.65 : 0.72);
-        addShellLayer(topPanels, 0.28);
+        const panelsByBay = new Map<string, ShellPanelGeometryData[]>();
+        for (const p of validPanels) {
+          const list = panelsByBay.get(p.bay);
+          if (list) list.push(p);
+          else panelsByBay.set(p.bay, [p]);
+        }
+        panelsByBay.forEach((bayPanels, bayName) => {
+          const bayOpacity = bayName === "top" ? 0.28 : viewMode === "sensitivity" ? 0.65 : 0.72;
+          addShellLayer(bayPanels, bayOpacity, bayName);
+        });
       }
     }
 
@@ -2230,25 +2810,47 @@ export const PrinterViewport: React.FC<Props> = ({
         const rearBoltZ = rearPos.z - tScene * 0.55;
 
         const panelSpecs: Array<{
+          bay: string;
+          label: string;
           geo: THREE.BoxGeometry;
           edges: THREE.EdgesGeometry;
           pos: THREE.Vector3;
         }> = [
-          { geo: sidePanelGeo, edges: sideEdgesGeo, pos: leftPos },
-          { geo: sidePanelGeo, edges: sideEdgesGeo, pos: rightPos },
-          { geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos },
+          { bay: "left", label: "Left Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: leftPos },
+          { bay: "right", label: "Right Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: rightPos },
+          { bay: "rear", label: "Rear Enclosure Panel", geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos },
         ];
 
         for (const ps of panelSpecs) {
-          const mesh = new THREE.Mesh(ps.geo, panelMat);
+          const wallMat = panelMat.clone();
+          const mesh = new THREE.Mesh(ps.geo, wallMat);
           mesh.position.copy(ps.pos);
           mesh.renderOrder = 2;
+          const bayGrp = classifyPartGroup(`bay_${ps.bay}`, "panel");
+          const baySens = sim.sensitivity?.panel_bay_sensitivities?.[ps.bay];
+          const bayStiff = stiffenById[bayGrp.id] ?? stiffenById[`bay_${ps.bay}`];
+          tagInspectable(mesh, {
+            key: `panel:${ps.bay}`,
+            name: ps.label,
+            subsystem: "frame",
+            partGroupId: bayGrp.id,
+            role: "panel",
+            material: panels.material_name,
+            profile: `${panels.thickness_mm}mm (${panels.mounting.replace(/_/g, " ")})`,
+            complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
+            heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
+            estHzGain: bayStiff?.est_hz_gain,
+            hzPer100g: baySens?.hz_per_100g,
+            whyItHurts: bayStiff?.why_it_hurts,
+            actionHint: bayStiff?.action_hint,
+          });
           group.add(mesh);
 
           const outline = new THREE.LineSegments(ps.edges, edgeMat);
           outline.position.copy(ps.pos);
           group.add(outline);
         }
+        panelMat.dispose();
 
         // Metallic perimeter bolt heads aligned directly on the extrusion T-slot centerlines
         if (isBoltedStructural) {
@@ -2371,25 +2973,111 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // Heated bed plate (deforms with bed_surface in Frame FEA & animates in Modal mode)
+    // Heated bed plate (deforms with bed_surface in Frame FEA, animates in Modal mode, & tints in Sensitivity)
     const [bedX, bedY] = geom.bed_size_mm;
-    const bedGeo = new THREE.BoxGeometry(bedX * SCALE, 0.08, bedY * SCALE);
+    const bedThickScene = Math.max(Math.min((sim.spec.bed.plate_thickness_mm ?? 8) * SCALE, 0.14), 0.05);
+    const bedGeo = new THREE.BoxGeometry(bedX * SCALE, bedThickScene, bedY * SCALE);
+
+    let bedHeatScore = 0;
+    if (viewMode === "sensitivity") {
+      const bedSpringScore = getLensScore(memberSensMap["bed_mount_spring"], adjointLens);
+      bedHeatScore = bedSpringScore;
+      for (const [mid, entry] of Object.entries(memberSensMap)) {
+        if (mid.startsWith("bed_arm_") || mid.startsWith("bed_")) {
+          const s = getLensScore(entry, adjointLens);
+          if (Math.abs(s) > Math.abs(bedHeatScore)) bedHeatScore = s;
+        }
+      }
+    }
+
+    const bedColor = new THREE.Color(0x2a3444);
+    const bedEmissive = new THREE.Color(0x000000);
+    let bedEmissiveIntensity = 0;
+    if (viewMode === "sensitivity") {
+      sensitivityColorInto(bedHeatScore, bedColor);
+      const absBed = Math.min(1, Math.abs(bedHeatScore));
+      if (absBed > 0.15) {
+        bedEmissive.copy(bedColor);
+        bedEmissiveIntensity = absBed * 0.32;
+      }
+    }
+
+    const bedPlateFea = sim.bed_plate_fea ?? null;
+    const isBedWarpRenderMode =
+      viewMode === "assembly" ||
+      viewMode === "fea_stress" ||
+      viewMode === "modal" ||
+      viewMode === "sensitivity";
+    const activeBedWarp = Boolean(showBedWarp && bedPlateFea && isBedWarpRenderMode);
+
+    let bedCompShare = 0;
+    let bedSensHasData = false;
+    const bedSpringEntry = memberSensMap["bed_mount_spring"];
+    if (bedSpringEntry) {
+      bedSensHasData = true;
+      bedCompShare += bedSpringEntry.compliance_share_pct ?? 0;
+    }
+    for (const [mid, entry] of Object.entries(memberSensMap)) {
+      if (mid !== "bed_mount_spring" && (mid.startsWith("bed_arm_") || mid.startsWith("bed_"))) {
+        bedSensHasData = true;
+        bedCompShare += entry.compliance_share_pct ?? 0;
+      }
+    }
+    const bedStiffTarget = stiffenById["bed_support"] ?? stiffenById["bed_plate"];
+    const bedInspectInfo: InspectedPartInfo = {
+      key: "bed_plate",
+      name: "Heated Bed Plate",
+      subsystem: "bed",
+      partGroupId: "bed_plate",
+      role: "bed",
+      material: sim.spec.bed.plate_material,
+      profile: `${sim.spec.bed.plate_thickness_mm}mm plate · ${(
+        sim.spec.bed.mount_type ?? "kinematic_3pt"
+      ).replace(/_/g, " ")}`,
+      complianceSharePct:
+        bedStiffTarget?.compliance_share_pct ?? (bedSensHasData ? bedCompShare : undefined),
+      heatScore: bedSensHasData ? bedHeatScore : undefined,
+      estHzGain: bedStiffTarget?.est_hz_gain,
+      whyItHurts: bedStiffTarget?.why_it_hurts ?? bedPlateFea?.summary,
+      actionHint:
+        bedStiffTarget?.action_hint ??
+        (bedPlateFea &&
+        (bedPlateFea.first_layer_risk === "high" || bedPlateFea.first_layer_risk === "critical")
+          ? "Switch to Kinematic 3-Pt mount or thicken cast plate to eliminate taco warp."
+          : undefined),
+      bedFlatnessUm: bedPlateFea?.total_flatness_error_um,
+      bedTacoUm: bedPlateFea?.taco_buckling_um,
+      bedModeHz: bedPlateFea?.plate_first_mode_hz,
+      bedRisk: bedPlateFea?.first_layer_risk,
+    };
+
     const bedMat = new THREE.MeshStandardMaterial({
-      color: 0x2a3444,
-      metalness: 0.4,
+      color: bedColor,
+      emissive: bedEmissive,
+      emissiveIntensity: bedEmissiveIntensity,
+      metalness: viewMode === "sensitivity" ? 0.25 : 0.4,
       roughness: 0.45,
-      transparent: viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity",
-      opacity:
-        viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity" ? 0.38 : 0.95,
+      transparent:
+        activeBedWarp ||
+        viewMode === "fea_stress" ||
+        viewMode === "modal" ||
+        viewMode === "sensitivity",
+      opacity: activeBedWarp
+        ? 0.45
+        : viewMode === "sensitivity"
+          ? 0.52
+          : viewMode === "fea_stress" || viewMode === "modal"
+            ? 0.38
+            : 0.95,
     });
     const bedMesh = new THREE.Mesh(bedGeo, bedMat);
     const bedBaseCenter = toThree(geom.bed_center_mm, cx, cy);
-    bedBaseCenter.y -= 0.04;
+    bedBaseCenter.y -= bedThickScene * 0.5;
     const bedNodeId = geom.bed_node_id || "bed_surface";
     const bedNodeBase = basePos[bedNodeId];
     const bedVisualOffset = bedNodeBase
       ? bedBaseCenter.clone().sub(bedNodeBase)
-      : new THREE.Vector3(0, -0.04, 0);
+      : new THREE.Vector3(0, -bedThickScene * 0.5, 0);
 
     if (viewMode === "fea_stress" && deformedPos[bedNodeId]) {
       bedMesh.position.copy(deformedPos[bedNodeId]).add(bedVisualOffset);
@@ -2402,7 +3090,366 @@ export const PrinterViewport: React.FC<Props> = ({
       stateRef.current.modalBedNodeId = bedNodeId;
       stateRef.current.modalBedOffset.copy(bedVisualOffset);
     }
+    tagInspectable(bedMesh, bedInspectInfo);
     group.add(bedMesh);
+
+    // Real 2D MITC4 Heated Bed Plate Surface Mesh & 3D Thermal Taco Warp Overlay
+    if (bedPlateFea && isBedWarpRenderMode) {
+      const nx = Math.max(2, Math.floor(bedPlateFea.grid_nx || 0));
+      const ny = Math.max(2, Math.floor(bedPlateFea.grid_ny || 0));
+      const totalGridVerts = nx * ny;
+      const gx =
+        bedPlateFea.grid_x_rel && bedPlateFea.grid_x_rel.length >= nx
+          ? bedPlateFea.grid_x_rel
+          : Array.from({ length: nx }, (_, i) => i / Math.max(nx - 1, 1) - 0.5);
+      const gy =
+        bedPlateFea.grid_y_rel && bedPlateFea.grid_y_rel.length >= ny
+          ? bedPlateFea.grid_y_rel
+          : Array.from({ length: ny }, (_, i) => i / Math.max(ny - 1, 1) - 0.5);
+      const zVals =
+        bedPlateFea.z_total_um && bedPlateFea.z_total_um.length >= totalGridVerts
+          ? bedPlateFea.z_total_um
+          : new Array<number>(totalGridVerts).fill(0);
+
+      let gxMin = Infinity,
+        gxMax = -Infinity;
+      for (let i = 0; i < nx; i++) {
+        if (gx[i] < gxMin) gxMin = gx[i];
+        if (gx[i] > gxMax) gxMax = gx[i];
+      }
+      const gxMid = 0.5 * (gxMin + gxMax);
+      const gxSpan = Math.max(gxMax - gxMin, 1e-6);
+
+      let gyMin = Infinity,
+        gyMax = -Infinity;
+      for (let j = 0; j < ny; j++) {
+        if (gy[j] < gyMin) gyMin = gy[j];
+        if (gy[j] > gyMax) gyMax = gy[j];
+      }
+      const gyMid = 0.5 * (gyMin + gyMax);
+      const gySpan = Math.max(gyMax - gyMin, 1e-6);
+
+      let zMin = Infinity,
+        zMax = -Infinity,
+        zSum = 0;
+      for (let k = 0; k < totalGridVerts; k++) {
+        const zv = Number.isFinite(zVals[k]) ? zVals[k] : 0;
+        if (zv < zMin) zMin = zv;
+        if (zv > zMax) zMax = zv;
+        zSum += zv;
+      }
+      const zMean = zSum / Math.max(totalGridVerts, 1);
+      const zSpan = Math.max(zMax - zMin, 1e-6);
+      const rawHalfSpan = Math.max(Math.abs(zMax - zMean), Math.abs(zMin - zMean), 1);
+      // 100 µm -> ~0.18 scene units, smoothly clamped at 0.42 units so 400 µm stays beneath gantry
+      const clampedAmp = Math.min(0.42, Math.max(zSpan > 1 ? 0.035 : 0, (rawHalfSpan / 100) * 0.18));
+      const umScale = clampedAmp / rawHalfSpan;
+      const baseTopY = bedThickScene * 0.5 + 0.007;
+      const warpLiftY = activeBedWarp ? Math.max(0.016, (zMean - zMin) * umScale + 0.014) : 0;
+
+      const positions = new Float32Array(totalGridVerts * 3);
+      const colors = new Float32Array(totalGridVerts * 3);
+      const warpCol = new THREE.Color();
+
+      for (let iy = 0; iy < ny; iy++) {
+        const vCentered = (gy[iy] - gyMid) / gySpan; // [-0.5, +0.5] CAD Y
+        const localZ = -vCentered * bedY * SCALE; // CAD +Y -> Three.js -Z
+        for (let ix = 0; ix < nx; ix++) {
+          const uCentered = (gx[ix] - gxMid) / gxSpan; // [-0.5, +0.5] CAD X
+          const localX = uCentered * bedX * SCALE;
+          const idx = iy * nx + ix;
+          const zv = Number.isFinite(zVals[idx]) ? zVals[idx] : 0;
+          const localY = activeBedWarp ? baseTopY + warpLiftY + (zv - zMean) * umScale : baseTopY;
+
+          const o = idx * 3;
+          positions[o] = localX;
+          positions[o + 1] = localY;
+          positions[o + 2] = localZ;
+
+          if (activeBedWarp) {
+            const tNorm = zSpan < 3.5 ? 0.42 : (zv - zMin) / zSpan;
+            bedWarpColorInto(tNorm, warpCol);
+            colors[o] = warpCol.r;
+            colors[o + 1] = warpCol.g;
+            colors[o + 2] = warpCol.b;
+          } else {
+            colors[o] = 0.22;
+            colors[o + 1] = 0.28;
+            colors[o + 2] = 0.36;
+          }
+        }
+      }
+
+      const quadCount = (nx - 1) * (ny - 1);
+      const triIndices = new Uint16Array(quadCount * 6);
+      const edgeIndices: number[] = [];
+      let tIdx = 0;
+      for (let iy = 0; iy < ny - 1; iy++) {
+        for (let ix = 0; ix < nx - 1; ix++) {
+          const a = iy * nx + ix;
+          const b = a + 1;
+          const c = (iy + 1) * nx + ix + 1;
+          const d = (iy + 1) * nx + ix;
+          triIndices[tIdx++] = a;
+          triIndices[tIdx++] = b;
+          triIndices[tIdx++] = c;
+          triIndices[tIdx++] = a;
+          triIndices[tIdx++] = c;
+          triIndices[tIdx++] = d;
+        }
+      }
+      for (let iy = 0; iy < ny; iy++) {
+        for (let ix = 0; ix < nx - 1; ix++) {
+          edgeIndices.push(iy * nx + ix, iy * nx + ix + 1);
+        }
+      }
+      for (let iy = 0; iy < ny - 1; iy++) {
+        for (let ix = 0; ix < nx; ix++) {
+          edgeIndices.push(iy * nx + ix, (iy + 1) * nx + ix);
+        }
+      }
+
+      const bedSurfGeo = new THREE.BufferGeometry();
+      bedSurfGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      bedSurfGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      bedSurfGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
+      bedSurfGeo.computeVertexNormals();
+
+      const bedSurfMat = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: activeBedWarp ? 0.32 : 0.55,
+        metalness: activeBedWarp ? 0.14 : 0.35,
+        side: THREE.DoubleSide,
+        transparent: !activeBedWarp,
+        opacity: activeBedWarp ? 0.94 : 0.28,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
+      const bedSurfMesh = new THREE.Mesh(bedSurfGeo, bedSurfMat);
+      bedSurfMesh.renderOrder = activeBedWarp ? 3 : 1;
+      tagInspectable(bedSurfMesh, bedInspectInfo);
+      bedMesh.add(bedSurfMesh);
+
+      const bedWireGeo = new THREE.BufferGeometry();
+      bedWireGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+      bedWireGeo.setIndex(new THREE.BufferAttribute(new Uint16Array(edgeIndices), 1));
+      const bedWireMat = new THREE.LineBasicMaterial({
+        color: activeBedWarp ? 0x0f172a : 0x64748b,
+        transparent: true,
+        opacity: activeBedWarp ? 0.65 : 0.25,
+      });
+      const bedWireLines = new THREE.LineSegments(bedWireGeo, bedWireMat);
+      bedWireLines.renderOrder = activeBedWarp ? 4 : 2;
+      bedMesh.add(bedWireLines);
+
+      // Highlight MITC4 bed plate mount constraint pins on warped surface
+      if (activeBedWarp && bedPlateFea.mount_points_rel && bedPlateFea.mount_points_rel.length > 0) {
+        const pinGeo = new THREE.RingGeometry(0.05, 0.085, 16);
+        const pinMat = new THREE.MeshBasicMaterial({
+          color: 0xf8fafc,
+          side: THREE.DoubleSide,
+        });
+        for (const [mx, my] of bedPlateFea.mount_points_rel) {
+          const uM = (mx - gxMid) / gxSpan;
+          const vM = (my - gyMid) / gySpan;
+          const pin = new THREE.Mesh(pinGeo, pinMat);
+          pin.rotation.x = -Math.PI * 0.5;
+          pin.position.set(uM * bedX * SCALE, baseTopY + warpLiftY + 0.015, -vM * bedY * SCALE);
+          pin.renderOrder = 5;
+          bedMesh.add(pin);
+        }
+      }
+    }
+
+    // 3D Bed Mount Standoffs / Kinematic Pucks / Springs / Silicone Columns at support points
+    if (viewMode === "assembly" || viewMode === "sensitivity" || viewMode === "fea_stress") {
+      const bedMountType: BedMountType =
+        geom.bed_mount_type ?? sim.spec.bed.mount_type ?? "kinematic_3pt";
+      const supportPtsThree: THREE.Vector3[] = [];
+
+      if (geom.bed_support_points_mm && geom.bed_support_points_mm.length > 0) {
+        for (const ptMm of geom.bed_support_points_mm) {
+          supportPtsThree.push(toThree(ptMm, cx, cy));
+        }
+      } else {
+        const [bcx, bcy, bcz] = geom.bed_center_mm;
+        const insetX = bedX * 0.36;
+        const insetY = bedY * 0.36;
+        const mountZ = bcz - (sim.spec.bed.plate_thickness_mm ?? 8) - 8;
+        if (bedMountType === "kinematic_3pt") {
+          supportPtsThree.push(
+            toThree([bcx - insetX, bcy - insetY, mountZ], cx, cy),
+            toThree([bcx + insetX, bcy - insetY, mountZ], cx, cy),
+            toThree([bcx, bcy + insetY, mountZ], cx, cy)
+          );
+        } else {
+          supportPtsThree.push(
+            toThree([bcx - insetX, bcy - insetY, mountZ], cx, cy),
+            toThree([bcx + insetX, bcy - insetY, mountZ], cx, cy),
+            toThree([bcx - insetX, bcy + insetY, mountZ], cx, cy),
+            toThree([bcx + insetX, bcy + insetY, mountZ], cx, cy)
+          );
+        }
+      }
+
+      if (supportPtsThree.length > 0) {
+        const bedDispDelta =
+          viewMode === "fea_stress" && deformedPos[bedNodeId] && bedNodeBase
+            ? deformedPos[bedNodeId].clone().sub(bedNodeBase)
+            : new THREE.Vector3(0, 0, 0);
+        const bedBottomY = bedBaseCenter.y - bedThickScene * 0.5;
+        const useSensBedTint = viewMode === "sensitivity" && Math.abs(bedHeatScore) > 0.15;
+
+        if (bedMountType === "kinematic_3pt") {
+          const puckGeo = new THREE.CylinderGeometry(0.11, 0.125, 0.045, 14);
+          const puckMat = new THREE.MeshStandardMaterial({
+            color: useSensBedTint ? bedColor : 0xcbd5e1,
+            emissive: useSensBedTint ? bedEmissive : 0x000000,
+            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
+            metalness: 0.78,
+            roughness: 0.28,
+          });
+          const ballGeo = new THREE.SphereGeometry(0.068, 12, 12);
+          const ballMat = new THREE.MeshStandardMaterial({
+            color: useSensBedTint ? bedColor : 0xeab308,
+            metalness: 0.85,
+            roughness: 0.2,
+          });
+          for (const sp of supportPtsThree) {
+            const grp = new THREE.Group();
+            const topPuck = new THREE.Mesh(puckGeo, puckMat);
+            topPuck.position.y = -0.025;
+            grp.add(topPuck);
+            const ball = new THREE.Mesh(ballGeo, ballMat);
+            ball.position.y = -0.085;
+            grp.add(ball);
+            const botPuck = new THREE.Mesh(puckGeo, puckMat);
+            botPuck.position.y = -0.145;
+            grp.add(botPuck);
+            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
+            group.add(grp);
+          }
+        } else if (bedMountType === "springs_4pt") {
+          const coilGeo = new THREE.TorusGeometry(0.068, 0.017, 8, 16);
+          const coilMat = new THREE.MeshStandardMaterial({
+            color: useSensBedTint ? bedColor : 0xfacc15,
+            emissive: useSensBedTint ? bedEmissive : 0x000000,
+            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
+            metalness: 0.45,
+            roughness: 0.35,
+          });
+          const washerGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.02, 12);
+          const washerMat = new THREE.MeshStandardMaterial({
+            color: 0x334155,
+            metalness: 0.7,
+            roughness: 0.4,
+          });
+          for (const sp of supportPtsThree) {
+            const grp = new THREE.Group();
+            const topW = new THREE.Mesh(washerGeo, washerMat);
+            topW.position.y = -0.012;
+            grp.add(topW);
+            for (let k = 0; k < 4; k++) {
+              const coil = new THREE.Mesh(coilGeo, coilMat);
+              coil.rotation.x = Math.PI * 0.5;
+              coil.position.y = -0.042 - k * 0.038;
+              grp.add(coil);
+            }
+            const botW = new THREE.Mesh(washerGeo, washerMat);
+            botW.position.y = -0.19;
+            grp.add(botW);
+            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
+            group.add(grp);
+          }
+        } else if (bedMountType === "silicone_4pt") {
+          const silGeo = new THREE.CylinderGeometry(0.082, 0.082, 0.16, 14);
+          const silMat = new THREE.MeshStandardMaterial({
+            color: useSensBedTint ? bedColor : 0xf97316,
+            emissive: useSensBedTint ? bedEmissive : 0x000000,
+            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
+            roughness: 0.75,
+            metalness: 0.08,
+          });
+          const capGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.022, 14);
+          const capMat = new THREE.MeshStandardMaterial({
+            color: 0x94a3b8,
+            metalness: 0.72,
+            roughness: 0.32,
+          });
+          for (const sp of supportPtsThree) {
+            const grp = new THREE.Group();
+            const col = new THREE.Mesh(silGeo, silMat);
+            col.position.y = -0.09;
+            grp.add(col);
+            const topC = new THREE.Mesh(capGeo, capMat);
+            topC.position.y = -0.012;
+            grp.add(topC);
+            const botC = new THREE.Mesh(capGeo, capMat);
+            botC.position.y = -0.17;
+            grp.add(botC);
+            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
+            group.add(grp);
+          }
+        } else if (bedMountType === "floating_4pt") {
+          const tabGeo = new THREE.BoxGeometry(0.22, 0.032, 0.11);
+          const tabMat = new THREE.MeshStandardMaterial({
+            color: useSensBedTint ? bedColor : 0x94a3b8,
+            emissive: useSensBedTint ? bedEmissive : 0x000000,
+            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
+            metalness: 0.75,
+            roughness: 0.3,
+          });
+          const pinGeo = new THREE.CylinderGeometry(0.052, 0.052, 0.14, 12);
+          const fixedPinMat = new THREE.MeshStandardMaterial({
+            color: 0xe2e8f0,
+            metalness: 0.85,
+            roughness: 0.22,
+          });
+          const floatPinMat =
+            supportPtsThree.length > 1
+              ? new THREE.MeshStandardMaterial({
+                  color: 0x38bdf8,
+                  metalness: 0.65,
+                  roughness: 0.28,
+                })
+              : fixedPinMat;
+          supportPtsThree.forEach((sp, idx) => {
+            const grp = new THREE.Group();
+            const tab = new THREE.Mesh(tabGeo, tabMat);
+            tab.position.y = -0.025;
+            grp.add(tab);
+            const pin = new THREE.Mesh(pinGeo, idx === 0 ? fixedPinMat : floatPinMat);
+            pin.position.y = -0.095;
+            grp.add(pin);
+            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
+            group.add(grp);
+          });
+        } else {
+          // rigid_4pt
+          const standGeo = new THREE.CylinderGeometry(0.072, 0.072, 0.16, 12);
+          const standMat = new THREE.MeshStandardMaterial({
+            color: useSensBedTint ? bedColor : 0xe2e8f0,
+            emissive: useSensBedTint ? bedEmissive : 0x000000,
+            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
+            metalness: 0.86,
+            roughness: 0.2,
+          });
+          const flangeGeo = new THREE.CylinderGeometry(0.105, 0.105, 0.028, 6);
+          for (const sp of supportPtsThree) {
+            const grp = new THREE.Group();
+            const cyl = new THREE.Mesh(standGeo, standMat);
+            cyl.position.y = -0.085;
+            grp.add(cyl);
+            const flg = new THREE.Mesh(flangeGeo, standMat);
+            flg.position.y = -0.018;
+            grp.add(flg);
+            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
+            group.add(grp);
+          }
+        }
+      }
+    }
 
     // Subtle undeformed bed plate ghost reference in FEA & Modal modes to visualize bed sway/motion
     if ((viewMode === "fea_stress" || viewMode === "modal") && bedNodeBase) {
@@ -2486,51 +3533,284 @@ export const PrinterViewport: React.FC<Props> = ({
         aluminum_6061_t6: 0xc6d0db,
         aluminum_7075_t6: 0xd1dae6,
       };
-      const carriageColor = mountColorMap[mountMatId] ?? 0xe63946;
-      const strutColor =
+
+      // Mode-aware colors & emissive glows for carriage, mount strut, nozzle stem, CoG sphere & nozzle tip
+      const carriageColorObj = new THREE.Color(mountColorMap[mountMatId] ?? 0xe63946);
+      const carriageEmissive = new THREE.Color(0x000000);
+      let carriageEmissiveInt = 0;
+      let carriageOpacity = viewMode === "assembly" ? 0.92 : 0.65;
+
+      const strut1ColorObj = new THREE.Color(
         viewMode === "assembly"
           ? isAluminumMount
             ? 0xe2e8f0
             : mountMatId.includes("_cf_")
               ? 0x64748b
               : 0x94a3b8
-          : 0x38bdf8;
+          : 0x38bdf8
+      );
+      const strut1Emissive = new THREE.Color(0x000000);
+      let strut1EmissiveInt = 0;
+      let strut1Radius = 0.032;
+
+      const strut2ColorObj = new THREE.Color(0xd97706);
+      const strut2Emissive = new THREE.Color(0x000000);
+      let strut2EmissiveInt = 0;
+      let strut2RadiusTop = 0.026;
+      let strut2RadiusBot = 0.022;
+
+      const cogSphereColorObj = new THREE.Color(0xf59e0b);
+      const cogSphereEmissive = new THREE.Color(0xd97706);
+      let cogSphereEmissiveInt = 0.65;
+      let cogRingColorHex = 0xfde68a;
+
+      const nozzleColorObj = new THREE.Color(0xfbbf24);
+      const nozzleEmissive = new THREE.Color(0xb45309);
+      let nozzleEmissiveInt = 0.28;
+      const nozzleCollarColorObj = new THREE.Color(0xd97706);
+
+      if (viewMode === "sensitivity") {
+        const thMountEntry =
+          memberSensMap["toolhead_mount"] ?? memberSensMap["toolhead_cog_spring"];
+        const nozStemEntry =
+          memberSensMap["nozzle_stem"] ?? memberSensMap["nozzle_stem_spring"];
+        const lumpedMap = sim.sensitivity?.lumped_mass_sensitivities;
+        const thMassEntry =
+          lumpedMap?.["toolhead_cog"] ?? lumpedMap?.[cogNodeId] ?? lumpedMap?.[thNodeId];
+
+        const mountScore = getLensScore(thMountEntry, adjointLens);
+        const stemScore = getLensScore(nozStemEntry, adjointLens);
+        const cogMassScore = thMassEntry
+          ? getLensScore(thMassEntry, adjointLens)
+          : adjointLens === "mass"
+            ? getLensScore(thMountEntry, "mass")
+            : 0;
+        const carriageScore =
+          Math.abs(mountScore) >= Math.abs(cogMassScore) ? mountScore : cogMassScore;
+
+        sensitivityColorInto(carriageScore, carriageColorObj);
+        carriageOpacity = 0.88;
+        if (Math.abs(carriageScore) > 0.15) {
+          carriageEmissive.copy(carriageColorObj);
+          carriageEmissiveInt = Math.min(1, Math.abs(carriageScore)) * 0.42;
+        }
+
+        sensitivityColorInto(mountScore, strut1ColorObj);
+        const absMount = Math.min(1, Math.abs(mountScore));
+        strut1Radius = 0.036 + absMount * 0.026;
+        if (absMount > 0.15) {
+          strut1Emissive.copy(strut1ColorObj);
+          strut1EmissiveInt = absMount * 0.55;
+        }
+
+        sensitivityColorInto(stemScore, strut2ColorObj);
+        const absStem = Math.min(1, Math.abs(stemScore));
+        strut2RadiusTop = 0.03 + absStem * 0.02;
+        strut2RadiusBot = 0.024 + absStem * 0.016;
+        if (absStem > 0.15) {
+          strut2Emissive.copy(strut2ColorObj);
+          strut2EmissiveInt = absStem * 0.55;
+        }
+
+        sensitivityColorInto(cogMassScore, cogSphereColorObj);
+        const absCog = Math.min(1, Math.abs(cogMassScore));
+        cogSphereEmissive.copy(cogSphereColorObj);
+        cogSphereEmissiveInt = absCog > 0.12 ? 0.35 + absCog * 0.55 : 0.12;
+
+        if (sim.sensitivity?.primary_problem_subsystem === "toolhead") {
+          cogRingColorHex = 0xef4444;
+        } else if (cogMassScore < -0.15) {
+          cogRingColorHex = 0x22d3ee;
+        } else if (mountScore > 0.25) {
+          cogRingColorHex = 0xfb923c;
+        } else {
+          cogRingColorHex = 0x64748b;
+        }
+
+        if (absStem > 0.15) {
+          sensitivityColorInto(stemScore, nozzleColorObj);
+          nozzleEmissive.copy(nozzleColorObj);
+          nozzleEmissiveInt = absStem * 0.48;
+          nozzleCollarColorObj.copy(nozzleColorObj);
+        } else {
+          nozzleColorObj.set(0x64748b);
+          nozzleEmissive.set(0x000000);
+          nozzleEmissiveInt = 0;
+          nozzleCollarColorObj.set(0x475569);
+        }
+      } else if (viewMode === "modal") {
+        const thScalar = getModalNodeScalar(thNodeId);
+        const cogScalar = getModalNodeScalar(cogNodeId);
+        const nozScalar = getModalNodeScalar(nozNodeId);
+
+        stressColorInto(thScalar, carriageColorObj);
+        carriageOpacity = 0.78;
+        if (thScalar > 0.4) {
+          carriageEmissive.copy(carriageColorObj);
+          carriageEmissiveInt = (thScalar - 0.3) * 0.4;
+        }
+
+        const s1 = 0.5 * (thScalar + cogScalar);
+        stressColorInto(s1, strut1ColorObj);
+        strut1Radius = 0.038;
+        if (s1 > 0.45) {
+          strut1Emissive.copy(strut1ColorObj);
+          strut1EmissiveInt = (s1 - 0.35) * 0.5;
+        }
+
+        const s2 = 0.5 * (cogScalar + nozScalar);
+        stressColorInto(s2, strut2ColorObj);
+        strut2RadiusTop = 0.032;
+        strut2RadiusBot = 0.026;
+        if (s2 > 0.45) {
+          strut2Emissive.copy(strut2ColorObj);
+          strut2EmissiveInt = (s2 - 0.35) * 0.5;
+        }
+
+        stressColorInto(cogScalar, cogSphereColorObj);
+        cogSphereEmissive.copy(cogSphereColorObj);
+        cogSphereEmissiveInt = 0.25 + cogScalar * 0.55;
+        cogRingColorHex = cogScalar > 0.7 ? 0xfca5a5 : 0xfde68a;
+
+        stressColorInto(nozScalar, nozzleColorObj);
+        nozzleEmissive.copy(nozzleColorObj);
+        nozzleEmissiveInt = 0.2 + nozScalar * 0.55;
+        nozzleCollarColorObj.copy(nozzleColorObj);
+      } else if (viewMode === "fea_stress") {
+        const mountStress =
+          stressMap["toolhead_mount"] ?? stressMap["toolhead_cog_spring"] ?? 0.35;
+        const stemStress =
+          stressMap["nozzle_stem"] ?? stressMap["nozzle_stem_spring"] ?? mountStress * 0.8;
+        stressColorInto(mountStress, strut1ColorObj);
+        stressColorInto(stemStress, strut2ColorObj);
+      }
+
+      // Pre-compute toolhead inspection metadata
+      const thMountEntry =
+        memberSensMap["toolhead_mount"] ?? memberSensMap["toolhead_cog_spring"];
+      const nozStemEntry =
+        memberSensMap["nozzle_stem"] ?? memberSensMap["nozzle_stem_spring"];
+      const lumpedMapInspect = sim.sensitivity?.lumped_mass_sensitivities;
+      const thMassEntryInspect =
+        lumpedMapInspect?.["toolhead_cog"] ??
+        lumpedMapInspect?.[cogNodeId] ??
+        lumpedMapInspect?.[thNodeId];
+      const thMountStress =
+        memberStressById["toolhead_mount"] ?? memberStressById["toolhead_cog_spring"];
+      const nozStemStress =
+        memberStressById["nozzle_stem"] ?? memberStressById["nozzle_stem_spring"];
+      const thMountStiff = stiffenById["toolhead_mount"] ?? stiffenById["toolhead"];
+      const thMassLight =
+        lightenById["toolhead_assembly"] ?? lightenById["toolhead_cog"] ?? lightenById["toolhead"];
+      const thSubShare = sim.sensitivity?.subsystem_breakdown?.toolhead?.compliance_share_pct;
+
+      const carriageInspectInfo: InspectedPartInfo = {
+        key: "toolhead_carriage",
+        name: "Toolhead Carriage & Mount",
+        subsystem: "toolhead",
+        partGroupId: "toolhead_mount",
+        role: "toolhead",
+        material: mountMatId,
+        profile: `${Math.round(sim.spec.toolhead.internal_stiffness_n_per_mm ?? 450)} N/mm mount`,
+        complianceSharePct:
+          thMountStiff?.compliance_share_pct ?? thMountEntry?.compliance_share_pct ?? thSubShare,
+        heatScore: thMountEntry ? getLensScore(thMountEntry, adjointLens) : undefined,
+        stressMpa: thMountStress?.von_mises_mpa,
+        yieldMpa: thMountStress?.yield_mpa,
+        estHzGain: thMountStiff?.est_hz_gain,
+        hzPer100g: thMassEntryInspect?.hz_per_100g,
+        whyItHurts: thMountStiff?.why_it_hurts,
+        actionHint: thMountStiff?.action_hint,
+      };
+      const mountStrutInspectInfo: InspectedPartInfo = {
+        ...carriageInspectInfo,
+        key: "toolhead_mount",
+        name: thMountStiff?.label ?? "Toolhead Mount Lever Arm",
+      };
+      const nozStemInspectInfo: InspectedPartInfo = {
+        key: "nozzle_stem",
+        name: "Hotend Nozzle Stem",
+        subsystem: "toolhead",
+        partGroupId: "toolhead_mount",
+        role: "toolhead",
+        material: sim.spec.toolhead.hotend.heatbreak_material,
+        profile: `Drop Z: ${Math.round(Math.abs(sim.spec.toolhead.nozzle_offset_mm?.[2] ?? 62))} mm`,
+        complianceSharePct: nozStemEntry?.compliance_share_pct ?? thMountStiff?.compliance_share_pct,
+        heatScore: nozStemEntry ? getLensScore(nozStemEntry, adjointLens) : undefined,
+        stressMpa: nozStemStress?.von_mises_mpa ?? thMountStress?.von_mises_mpa,
+        yieldMpa: nozStemStress?.yield_mpa ?? thMountStress?.yield_mpa,
+        estHzGain: thMountStiff?.est_hz_gain,
+        whyItHurts: thMountStiff?.why_it_hurts,
+        actionHint: thMountStiff?.action_hint,
+      };
+      const cogInspectInfo: InspectedPartInfo = {
+        key: "toolhead_cog",
+        name: thMassLight?.label ?? "Toolhead Moving Mass (CoG)",
+        subsystem: "toolhead",
+        partGroupId: "toolhead_assembly",
+        role: "toolhead",
+        material: `${Math.round(sim.spec.toolhead.total_mass_g)} g moving mass`,
+        profile: `CoG Y/Z: ${Math.round(Math.abs(sim.spec.toolhead.cog_offset_mm?.[1] ?? 18))}/${Math.round(Math.abs(sim.spec.toolhead.cog_offset_mm?.[2] ?? 25))} mm`,
+        complianceSharePct: thSubShare,
+        heatScore: thMassEntryInspect ? getLensScore(thMassEntryInspect, adjointLens) : undefined,
+        hzPer100g: thMassLight?.hz_per_100g ?? thMassEntryInspect?.hz_per_100g,
+        whyItHurts: thMassLight?.why_it_hurts,
+        actionHint:
+          thMassLight?.action_hint ??
+          (sim.spec.toolhead.total_mass_g > 235
+            ? "Trim toolhead moving mass to boost XY acceleration and input-shaper frequency."
+            : undefined),
+      };
+      const nozzleInspectInfo: InspectedPartInfo = {
+        ...nozStemInspectInfo,
+        key: "nozzle_tip",
+        name: `Hotend Nozzle (${sim.spec.toolhead.hotend.nozzle_diameter_mm}mm)`,
+      };
 
       // Compact carriage block mounted on the X-beam centerline
       const thGroup = new THREE.Group();
       const carriageBody = new THREE.Mesh(
         new THREE.BoxGeometry(0.42, 0.28, 0.30),
         new THREE.MeshStandardMaterial({
-          color: carriageColor,
-          metalness: isAluminumMount ? 0.72 : 0.28,
-          roughness: isAluminumMount ? 0.26 : 0.45,
+          color: carriageColorObj,
+          emissive: carriageEmissive,
+          emissiveIntensity: carriageEmissiveInt,
+          metalness: viewMode === "sensitivity" ? 0.24 : isAluminumMount ? 0.72 : 0.28,
+          roughness: viewMode === "sensitivity" ? 0.4 : isAluminumMount ? 0.26 : 0.45,
           transparent: viewMode !== "assembly",
-          opacity: viewMode === "assembly" ? 0.92 : 0.55,
+          opacity: carriageOpacity,
         })
       );
+      tagInspectable(carriageBody, carriageInspectInfo);
       thGroup.add(carriageBody);
       thGroup.position.copy(thAnchor);
       group.add(thGroup);
 
       // Sleek lever-arm struts connecting X-beam carriage -> CoG -> Nozzle tip
-      const strutGeo1 = new THREE.CylinderGeometry(0.032, 0.032, 1, 10);
+      const strutGeo1 = new THREE.CylinderGeometry(strut1Radius, strut1Radius, 1, 10);
       const strutMat1 = new THREE.MeshStandardMaterial({
-        color: strutColor,
-        metalness: 0.7,
-        roughness: 0.28,
+        color: strut1ColorObj,
+        emissive: strut1Emissive,
+        emissiveIntensity: strut1EmissiveInt,
+        metalness: viewMode === "sensitivity" ? 0.3 : 0.7,
+        roughness: viewMode === "sensitivity" ? 0.36 : 0.28,
       });
       const strutToCog = new THREE.Mesh(strutGeo1, strutMat1);
       orientBeamMesh(strutToCog, thAnchor, cogAnchor);
+      tagInspectable(strutToCog, mountStrutInspectInfo);
       group.add(strutToCog);
 
-      const strutGeo2 = new THREE.CylinderGeometry(0.026, 0.022, 1, 10);
+      const strutGeo2 = new THREE.CylinderGeometry(strut2RadiusTop, strut2RadiusBot, 1, 10);
       const strutMat2 = new THREE.MeshStandardMaterial({
-        color: 0xd97706,
-        metalness: 0.75,
-        roughness: 0.25,
+        color: strut2ColorObj,
+        emissive: strut2Emissive,
+        emissiveIntensity: strut2EmissiveInt,
+        metalness: viewMode === "sensitivity" ? 0.3 : 0.75,
+        roughness: viewMode === "sensitivity" ? 0.36 : 0.25,
       });
       const strutToNoz = new THREE.Mesh(strutGeo2, strutMat2);
       orientBeamMesh(strutToNoz, cogAnchor, nozAnchor);
+      tagInspectable(strutToNoz, nozStemInspectInfo);
       group.add(strutToNoz);
 
       // Undeformed lever-arm ghost reference in FEA & Modal modes
@@ -2548,25 +3828,26 @@ export const PrinterViewport: React.FC<Props> = ({
         group.add(new THREE.Line(ghostGeo, ghostMat));
       }
 
-      // Glowing amber CoG marker sphere + equatorial target ring
+      // Glowing CoG marker sphere + equatorial target ring
       const cogGroup = new THREE.Group();
       const cogSphere = new THREE.Mesh(
         new THREE.SphereGeometry(0.13, 18, 18),
         new THREE.MeshStandardMaterial({
-          color: 0xf59e0b,
-          emissive: 0xd97706,
-          emissiveIntensity: 0.65,
+          color: cogSphereColorObj,
+          emissive: cogSphereEmissive,
+          emissiveIntensity: cogSphereEmissiveInt,
           roughness: 0.22,
           metalness: 0.18,
         })
       );
+      tagInspectable(cogSphere, cogInspectInfo);
       cogGroup.add(cogSphere);
       const cogRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.19, 0.016, 10, 24),
+        new THREE.TorusGeometry(0.19, 0.018, 10, 24),
         new THREE.MeshBasicMaterial({
-          color: 0xfde68a,
+          color: cogRingColorHex,
           transparent: true,
-          opacity: 0.88,
+          opacity: 0.9,
         })
       );
       cogRing.rotation.x = Math.PI * 0.5;
@@ -2574,28 +3855,29 @@ export const PrinterViewport: React.FC<Props> = ({
       cogGroup.position.copy(cogAnchor);
       group.add(cogGroup);
 
-      // Sharp brass/gold inverted cone whose apex sits exactly at nozzle_tip
+      // Sharp inverted cone whose apex sits exactly at nozzle_tip
       const nozzleGroup = new THREE.Group();
       const nozzleCone = new THREE.Mesh(
         new THREE.ConeGeometry(0.09, 0.24, 16),
         new THREE.MeshStandardMaterial({
-          color: 0xfbbf24,
-          emissive: 0xb45309,
-          emissiveIntensity: 0.28,
-          metalness: 0.88,
-          roughness: 0.18,
+          color: nozzleColorObj,
+          emissive: nozzleEmissive,
+          emissiveIntensity: nozzleEmissiveInt,
+          metalness: viewMode === "sensitivity" ? 0.35 : 0.88,
+          roughness: viewMode === "sensitivity" ? 0.34 : 0.18,
         })
       );
       nozzleCone.rotation.x = Math.PI;
       nozzleCone.position.y = 0.12; // tip at local (0, 0, 0)
+      tagInspectable(nozzleCone, nozzleInspectInfo);
       nozzleGroup.add(nozzleCone);
 
       const nozzleCollar = new THREE.Mesh(
         new THREE.CylinderGeometry(0.095, 0.095, 0.08, 14),
         new THREE.MeshStandardMaterial({
-          color: 0xd97706,
-          metalness: 0.82,
-          roughness: 0.24,
+          color: nozzleCollarColorObj,
+          metalness: viewMode === "sensitivity" ? 0.35 : 0.82,
+          roughness: viewMode === "sensitivity" ? 0.36 : 0.24,
         })
       );
       nozzleCollar.position.y = 0.27;
@@ -2650,6 +3932,77 @@ export const PrinterViewport: React.FC<Props> = ({
       group.add(thGroup);
     }
 
+    // Glowing #1 Problem Area hotspot beacon in Adjoint ROI (sensitivity) mode
+    if (viewMode === "sensitivity" && sim.sensitivity) {
+      let primarySub: SubsystemKey | undefined = sim.sensitivity.primary_problem_subsystem;
+      if (!primarySub && sim.sensitivity.subsystem_breakdown) {
+        let bestShare = -1;
+        for (const key of SUBSYSTEM_ORDER) {
+          const share = sim.sensitivity.subsystem_breakdown[key]?.compliance_share_pct ?? -1;
+          if (share > bestShare) {
+            bestShare = share;
+            primarySub = key;
+          }
+        }
+      }
+
+      let beaconCenter: THREE.Vector3 | null = null;
+      let beaconRadius = 0.48;
+      if (primarySub === "toolhead" && cogAnchor && nozAnchor) {
+        beaconCenter = cogAnchor.clone().lerp(nozAnchor, 0.42);
+        beaconRadius = 0.44;
+      } else if (primarySub === "gantry") {
+        if (basePos["y_car_l"] && basePos["y_car_r"]) {
+          beaconCenter = basePos["y_car_l"].clone().add(basePos["y_car_r"]).multiplyScalar(0.5);
+        } else if (thAnchor) {
+          beaconCenter = thAnchor.clone();
+        }
+        beaconRadius = 0.56;
+      } else if (primarySub === "bed") {
+        beaconCenter = bedBaseCenter.clone().add(new THREE.Vector3(0, 0.08, 0));
+        beaconRadius = 0.72;
+      } else if (primarySub === "frame") {
+        const topTargetId = sim.sensitivity.top_stiffen_targets?.[0]?.id;
+        const targetMember = topTargetId
+          ? geom.members.find((mm) => mm.id === topTargetId)
+          : undefined;
+        if (targetMember && basePos[targetMember.start_id] && basePos[targetMember.end_id]) {
+          beaconCenter = basePos[targetMember.start_id]
+            .clone()
+            .add(basePos[targetMember.end_id])
+            .multiplyScalar(0.5);
+          beaconRadius = 0.52;
+        }
+      }
+
+      if (beaconCenter) {
+        const beaconGroup = new THREE.Group();
+        const outerRing = new THREE.Mesh(
+          new THREE.TorusGeometry(beaconRadius, 0.022, 12, 36),
+          new THREE.MeshBasicMaterial({
+            color: 0xef4444,
+            transparent: true,
+            opacity: 0.78,
+          })
+        );
+        outerRing.rotation.x = Math.PI * 0.5;
+        beaconGroup.add(outerRing);
+
+        const vertRing = new THREE.Mesh(
+          new THREE.TorusGeometry(beaconRadius * 0.82, 0.014, 10, 32),
+          new THREE.MeshBasicMaterial({
+            color: 0xfca5a5,
+            transparent: true,
+            opacity: 0.52,
+          })
+        );
+        beaconGroup.add(vertRing);
+
+        beaconGroup.position.copy(beaconCenter);
+        group.add(beaconGroup);
+      }
+    }
+
     // Virtual Print Toolpath overlay
     if (viewMode === "toolpath" && sim.virtual_print.segments.length > 0) {
       const positions: number[] = [];
@@ -2689,6 +4042,22 @@ export const PrinterViewport: React.FC<Props> = ({
         group.add(new THREE.LineSegments(tpGeo, tpMat));
       }
     }
+
+    // Reconcile pinned Part Inspector selection with newly built meshes after spec/mode change
+    if (stateRef.current.pinnedKey) {
+      const matched = stateRef.current.inspectableMeshes.find(
+        (mesh) => (mesh.userData?.inspectInfo as InspectedPartInfo | undefined)?.key === stateRef.current.pinnedKey
+      );
+      if (matched && matched.userData?.inspectInfo) {
+        stateRef.current.pinnedMesh = matched;
+        applyInspectHighlight(matched, "pin", 0.5);
+        setPinnedPart(matched.userData.inspectInfo as InspectedPartInfo);
+      } else {
+        stateRef.current.pinnedMesh = null;
+        stateRef.current.pinnedKey = null;
+        setPinnedPart(null);
+      }
+    }
   }, [
     sim,
     solidFea,
@@ -2701,6 +4070,9 @@ export const PrinterViewport: React.FC<Props> = ({
     feaScale,
     feaLoadCase,
     layerLimit,
+    adjointLens,
+    modalColorMode,
+    showBedWarp,
   ]);
 
   const maxLayers = Math.max(0, (sim?.virtual_print.layer_count ?? 1) - 1);
@@ -2737,31 +4109,74 @@ export const PrinterViewport: React.FC<Props> = ({
         : `X ${X_MOUNT_HUD_LABELS[xRailMountHud]}`
       : null;
 
+  const bedPlateFeaHud = sim?.bed_plate_fea ?? null;
+  const canShowBedWarpHud =
+    Boolean(bedPlateFeaHud) &&
+    (viewMode === "assembly" ||
+      viewMode === "fea_stress" ||
+      viewMode === "modal" ||
+      viewMode === "sensitivity");
+  const bedWarpHintHot =
+    canShowBedWarpHud &&
+    !showBedWarp &&
+    (bedPlateFeaHud?.total_flatness_error_um ?? 0) >= 50;
+  const bedWarpQuickFix =
+    sim &&
+    bedPlateFeaHud &&
+    (bedPlateFeaHud.first_layer_risk === "high" ||
+      bedPlateFeaHud.first_layer_risk === "critical")
+      ? getQuickFixForTarget("bed_plate", sim.spec)
+      : null;
+  const pinnedQuickFix =
+    pinnedPart && sim ? getQuickFixForTarget(pinnedPart.partGroupId, sim.spec) : null;
+
   return (
     <div className="viewport-wrap">
       <div ref={containerRef} className="viewport-canvas" />
 
       <div className="viewport-hud-top">
-        <div className="hud-pill-group">
-          {(
-            [
-              ["assembly", "Assembly"],
-              ["fea_stress", "Frame FEA"],
-              ["modal", "Modal"],
-              ["sensitivity", "Adjoint ROI"],
-              ["toolpath", "Virtual Print"],
-              ["solid_part", "3D Solid Part"],
-              ["topology", "Topo Opt"],
-            ] as Array<[ViewMode, string]>
-          ).map(([id, label]) => (
+        <div className="viewport-hud-top-left">
+          <div className="hud-pill-group">
+            {(
+              [
+                ["assembly", "Assembly"],
+                ["fea_stress", "Frame FEA"],
+                ["modal", "Modal"],
+                ["sensitivity", "Adjoint ROI"],
+                ["toolpath", "Virtual Print"],
+                ["solid_part", "3D Solid Part"],
+                ["topology", "Topo Opt"],
+              ] as Array<[ViewMode, string]>
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                className={`hud-pill ${viewMode === id ? "active" : ""}`}
+                onClick={() => onViewModeChange(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {canShowBedWarpHud && bedPlateFeaHud && (
             <button
-              key={id}
-              className={`hud-pill ${viewMode === id ? "active" : ""}`}
-              onClick={() => onViewModeChange(id)}
+              type="button"
+              className={`bed-warp-toggle-pill ${showBedWarp ? "active" : ""} ${
+                bedWarpHintHot ? "hint-hot" : ""
+              }`}
+              onClick={() => setShowBedWarp(!showBedWarp)}
+              title={`Toggle 3D MITC4 Heated Bed Thermal/Gravity Warp Mesh (Flatness error: ${bedPlateFeaHud.total_flatness_error_um.toFixed(
+                1
+              )} µm, Taco: ${bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm)`}
             >
-              {label}
+              <span>Bed Thermal/Warp</span>
+              {bedWarpHintHot && (
+                <span className="bed-warp-hint-tag">
+                  {Math.round(bedPlateFeaHud.total_flatness_error_um)} µm
+                </span>
+              )}
             </button>
-          ))}
+          )}
         </div>
 
         {sim && (
@@ -2780,7 +4195,212 @@ export const PrinterViewport: React.FC<Props> = ({
         )}
       </div>
 
+      {/* Compact Hover Pill for 3D Part Raycasting */}
+      {hoveredPart && hoveredPart.key !== pinnedPart?.key && (
+        <div className="viewport-hover-pill">
+          <span
+            className="swatch-dot"
+            style={{ background: SUBSYSTEM_META[hoveredPart.subsystem].color }}
+          />
+          <strong className="viewport-hover-name">{hoveredPart.name}</strong>
+          {hoveredPart.complianceSharePct != null && hoveredPart.complianceSharePct >= 1 && (
+            <span className="viewport-hover-stat">
+              {hoveredPart.complianceSharePct.toFixed(0)}% flex
+            </span>
+          )}
+          {hoveredPart.bedFlatnessUm != null && (
+            <span className="viewport-hover-stat">
+              {hoveredPart.bedFlatnessUm.toFixed(0)} µm flat err
+            </span>
+          )}
+          <span className="viewport-hover-hint">Click to inspect</span>
+        </div>
+      )}
+
+      {/* Floating 3D Part Inspector Card */}
+      {pinnedPart && sim && (
+        <div className="part-inspector-card">
+          <div className="part-inspector-head">
+            <div className="part-inspector-title-wrap">
+              <span
+                className="part-inspector-sub-badge"
+                style={{
+                  borderColor: SUBSYSTEM_META[pinnedPart.subsystem].color,
+                  color: SUBSYSTEM_META[pinnedPart.subsystem].color,
+                }}
+              >
+                {SUBSYSTEM_META[pinnedPart.subsystem].label}
+              </span>
+              <strong className="part-inspector-title">{pinnedPart.name}</strong>
+            </div>
+            <button
+              type="button"
+              className="part-inspector-close"
+              onClick={handleCloseInspector}
+              title="Close Part Inspector"
+              aria-label="Close Part Inspector"
+            >
+              ×
+            </button>
+          </div>
+
+          {(pinnedPart.material || pinnedPart.profile) && (
+            <div className="part-inspector-meta">
+              {pinnedPart.profile && <span>{pinnedPart.profile.replace(/_/g, " ")}</span>}
+              {pinnedPart.profile && pinnedPart.material && <span>·</span>}
+              {pinnedPart.material && <span>{pinnedPart.material.replace(/_/g, " ")}</span>}
+            </div>
+          )}
+
+          <div className="part-inspector-grid">
+            {pinnedPart.complianceSharePct != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Nozzle Flex</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.complianceSharePct.toFixed(1)}%
+                </span>
+              </div>
+            )}
+            {pinnedPart.stressMpa != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">von Mises</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.stressMpa.toFixed(2)} MPa
+                  {pinnedPart.yieldMpa ? ` / ${Math.round(pinnedPart.yieldMpa)}` : ""}
+                </span>
+              </div>
+            )}
+            {pinnedPart.heatScore != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Adjoint ROI</span>
+                <span
+                  className={`part-inspector-val ${
+                    pinnedPart.heatScore > 0.25
+                      ? "tag-warn"
+                      : pinnedPart.heatScore < -0.2
+                        ? "tag-ok"
+                        : ""
+                  }`}
+                >
+                  {pinnedPart.heatScore >= 0 ? "+" : ""}
+                  {(pinnedPart.heatScore * 100).toFixed(0)}%
+                </span>
+              </div>
+            )}
+            {pinnedPart.estHzGain != null && pinnedPart.estHzGain > 0 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Stiffen Gain</span>
+                <span className="part-inspector-val tag-ok">
+                  +{formatHzGain(pinnedPart.estHzGain)} Hz
+                </span>
+              </div>
+            )}
+            {pinnedPart.hzPer100g != null && Math.abs(pinnedPart.hzPer100g) >= 0.01 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Mass Sens.</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.hzPer100g > 0 ? "+" : ""}
+                  {pinnedPart.hzPer100g.toFixed(2)} Hz/100g
+                </span>
+              </div>
+            )}
+            {pinnedPart.bedFlatnessUm != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Bed Flatness</span>
+                <span
+                  className={`part-inspector-val ${
+                    pinnedPart.bedRisk === "critical" || pinnedPart.bedRisk === "high"
+                      ? "tag-bad"
+                      : pinnedPart.bedRisk === "moderate"
+                        ? "tag-warn"
+                        : "tag-ok"
+                  }`}
+                >
+                  {pinnedPart.bedFlatnessUm.toFixed(1)} µm
+                </span>
+              </div>
+            )}
+            {pinnedPart.bedTacoUm != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Taco Warp</span>
+                <span className="part-inspector-val">{pinnedPart.bedTacoUm.toFixed(1)} µm</span>
+              </div>
+            )}
+            {pinnedPart.bedModeHz != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Plate Mode f₁</span>
+                <span className="part-inspector-val">{pinnedPart.bedModeHz.toFixed(0)} Hz</span>
+              </div>
+            )}
+          </div>
+
+          {pinnedPart.whyItHurts && (
+            <div className="part-inspector-why">{pinnedPart.whyItHurts}</div>
+          )}
+          {pinnedPart.actionHint && (
+            <div className="part-inspector-hint">
+              <span className="sens-fix-prefix">Hint:</span> {pinnedPart.actionHint}
+            </div>
+          )}
+
+          {pinnedQuickFix && onApplyFix && (
+            <button
+              type="button"
+              className="quick-fix-btn part-inspector-fix-btn"
+              onClick={() => onApplyFix(pinnedQuickFix)}
+              title={pinnedQuickFix.summary}
+            >
+              ⚡ {pinnedQuickFix.buttonLabel}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="viewport-hud-bottom">
+        {canShowBedWarpHud && showBedWarp && bedPlateFeaHud && (
+          <div className="hud-card bed-warp-hud">
+            <span className="badge-pill">2D MITC4 Bed Plate</span>
+            <div className="bed-warp-legend">
+              <span style={{ color: "#60a5fa" }}>Valley</span>
+              <div className="legend-gradient bed-warp" />
+              <span style={{ color: "#f87171" }}>Crown/Bow</span>
+            </div>
+            <span style={{ color: "var(--muted)" }}>|</span>
+            <span>
+              Flatness:{" "}
+              <strong
+                className={
+                  bedPlateFeaHud.first_layer_risk === "critical" ||
+                  bedPlateFeaHud.first_layer_risk === "high"
+                    ? "tag-bad"
+                    : bedPlateFeaHud.first_layer_risk === "moderate"
+                      ? "tag-warn"
+                      : "tag-ok"
+                }
+              >
+                {bedPlateFeaHud.total_flatness_error_um.toFixed(1)} µm
+              </strong>
+            </span>
+            <span style={{ color: "var(--muted)" }}>|</span>
+            <span>
+              Taco: <strong>{bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm</strong>
+            </span>
+            <span style={{ color: "var(--muted)" }}>|</span>
+            <span>
+              Plate 1st Mode: <strong>{bedPlateFeaHud.plate_first_mode_hz.toFixed(0)} Hz</strong>
+            </span>
+            {bedWarpQuickFix && onApplyFix && (
+              <button
+                type="button"
+                className="quick-fix-btn"
+                onClick={() => onApplyFix(bedWarpQuickFix)}
+                title={bedWarpQuickFix.summary}
+              >
+                ⚡ {bedWarpQuickFix.buttonLabel}
+              </button>
+            )}
+          </div>
+        )}
         {viewMode === "fea_stress" && sim && (
           <>
             <div className="hud-card">
@@ -2861,23 +4481,65 @@ export const PrinterViewport: React.FC<Props> = ({
               <span style={{ color: "var(--muted)", fontWeight: 600 }}>Mode:</span>
               {sim.modal_fea.modes.slice(0, 6).map((m, idx) => {
                 const axisTag = m.excited_axis ? `${m.excited_axis}-Accel` : m.dominant_axis;
+                const isWorst = sim.modal_fea.worst_print_mode_number === m.mode_number;
+                const impMeta = m.print_impact_level ? impactLevelMeta(m.print_impact_level) : null;
                 return (
                   <button
                     key={m.mode_number}
                     type="button"
-                    className={`hud-pill ${clampedModeIdx === idx ? "active" : ""}`}
+                    className={`hud-pill modal-mode-pill ${clampedModeIdx === idx ? "active" : ""} ${
+                      isWorst ? "worst-mode" : ""
+                    }`}
                     style={{ padding: "4px 8px" }}
                     onClick={() => onSelectModeIdx(idx)}
                     title={
-                      m.mode_label
-                        ? `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz · ${axisTag}) — ${m.mode_label}`
-                        : `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz) — excited by ${axisTag}`
+                      [
+                        `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz · ${axisTag})`,
+                        m.mode_label ? `— ${m.mode_label}` : "",
+                        m.print_impact_score != null
+                          ? `• Print Impact ${Math.round(m.print_impact_score)}/100`
+                          : "",
+                        isWorst ? "★ Worst print-impact mode" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")
                     }
                   >
-                    Mode {m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
+                    {impMeta && (
+                      <span
+                        className="impact-dot-mini"
+                        style={{ background: impMeta.dotColor }}
+                      />
+                    )}
+                    {isWorst && (
+                      <span className="worst-star" title="Worst print-impact mode">
+                        ★
+                      </span>
+                    )}
+                    M{m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
                   </button>
                 );
               })}
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <span style={{ color: "var(--muted)", fontWeight: 600 }}>Color:</span>
+              <button
+                type="button"
+                className={`hud-pill ${modalColorMode === "relative" ? "active" : ""}`}
+                style={{ padding: "3px 7px", fontSize: 10.5 }}
+                onClick={() => setModalColorMode("relative")}
+                title="Color nodes by |u_node - u_bed| — whole-frame rocking stays cool blue while flopping toolheads blaze red"
+              >
+                Relative to Bed (Print Error)
+              </button>
+              <button
+                type="button"
+                className={`hud-pill ${modalColorMode === "global" ? "active" : ""}`}
+                style={{ padding: "3px 7px", fontSize: 10.5 }}
+                onClick={() => setModalColorMode("global")}
+                title="Color nodes by absolute global modal displacement amplitude |u_node|"
+              >
+                Global Motion
+              </button>
             </div>
 
             {activeMode && (() => {
@@ -2885,15 +4547,62 @@ export const PrinterViewport: React.FC<Props> = ({
                 ? `${activeMode.excited_axis}-Accel`
                 : activeMode.dominant_axis;
               const sevMeta = modeSeverityMeta(activeMode.severity);
+              const impMeta =
+                activeMode.print_impact_level || activeMode.print_impact_score != null
+                  ? impactLevelMeta(
+                      activeMode.print_impact_level ??
+                        ((activeMode.print_impact_score ?? 0) >= 75
+                          ? "critical"
+                          : (activeMode.print_impact_score ?? 0) >= 50
+                            ? "high"
+                            : (activeMode.print_impact_score ?? 0) >= 25
+                              ? "moderate"
+                              : "low")
+                    )
+                  : null;
+              const isWorstActive =
+                sim.modal_fea.worst_print_mode_number === activeMode.mode_number;
+              const share = activeMode.subsystem_share_pct;
+
               return (
                 <div className="hud-card hud-guide-bar modal-guide">
                   <div className="hud-guide-row hud-guide-header">
                     <div className="hud-guide-badges">
                       <span className="badge-pill hud-guide-pill">
-                        Mode {activeMode.mode_number} · {activeMode.frequency_hz.toFixed(1)} Hz
+                        {isWorstActive ? "★ " : ""}Mode {activeMode.mode_number} ·{" "}
+                        {activeMode.frequency_hz.toFixed(1)} Hz
                       </span>
                       <span className="badge-pill hud-axis-pill">{axisTag}</span>
-                      {sevMeta && <span className={`badge-pill ${sevMeta.cls}`}>{sevMeta.label}</span>}
+                      {impMeta ? (
+                        <span className={`badge-pill ${impMeta.cls}`}>
+                          {impMeta.label}
+                          {activeMode.print_impact_score != null
+                            ? ` ${Math.round(activeMode.print_impact_score)}/100`
+                            : ""}
+                        </span>
+                      ) : (
+                        sevMeta && <span className={`badge-pill ${sevMeta.cls}`}>{sevMeta.label}</span>
+                      )}
+                      {(activeMode.nozzle_whip_ratio ?? 0) >= 1.25 && (
+                        <span
+                          className={`badge-pill ${
+                            (activeMode.nozzle_whip_ratio ?? 0) >= 1.8 ? "bad" : "warn"
+                          }`}
+                          title="Nozzle tip moves farther than the carriage due to rotational pitch/twist whip"
+                        >
+                          {activeMode.nozzle_whip_ratio!.toFixed(2)}× whip
+                        </span>
+                      )}
+                      {activeMode.toolhead_flop_pct != null && activeMode.toolhead_flop_pct >= 5 && (
+                        <span
+                          className={`badge-pill ${
+                            activeMode.toolhead_flop_pct >= 50 ? "bad" : "warn"
+                          }`}
+                          title="Fraction of relative nozzle-to-bed motion coming from local toolhead mount/stem flop"
+                        >
+                          Toolhead Flop: {Math.round(activeMode.toolhead_flop_pct)}%
+                        </span>
+                      )}
                       {activeMode.mode_label && (
                         <strong className="hud-guide-title">{activeMode.mode_label}</strong>
                       )}
@@ -2942,6 +4651,37 @@ export const PrinterViewport: React.FC<Props> = ({
                     </div>
                   </div>
 
+                  {share && (
+                    <div className="subsystem-bar-wrap">
+                      <div className="subsystem-bar-track" title="Modal strain/kinetic energy share by subsystem">
+                        {SUBSYSTEM_ORDER.map((k) => {
+                          const pct = Math.max(0, share[k] ?? 0);
+                          if (pct <= 0.5) return null;
+                          return (
+                            <div
+                              key={k}
+                              className="subsystem-bar-seg"
+                              style={{ width: `${pct}%`, background: SUBSYSTEM_META[k].color }}
+                              title={`${SUBSYSTEM_META[k].label}: ${Math.round(pct)}%`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="subsystem-bar-legend">
+                        {SUBSYSTEM_ORDER.map((k) => (
+                          <span key={k} className="subsystem-legend-item">
+                            <span
+                              className="swatch-dot"
+                              style={{ background: SUBSYSTEM_META[k].color }}
+                            />
+                            {SUBSYSTEM_META[k].label}{" "}
+                            <strong>{Math.round(share[k] ?? 0)}%</strong>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {activeMode.what_is_shaking && (
                     <div className="hud-guide-line">
                       <span className="hud-guide-key">What&apos;s shaking:</span>{" "}
@@ -2963,6 +4703,8 @@ export const PrinterViewport: React.FC<Props> = ({
         {viewMode === "sensitivity" && sim && (() => {
           const topStiff = sim.sensitivity?.top_stiffen_targets?.[0];
           const topLight = sim.sensitivity?.top_lighten_targets?.[0];
+          const breakdown = sim.sensitivity?.subsystem_breakdown;
+          const primarySub = sim.sensitivity?.primary_problem_subsystem;
           const stiffStatParts: string[] = [];
           if (topStiff) {
             if ((topStiff.est_hz_gain ?? 0) > 0) {
@@ -2981,20 +4723,83 @@ export const PrinterViewport: React.FC<Props> = ({
 
           return (
             <div className="hud-card hud-guide-bar sens-guide">
-              <div className="hud-guide-row hud-sens-legend">
-                <div className="legend-gradient sensitivity" />
-                <span style={{ color: "#22d3ee", fontWeight: 700 }}>
-                  Cyan = Lighten Mass{" "}
-                  <span className="hud-sens-note">(moving weight slowing you down)</span>
-                </span>
-                <span style={{ color: "var(--muted)" }}>·</span>
-                <span style={{ color: "#94a3b8", fontWeight: 600 }}>Slate = Neutral</span>
-                <span style={{ color: "var(--muted)" }}>·</span>
-                <span style={{ color: "#fb923c", fontWeight: 700 }}>
-                  Red/Orange = Stiffen Hotspot{" "}
-                  <span className="hud-sens-note">(biggest Hz/$ gain)</span>
-                </span>
+              <div className="hud-guide-row hud-guide-header">
+                <div className="hud-sens-lens-row">
+                  <span style={{ color: "var(--muted)", fontWeight: 700, fontSize: 10.5 }}>
+                    Lens:
+                  </span>
+                  {ADJOINT_LENS_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={`hud-pill ${adjointLens === opt.id ? "active" : ""}`}
+                      style={{ padding: "3px 8px", fontSize: 10.5 }}
+                      onClick={() => setAdjointLens(opt.id)}
+                      title={opt.title}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="hud-guide-row hud-sens-legend">
+                  <div className="legend-gradient sensitivity" />
+                  {adjointLens !== "compliance" && (
+                    <span style={{ color: "#22d3ee", fontWeight: 700 }}>Cyan = Lighten Mass</span>
+                  )}
+                  {adjointLens !== "compliance" && adjointLens !== "mass" && (
+                    <span style={{ color: "var(--muted)" }}>·</span>
+                  )}
+                  <span style={{ color: "#94a3b8", fontWeight: 600 }}>Slate = Neutral</span>
+                  {adjointLens !== "mass" && (
+                    <>
+                      <span style={{ color: "var(--muted)" }}>·</span>
+                      <span style={{ color: "#fb923c", fontWeight: 700 }}>
+                        Red/Orange = Stiffen Hotspot
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
+
+              {breakdown && (
+                <div className="subsystem-bar-wrap">
+                  <div className="subsystem-bar-track" title="Static nozzle-to-bed print error share by subsystem">
+                    {SUBSYSTEM_ORDER.map((k) => {
+                      const pct = Math.max(0, breakdown[k]?.compliance_share_pct ?? 0);
+                      if (pct <= 0.5) return null;
+                      return (
+                        <div
+                          key={k}
+                          className="subsystem-bar-seg"
+                          style={{ width: `${pct}%`, background: SUBSYSTEM_META[k].color }}
+                          title={`${breakdown[k]?.label ?? SUBSYSTEM_META[k].label}: ${Math.round(pct)}% of flex`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="subsystem-bar-legend">
+                    <span style={{ color: "var(--muted)", fontWeight: 600 }}>Print-Error Share:</span>
+                    {SUBSYSTEM_ORDER.map((k) => {
+                      const entry = breakdown[k];
+                      const isPrimary = primarySub === k;
+                      return (
+                        <span
+                          key={k}
+                          className={`subsystem-legend-item ${isPrimary ? "primary" : ""}`}
+                        >
+                          <span
+                            className="swatch-dot"
+                            style={{ background: SUBSYSTEM_META[k].color }}
+                          />
+                          {SUBSYSTEM_META[k].label}{" "}
+                          <strong>{Math.round(entry?.compliance_share_pct ?? 0)}%</strong>
+                          {isPrimary && <span className="subsystem-primary-tag">#1</span>}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {(topStiff || topLight) && (
                 <div className="hud-guide-row hud-sens-takeaway">
@@ -3225,7 +5030,7 @@ export const PrinterViewport: React.FC<Props> = ({
               </span>
             )}
             <span>|</span>
-            <span>Drag to orbit • Scroll to zoom</span>
+            <span>Click part to inspect • Drag to orbit • Scroll to zoom</span>
           </div>
         )}
       </div>
