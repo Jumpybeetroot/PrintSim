@@ -72,8 +72,39 @@ const PANEL_MOUNTING_LABELS: Record<string, string> = {
 
 const MOUNT_MATERIAL_LABELS: Record<string, string> = {
   abs_printed: "Printed ABS",
+  pet_cf_printed: "Printed PET-CF15",
   pa12_cf_printed: "Printed PA12-CF",
-  aluminum_6061_t6: "CNC Aluminum 6061",
+  ppa_cf_printed: "Printed PPA-CF",
+  pps_cf_printed: "Printed PPS-CF",
+  aluminum_6061_t6: "CNC Al 6061",
+  aluminum_7075_t6: "CNC Al 7075",
+};
+
+const EXTRUSION_FILLING_LABELS: Record<string, string> = {
+  none: "Hollow",
+  pu_foam: "PU Foam",
+  silica_sand: "Silica Sand",
+  lead_shot: "Lead Shot",
+  epoxy_granite: "Epoxy Granite",
+  uhpc_grout: "UHPC Grout",
+};
+
+const X_RAIL_MOUNT_LABELS: Record<string, string> = {
+  front: "Front",
+  top: "Top",
+  bottom: "Bottom",
+  dual_top_bottom: "Dual Top+Bot",
+};
+
+const Y_RAIL_MOUNT_LABELS: Record<string, string> = {
+  top: "Top",
+  inner: "Inner Side",
+  bottom: "Bottom",
+};
+
+const RAIL_PROFILE_LABELS: Record<string, string> = {
+  mgn9_rail: "MGN9H",
+  mgn12_rail: "MGN12H",
 };
 
 function formatPanelDesc(frame: PrinterSpecData["frame"]): string {
@@ -144,6 +175,19 @@ function describeSpecDiff(
       }`
     );
   }
+  const prevFill = prev.frame.extrusion_filling ?? "none";
+  const nextFill = next.frame.extrusion_filling ?? "none";
+  if (prevFill !== nextFill) {
+    const prevFillLabel =
+      catalog?.extrusion_fillings?.find((f) => f.id === prevFill)?.short_name ??
+      EXTRUSION_FILLING_LABELS[prevFill] ??
+      prevFill;
+    const nextFillLabel =
+      catalog?.extrusion_fillings?.find((f) => f.id === nextFill)?.short_name ??
+      EXTRUSION_FILLING_LABELS[nextFill] ??
+      nextFill;
+    diffs.push(`Extrusion Fill: ${prevFillLabel} → ${nextFillLabel}`);
+  }
   if (prev.bed.z_drive !== next.bed.z_drive) {
     diffs.push(
       `Gantry Type: ${Z_DRIVE_LABELS[prev.bed.z_drive] ?? prev.bed.z_drive} → ${
@@ -183,6 +227,19 @@ function describeSpecDiff(
       }`
     );
   }
+  const prevBracket = prev.gantry.bracket_material ?? "abs_printed";
+  const nextBracket = next.gantry.bracket_material ?? "abs_printed";
+  if (prevBracket !== nextBracket) {
+    const prevBracketLabel =
+      catalog?.gantry_brackets?.find((b) => b.id === prevBracket)?.short_name ??
+      MOUNT_MATERIAL_LABELS[prevBracket] ??
+      prevBracket;
+    const nextBracketLabel =
+      catalog?.gantry_brackets?.find((b) => b.id === nextBracket)?.short_name ??
+      MOUNT_MATERIAL_LABELS[nextBracket] ??
+      nextBracket;
+    diffs.push(`Gantry Brackets: ${prevBracketLabel} → ${nextBracketLabel}`);
+  }
   if (prev.gantry.x_beam_profile !== next.gantry.x_beam_profile) {
     diffs.push(
       `X Beam: ${shortCatalogName(prev.gantry.x_beam_profile, catalog?.profiles)} → ${shortCatalogName(
@@ -198,6 +255,50 @@ function describeSpecDiff(
         catalog?.materials
       )}`
     );
+  }
+  const prevXMount = prev.gantry.x_rail_mount ?? (prev.gantry.dual_x_rails ? "dual_top_bottom" : "front");
+  const nextXMount = next.gantry.x_rail_mount ?? (next.gantry.dual_x_rails ? "dual_top_bottom" : "front");
+  if (prevXMount !== nextXMount) {
+    const prevLabel =
+      catalog?.x_rail_mounts?.find((m) => m.id === prevXMount)?.short_name ??
+      X_RAIL_MOUNT_LABELS[prevXMount] ??
+      prevXMount;
+    const nextLabel =
+      catalog?.x_rail_mounts?.find((m) => m.id === nextXMount)?.short_name ??
+      X_RAIL_MOUNT_LABELS[nextXMount] ??
+      nextXMount;
+    diffs.push(`X Rail Mount: ${prevLabel} → ${nextLabel}`);
+  }
+  const prevYMount = prev.gantry.y_rail_mount ?? "top";
+  const nextYMount = next.gantry.y_rail_mount ?? "top";
+  if (prevYMount !== nextYMount) {
+    const prevLabel =
+      catalog?.y_rail_mounts?.find((m) => m.id === prevYMount)?.short_name ??
+      Y_RAIL_MOUNT_LABELS[prevYMount] ??
+      prevYMount;
+    const nextLabel =
+      catalog?.y_rail_mounts?.find((m) => m.id === nextYMount)?.short_name ??
+      Y_RAIL_MOUNT_LABELS[nextYMount] ??
+      nextYMount;
+    diffs.push(`Y Rail Mount: ${prevLabel} → ${nextLabel}`);
+  }
+  if (prev.gantry.x_rail_profile !== next.gantry.x_rail_profile) {
+    const prevRail =
+      RAIL_PROFILE_LABELS[prev.gantry.x_rail_profile] ??
+      shortCatalogName(prev.gantry.x_rail_profile, catalog?.profiles);
+    const nextRail =
+      RAIL_PROFILE_LABELS[next.gantry.x_rail_profile] ??
+      shortCatalogName(next.gantry.x_rail_profile, catalog?.profiles);
+    diffs.push(`X Rail: ${prevRail} → ${nextRail}`);
+  }
+  if (prev.gantry.y_rail_profile !== next.gantry.y_rail_profile) {
+    const prevRail =
+      RAIL_PROFILE_LABELS[prev.gantry.y_rail_profile] ??
+      shortCatalogName(prev.gantry.y_rail_profile, catalog?.profiles);
+    const nextRail =
+      RAIL_PROFILE_LABELS[next.gantry.y_rail_profile] ??
+      shortCatalogName(next.gantry.y_rail_profile, catalog?.profiles);
+    diffs.push(`Y Rail: ${prevRail} → ${nextRail}`);
   }
   if (prev.gantry.belt.type !== next.gantry.belt.type) {
     diffs.push(

@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  AccelBottleneckData,
+  AccelBottleneckShares,
   AxisShaperGraph,
   CompareMode,
+  GeometryExtrusionFillingData,
   KlipperShaperCandidate,
   PrinterBOMResponse,
   SimulationResponse,
@@ -156,7 +159,7 @@ function buildImpactMetrics(
     },
     {
       key: "flex",
-      label: "Nozzle Flex",
+      label: "Nozzle–Bed Flex",
       oldVal: cmp.static_fea.combined_max_deflection_um,
       newVal: cur.static_fea.combined_max_deflection_um,
       higherIsBetter: false,
@@ -660,8 +663,10 @@ const SolidHexFEACard: React.FC<{ solidFea: SolidFEAResponse }> = ({ solidFea })
 
 const KlipperShaperPsdCard: React.FC<{
   graphs: { x: AxisShaperGraph; y: AxisShaperGraph };
+  frameDampingRatio?: number;
+  extrusionFilling?: GeometryExtrusionFillingData;
   changed: boolean;
-}> = ({ graphs, changed }) => {
+}> = ({ graphs, frameDampingRatio, extrusionFilling, changed }) => {
   const [axis, setAxis] = useState<"x" | "y">("x");
   const [selectedShaperName, setSelectedShaperName] = useState<string | null>(null);
 
@@ -782,13 +787,33 @@ const KlipperShaperPsdCard: React.FC<{
   }, [graph, activeCandidate]);
 
   const gradId = `psdRawGrad-${axis}`;
+  const effDamping =
+    frameDampingRatio ?? extrusionFilling?.damping_ratio ?? graph.damping_ratio;
+  const isFilled = Boolean(extrusionFilling && extrusionFilling.id !== "none");
+  const fillingShortName = isFilled && extrusionFilling ? extrusionFilling.short_name : "Hollow";
 
   return (
     <div className={`section-card psd-card ${changed ? "card-changed" : ""}`}>
       <div className="section-title">
         <span>Klipper ADXL345 Resonance (PSD)</span>
         <span className="psd-peak-pill">
-          Peak {graph.peak_freq_hz.toFixed(1)} Hz • ζ={graph.damping_ratio.toFixed(2)}
+          Peak {graph.peak_freq_hz.toFixed(1)} Hz
+        </span>
+      </div>
+      <div className="psd-damping-strip">
+        <span>Frame Damping</span>
+        <span className="psd-damping-val">
+          {isFilled && extrusionFilling && (
+            <span
+              className="swatch-dot"
+              style={{ background: extrusionFilling.color_hex }}
+            />
+          )}
+          <strong>ζ = {effDamping.toFixed(3)}</strong>
+          <span>·</span>
+          <span style={{ color: isFilled ? "var(--accent)" : "var(--muted)" }}>
+            {fillingShortName}
+          </span>
         </span>
       </div>
 
@@ -1017,6 +1042,149 @@ const KlipperShaperPsdCard: React.FC<{
   );
 };
 
+const BOTTLENECK_SOURCES: Array<{
+  key: keyof AccelBottleneckShares;
+  label: string;
+  shortLabel: string;
+  color: string;
+}> = [
+  { key: "frame", label: "Frame & Gantry", shortLabel: "Frame", color: "#38bdf8" },
+  { key: "belt", label: "Belt Stretch", shortLabel: "Belt", color: "#f59e0b" },
+  { key: "motor", label: "Motor Stiffness", shortLabel: "Motor", color: "#a78bfa" },
+  { key: "bracket", label: "Brackets", shortLabel: "Bkt", color: "#fb7185" },
+];
+
+const AccelBottleneckCard: React.FC<{
+  bottleneck: AccelBottleneckData;
+  changed: boolean;
+}> = ({ bottleneck, changed }) => {
+  const [selectedAxis, setSelectedAxis] = useState<"X" | "Y">(bottleneck.limiting_axis);
+
+  useEffect(() => {
+    setSelectedAxis(bottleneck.limiting_axis);
+  }, [bottleneck.limiting_axis]);
+
+  const activeShares: AccelBottleneckShares =
+    selectedAxis === "X"
+      ? bottleneck.x_shares_pct ?? bottleneck.shares_pct
+      : bottleneck.y_shares_pct ?? bottleneck.shares_pct;
+
+  const totalShare = Math.max(
+    BOTTLENECK_SOURCES.reduce((acc, s) => acc + Math.max(0, activeShares[s.key] ?? 0), 0),
+    1e-6
+  );
+
+  const primaryMeta =
+    BOTTLENECK_SOURCES.find((s) => s.key === bottleneck.primary_source) ?? BOTTLENECK_SOURCES[0];
+
+  // Dominant source for the currently viewed axis (highlights the biggest contributor in the legend)
+  let activeDominantKey: keyof AccelBottleneckShares = bottleneck.primary_source;
+  let activeMaxVal = -1;
+  for (const s of BOTTLENECK_SOURCES) {
+    const v = activeShares[s.key] ?? 0;
+    if (v > activeMaxVal) {
+      activeMaxVal = v;
+      activeDominantKey = s.key;
+    }
+  }
+
+  const formatAxisLine = (shares: AccelBottleneckShares) =>
+    BOTTLENECK_SOURCES.map((s) => `${s.shortLabel} ${Math.round(shares[s.key] ?? 0)}%`).join(" · ");
+
+  return (
+    <div className={`section-card bottleneck-card ${changed ? "card-changed" : ""}`}>
+      <div className="section-title bottleneck-header">
+        <span>Accel Limit Breakdown</span>
+        <span
+          className="bottleneck-pill"
+          style={{
+            background: `${primaryMeta.color}22`,
+            border: `1px solid ${primaryMeta.color}66`,
+            color: primaryMeta.color,
+          }}
+        >
+          Limiting: {bottleneck.limiting_axis} · {Math.round(bottleneck.primary_share_pct)}%{" "}
+          {bottleneck.primary_label}
+        </span>
+      </div>
+
+      <div className="bottleneck-axis-row">
+        <span>Compliance Share ({selectedAxis}-Axis)</span>
+        <div className="bottleneck-axis-tabs">
+          {(["X", "Y"] as const).map((ax) => {
+            const isLimiting = ax === bottleneck.limiting_axis;
+            return (
+              <button
+                key={ax}
+                type="button"
+                className={`bottleneck-axis-btn ${selectedAxis === ax ? "active" : ""}`}
+                onClick={() => setSelectedAxis(ax)}
+                title={isLimiting ? `${ax}-axis is the limiting acceleration axis` : `Inspect ${ax}-axis compliance share`}
+              >
+                {ax}
+                {isLimiting ? " ★" : ""}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="bottleneck-bar" role="img" aria-label={`Acceleration compliance share on ${selectedAxis}-axis`}>
+        {BOTTLENECK_SOURCES.map((src) => {
+          const rawPct = Math.max(0, activeShares[src.key] ?? 0);
+          const normPct = (rawPct / totalShare) * 100;
+          if (normPct < 0.4) return null;
+          return (
+            <div
+              key={src.key}
+              className="bottleneck-seg"
+              style={{ width: `${normPct}%`, background: src.color }}
+              title={`${src.label}: ${rawPct.toFixed(1)}%`}
+            >
+              {normPct >= 14 ? `${Math.round(rawPct)}%` : ""}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bottleneck-legend">
+        {BOTTLENECK_SOURCES.map((src) => {
+          const val = activeShares[src.key] ?? 0;
+          const isDom = src.key === activeDominantKey;
+          return (
+            <div key={src.key} className={`bottleneck-legend-item ${isDom ? "primary" : ""}`}>
+              <span className="bottleneck-legend-left">
+                <span className="swatch-dot" style={{ background: src.color }} />
+                <span>{src.label}</span>
+              </span>
+              <span className="bottleneck-legend-pct" style={{ color: isDom ? src.color : undefined }}>
+                {val.toFixed(0)}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bottleneck-xy-strip">
+        <div className={`bottleneck-xy-line ${bottleneck.limiting_axis === "X" ? "is-limiting" : ""}`}>
+          <span className="bottleneck-xy-axis">X:</span>
+          <span>{formatAxisLine(bottleneck.x_shares_pct ?? bottleneck.shares_pct)}</span>
+        </div>
+        <div className={`bottleneck-xy-line ${bottleneck.limiting_axis === "Y" ? "is-limiting" : ""}`}>
+          <span className="bottleneck-xy-axis">Y:</span>
+          <span>{formatAxisLine(bottleneck.y_shares_pct ?? bottleneck.shares_pct)}</span>
+        </div>
+      </div>
+
+      {bottleneck.recommendation && (
+        <div className="bottleneck-tip" style={{ borderLeftColor: primaryMeta.color }}>
+          {bottleneck.recommendation}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const MetricsPanel: React.FC<Props> = ({
   sim,
   baselineSim,
@@ -1151,6 +1319,13 @@ export const MetricsPanel: React.FC<Props> = ({
     compareSim != null &&
     (Math.abs(fea.combined_max_deflection_um - compareSim.static_fea.combined_max_deflection_um) >= 0.05 ||
       Math.abs(
+        (fea.nozzle_absolute_deflection_um ?? 0) -
+          (compareSim.static_fea.nozzle_absolute_deflection_um ?? 0)
+      ) >= 0.05 ||
+      Math.abs(
+        (fea.bed_deflection_um ?? 0) - (compareSim.static_fea.bed_deflection_um ?? 0)
+      ) >= 0.05 ||
+      Math.abs(
         (fea.beam_center_deflection_um ?? 0) - (compareSim.static_fea.beam_center_deflection_um ?? 0)
       ) >= 0.05 ||
       Math.abs(
@@ -1165,19 +1340,39 @@ export const MetricsPanel: React.FC<Props> = ({
       Math.abs(
         (sim.geometry.panels?.effective_shear_gt_kn_mm ?? 0) -
           (compareSim.geometry.panels?.effective_shear_gt_kn_mm ?? 0)
-      ) >= 0.01);
+      ) >= 0.01 ||
+      (sim.geometry.extrusion_filling?.id ?? "none") !==
+        (compareSim.geometry.extrusion_filling?.id ?? "none") ||
+      (sim.geometry.linear_rails?.x_rail_mount ?? "front") !==
+        (compareSim.geometry.linear_rails?.x_rail_mount ?? "front") ||
+      (sim.geometry.linear_rails?.y_rail_mount ?? "top") !==
+        (compareSim.geometry.linear_rails?.y_rail_mount ?? "top") ||
+      (sim.geometry.linear_rails?.x_rail_profile ?? "") !==
+        (compareSim.geometry.linear_rails?.x_rail_profile ?? "") ||
+      (sim.geometry.linear_rails?.y_rail_profile ?? "") !==
+        (compareSim.geometry.linear_rails?.y_rail_profile ?? "") ||
+      Boolean(sim.geometry.linear_rails?.dual_x_rails) !==
+        Boolean(compareSim.geometry.linear_rails?.dual_x_rails));
   const modalChanged =
     compareSim != null &&
     (Math.abs(mod.fundamental_freq_hz - compareSim.modal_fea.fundamental_freq_hz) >= 0.05 ||
       Math.abs(
         (mod.nozzle_pitch_twist_freq_hz ?? 0) - (compareSim.modal_fea.nozzle_pitch_twist_freq_hz ?? 0)
       ) >= 0.05 ||
+      Math.abs(
+        (mod.frame_damping_ratio ?? 0) - (compareSim.modal_fea.frame_damping_ratio ?? 0)
+      ) >= 0.002 ||
       Math.abs(mod.recommended_max_accel_mm_s2 - compareSim.modal_fea.recommended_max_accel_mm_s2) >= 15 ||
       Math.abs(scores.dynamics - compareSim.scores.dynamics) >= 0.05 ||
       Math.abs(kin.torque_safety_margin - compareSim.kinematics.torque_safety_margin) >= 0.05 ||
       Math.abs(
         (kin.motor_stiffness_n_per_mm ?? 0) - (compareSim.kinematics.motor_stiffness_n_per_mm ?? 0)
       ) >= 0.1 ||
+      Math.abs(
+        (kin.bracket_stiffness_n_per_mm ?? 0) - (compareSim.kinematics.bracket_stiffness_n_per_mm ?? 0)
+      ) >= 0.5 ||
+      (kin.bracket_material ?? "") !== (compareSim.kinematics.bracket_material ?? "") ||
+      Boolean(kin.bracket_creep_risk) !== Boolean(compareSim.kinematics.bracket_creep_risk) ||
       Math.abs(
         (kin.drive_stiffness_n_per_mm ?? 0) - (compareSim.kinematics.drive_stiffness_n_per_mm ?? 0)
       ) >= 0.1 ||
@@ -1187,7 +1382,15 @@ export const MetricsPanel: React.FC<Props> = ({
       ) >= 0.5 ||
       Math.abs((kin.motor_heat_w_each ?? 0) - (compareSim.kinematics.motor_heat_w_each ?? 0)) >= 0.1 ||
       (kin.drive_mode ?? "") !== (compareSim.kinematics.drive_mode ?? "") ||
-      Math.abs((kin.belt_pluck_freq_150mm_hz ?? 0) - (compareSim.kinematics.belt_pluck_freq_150mm_hz ?? 0)) >= 1);
+      Math.abs((kin.belt_pluck_freq_150mm_hz ?? 0) - (compareSim.kinematics.belt_pluck_freq_150mm_hz ?? 0)) >= 1 ||
+      (mod.accel_bottleneck?.primary_source ?? "") !==
+        (compareSim.modal_fea.accel_bottleneck?.primary_source ?? "") ||
+      (mod.accel_bottleneck?.limiting_axis ?? "") !==
+        (compareSim.modal_fea.accel_bottleneck?.limiting_axis ?? "") ||
+      Math.abs(
+        (mod.accel_bottleneck?.primary_share_pct ?? 0) -
+          (compareSim.modal_fea.accel_bottleneck?.primary_share_pct ?? 0)
+      ) >= 1);
   const thermalChanged =
     compareSim != null &&
     (Math.abs(th.max_volumetric_flow_mm3_s - compareSim.thermal.max_volumetric_flow_mm3_s) >= 0.05 ||
@@ -1498,12 +1701,58 @@ export const MetricsPanel: React.FC<Props> = ({
                   </>
                 );
               })()}
+              {sim.geometry.linear_rails && (() => {
+                const lr = sim.geometry.linear_rails;
+                const xMountShort: Record<string, string> = {
+                  front: "Front",
+                  top: "Top",
+                  bottom: "Bottom",
+                  dual_top_bottom: "Dual Top+Bot",
+                };
+                const yMountShort: Record<string, string> = {
+                  top: "Top",
+                  inner: "Inner",
+                  bottom: "Bottom",
+                };
+                const xProf = lr.x_rail_profile.includes("mgn9") ? "MGN9H" : "MGN12H";
+                const yProf = lr.y_rail_profile.includes("mgn9") ? "MGN9H" : "MGN12H";
+                return (
+                  <div
+                    className="metric-kv"
+                    title={`Total hardened-steel rail mass: ${Math.round(lr.total_rail_mass_g)} g`}
+                  >
+                    <span>Linear Rails (Composite EI)</span>
+                    <span className="metric-val" style={{ textAlign: "right" }}>
+                      {xProf} {xMountShort[lr.x_rail_mount] ?? lr.x_rail_mount}
+                      <span style={{ color: "var(--accent)", fontWeight: 600, fontSize: 10.5 }}>
+                        {" "}
+                        (+{Math.round(lr.x_beam_ei_y_boost_pct)}% Y / +{Math.round(lr.x_beam_ei_z_boost_pct)}% Z)
+                      </span>
+                      {sim.architecture === "corexy" && (
+                        <span style={{ color: "var(--muted)", fontWeight: 500, fontSize: 10.5 }}>
+                          {" "}
+                          · {yProf} {yMountShort[lr.y_rail_mount] ?? lr.y_rail_mount} (+
+                          {Math.round(lr.y_rail_ei_x_boost_pct)}% X)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })()}
               <div className="metric-kv">
                 <span>Gravity Sag (Nozzle)</span>
                 <span className="metric-val">{fea.gravity_sag_toolhead_um.toFixed(1)} µm</span>
               </div>
               <div className="metric-kv">
-                <span>Nozzle-Tip Deflection</span>
+                <span>
+                  Nozzle-to-Bed Flex
+                  {(fea.nozzle_absolute_deflection_um != null || fea.bed_deflection_um != null) && (
+                    <span className="metric-sub-inline">
+                      Abs: {(fea.nozzle_absolute_deflection_um ?? fea.combined_max_deflection_um).toFixed(1)} µm · Bed:{" "}
+                      {(fea.bed_deflection_um ?? 0).toFixed(1)} µm
+                    </span>
+                  )}
+                </span>
                 <span className="metric-val metric-val-with-delta">
                   {compareSim && (
                     <InlineDeltaBadge
@@ -1566,8 +1815,8 @@ export const MetricsPanel: React.FC<Props> = ({
                   </span>
                 </div>
               )}
-              <div className="metric-kv">
-                <span>Toolhead Stiffness X / Y</span>
+              <div className="metric-kv" title="Nozzle-to-Bed structural loop stiffness">
+                <span>Nozzle-to-Bed Stiffness X / Y</span>
                 <span className="metric-val">
                   {fea.toolhead_stiffness_x_n_per_mm.toFixed(0)} / {fea.toolhead_stiffness_y_n_per_mm.toFixed(0)} N/mm
                 </span>
@@ -1585,7 +1834,16 @@ export const MetricsPanel: React.FC<Props> = ({
             </div>
 
             {mod.shaper_graphs && (
-              <KlipperShaperPsdCard graphs={mod.shaper_graphs} changed={modalChanged} />
+              <KlipperShaperPsdCard
+                graphs={mod.shaper_graphs}
+                frameDampingRatio={mod.frame_damping_ratio}
+                extrusionFilling={sim.geometry.extrusion_filling}
+                changed={modalChanged}
+              />
+            )}
+
+            {mod.accel_bottleneck && (
+              <AccelBottleneckCard bottleneck={mod.accel_bottleneck} changed={modalChanged} />
             )}
 
             <div className={`section-card ${modalChanged ? "card-changed" : ""}`}>
@@ -1688,6 +1946,21 @@ export const MetricsPanel: React.FC<Props> = ({
                             </span>
                           </div>
                         )}
+                        {(mod.shaper_x?.bracket_freq_hz != null || mod.shaper_y?.bracket_freq_hz != null) && (
+                          <div className="metric-kv">
+                            <span>Bracket Freq (X / Y)</span>
+                            <span className="metric-val">
+                              {mod.shaper_x?.bracket_freq_hz != null
+                                ? mod.shaper_x.bracket_freq_hz.toFixed(0)
+                                : "—"}{" "}
+                              /{" "}
+                              {mod.shaper_y?.bracket_freq_hz != null
+                                ? mod.shaper_y.bracket_freq_hz.toFixed(0)
+                                : "—"}{" "}
+                              Hz
+                            </span>
+                          </div>
+                        )}
                       </>
                     )}
                     <div className="metric-kv">
@@ -1751,6 +2024,43 @@ export const MetricsPanel: React.FC<Props> = ({
                             />
                           )}
                           {kin.belt_stiffness_n_per_mm.toFixed(1)} N/mm
+                        </span>
+                      </div>
+                    )}
+                    {kin.bracket_stiffness_n_per_mm != null && (
+                      <div
+                        className="metric-kv"
+                        title={
+                          sim.geometry.gantry_brackets
+                            ? `${sim.geometry.gantry_brackets.name} • HDT ${sim.geometry.gantry_brackets.hdt_c}°C • Creep limit ${sim.geometry.gantry_brackets.creep_tension_limit_n} N`
+                            : undefined
+                        }
+                      >
+                        <span>
+                          Bracket Stiffness
+                          {sim.geometry.gantry_brackets && (
+                            <span style={{ color: "var(--muted)", fontSize: 10.5 }}>
+                              {" "}
+                              ({sim.geometry.gantry_brackets.short_name})
+                            </span>
+                          )}
+                        </span>
+                        <span
+                          className={`metric-val metric-val-with-delta ${
+                            kin.bracket_creep_risk ? "tag-bad" : ""
+                          }`}
+                        >
+                          {compareSim?.kinematics.bracket_stiffness_n_per_mm != null && (
+                            <InlineDeltaBadge
+                              oldVal={compareSim.kinematics.bracket_stiffness_n_per_mm}
+                              newVal={kin.bracket_stiffness_n_per_mm}
+                              higherIsBetter={true}
+                              eps={0.5}
+                              formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(0)}`}
+                            />
+                          )}
+                          {kin.bracket_stiffness_n_per_mm.toFixed(0)} N/mm
+                          {kin.bracket_creep_risk && " (CREEP)"}
                         </span>
                       </div>
                     )}
@@ -1853,8 +2163,16 @@ export const MetricsPanel: React.FC<Props> = ({
                         <span className="metric-val">{Math.round(kin.frame_belt_preload_n)} N</span>
                       </div>
                     )}
-                    {(kin.motor_overcurrent_risk || kin.belt_overtension_risk || kin.shaft_bending_risk) && (
+                    {(kin.motor_overcurrent_risk ||
+                      kin.belt_overtension_risk ||
+                      kin.shaft_bending_risk ||
+                      kin.bracket_creep_risk) && (
                       <div className="warning-pill-stack">
+                        {kin.bracket_creep_risk && (
+                          <div className="warning-pill bad">
+                            ⚠ Belt tension exceeds gantry bracket creep limit — upgrade to PPA-CF/PPS-CF or CNC Aluminum
+                          </div>
+                        )}
                         {kin.motor_overcurrent_risk && (
                           <div className="warning-pill bad">
                             ⚠ Motor run current exceeds rated Amps — overheating &amp; demagnetization risk

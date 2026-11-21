@@ -1,11 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  BracketMaterialType,
   CatalogResponse,
+  ExtrusionFillingInfo,
+  ExtrusionFillingType,
+  GantryBracketInfo,
   PrinterSpecData,
+  RailMountOption,
   SimulationResponse,
   SolidFeaEngine,
   ToolheadMountMaterial,
   TopoOptRequestParams,
+  XRailMountType,
+  YRailMountType,
 } from "../types";
 
 interface Props {
@@ -88,17 +95,245 @@ const HEATBREAK_LABELS: Record<string, string> = {
   brass_c360: "Brass C360",
 };
 
+const FALLBACK_EXTRUSION_FILLINGS: ExtrusionFillingInfo[] = [
+  {
+    id: "none",
+    name: "Hollow (Unfilled)",
+    short_name: "Hollow",
+    density_kg_m3: 0,
+    youngs_modulus_pa: 0,
+    bonded: false,
+    damping_boost: 0,
+    cost_per_kg_usd: 0,
+    color_hex: "#94a3b8",
+    notes: "Standard hollow aluminum extrusion (low structural damping)",
+  },
+  {
+    id: "pu_foam",
+    name: "Expanding PU Acoustic Foam",
+    short_name: "PU Foam",
+    density_kg_m3: 45,
+    youngs_modulus_pa: 0.02e9,
+    bonded: false,
+    damping_boost: 0.01,
+    cost_per_kg_usd: 18,
+    color_hex: "#fde68a",
+    notes: "Ultra-light acoustic deadening; negligible added mass or stiffness",
+  },
+  {
+    id: "silica_sand",
+    name: "Kiln-Dried Silica Sand",
+    short_name: "Silica Sand",
+    density_kg_m3: 1550,
+    youngs_modulus_pa: 0,
+    bonded: false,
+    damping_boost: 0.028,
+    cost_per_kg_usd: 1.5,
+    color_hex: "#d6b88d",
+    notes: "Low-cost granular Coulomb friction damping; zero bonded bending stiffness",
+  },
+  {
+    id: "lead_shot",
+    name: "Fine Lead Shot (#8–#9)",
+    short_name: "Lead Shot",
+    density_kg_m3: 6800,
+    youngs_modulus_pa: 0,
+    bonded: false,
+    damping_boost: 0.042,
+    cost_per_kg_usd: 11,
+    color_hex: "#475569",
+    notes: "Maximum granular impact damping & base inertia; heavy mass lowers raw Hz",
+  },
+  {
+    id: "epoxy_granite",
+    name: "Epoxy Granite (85% Quartz + Epoxy)",
+    short_name: "Epoxy Granite",
+    density_kg_m3: 2250,
+    youngs_modulus_pa: 30e9,
+    bonded: true,
+    damping_boost: 0.036,
+    cost_per_kg_usd: 9.5,
+    color_hex: "#64748b",
+    notes: "Mineral casting bonds to cavity walls: +10-16% bending stiffness & strong resin damping",
+  },
+  {
+    id: "uhpc_grout",
+    name: "Non-Shrink UHPC / CSA Grout",
+    short_name: "UHPC Grout",
+    density_kg_m3: 2350,
+    youngs_modulus_pa: 40e9,
+    bonded: true,
+    damping_boost: 0.03,
+    cost_per_kg_usd: 4.5,
+    color_hex: "#9ca3af",
+    notes: "High-modulus bonded cementitious grout: highest core EI boost + solid damping",
+  },
+];
+
+const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
+  {
+    id: "abs_printed",
+    name: "3D-Printed ABS / ASA (2.1 GPa)",
+    short_name: "Printed ABS",
+    youngs_modulus_gpa: 2.1,
+    hdt_c: 95,
+    creep_tension_limit_n: 45,
+    cnc_machined: false,
+    kit_cost_usd: 28,
+    carriage_mass_delta_g: 0,
+    color_hex: "#e63946",
+  },
+  {
+    id: "pet_cf_printed",
+    name: "3D-Printed PET-CF15 Annealed (5.2 GPa)",
+    short_name: "Printed PET-CF15",
+    youngs_modulus_gpa: 5.2,
+    hdt_c: 182,
+    creep_tension_limit_n: 75,
+    cnc_machined: false,
+    kit_cost_usd: 52,
+    carriage_mass_delta_g: 10,
+    color_hex: "#3b4252",
+  },
+  {
+    id: "pa12_cf_printed",
+    name: "3D-Printed PA12-CF15 (6.2 GPa)",
+    short_name: "Printed PA12-CF",
+    youngs_modulus_gpa: 6.2,
+    hdt_c: 155,
+    creep_tension_limit_n: 65,
+    cnc_machined: false,
+    kit_cost_usd: 72,
+    carriage_mass_delta_g: 6,
+    color_hex: "#333840",
+  },
+  {
+    id: "ppa_cf_printed",
+    name: "3D-Printed PPA-CF Annealed (11.8 GPa)",
+    short_name: "Printed PPA-CF",
+    youngs_modulus_gpa: 11.8,
+    hdt_c: 196,
+    creep_tension_limit_n: 105,
+    cnc_machined: false,
+    kit_cost_usd: 98,
+    carriage_mass_delta_g: 9,
+    color_hex: "#2d333b",
+  },
+  {
+    id: "pps_cf_printed",
+    name: "3D-Printed PPS-CF Annealed (8.5 GPa, 235°C HDT)",
+    short_name: "Printed PPS-CF",
+    youngs_modulus_gpa: 8.5,
+    hdt_c: 235,
+    creep_tension_limit_n: 115,
+    cnc_machined: false,
+    kit_cost_usd: 120,
+    carriage_mass_delta_g: 12,
+    color_hex: "#23272e",
+  },
+  {
+    id: "aluminum_6061_t6",
+    name: "CNC Aluminum 6061-T6 (68.9 GPa)",
+    short_name: "CNC Al 6061",
+    youngs_modulus_gpa: 68.9,
+    hdt_c: 300,
+    creep_tension_limit_n: 250,
+    cnc_machined: true,
+    kit_cost_usd: 210,
+    carriage_mass_delta_g: 42,
+    color_hex: "#c6d0db",
+  },
+  {
+    id: "aluminum_7075_t6",
+    name: "CNC Aluminum 7075-T6 Billet (71.7 GPa)",
+    short_name: "CNC Al 7075",
+    youngs_modulus_gpa: 71.7,
+    hdt_c: 300,
+    creep_tension_limit_n: 280,
+    cnc_machined: true,
+    kit_cost_usd: 285,
+    carriage_mass_delta_g: 46,
+    color_hex: "#cbd5e1",
+  },
+];
+
 const MOUNT_MATERIAL_OPTIONS: Array<{
   id: ToolheadMountMaterial;
   label: string;
   shortLabel: string;
 }> = [
   { id: "abs_printed", label: "Printed ABS (2.1 GPa)", shortLabel: "Printed ABS" },
+  { id: "pet_cf_printed", label: "Printed PET-CF15 (5.2 GPa)", shortLabel: "Printed PET-CF15" },
   { id: "pa12_cf_printed", label: "Printed PA12-CF (6.2 GPa)", shortLabel: "Printed PA12-CF" },
-  { id: "aluminum_6061_t6", label: "CNC Aluminum 6061 (69 GPa)", shortLabel: "CNC Aluminum 6061" },
+  { id: "ppa_cf_printed", label: "Printed PPA-CF (11.8 GPa)", shortLabel: "Printed PPA-CF" },
+  { id: "pps_cf_printed", label: "Printed PPS-CF (8.5 GPa)", shortLabel: "Printed PPS-CF" },
+  { id: "aluminum_6061_t6", label: "CNC Al 6061-T6 (68.9 GPa)", shortLabel: "CNC Al 6061" },
+  { id: "aluminum_7075_t6", label: "CNC Al 7075-T6 (71.7 GPa)", shortLabel: "CNC Al 7075" },
 ];
 
 const BUS_VOLTAGE_PRESETS = [24, 36, 48, 60];
+
+const LINEAR_RAIL_PROFILES: Array<{ id: string; label: string; shortLabel: string }> = [
+  { id: "mgn9_rail", label: "MGN9H (9×6.5mm)", shortLabel: "MGN9H" },
+  { id: "mgn12_rail", label: "MGN12H (12×8mm)", shortLabel: "MGN12H" },
+];
+
+const FALLBACK_X_RAIL_MOUNTS: RailMountOption<XRailMountType>[] = [
+  {
+    id: "front",
+    name: "Front Face (-Y)",
+    short_name: "Front",
+    notes: "Standard Voron front mount — maximum Y-axis composite bending stiffness",
+  },
+  {
+    id: "top",
+    name: "Top Face (+Z)",
+    short_name: "Top",
+    notes: "Top-mounted X rail — maximum vertical Z-axis stiffness",
+  },
+  {
+    id: "bottom",
+    name: "Bottom Face (-Z)",
+    short_name: "Bottom",
+    notes: "Under-slung X rail — shorter nozzle drop and lower X-beam pitch twist",
+  },
+  {
+    id: "dual_top_bottom",
+    name: "Dual Top + Bottom (±Z)",
+    short_name: "Dual Top+Bot",
+    notes: "Symmetric twin steel rails top & bottom — highest Z/torsional stiffness",
+  },
+];
+
+const FALLBACK_Y_RAIL_MOUNTS: RailMountOption<YRailMountType>[] = [
+  {
+    id: "top",
+    name: "Top Face (+Z)",
+    short_name: "Top",
+    notes: "Standard top-face Y linear rails",
+  },
+  {
+    id: "inner",
+    name: "Inner Side (±X)",
+    short_name: "Inner Side",
+    notes: "Inward side-mounted Y rails — maximum lateral X-axis bending stiffness",
+  },
+  {
+    id: "bottom",
+    name: "Bottom Face (-Z)",
+    short_name: "Bottom",
+    notes: "Under-slung bottom-face Y rails",
+  },
+];
+
+function railProfileShort(id?: string): string {
+  if (!id) return "MGN12H";
+  const found = LINEAR_RAIL_PROFILES.find((r) => r.id === id);
+  if (found) return found.shortLabel;
+  if (id.includes("mgn9")) return "MGN9H";
+  if (id.includes("mgn12")) return "MGN12H";
+  return id;
+}
 
 function mountMaterialShort(id?: string): string {
   return MOUNT_MATERIAL_OPTIONS.find((m) => m.id === id)?.shortLabel ?? "Printed ABS";
@@ -583,6 +818,72 @@ export const DesignPanel: React.FC<Props> = ({
   const beltOvertension = Boolean(sim?.kinematics.belt_overtension_risk);
   const shaftBendingRisk = Boolean(sim?.kinematics.shaft_bending_risk);
 
+  const extrusionFillings: ExtrusionFillingInfo[] =
+    catalog.extrusion_fillings && catalog.extrusion_fillings.length > 0
+      ? catalog.extrusion_fillings
+      : FALLBACK_EXTRUSION_FILLINGS;
+  const currentFillingId: ExtrusionFillingType = spec.frame.extrusion_filling ?? "none";
+  const selectedFilling =
+    extrusionFillings.find((f) => f.id === currentFillingId) ?? extrusionFillings[0];
+  const simFilling =
+    sim?.geometry.extrusion_filling && sim.geometry.extrusion_filling.id === currentFillingId
+      ? sim.geometry.extrusion_filling
+      : null;
+  const fillingAddedMassKg = simFilling?.added_mass_kg ?? 0;
+  const fillingDampingRatio =
+    simFilling?.damping_ratio ??
+    sim?.modal_fea.frame_damping_ratio ??
+    0.042 + (selectedFilling?.damping_boost ?? 0);
+
+  const gantryBrackets: GantryBracketInfo[] =
+    catalog.gantry_brackets && catalog.gantry_brackets.length > 0
+      ? catalog.gantry_brackets
+      : FALLBACK_GANTRY_BRACKETS;
+  const currentBracketId: BracketMaterialType = spec.gantry.bracket_material ?? "abs_printed";
+  const selectedBracket =
+    gantryBrackets.find((b) => b.id === currentBracketId) ?? gantryBrackets[0];
+  const simBracketStiffness = sim?.kinematics.bracket_stiffness_n_per_mm;
+  const bracketCreepRisk = Boolean(sim?.kinematics.bracket_creep_risk);
+
+  const xRailMounts: RailMountOption<XRailMountType>[] =
+    catalog.x_rail_mounts && catalog.x_rail_mounts.length > 0
+      ? catalog.x_rail_mounts
+      : FALLBACK_X_RAIL_MOUNTS;
+  const yRailMounts: RailMountOption<YRailMountType>[] =
+    catalog.y_rail_mounts && catalog.y_rail_mounts.length > 0
+      ? catalog.y_rail_mounts
+      : FALLBACK_Y_RAIL_MOUNTS;
+  const currentXRailMount: XRailMountType =
+    spec.gantry.x_rail_mount ?? (spec.gantry.dual_x_rails ? "dual_top_bottom" : "front");
+  const currentYRailMount: YRailMountType = spec.gantry.y_rail_mount ?? "top";
+  const selectedXRailMount =
+    xRailMounts.find((m) => m.id === currentXRailMount) ?? xRailMounts[0];
+  const selectedYRailMount =
+    yRailMounts.find((m) => m.id === currentYRailMount) ?? yRailMounts[0];
+  const currentXRailProfile = spec.gantry.x_rail_profile || "mgn12_rail";
+  const currentYRailProfile = spec.gantry.y_rail_profile || "mgn9_rail";
+  const xRailProfileOptions = LINEAR_RAIL_PROFILES.some((r) => r.id === currentXRailProfile)
+    ? LINEAR_RAIL_PROFILES
+    : [
+        ...LINEAR_RAIL_PROFILES,
+        { id: currentXRailProfile, label: profileLabel(currentXRailProfile), shortLabel: railProfileShort(currentXRailProfile) },
+      ];
+  const yRailProfileOptions = LINEAR_RAIL_PROFILES.some((r) => r.id === currentYRailProfile)
+    ? LINEAR_RAIL_PROFILES
+    : [
+        ...LINEAR_RAIL_PROFILES,
+        { id: currentYRailProfile, label: profileLabel(currentYRailProfile), shortLabel: railProfileShort(currentYRailProfile) },
+      ];
+  const simLinearRails = sim?.geometry.linear_rails;
+
+  const partFeaMaterials = (() => {
+    const existingIds = new Set(catalog.materials.map((m) => m.id));
+    const extras = gantryBrackets
+      .filter((b) => !existingIds.has(b.id))
+      .map((b) => ({ id: b.id, name: b.name }));
+    return [...catalog.materials, ...extras];
+  })();
+
   const stepperCatalog = catalog.steppers ?? [];
   const xyStepper = spec.kinematics.xy_stepper;
   const matchedStepper =
@@ -897,6 +1198,67 @@ export const DesignPanel: React.FC<Props> = ({
                 </select>
               </div>
 
+              <div className="field-row">
+                <label>
+                  <span>Extrusion Cavity Filling</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: currentFillingId !== "none" ? "var(--accent)" : "var(--muted)", fontWeight: 600 }}>
+                    <span
+                      className="swatch-dot"
+                      style={{ background: selectedFilling.color_hex }}
+                    />
+                    {selectedFilling.short_name}
+                  </span>
+                </label>
+                <select
+                  value={currentFillingId}
+                  onChange={(e) => {
+                    const nextId = e.target.value as ExtrusionFillingType;
+                    const nextItem =
+                      extrusionFillings.find((f) => f.id === nextId) ?? extrusionFillings[0];
+                    update(
+                      (d) => {
+                        d.frame.extrusion_filling = nextId;
+                      },
+                      `Extrusion Fill: ${selectedFilling.short_name} → ${nextItem.short_name}`
+                    );
+                  }}
+                >
+                  {extrusionFillings.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="inline-readout-strip">
+                  {currentFillingId === "none" ? (
+                    <>
+                      <span>Hollow extrusion</span>
+                      <span>·</span>
+                      <span>ζ = {fillingDampingRatio.toFixed(3)}</span>
+                      <span>·</span>
+                      <span>Base stiffness</span>
+                    </>
+                  ) : (
+                    <>
+                      <strong>+{fillingAddedMassKg.toFixed(2)} kg fill</strong>
+                      <span>·</span>
+                      <span>ζ = {fillingDampingRatio.toFixed(3)}</span>
+                      <span>·</span>
+                      <span style={{ color: selectedFilling.bonded ? "var(--accent)" : "var(--green)" }}>
+                        {selectedFilling.bonded ? "Bonded +EI" : "Granular Damping"}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {showHints && (
+                  <div className="hint-line">
+                    Fillings apply to stationary frame extrusions only (never the moving X-beam).
+                    Epoxy granite &amp; UHPC bond to cavity walls (+EI + damping); sand &amp; lead shot
+                    damp resonance without raising moving mass.
+                  </div>
+                )}
+              </div>
+
               <div className="sub-block">
                 <div className="sub-block-title">
                   <span>Structural &amp; Enclosure Panels</span>
@@ -1149,6 +1511,83 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               )}
 
+              <div className="sub-block">
+                <div className="sub-block-title">
+                  <span>Gantry Brackets &amp; Motor Mounts</span>
+                  <span
+                    className={`sub-block-tag ${
+                      bracketCreepRisk ? "danger" : selectedBracket.cnc_machined ? "ok" : ""
+                    }`}
+                  >
+                    <span
+                      className="swatch-dot"
+                      style={{ background: selectedBracket.color_hex, marginRight: 4 }}
+                    />
+                    {selectedBracket.short_name}
+                  </span>
+                </div>
+
+                {showHints && (
+                  <div className="hint-line">
+                    Motor mounts &amp; XY joints flex in series with belts. Printed ABS creeps above
+                    ~45 N belt tension in heated chambers; annealed PPA-CF/PPS-CF or CNC aluminum
+                    prevent creep &amp; sharpen resonance.
+                  </div>
+                )}
+
+                <div className="field-row">
+                  <label>Bracket Material</label>
+                  <select
+                    value={currentBracketId}
+                    onChange={(e) => {
+                      const nextId = e.target.value as BracketMaterialType;
+                      const nextItem =
+                        gantryBrackets.find((b) => b.id === nextId) ?? gantryBrackets[0];
+                      update(
+                        (d) => {
+                          d.gantry.bracket_material = nextId;
+                        },
+                        `Gantry Brackets: ${selectedBracket.short_name} → ${nextItem.short_name}`
+                      );
+                    }}
+                  >
+                    {gantryBrackets.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="bracket-readout-row">
+                  <div className="inline-readout-strip">
+                    {simBracketStiffness != null && (
+                      <>
+                        <strong>{Math.round(simBracketStiffness)} N/mm</strong>
+                        <span>·</span>
+                      </>
+                    )}
+                    <span>{Math.round(selectedBracket.hdt_c)}°C HDT</span>
+                    <span>·</span>
+                    <span>{Math.round(selectedBracket.creep_tension_limit_n)} N limit</span>
+                  </div>
+                  <div className="bracket-pill-row">
+                    {bracketCreepRisk ? (
+                      <span className="badge-pill bad">Creep Risk</span>
+                    ) : selectedBracket.cnc_machined ? (
+                      <span className="badge-pill ok">CNC Rigid</span>
+                    ) : (
+                      <span className="badge-pill ok">No Creep</span>
+                    )}
+                    <span className="bracket-mass-note">
+                      {selectedBracket.carriage_mass_delta_g > 0
+                        ? `+${Math.round(selectedBracket.carriage_mass_delta_g)}g moving`
+                        : "Base Y-carriage mass"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {showHints && (
                 <div className="hint-line">Lighter X-beam = faster Y acceleration &amp; less ringing</div>
               )}
@@ -1196,6 +1635,163 @@ export const DesignPanel: React.FC<Props> = ({
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div className="sub-block">
+                <div className="sub-block-title">
+                  <span>Linear Rails &amp; Mounting</span>
+                  <span className="sub-block-tag">
+                    X: {selectedXRailMount.short_name}
+                    {spec.architecture === "corexy" ? ` · Y: ${selectedYRailMount.short_name}` : ""}
+                  </span>
+                </div>
+
+                {showHints && (
+                  <div className="hint-line">
+                    Front = max Y stiffness; Top = max Z stiffness; Bottom = shorter nozzle drop &amp; less
+                    pitch twist; Inner Y = max X stiffness.
+                  </div>
+                )}
+
+                <div className={spec.architecture === "corexy" ? "field-grid-2" : "field-row"}>
+                  <div className="field-row">
+                    <label>X Rail Profile</label>
+                    <select
+                      value={currentXRailProfile}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        update(
+                          (d) => {
+                            d.gantry.x_rail_profile = nextId;
+                          },
+                          `X Rail: ${railProfileShort(currentXRailProfile)} → ${railProfileShort(nextId)}`
+                        );
+                      }}
+                    >
+                      {xRailProfileOptions.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {spec.architecture === "corexy" && (
+                    <div className="field-row">
+                      <label>Y Rail Profile</label>
+                      <select
+                        value={currentYRailProfile}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          update(
+                            (d) => {
+                              d.gantry.y_rail_profile = nextId;
+                            },
+                            `Y Rail: ${railProfileShort(currentYRailProfile)} → ${railProfileShort(nextId)}`
+                          );
+                        }}
+                      >
+                        {yRailProfileOptions.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="field-row">
+                  <label>
+                    <span>X Rail Mount</span>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                      {selectedXRailMount.name}
+                    </span>
+                  </label>
+                  <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+                    {xRailMounts.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`voltage-pill-btn ${currentXRailMount === opt.id ? "active" : ""}`}
+                        style={{ fontSize: 10 }}
+                        title={opt.notes}
+                        onClick={() => {
+                          if (currentXRailMount === opt.id) return;
+                          update(
+                            (d) => {
+                              d.gantry.x_rail_mount = opt.id;
+                              d.gantry.dual_x_rails = opt.id === "dual_top_bottom";
+                            },
+                            `X Rail Mount: ${selectedXRailMount.short_name} → ${opt.short_name}`
+                          );
+                        }}
+                      >
+                        {opt.short_name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {spec.architecture === "corexy" && (
+                  <div className="field-row">
+                    <label>
+                      <span>Y Rail Mount</span>
+                      <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                        {selectedYRailMount.name}
+                      </span>
+                    </label>
+                    <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+                      {yRailMounts.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={`voltage-pill-btn ${currentYRailMount === opt.id ? "active" : ""}`}
+                          style={{ fontSize: 10.5 }}
+                          title={opt.notes}
+                          onClick={() => {
+                            if (currentYRailMount === opt.id) return;
+                            update(
+                              (d) => {
+                                d.gantry.y_rail_mount = opt.id;
+                              },
+                              `Y Rail Mount: ${selectedYRailMount.short_name} → ${opt.short_name}`
+                            );
+                          }}
+                        >
+                          {opt.short_name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {simLinearRails && (
+                  <div className="inline-readout-strip">
+                    <span>
+                      X-Beam Composite Boost:{" "}
+                      <strong style={{ color: "var(--accent)" }}>
+                        +{Math.round(simLinearRails.x_beam_ei_y_boost_pct)}% Y
+                      </strong>{" "}
+                      ·{" "}
+                      <strong style={{ color: "var(--accent)" }}>
+                        +{Math.round(simLinearRails.x_beam_ei_z_boost_pct)}% Z
+                      </strong>
+                    </span>
+                    {spec.architecture === "corexy" && (
+                      <>
+                        <span>·</span>
+                        <span>
+                          Y-Rail{" "}
+                          <strong style={{ color: "var(--green)" }}>
+                            +{Math.round(simLinearRails.y_rail_ei_x_boost_pct)}% X
+                          </strong>
+                        </span>
+                      </>
+                    )}
+                    <span>·</span>
+                    <span>{Math.round(simLinearRails.total_rail_mass_g)} g steel</span>
+                  </div>
+                )}
               </div>
 
               {showHints && (
@@ -1895,7 +2491,7 @@ export const DesignPanel: React.FC<Props> = ({
                       setPartFdm(e.target.value.includes("printed"));
                     }}
                   >
-                    {catalog.materials.map((m) => (
+                    {partFeaMaterials.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}
                       </option>

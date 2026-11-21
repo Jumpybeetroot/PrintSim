@@ -48,10 +48,61 @@ export interface StepperCatalogItem {
   steps_per_rev: number;
 }
 
-export type ToolheadMountMaterial =
+export type ExtrusionFillingType =
+  | "none"
+  | "pu_foam"
+  | "silica_sand"
+  | "lead_shot"
+  | "epoxy_granite"
+  | "uhpc_grout";
+
+export type BracketMaterialType =
   | "abs_printed"
+  | "pet_cf_printed"
   | "pa12_cf_printed"
-  | "aluminum_6061_t6";
+  | "ppa_cf_printed"
+  | "pps_cf_printed"
+  | "aluminum_6061_t6"
+  | "aluminum_7075_t6";
+
+export type ToolheadMountMaterial = BracketMaterialType;
+
+export type XRailMountType = "front" | "top" | "bottom" | "dual_top_bottom";
+
+export type YRailMountType = "top" | "inner" | "bottom";
+
+export interface RailMountOption<T extends string = string> {
+  id: T;
+  name: string;
+  short_name: string;
+  notes: string;
+}
+
+export interface ExtrusionFillingInfo {
+  id: ExtrusionFillingType;
+  name: string;
+  short_name: string;
+  density_kg_m3: number;
+  youngs_modulus_pa: number;
+  bonded: boolean;
+  damping_boost: number;
+  cost_per_kg_usd: number;
+  color_hex: string;
+  notes: string;
+}
+
+export interface GantryBracketInfo {
+  id: BracketMaterialType;
+  name: string;
+  short_name: string;
+  youngs_modulus_gpa: number;
+  hdt_c: number;
+  creep_tension_limit_n: number;
+  cnc_machined: boolean;
+  kit_cost_usd: number;
+  carriage_mass_delta_g: number;
+  color_hex: string;
+}
 
 export interface ToolheadPresetItem {
   preset_id: string;
@@ -70,6 +121,10 @@ export interface CatalogResponse {
   presets: PresetItem[];
   steppers?: StepperCatalogItem[];
   toolhead_presets?: ToolheadPresetItem[];
+  extrusion_fillings?: ExtrusionFillingInfo[];
+  gantry_brackets?: GantryBracketInfo[];
+  x_rail_mounts?: RailMountOption<XRailMountType>[];
+  y_rail_mounts?: RailMountOption<YRailMountType>[];
 }
 
 export interface SolidVoxelData {
@@ -264,6 +319,7 @@ export interface PrinterSpecData {
     panel_material: string;
     panel_thickness_mm: number;
     bolt_panels_to_gantry?: boolean;
+    extrusion_filling?: ExtrusionFillingType;
   };
   gantry: {
     x_beam_profile: string;
@@ -271,9 +327,12 @@ export interface PrinterSpecData {
     x_rail_profile: string;
     y_rail_profile: string;
     rail_material: string;
+    x_rail_mount?: XRailMountType;
+    y_rail_mount?: YRailMountType;
     dual_x_rails: boolean;
     drive_mode: "2wd" | "awd";
     double_shear_pulleys: boolean;
+    bracket_material?: BracketMaterialType;
     carriage_mass_g: number;
     belt: {
       type: "gt2_6mm" | "gt2_9mm" | "gt2_12mm";
@@ -381,17 +440,40 @@ export interface ModeShapeData {
   nodal_vectors: Record<string, [number, number, number]>;
 }
 
+export interface AccelBottleneckShares {
+  frame: number;
+  belt: number;
+  motor: number;
+  bracket: number;
+}
+
+export interface AccelBottleneckData {
+  limiting_axis: "X" | "Y";
+  primary_source: "frame" | "belt" | "motor" | "bracket";
+  primary_label: string;
+  primary_share_pct: number;
+  shares_pct: AccelBottleneckShares;
+  x_shares_pct: AccelBottleneckShares;
+  y_shares_pct: AccelBottleneckShares;
+  recommendation: string;
+}
+
 export interface ShaperData {
   axis: string;
   effective_freq_hz: number;
   structural_freq_hz: number;
   belt_freq_hz: number;
   motor_freq_hz?: number;
+  bracket_freq_hz?: number;
   drive_freq_hz?: number;
+  primary_bottleneck?: string;
+  compliance_share_pct?: AccelBottleneckShares;
   recommended_shaper: string;
   max_accel_mm_s2: number;
   estimated_ringing_ratio: number;
 }
+
+export type ShaperRecommendationData = ShaperData;
 
 export interface KlipperShaperCandidate {
   name: string; // "ZV" | "MZV" | "EI" | "2HUMP_EI" | "3HUMP_EI"
@@ -451,6 +533,168 @@ export interface ToolpathSegment {
   defect: "ok" | "travel" | "ringing" | "underextrusion" | "step_skip" | "cooling";
 }
 
+export interface GeometryExtrusionFillingData {
+  id: string;
+  name: string;
+  short_name: string;
+  bonded: boolean;
+  added_mass_kg: number;
+  damping_ratio: number;
+  color_hex: string;
+  notes: string;
+}
+
+export interface GeometryGantryBracketsData {
+  material_id: string;
+  name: string;
+  short_name: string;
+  youngs_modulus_gpa: number;
+  hdt_c: number;
+  creep_tension_limit_n: number;
+  cnc_machined: boolean;
+  kit_cost_usd: number;
+  carriage_mass_delta_g: number;
+  color_hex: string;
+}
+
+export interface GeometryLinearRailsData {
+  x_rail_profile: string;
+  y_rail_profile: string;
+  rail_material: string;
+  x_rail_mount: XRailMountType;
+  y_rail_mount: YRailMountType;
+  dual_x_rails: boolean;
+  x_rail_width_mm: number;
+  x_rail_height_mm: number;
+  y_rail_width_mm: number;
+  y_rail_height_mm: number;
+  x_beam_ei_y_boost_pct: number;
+  x_beam_ei_z_boost_pct: number;
+  y_rail_ei_x_boost_pct: number;
+  total_rail_mass_g: number;
+}
+
+export interface GeometryData {
+  architecture: string;
+  drive_mode?: "2wd" | "awd";
+  double_shear_pulleys?: boolean;
+  extrusion_filling?: GeometryExtrusionFillingData;
+  gantry_brackets?: GeometryGantryBracketsData;
+  linear_rails?: GeometryLinearRailsData;
+  panels?: {
+    enabled: boolean;
+    mounting: string;
+    material_id: string;
+    material_name: string;
+    thickness_mm: number;
+    color_hex: string;
+    bolted_to_gantry?: boolean;
+    is_flying_gantry?: boolean;
+    effective_shear_gt_kn_mm?: number;
+    buckling_factor?: number;
+    areal_mass_kg_m2?: number;
+    total_panel_mass_kg?: number;
+  };
+  frame_dims_mm: [number, number, number];
+  build_volume_mm: [number, number, number];
+  build_origin_mm: [number, number, number];
+  bed_size_mm: [number, number];
+  bed_center_mm: [number, number, number];
+  bed_node_id?: string;
+  toolhead_node_id: string;
+  nozzle_node_id?: string;
+  toolhead_cog_node_id?: string;
+  cog_offset_mm?: [number, number, number];
+  nozzle_offset_mm?: [number, number, number];
+  mount_material?: string;
+  toolhead_envelope_mm: [number, number, number];
+  nodes: GeometryNode[];
+  members: GeometryMember[];
+  mass_summary: {
+    frame_mass_kg: number;
+    total_mass_kg: number;
+    x_moving_mass_g: number;
+    y_moving_mass_g: number;
+    estimated_material_cost_usd: number;
+  };
+}
+
+export interface StaticFeaData {
+  gravity_sag_toolhead_um: number;
+  accel_deflection_x_um: number;
+  accel_deflection_y_um: number;
+  combined_max_deflection_um: number;
+  nozzle_absolute_deflection_um?: number;
+  bed_deflection_um?: number;
+  beam_center_deflection_um?: number;
+  nozzle_twist_amplification_pct?: number;
+  nozzle_twist_angle_mrad?: number;
+  toolhead_stiffness_x_n_per_mm: number;
+  toolhead_stiffness_y_n_per_mm: number;
+  toolhead_stiffness_z_n_per_mm: number;
+  max_von_mises_mpa: number;
+  min_safety_factor: number;
+  peak_inertial_force_x_n: number;
+  peak_inertial_force_y_n: number;
+  nodal_displacements_mm: Record<string, [number, number, number]>;
+  member_stresses: Array<{
+    member_id: string;
+    role: string;
+    axial_force_n: number;
+    max_bending_moment_nm: number;
+    von_mises_mpa: number;
+    yield_mpa: number;
+    safety_factor: number;
+    utilization: number;
+  }>;
+}
+
+export interface ModalFeaData {
+  fundamental_freq_hz: number;
+  nozzle_pitch_twist_freq_hz?: number;
+  frame_damping_ratio?: number;
+  recommended_max_accel_mm_s2: number;
+  accel_bottleneck?: AccelBottleneckData;
+  shaper_x: ShaperData | null;
+  shaper_y: ShaperData | null;
+  shaper_graphs?: { x: AxisShaperGraph; y: AxisShaperGraph };
+  modes: ModeShapeData[];
+}
+
+export interface KinematicsData {
+  architecture: string;
+  drive_mode?: string;
+  xy_motor_count?: number;
+  build_volume_liters: number;
+  frame_volume_liters: number;
+  packaging_efficiency_pct: number;
+  max_motor_rpm: number;
+  available_torque_at_vmax_nm: number;
+  required_torque_x_nm: number;
+  required_torque_y_nm: number;
+  torque_safety_margin: number;
+  max_safe_accel_motor_mm_s2: number;
+  step_skip_risk: boolean;
+  belt_peak_tension_n: number;
+  belt_slip_risk: boolean;
+  belt_pluck_freq_150mm_hz?: number;
+  belt_max_working_tension_n?: number;
+  belt_overtension_risk?: boolean;
+  shaft_bending_risk?: boolean;
+  frame_belt_preload_n?: number;
+  motor_run_current_a?: number;
+  motor_stiffness_n_per_mm?: number;
+  belt_stiffness_n_per_mm?: number;
+  bracket_material?: string;
+  bracket_stiffness_n_per_mm?: number;
+  bracket_creep_risk?: boolean;
+  drive_stiffness_n_per_mm?: number;
+  motor_voltage_efficiency_pct?: number;
+  motor_heat_w_each?: number;
+  motor_overcurrent_risk?: boolean;
+  delta_workspace_valid: boolean;
+}
+
 export interface SimulationResponse {
   printer_name: string;
   architecture: string;
@@ -465,46 +709,7 @@ export interface SimulationResponse {
     composite: number;
   };
   diagnostics: string[];
-  geometry: {
-    architecture: string;
-    drive_mode?: "2wd" | "awd";
-    double_shear_pulleys?: boolean;
-    panels?: {
-      enabled: boolean;
-      mounting: string;
-      material_id: string;
-      material_name: string;
-      thickness_mm: number;
-      color_hex: string;
-      bolted_to_gantry?: boolean;
-      is_flying_gantry?: boolean;
-      effective_shear_gt_kn_mm?: number;
-      buckling_factor?: number;
-      areal_mass_kg_m2?: number;
-      total_panel_mass_kg?: number;
-    };
-    frame_dims_mm: [number, number, number];
-    build_volume_mm: [number, number, number];
-    build_origin_mm: [number, number, number];
-    bed_size_mm: [number, number];
-    bed_center_mm: [number, number, number];
-    toolhead_node_id: string;
-    nozzle_node_id?: string;
-    toolhead_cog_node_id?: string;
-    cog_offset_mm?: [number, number, number];
-    nozzle_offset_mm?: [number, number, number];
-    mount_material?: string;
-    toolhead_envelope_mm: [number, number, number];
-    nodes: GeometryNode[];
-    members: GeometryMember[];
-    mass_summary: {
-      frame_mass_kg: number;
-      total_mass_kg: number;
-      x_moving_mass_g: number;
-      y_moving_mass_g: number;
-      estimated_material_cost_usd: number;
-    };
-  };
+  geometry: GeometryData;
   collision: {
     has_collision: boolean;
     clearance_x_mm: number;
@@ -512,72 +717,9 @@ export interface SimulationResponse {
     clearance_z_mm: number;
     issues: string[];
   };
-  static_fea: {
-    gravity_sag_toolhead_um: number;
-    accel_deflection_x_um: number;
-    accel_deflection_y_um: number;
-    combined_max_deflection_um: number;
-    beam_center_deflection_um?: number;
-    nozzle_twist_amplification_pct?: number;
-    nozzle_twist_angle_mrad?: number;
-    toolhead_stiffness_x_n_per_mm: number;
-    toolhead_stiffness_y_n_per_mm: number;
-    toolhead_stiffness_z_n_per_mm: number;
-    max_von_mises_mpa: number;
-    min_safety_factor: number;
-    peak_inertial_force_x_n: number;
-    peak_inertial_force_y_n: number;
-    nodal_displacements_mm: Record<string, [number, number, number]>;
-    member_stresses: Array<{
-      member_id: string;
-      role: string;
-      axial_force_n: number;
-      max_bending_moment_nm: number;
-      von_mises_mpa: number;
-      yield_mpa: number;
-      safety_factor: number;
-      utilization: number;
-    }>;
-  };
-  modal_fea: {
-    fundamental_freq_hz: number;
-    nozzle_pitch_twist_freq_hz?: number;
-    recommended_max_accel_mm_s2: number;
-    shaper_x: ShaperData | null;
-    shaper_y: ShaperData | null;
-    shaper_graphs?: { x: AxisShaperGraph; y: AxisShaperGraph };
-    modes: ModeShapeData[];
-  };
-  kinematics: {
-    architecture: string;
-    drive_mode?: string;
-    xy_motor_count?: number;
-    build_volume_liters: number;
-    frame_volume_liters: number;
-    packaging_efficiency_pct: number;
-    max_motor_rpm: number;
-    available_torque_at_vmax_nm: number;
-    required_torque_x_nm: number;
-    required_torque_y_nm: number;
-    torque_safety_margin: number;
-    max_safe_accel_motor_mm_s2: number;
-    step_skip_risk: boolean;
-    belt_peak_tension_n: number;
-    belt_slip_risk: boolean;
-    belt_pluck_freq_150mm_hz?: number;
-    belt_max_working_tension_n?: number;
-    belt_overtension_risk?: boolean;
-    shaft_bending_risk?: boolean;
-    frame_belt_preload_n?: number;
-    motor_run_current_a?: number;
-    motor_stiffness_n_per_mm?: number;
-    belt_stiffness_n_per_mm?: number;
-    drive_stiffness_n_per_mm?: number;
-    motor_voltage_efficiency_pct?: number;
-    motor_heat_w_each?: number;
-    motor_overcurrent_risk?: boolean;
-    delta_workspace_valid: boolean;
-  };
+  static_fea: StaticFeaData;
+  modal_fea: ModalFeaData;
+  kinematics: KinematicsData;
   thermal: {
     filament_id: string;
     filament_name: string;

@@ -2083,3 +2083,290 @@ textarea.code-editor {
     border-bottom: 1px solid var(--border);
   }
 }
+
+/* ==========================================================================
+   Extrusion Cavity Fillings & Gantry Bracket Material Readouts / Badges
+   ========================================================================== */
+
+.swatch-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
+.inline-readout-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.inline-readout-strip strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.bracket-readout-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.bracket-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.bracket-mass-note {
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sub-block-tag.ok {
+  color: var(--green);
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.psd-damping-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgba(13, 19, 29, 0.65);
+  border: 1px solid rgba(39, 50, 71, 0.85);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.psd-damping-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+}
+
+.hud-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.hud-fill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #e0f2fe;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Acceleration Bottleneck Breakdown Card & Relative Flex Subtext
+   ========================================================================== */
+
+.metric-sub-inline {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bottleneck-card {
+  gap: 7px;
+  border-color: rgba(56, 189, 248, 0.32);
+}
+
+.bottleneck-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bottleneck-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bottleneck-axis-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.bottleneck-axis-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: #0b1018;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.bottleneck-axis-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+
+.bottleneck-axis-btn:hover {
+  color: var(--text);
+}
+
+.bottleneck-axis-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  color: var(--accent);
+}
+
+.bottleneck-bar {
+  width: 100%;
+  height: 15px;
+  background: #0b1018;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: flex;
+  overflow: hidden;
+}
+
+.bottleneck-seg {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  color: #08101c;
+  font-variant-numeric: tabular-nums;
+  border-right: 1px solid rgba(12, 16, 23, 0.65);
+  overflow: hidden;
+  white-space: nowrap;
+  transition: width 0.25s ease;
+}
+
+.bottleneck-seg:last-child {
+  border-right: none;
+}
+
+.bottleneck-legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+}
+
+.bottleneck-legend-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: rgba(13, 19, 29, 0.55);
+  border: 1px solid transparent;
+  font-variant-numeric: tabular-nums;
+}
+
+.bottleneck-legend-item.primary {
+  color: var(--text);
+  background: rgba(13, 19, 29, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.bottleneck-legend-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bottleneck-legend-pct {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.bottleneck-xy-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: rgba(11, 16, 24, 0.72);
+  border: 1px solid rgba(39, 50, 71, 0.75);
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bottleneck-xy-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bottleneck-xy-line.is-limiting {
+  color: var(--text);
+}
+
+.bottleneck-xy-axis {
+  font-weight: 800;
+  color: var(--accent);
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.bottleneck-tip {
+  font-size: 11px;
+  line-height: 1.38;
+  color: #cbd5e1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.08);
+  border-left: 3px solid var(--accent);
+}

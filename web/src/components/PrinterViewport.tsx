@@ -2,12 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  GeometryMember,
   SimulationResponse,
   SolidFeaEngine,
   SolidFEAResponse,
   TetFEAResponse,
   TopologyOptResponse,
   ViewMode,
+  XRailMountType,
+  YRailMountType,
 } from "../types";
 
 interface Props {
@@ -82,34 +85,673 @@ function frameCameraToBox(
   controls.update();
 }
 
-function stressColor(t: number): THREE.Color {
+const STRESS_STOP_0 = new THREE.Color("#2563eb");
+const STRESS_STOP_1 = new THREE.Color("#06b6d4");
+const STRESS_STOP_2 = new THREE.Color("#22c55e");
+const STRESS_STOP_3 = new THREE.Color("#eab308");
+const STRESS_STOP_4 = new THREE.Color("#ef4444");
+
+function stressColorInto(t: number, out: THREE.Color): THREE.Color {
   const c = Math.max(0, Math.min(1, t));
-  const color = new THREE.Color();
   // Scientific blue -> cyan -> green -> yellow -> red
   if (c < 0.25) {
-    color.lerpColors(new THREE.Color("#2563eb"), new THREE.Color("#06b6d4"), c / 0.25);
+    out.lerpColors(STRESS_STOP_0, STRESS_STOP_1, c / 0.25);
   } else if (c < 0.5) {
-    color.lerpColors(new THREE.Color("#06b6d4"), new THREE.Color("#22c55e"), (c - 0.25) / 0.25);
+    out.lerpColors(STRESS_STOP_1, STRESS_STOP_2, (c - 0.25) / 0.25);
   } else if (c < 0.75) {
-    color.lerpColors(new THREE.Color("#22c55e"), new THREE.Color("#eab308"), (c - 0.5) / 0.25);
+    out.lerpColors(STRESS_STOP_2, STRESS_STOP_3, (c - 0.5) / 0.25);
   } else {
-    color.lerpColors(new THREE.Color("#eab308"), new THREE.Color("#ef4444"), (c - 0.75) / 0.25);
+    out.lerpColors(STRESS_STOP_3, STRESS_STOP_4, (c - 0.75) / 0.25);
   }
-  return color;
+  return out;
+}
+
+function stressColor(t: number): THREE.Color {
+  return stressColorInto(t, new THREE.Color());
 }
 
 function toThree(ptMm: [number, number, number], cx: number, cy: number): THREE.Vector3 {
   return new THREE.Vector3((ptMm[0] - cx) * SCALE, ptMm[2] * SCALE, -(ptMm[1] - cy) * SCALE);
 }
 
+const _orientDir = new THREE.Vector3();
+const _orientUp = new THREE.Vector3(0, 1, 0);
+const _orientQuat = new THREE.Quaternion();
+
 function orientBeamMesh(mesh: THREE.Mesh, p0: THREE.Vector3, p1: THREE.Vector3): void {
-  const dir = new THREE.Vector3().subVectors(p1, p0);
-  const len = Math.max(dir.length(), 1e-4);
+  _orientDir.subVectors(p1, p0);
+  const len = Math.max(_orientDir.length(), 1e-4);
   mesh.position.copy(p0).add(p1).multiplyScalar(0.5);
   mesh.scale.set(1, len, 1);
-  const up = new THREE.Vector3(0, 1, 0);
-  const quat = new THREE.Quaternion().setFromUnitVectors(up, dir.normalize());
-  mesh.quaternion.copy(quat);
+  _orientDir.divideScalar(len);
+  _orientQuat.setFromUnitVectors(_orientUp, _orientDir);
+  mesh.quaternion.copy(_orientQuat);
+}
+
+interface ContinuousBeamChain {
+  nodeIds: string[];
+  members: GeometryMember[];
+  template: GeometryMember;
+  isRod: boolean;
+}
+
+interface ModalContinuousBeam {
+  geometry: THREE.BufferGeometry;
+  nodeIds: string[];
+  controlPts: THREE.Vector3[];
+  controlValues: number[];
+  width: number;
+  height: number;
+  segmentsPerSpan: number;
+  undeformedAxis: THREE.Vector3;
+  fixedStart: boolean;
+  fixedEnd: boolean;
+}
+
+/**
+ * Merge collinear, matching-spec rectangular extrusions (e.g. col_*_low + col_*_top,
+ * y_rail_*_f + y_rail_*_r, x_gantry_l + x_gantry_r, Cartesian Z-columns/base rails,
+ * Delta towers) into single continuous multi-span chains.
+ */
+function groupContinuousBeams(
+  members: GeometryMember[],
+  basePos: Record<string, THREE.Vector3>,
+  fixedNodeIds?: Set<string>
+): ContinuousBeamChain[] {
+  const isMergeable = (m: GeometryMember): boolean =>
+    m.shape !== "rod" &&
+    m.role !== "brace" &&
+    m.role !== "toolhead" &&
+    m.role !== "bed" &&
+    Boolean(basePos[m.start_id]) &&
+    Boolean(basePos[m.end_id]) &&
+    basePos[m.start_id].distanceToSquared(basePos[m.end_id]) > 1e-10;
+
+  const sameExtrusionSpec = (a: GeometryMember, b: GeometryMember): boolean =>
+    a.profile === b.profile &&
+    a.material === b.material &&
+    a.role === b.role &&
+    a.shape === b.shape;
+
+  // Map nodeId -> mergeable member indices incident to that node
+  const nodeToMergeable = new Map<string, number[]>();
+  for (let i = 0; i < members.length; i++) {
+    const m = members[i];
+    if (!isMergeable(m)) continue;
+    let listS = nodeToMergeable.get(m.start_id);
+    if (!listS) {
+      listS = [];
+      nodeToMergeable.set(m.start_id, listS);
+    }
+    listS.push(i);
+
+    let listE = nodeToMergeable.get(m.end_id);
+    if (!listE) {
+      listE = [];
+      nodeToMergeable.set(m.end_id, listE);
+    }
+    listE.push(i);
+  }
+
+  const otherNode = (m: GeometryMember, sharedId: string): string =>
+    m.start_id === sharedId ? m.end_id : m.start_id;
+
+  const dirFromTo = (fromId: string, toId: string, out: THREE.Vector3): THREE.Vector3 => {
+    out.subVectors(basePos[toId], basePos[fromId]);
+    const len = out.length();
+    if (len > 1e-8) out.divideScalar(len);
+    return out;
+  };
+
+  const _dIn = new THREE.Vector3();
+  const _dCand = new THREE.Vector3();
+
+  /**
+   * Find the unique collinear continuation of member `mIdx` leaving `sharedId`
+   * along the same straight axis (degree-2-for-this-chain collinearity check).
+   */
+  const findCollinearPartner = (mIdx: number, sharedId: string): number => {
+    const m = members[mIdx];
+    const incident = nodeToMergeable.get(sharedId);
+    if (!incident || incident.length < 2) return -1;
+
+    const prevId = otherNode(m, sharedId);
+    dirFromTo(prevId, sharedId, _dIn);
+
+    let forwardPartner = -1;
+    let forwardCount = 0;
+    let backwardOtherCount = 0;
+
+    for (const cIdx of incident) {
+      if (cIdx === mIdx) continue;
+      const cand = members[cIdx];
+      if (!sameExtrusionSpec(m, cand)) continue;
+      const candOther = otherNode(cand, sharedId);
+      dirFromTo(sharedId, candOther, _dCand);
+      const dot = _dIn.dot(_dCand);
+      if (dot > 0.995) {
+        forwardCount++;
+        forwardPartner = cIdx;
+      } else if (dot < -0.995) {
+        backwardOtherCount++;
+      }
+    }
+
+    // Strict degree-2 along this collinear line (exactly one entering, one leaving)
+    if (forwardCount === 1 && backwardOtherCount === 0) {
+      return forwardPartner;
+    }
+    return -1;
+  };
+
+  const partnerAtStart = new Int32Array(members.length).fill(-1);
+  const partnerAtEnd = new Int32Array(members.length).fill(-1);
+  for (let i = 0; i < members.length; i++) {
+    if (!isMergeable(members[i])) continue;
+    partnerAtStart[i] = findCollinearPartner(i, members[i].start_id);
+    partnerAtEnd[i] = findCollinearPartner(i, members[i].end_id);
+  }
+
+  // Enforce symmetric pairing
+  for (let i = 0; i < members.length; i++) {
+    const ps = partnerAtStart[i];
+    if (ps !== -1 && partnerAtStart[ps] !== i && partnerAtEnd[ps] !== i) {
+      partnerAtStart[i] = -1;
+    }
+    const pe = partnerAtEnd[i];
+    if (pe !== -1 && partnerAtStart[pe] !== i && partnerAtEnd[pe] !== i) {
+      partnerAtEnd[i] = -1;
+    }
+  }
+
+  const visited = new Uint8Array(members.length);
+  const chains: ContinuousBeamChain[] = [];
+
+  const traceChainFrom = (startMemberIdx: number, startFromEnd: boolean) => {
+    const startMember = members[startMemberIdx];
+    const chainMembers: GeometryMember[] = [startMember];
+    const chainNodes: string[] = startFromEnd
+      ? [startMember.end_id, startMember.start_id]
+      : [startMember.start_id, startMember.end_id];
+
+    visited[startMemberIdx] = 1;
+    let currIdx = startMemberIdx;
+    let currNode = chainNodes[1];
+
+    while (true) {
+      const m = members[currIdx];
+      const nextIdx = currNode === m.end_id ? partnerAtEnd[currIdx] : partnerAtStart[currIdx];
+      if (nextIdx === -1 || visited[nextIdx]) break;
+
+      visited[nextIdx] = 1;
+      const nextM = members[nextIdx];
+      const nextNode = otherNode(nextM, currNode);
+      chainMembers.push(nextM);
+      chainNodes.push(nextNode);
+      currIdx = nextIdx;
+      currNode = nextNode;
+    }
+
+    // Orient chains so a fixed foot/anchor node (e.g. b_fl) is always at index 0
+    if (fixedNodeIds && chainNodes.length >= 2) {
+      const firstFixed = fixedNodeIds.has(chainNodes[0]);
+      const lastFixed = fixedNodeIds.has(chainNodes[chainNodes.length - 1]);
+      if (!firstFixed && lastFixed) {
+        chainNodes.reverse();
+        chainMembers.reverse();
+      }
+    }
+
+    chains.push({
+      nodeIds: chainNodes,
+      members: chainMembers,
+      template: chainMembers[0],
+      isRod: chainMembers[0].shape === "rod",
+    });
+  };
+
+  // Pass 1: start from natural chain endpoints (degree <= 1 along the collinear chain)
+  for (let i = 0; i < members.length; i++) {
+    if (visited[i] || !isMergeable(members[i])) continue;
+    const hasStartPartner = partnerAtStart[i] !== -1;
+    const hasEndPartner = partnerAtEnd[i] !== -1;
+    if (!hasStartPartner) {
+      traceChainFrom(i, false);
+    } else if (!hasEndPartner) {
+      traceChainFrom(i, true);
+    }
+  }
+
+  // Pass 2: any remaining members (non-mergeable rods/braces/toolhead or degenerate loops)
+  for (let i = 0; i < members.length; i++) {
+    if (visited[i]) continue;
+    if (isMergeable(members[i])) {
+      traceChainFrom(i, false);
+    } else {
+      visited[i] = 1;
+      const m = members[i];
+      chains.push({
+        nodeIds: [m.start_id, m.end_id],
+        members: [m],
+        template: m,
+        isRod: m.shape === "rod",
+      });
+    }
+  }
+
+  return chains;
+}
+
+// Module-level zero-allocation scratch buffers for 60 fps continuous beam sweeping
+const _beamUp = new THREE.Vector3(0, 1, 0);
+const _beamRefAxis = new THREE.Vector3();
+const _beamInitQ = new THREE.Quaternion();
+const _beamStepQ = new THREE.Quaternion();
+const _beamU = new THREE.Vector3();
+const _beamV = new THREE.Vector3();
+const _beamT = new THREE.Vector3();
+const _beamPrevT = new THREE.Vector3();
+const _beamP = new THREE.Vector3();
+const _beamC0 = new THREE.Vector3();
+const _beamC1 = new THREE.Vector3();
+const _beamC2 = new THREE.Vector3();
+const _beamC3 = new THREE.Vector3();
+const _beamCol = new THREE.Color();
+const _beamSecantPool: THREE.Vector3[] = [];
+const _beamTangentPool: THREE.Vector3[] = [];
+let _beamSpanLens = new Float64Array(16);
+
+function ensureSplineScratch(numPts: number): void {
+  while (_beamSecantPool.length < numPts) {
+    _beamSecantPool.push(new THREE.Vector3());
+  }
+  while (_beamTangentPool.length < numPts) {
+    _beamTangentPool.push(new THREE.Vector3());
+  }
+  if (_beamSpanLens.length < numPts) {
+    _beamSpanLens = new Float64Array(Math.max(numPts * 2, 16));
+  }
+}
+
+function writeRingVertex(
+  posArr: Float32Array,
+  normArr: Float32Array,
+  colArr: Float32Array | null,
+  vIdx: number,
+  pt: THREE.Vector3,
+  nx: number,
+  ny: number,
+  nz: number,
+  col: THREE.Color | null
+): void {
+  const o = vIdx * 3;
+  posArr[o] = pt.x;
+  posArr[o + 1] = pt.y;
+  posArr[o + 2] = pt.z;
+  normArr[o] = nx;
+  normArr[o + 1] = ny;
+  normArr[o + 2] = nz;
+  if (colArr && col) {
+    colArr[o] = col.r;
+    colArr[o + 1] = col.g;
+    colArr[o + 2] = col.b;
+  }
+}
+
+/**
+ * Update a pre-allocated continuous swept rectangular beam BufferGeometry in-place
+ * using chord-length cubic Hermite interpolation, fixed-end tangent clamping,
+ * stable Bishop parallel-transport frames, sharp split rectangular face normals,
+ * and smooth per-vertex scientific color gradients (zero per-frame heap allocations).
+ */
+function updateContinuousBeamGeometry(
+  geo: THREE.BufferGeometry,
+  controlPts: THREE.Vector3[],
+  controlValues: number[],
+  width: number,
+  height: number,
+  segmentsPerSpan: number,
+  useVertexColors: boolean,
+  undeformedAxis?: THREE.Vector3,
+  fixedStart = false,
+  fixedEnd = false,
+  updateColors = true
+): void {
+  const numPts = controlPts.length;
+  if (numPts < 2) return;
+  const numSpans = numPts - 1;
+  const segs = Math.max(1, Math.floor(segmentsPerSpan));
+  const totalSlices = numSpans * segs;
+  const ringCount = totalSlices + 1;
+
+  const posAttr = geo.getAttribute("position") as THREE.BufferAttribute;
+  const normAttr = geo.getAttribute("normal") as THREE.BufferAttribute;
+  const colAttr = useVertexColors
+    ? (geo.getAttribute("color") as THREE.BufferAttribute | undefined)
+    : undefined;
+  const posArr = posAttr.array as Float32Array;
+  const normArr = normAttr.array as Float32Array;
+  const colArr = useVertexColors && updateColors && colAttr ? (colAttr.array as Float32Array) : null;
+
+  ensureSplineScratch(numPts);
+
+  // 1. Reference undeformed axis for stable Bishop frame anchor
+  if (undeformedAxis && undeformedAxis.lengthSq() > 1e-10) {
+    _beamRefAxis.copy(undeformedAxis).normalize();
+  } else {
+    _beamRefAxis.subVectors(controlPts[numPts - 1], controlPts[0]);
+    const refLen = _beamRefAxis.length();
+    if (refLen > 1e-8) {
+      _beamRefAxis.divideScalar(refLen);
+    } else {
+      _beamRefAxis.set(0, 1, 0);
+    }
+  }
+
+  // 2. Chord-length parameterization & secant velocities S_i = (P_{i+1} - P_i) / d_i
+  for (let i = 0; i < numSpans; i++) {
+    const sVec = _beamSecantPool[i];
+    sVec.subVectors(controlPts[i + 1], controlPts[i]);
+    const d = Math.max(sVec.length(), 1e-5);
+    _beamSpanLens[i] = d;
+    sVec.divideScalar(d);
+  }
+
+  // 3. Smooth cubic Hermite tangents M_i (chord-length Bessel interior + fixed/natural endpoints)
+  if (numPts === 2) {
+    _beamTangentPool[0].copy(_beamSecantPool[0]);
+    _beamTangentPool[1].copy(_beamSecantPool[0]);
+  } else {
+    // Interior nodes: chord-length weighted parabolic tangent (prevents overshoot on unequal spans)
+    for (let i = 1; i < numPts - 1; i++) {
+      const dPrev = _beamSpanLens[i - 1];
+      const dNext = _beamSpanLens[i];
+      const denom = dPrev + dNext;
+      const wPrev = dNext / denom;
+      const wNext = dPrev / denom;
+      const sPrev = _beamSecantPool[i - 1];
+      const sNext = _beamSecantPool[i];
+      _beamTangentPool[i].set(
+        wPrev * sPrev.x + wNext * sNext.x,
+        wPrev * sPrev.y + wNext * sNext.y,
+        wPrev * sPrev.z + wNext * sNext.z
+      );
+    }
+
+    // Start node tangent: clamp to undeformed axis if fixed (authentic cantilever S-curve), else natural (P''=0)
+    if (fixedStart) {
+      _beamTangentPool[0].copy(_beamRefAxis);
+    } else {
+      const s0 = _beamSecantPool[0];
+      const m1 = _beamTangentPool[1];
+      _beamTangentPool[0].set(
+        1.5 * s0.x - 0.5 * m1.x,
+        1.5 * s0.y - 0.5 * m1.y,
+        1.5 * s0.z - 0.5 * m1.z
+      );
+    }
+
+    // End node tangent
+    const last = numPts - 1;
+    if (fixedEnd) {
+      _beamTangentPool[last].copy(_beamRefAxis);
+    } else {
+      const sLast = _beamSecantPool[numSpans - 1];
+      const mPrev = _beamTangentPool[last - 1];
+      _beamTangentPool[last].set(
+        1.5 * sLast.x - 0.5 * mPrev.x,
+        1.5 * sLast.y - 0.5 * mPrev.y,
+        1.5 * sLast.z - 0.5 * mPrev.z
+      );
+    }
+  }
+
+  // 4. Initial cross-section frame (U, refAxis, V) matching orientBeamMesh BoxGeometry(w, 1, h)
+  _beamInitQ.setFromUnitVectors(_beamUp, _beamRefAxis);
+  _beamU.set(1, 0, 0).applyQuaternion(_beamInitQ).normalize();
+  _beamV.set(0, 0, 1).applyQuaternion(_beamInitQ).normalize();
+
+  const hw = width * 0.5;
+  const hh = height * 0.5;
+  const sideVertCount = 4 * ringCount * 2;
+  const startCapBase = sideVertCount;
+  const endCapBase = sideVertCount + 4;
+
+  // 5. Sweep rings along the spline with Bishop parallel transport
+  for (let ring = 0; ring <= totalSlices; ring++) {
+    const spanIdx = ring === totalSlices ? numSpans - 1 : Math.floor(ring / segs);
+    const localStep = ring === totalSlices ? segs : ring - spanIdx * segs;
+    const u = localStep / segs;
+
+    const p0 = controlPts[spanIdx];
+    const p1 = controlPts[spanIdx + 1];
+    const d = _beamSpanLens[spanIdx];
+    const m0 = _beamTangentPool[spanIdx];
+    const m1 = _beamTangentPool[spanIdx + 1];
+
+    if (numPts === 2) {
+      _beamP.set(
+        p0.x + (p1.x - p0.x) * u,
+        p0.y + (p1.y - p0.y) * u,
+        p0.z + (p1.z - p0.z) * u
+      );
+      _beamT.copy(_beamSecantPool[0]);
+    } else {
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const h00 = 2 * u3 - 3 * u2 + 1;
+      const h10 = (u3 - 2 * u2 + u) * d;
+      const h01 = -2 * u3 + 3 * u2;
+      const h11 = (u3 - u2) * d;
+
+      _beamP.set(
+        h00 * p0.x + h10 * m0.x + h01 * p1.x + h11 * m1.x,
+        h00 * p0.y + h10 * m0.y + h01 * p1.y + h11 * m1.y,
+        h00 * p0.z + h10 * m0.z + h01 * p1.z + h11 * m1.z
+      );
+
+      const dh00 = 6 * u2 - 6 * u;
+      const dh10 = (3 * u2 - 4 * u + 1) * d;
+      const dh01 = -6 * u2 + 6 * u;
+      const dh11 = (3 * u2 - 2 * u) * d;
+
+      _beamT.set(
+        dh00 * p0.x + dh10 * m0.x + dh01 * p1.x + dh11 * m1.x,
+        dh00 * p0.y + dh10 * m0.y + dh01 * p1.y + dh11 * m1.y,
+        dh00 * p0.z + dh10 * m0.z + dh01 * p1.z + dh11 * m1.z
+      );
+      const tLen = _beamT.length();
+      if (tLen > 1e-8) {
+        _beamT.divideScalar(tLen);
+      } else {
+        _beamT.copy(_beamSecantPool[spanIdx]);
+      }
+    }
+
+    // Parallel-transport frame (U, T, V) with U × T = V
+    if (ring === 0) {
+      const dot0 = _beamRefAxis.dot(_beamT);
+      if (dot0 < 0.999999 && dot0 > -0.9999) {
+        _beamStepQ.setFromUnitVectors(_beamRefAxis, _beamT);
+        _beamU.applyQuaternion(_beamStepQ);
+      }
+    } else {
+      const dotS = _beamPrevT.dot(_beamT);
+      if (dotS < 0.999999 && dotS > -0.9999) {
+        _beamStepQ.setFromUnitVectors(_beamPrevT, _beamT);
+        _beamU.applyQuaternion(_beamStepQ);
+      }
+    }
+    _beamU.addScaledVector(_beamT, -_beamU.dot(_beamT));
+    if (_beamU.lengthSq() > 1e-10) {
+      _beamU.normalize();
+    } else {
+      _beamU.set(1, 0, 0).cross(_beamT);
+      if (_beamU.lengthSq() < 1e-6) _beamU.set(0, 0, 1).cross(_beamT);
+      _beamU.normalize();
+    }
+    _beamV.crossVectors(_beamU, _beamT).normalize();
+    _beamPrevT.copy(_beamT);
+
+    // 4 cross-section corners around _beamP
+    const ux = _beamU.x * hw;
+    const uy = _beamU.y * hw;
+    const uz = _beamU.z * hw;
+    const vx = _beamV.x * hh;
+    const vy = _beamV.y * hh;
+    const vz = _beamV.z * hh;
+
+    _beamC0.set(_beamP.x - ux - vx, _beamP.y - uy - vy, _beamP.z - uz - vz);
+    _beamC1.set(_beamP.x + ux - vx, _beamP.y + uy - vy, _beamP.z + uz - vz);
+    _beamC2.set(_beamP.x + ux + vx, _beamP.y + uy + vy, _beamP.z + uz + vz);
+    _beamC3.set(_beamP.x - ux + vx, _beamP.y - uy + vy, _beamP.z - uz + vz);
+
+    let ringColor: THREE.Color | null = null;
+    if (colArr) {
+      const v0 = controlValues[spanIdx] ?? 0;
+      const v1 = controlValues[spanIdx + 1] ?? v0;
+      ringColor = stressColorInto(v0 + (v1 - v0) * u, _beamCol);
+    }
+
+    // Side 0: -V face (c0, c1)
+    const s0Base = (0 * ringCount + ring) * 2;
+    writeRingVertex(posArr, normArr, colArr, s0Base, _beamC0, -_beamV.x, -_beamV.y, -_beamV.z, ringColor);
+    writeRingVertex(posArr, normArr, colArr, s0Base + 1, _beamC1, -_beamV.x, -_beamV.y, -_beamV.z, ringColor);
+
+    // Side 1: +U face (c1, c2)
+    const s1Base = (1 * ringCount + ring) * 2;
+    writeRingVertex(posArr, normArr, colArr, s1Base, _beamC1, _beamU.x, _beamU.y, _beamU.z, ringColor);
+    writeRingVertex(posArr, normArr, colArr, s1Base + 1, _beamC2, _beamU.x, _beamU.y, _beamU.z, ringColor);
+
+    // Side 2: +V face (c2, c3)
+    const s2Base = (2 * ringCount + ring) * 2;
+    writeRingVertex(posArr, normArr, colArr, s2Base, _beamC2, _beamV.x, _beamV.y, _beamV.z, ringColor);
+    writeRingVertex(posArr, normArr, colArr, s2Base + 1, _beamC3, _beamV.x, _beamV.y, _beamV.z, ringColor);
+
+    // Side 3: -U face (c3, c0)
+    const s3Base = (3 * ringCount + ring) * 2;
+    writeRingVertex(posArr, normArr, colArr, s3Base, _beamC3, -_beamU.x, -_beamU.y, -_beamU.z, ringColor);
+    writeRingVertex(posArr, normArr, colArr, s3Base + 1, _beamC0, -_beamU.x, -_beamU.y, -_beamU.z, ringColor);
+
+    // Closed end caps with crisp flat face normals
+    if (ring === 0) {
+      writeRingVertex(posArr, normArr, colArr, startCapBase, _beamC0, -_beamT.x, -_beamT.y, -_beamT.z, ringColor);
+      writeRingVertex(posArr, normArr, colArr, startCapBase + 1, _beamC1, -_beamT.x, -_beamT.y, -_beamT.z, ringColor);
+      writeRingVertex(posArr, normArr, colArr, startCapBase + 2, _beamC2, -_beamT.x, -_beamT.y, -_beamT.z, ringColor);
+      writeRingVertex(posArr, normArr, colArr, startCapBase + 3, _beamC3, -_beamT.x, -_beamT.y, -_beamT.z, ringColor);
+    }
+    if (ring === totalSlices) {
+      writeRingVertex(posArr, normArr, colArr, endCapBase, _beamC0, _beamT.x, _beamT.y, _beamT.z, ringColor);
+      writeRingVertex(posArr, normArr, colArr, endCapBase + 1, _beamC1, _beamT.x, _beamT.y, _beamT.z, ringColor);
+      writeRingVertex(posArr, normArr, colArr, endCapBase + 2, _beamC2, _beamT.x, _beamT.y, _beamT.z, ringColor);
+      writeRingVertex(posArr, normArr, colArr, endCapBase + 3, _beamC3, _beamT.x, _beamT.y, _beamT.z, ringColor);
+    }
+  }
+
+  posAttr.needsUpdate = true;
+  normAttr.needsUpdate = true;
+  if (colArr && colAttr) {
+    colAttr.needsUpdate = true;
+  }
+}
+
+function createContinuousBeamGeometry(
+  controlPts: THREE.Vector3[],
+  controlValues: number[],
+  width: number,
+  height: number,
+  segmentsPerSpan: number,
+  useVertexColors: boolean,
+  undeformedAxis?: THREE.Vector3,
+  fixedStart = false,
+  fixedEnd = false
+): THREE.BufferGeometry {
+  const numSpans = Math.max(1, controlPts.length - 1);
+  const segs = Math.max(1, Math.floor(segmentsPerSpan));
+  const totalSlices = numSpans * segs;
+  const ringCount = totalSlices + 1;
+
+  const sideVertCount = 4 * ringCount * 2;
+  const totalVerts = sideVertCount + 8;
+
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+
+  const triCount = 4 * totalSlices * 2 + 4;
+  const indices =
+    totalVerts <= 65535 ? new Uint16Array(triCount * 3) : new Uint32Array(triCount * 3);
+
+  let idxOff = 0;
+  for (let side = 0; side < 4; side++) {
+    for (let s = 0; s < totalSlices; s++) {
+      const a0 = (side * ringCount + s) * 2;
+      const a1 = a0 + 1;
+      const b0 = a0 + 2;
+      const b1 = a0 + 3;
+      indices[idxOff++] = a0;
+      indices[idxOff++] = b0;
+      indices[idxOff++] = b1;
+      indices[idxOff++] = a0;
+      indices[idxOff++] = b1;
+      indices[idxOff++] = a1;
+    }
+  }
+
+  // Start cap (normal -T_0)
+  const startCapBase = sideVertCount;
+  indices[idxOff++] = startCapBase;
+  indices[idxOff++] = startCapBase + 1;
+  indices[idxOff++] = startCapBase + 2;
+  indices[idxOff++] = startCapBase;
+  indices[idxOff++] = startCapBase + 2;
+  indices[idxOff++] = startCapBase + 3;
+
+  // End cap (normal +T_N)
+  const endCapBase = sideVertCount + 4;
+  indices[idxOff++] = endCapBase;
+  indices[idxOff++] = endCapBase + 3;
+  indices[idxOff++] = endCapBase + 2;
+  indices[idxOff++] = endCapBase;
+  indices[idxOff++] = endCapBase + 2;
+  indices[idxOff++] = endCapBase + 1;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  if (useVertexColors) {
+    const colors = new Float32Array(totalVerts * 3);
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  }
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+
+  updateContinuousBeamGeometry(
+    geo,
+    controlPts,
+    controlValues,
+    width,
+    height,
+    segs,
+    useVertexColors,
+    undeformedAxis,
+    fixedStart,
+    fixedEnd,
+    true
+  );
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+function applyRodGradientColors(geo: THREE.BufferGeometry, val0: number, val1: number): void {
+  const posAttr = geo.getAttribute("position") as THREE.BufferAttribute;
+  const colors = new Float32Array(posAttr.count * 3);
+  for (let i = 0; i < posAttr.count; i++) {
+    const t = Math.max(0, Math.min(1, posAttr.getY(i) + 0.5));
+    stressColorInto(val0 + (val1 - val0) * t, _beamCol);
+    colors[i * 3] = _beamCol.r;
+    colors[i * 3 + 1] = _beamCol.g;
+    colors[i * 3 + 2] = _beamCol.b;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 }
 
 export const PrinterViewport: React.FC<Props> = ({
@@ -142,6 +784,7 @@ export const PrinterViewport: React.FC<Props> = ({
       startId: string;
       endId: string;
     }>;
+    modalContinuousBeams: ModalContinuousBeam[];
     modalToolhead?: THREE.Group;
     modalToolheadNodeId?: string;
     modalCogMarker?: THREE.Group;
@@ -149,11 +792,16 @@ export const PrinterViewport: React.FC<Props> = ({
     modalNozzleMarker?: THREE.Group;
     modalNozzleNodeId?: string;
     modalNozzleRefNodeId?: string;
+    modalBedMesh?: THREE.Mesh;
+    modalBedNodeId?: string;
+    modalBedOffset: THREE.Vector3;
     basePositions: Record<string, THREE.Vector3>;
     modalVectors: Record<string, THREE.Vector3>;
     isModal: boolean;
   }>({
     modalMeshes: [],
+    modalContinuousBeams: [],
+    modalBedOffset: new THREE.Vector3(0, -0.04, 0),
     basePositions: {},
     modalVectors: {},
     isModal: false,
@@ -212,16 +860,25 @@ export const PrinterViewport: React.FC<Props> = ({
     window.addEventListener("resize", onResize);
 
     const clock = new THREE.Clock();
+    const tmpPosA = new THREE.Vector3();
+    const tmpPosB = new THREE.Vector3();
+    const tmpNozV0 = new THREE.Vector3();
+    const tmpNozV1 = new THREE.Vector3();
+
     const animate = () => {
       stateRef.current.animFrame = requestAnimationFrame(animate);
       controls.update();
 
-      if (stateRef.current.isModal && stateRef.current.modalMeshes.length > 0) {
+      if (
+        stateRef.current.isModal &&
+        (stateRef.current.modalContinuousBeams.length > 0 || stateRef.current.modalMeshes.length > 0)
+      ) {
         const t = clock.getElapsedTime();
         const phase = Math.sin(t * 7.5) * 0.38;
         const {
           basePositions,
           modalVectors,
+          modalContinuousBeams,
           modalMeshes,
           modalToolhead,
           modalToolheadNodeId,
@@ -230,40 +887,72 @@ export const PrinterViewport: React.FC<Props> = ({
           modalNozzleMarker,
           modalNozzleNodeId,
           modalNozzleRefNodeId,
+          modalBedMesh,
+          modalBedNodeId,
+          modalBedOffset,
         } = stateRef.current;
 
-        const getPos = (id: string) => {
+        const getPosInto = (id: string, out: THREE.Vector3): THREE.Vector3 => {
           const b = basePositions[id];
           const v = modalVectors[id];
-          if (!b) return new THREE.Vector3();
-          if (!v) return b.clone();
-          return b.clone().addScaledVector(v, phase);
+          if (!b) return out.set(0, 0, 0);
+          out.copy(b);
+          if (v) out.addScaledVector(v, phase);
+          return out;
         };
 
+        for (const beam of modalContinuousBeams) {
+          for (let i = 0; i < beam.nodeIds.length; i++) {
+            getPosInto(beam.nodeIds[i], beam.controlPts[i]);
+          }
+          updateContinuousBeamGeometry(
+            beam.geometry,
+            beam.controlPts,
+            beam.controlValues,
+            beam.width,
+            beam.height,
+            beam.segmentsPerSpan,
+            true,
+            beam.undeformedAxis,
+            beam.fixedStart,
+            beam.fixedEnd,
+            false
+          );
+        }
+
         for (const item of modalMeshes) {
-          orientBeamMesh(item.mesh, getPos(item.startId), getPos(item.endId));
+          orientBeamMesh(
+            item.mesh,
+            getPosInto(item.startId, tmpPosA),
+            getPosInto(item.endId, tmpPosB)
+          );
         }
         if (modalToolhead) {
-          const thPos = getPos(modalToolheadNodeId || "toolhead");
-          modalToolhead.position.copy(thPos);
+          getPosInto(modalToolheadNodeId || "toolhead", modalToolhead.position);
         }
         if (modalCogMarker && modalCogNodeId) {
-          modalCogMarker.position.copy(getPos(modalCogNodeId));
+          getPosInto(modalCogNodeId, modalCogMarker.position);
         }
         if (modalNozzleMarker && modalNozzleNodeId) {
-          const curNoz = getPos(modalNozzleNodeId);
+          const curNoz = getPosInto(modalNozzleNodeId, tmpPosA);
           modalNozzleMarker.position.copy(curNoz);
           if (modalNozzleRefNodeId && basePositions[modalNozzleRefNodeId] && basePositions[modalNozzleNodeId]) {
-            const v0 = new THREE.Vector3().subVectors(
+            tmpNozV0.subVectors(
               basePositions[modalNozzleRefNodeId],
               basePositions[modalNozzleNodeId]
             );
-            const curRef = getPos(modalNozzleRefNodeId);
-            const v1 = new THREE.Vector3().subVectors(curRef, curNoz);
-            if (v0.lengthSq() > 1e-6 && v1.lengthSq() > 1e-6) {
-              modalNozzleMarker.quaternion.setFromUnitVectors(v0.normalize(), v1.normalize());
+            const curRef = getPosInto(modalNozzleRefNodeId, tmpPosB);
+            tmpNozV1.subVectors(curRef, curNoz);
+            if (tmpNozV0.lengthSq() > 1e-6 && tmpNozV1.lengthSq() > 1e-6) {
+              modalNozzleMarker.quaternion.setFromUnitVectors(
+                tmpNozV0.normalize(),
+                tmpNozV1.normalize()
+              );
             }
           }
+        }
+        if (modalBedMesh && modalBedNodeId) {
+          getPosInto(modalBedNodeId, modalBedMesh.position).add(modalBedOffset);
         }
       }
 
@@ -293,6 +982,7 @@ export const PrinterViewport: React.FC<Props> = ({
     disposeGroupChildren(group);
 
     stateRef.current.modalMeshes = [];
+    stateRef.current.modalContinuousBeams = [];
     stateRef.current.modalToolhead = undefined;
     stateRef.current.modalToolheadNodeId = undefined;
     stateRef.current.modalCogMarker = undefined;
@@ -300,6 +990,8 @@ export const PrinterViewport: React.FC<Props> = ({
     stateRef.current.modalNozzleMarker = undefined;
     stateRef.current.modalNozzleNodeId = undefined;
     stateRef.current.modalNozzleRefNodeId = undefined;
+    stateRef.current.modalBedMesh = undefined;
+    stateRef.current.modalBedNodeId = undefined;
     stateRef.current.isModal = viewMode === "modal";
 
     // Render 3D Solid Part FEA mode (Curved Tet10 Gmsh+scikit-fem OR Voxel Hex8)
@@ -615,10 +1307,12 @@ export const PrinterViewport: React.FC<Props> = ({
 
     const basePos: Record<string, THREE.Vector3> = {};
     const deformedPos: Record<string, THREE.Vector3> = {};
+    const fixedNodeIds = new Set<string>();
 
     for (const n of geom.nodes) {
       const p0 = toThree(n.position_mm, cx, cy);
       basePos[n.id] = p0;
+      if (n.fixed) fixedNodeIds.add(n.id);
 
       const disp = sim.static_fea.nodal_displacements_mm[n.id] || [0, 0, 0];
       const dispVec = new THREE.Vector3(disp[0] * SCALE, disp[2] * SCALE, -disp[1] * SCALE);
@@ -629,73 +1323,231 @@ export const PrinterViewport: React.FC<Props> = ({
     // Modal displacement vectors
     const activeMode = sim.modal_fea.modes[selectedModeIdx] || sim.modal_fea.modes[0];
     const mVecs: Record<string, THREE.Vector3> = {};
+    let maxModalAmp = 0;
     if (activeMode) {
       for (const [nid, vec] of Object.entries(activeMode.nodal_vectors)) {
-        mVecs[nid] = new THREE.Vector3(vec[0], vec[2], -vec[1]);
+        const mv = new THREE.Vector3(vec[0], vec[2], -vec[1]);
+        mVecs[nid] = mv;
+        const amp = mv.length();
+        if (amp > maxModalAmp) maxModalAmp = amp;
       }
     }
+    const modalAmpNorm = maxModalAmp > 1e-6 ? maxModalAmp : 1.0;
     stateRef.current.modalVectors = mVecs;
 
-    // Stress lookup
+    // Stress lookup (member-level and smooth nodal averages for corner blending)
     const stressMap: Record<string, number> = {};
     const maxStress = Math.max(sim.static_fea.max_von_mises_mpa, 0.05);
     for (const ms of sim.static_fea.member_stresses) {
       stressMap[ms.member_id] = ms.von_mises_mpa / maxStress;
     }
 
-    // Build structural members
-    const frameOpacity = viewMode === "toolpath" ? 0.25 : 1.0;
+    // Exclude virtual bed-mount / Z-rail backing members (role === "bed") and solver-internal
+    // equivalent shear-panel X-struts (panel_shear_*) from rendered structural extrusions so the
+    // real 3D panel sheets, heated bed plate, and continuous curved frame beams render cleanly.
+    const structuralMembers = geom.members.filter(
+      (m) => m.role !== "bed" && !m.id.startsWith("panel_shear_")
+    );
 
-    for (const m of geom.members) {
+    const nodalStressSum: Record<string, number> = {};
+    const nodalStressCount: Record<string, number> = {};
+    for (const m of structuralMembers) {
+      const s = stressMap[m.id] ?? 0;
+      nodalStressSum[m.start_id] = (nodalStressSum[m.start_id] ?? 0) + s;
+      nodalStressCount[m.start_id] = (nodalStressCount[m.start_id] ?? 0) + 1;
+      nodalStressSum[m.end_id] = (nodalStressSum[m.end_id] ?? 0) + s;
+      nodalStressCount[m.end_id] = (nodalStressCount[m.end_id] ?? 0) + 1;
+    }
+    const globalNodalStress: Record<string, number> = {};
+    for (const nid of Object.keys(nodalStressSum)) {
+      globalNodalStress[nid] = nodalStressSum[nid] / Math.max(nodalStressCount[nid], 1);
+    }
+
+    // Build continuous structural members (merges split columns, Y-rails, X-gantry, etc.)
+    const useVertexColors = viewMode === "fea_stress" || viewMode === "modal";
+    const frameOpacity = viewMode === "toolpath" ? 0.25 : 1.0;
+    const activeFilling =
+      viewMode === "assembly" && geom.extrusion_filling && geom.extrusion_filling.id !== "none"
+        ? geom.extrusion_filling
+        : null;
+    const fillingMat = activeFilling
+      ? new THREE.MeshStandardMaterial({
+          color: new THREE.Color(activeFilling.color_hex),
+          metalness: activeFilling.id === "lead_shot" ? 0.55 : 0.12,
+          roughness: activeFilling.bonded ? 0.48 : 0.72,
+        })
+      : null;
+    let fillingMatUsed = false;
+
+    const ghostLineMat = useVertexColors
+      ? new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.35 })
+      : null;
+    let ghostLineMatUsed = false;
+
+    const beamChains = groupContinuousBeams(structuralMembers, basePos, fixedNodeIds);
+
+    for (const chain of beamChains) {
+      const m = chain.template;
+      const firstId = chain.nodeIds[0];
+      const lastId = chain.nodeIds[chain.nodeIds.length - 1];
+      if (!basePos[firstId] || !basePos[lastId]) continue;
+
       const w = Math.max(m.width_mm * SCALE, 0.06);
       const h = Math.max(m.height_mm * SCALE, 0.06);
-      const geo =
-        m.shape === "rod"
-          ? new THREE.CylinderGeometry(w * 0.5, w * 0.5, 1, 10)
-          : new THREE.BoxGeometry(w, 1, h);
 
-      let color = new THREE.Color(m.color_hex);
-      if (viewMode === "fea_stress") {
-        color = stressColor(stressMap[m.id] ?? 0);
-      } else if (viewMode === "modal") {
-        const amp0 = mVecs[m.start_id]?.length() ?? 0;
-        const amp1 = mVecs[m.end_id]?.length() ?? 0;
-        color = stressColor(0.5 * (amp0 + amp1));
-      } else if (m.role === "brace") {
-        color = new THREE.Color("#38bdf8");
-      } else if (m.role === "gantry") {
-        color = m.material.includes("carbon") ? new THREE.Color("#1f2937") : new THREE.Color("#f59e0b");
+      // Compute smooth nodal scalar values for FEA stress & Modal heatmap gradients
+      const controlValues: number[] = [];
+      if (viewMode === "modal") {
+        for (const nid of chain.nodeIds) {
+          controlValues.push(Math.min(1, (mVecs[nid]?.length() ?? 0) / modalAmpNorm));
+        }
+      } else if (viewMode === "fea_stress") {
+        const nCount = chain.nodeIds.length;
+        for (let i = 0; i < nCount; i++) {
+          const nid = chain.nodeIds[i];
+          if (i > 0 && i < nCount - 1) {
+            const sPrev = stressMap[chain.members[i - 1].id] ?? 0;
+            const sNext = stressMap[chain.members[i].id] ?? 0;
+            controlValues.push(0.5 * (sPrev + sNext));
+          } else if (i === 0) {
+            const sFirst = stressMap[chain.members[0].id] ?? 0;
+            controlValues.push(
+              fixedNodeIds.has(nid)
+                ? sFirst
+                : 0.5 * sFirst + 0.5 * (globalNodalStress[nid] ?? sFirst)
+            );
+          } else {
+            const sLast = stressMap[chain.members[chain.members.length - 1].id] ?? 0;
+            controlValues.push(
+              fixedNodeIds.has(nid)
+                ? sLast
+                : 0.5 * sLast + 0.5 * (globalNodalStress[nid] ?? sLast)
+            );
+          }
+        }
+      } else {
+        for (let i = 0; i < chain.nodeIds.length; i++) {
+          controlValues.push(0);
+        }
+      }
+
+      let matColor = new THREE.Color(0xffffff);
+      if (!useVertexColors) {
+        matColor = new THREE.Color(m.color_hex);
+        if (m.role === "brace") {
+          matColor = new THREE.Color("#38bdf8");
+        } else if (m.role === "gantry") {
+          matColor = m.material.includes("carbon")
+            ? new THREE.Color("#1f2937")
+            : new THREE.Color("#f59e0b");
+        }
       }
 
       const mat = new THREE.MeshStandardMaterial({
-        color,
-        metalness: m.material.includes("carbon") ? 0.15 : 0.55,
-        roughness: m.material.includes("carbon") ? 0.65 : 0.35,
+        color: matColor,
+        vertexColors: useVertexColors,
+        metalness: useVertexColors ? 0.25 : m.material.includes("carbon") ? 0.15 : 0.55,
+        roughness: useVertexColors ? 0.4 : m.material.includes("carbon") ? 0.65 : 0.35,
         transparent: frameOpacity < 1,
         opacity: frameOpacity,
       });
 
-      const mesh = new THREE.Mesh(geo, mat);
-      const p0 = viewMode === "fea_stress" ? deformedPos[m.start_id] : basePos[m.start_id];
-      const p1 = viewMode === "fea_stress" ? deformedPos[m.end_id] : basePos[m.end_id];
-      orientBeamMesh(mesh, p0, p1);
-      group.add(mesh);
+      if (chain.isRod) {
+        const geo = new THREE.CylinderGeometry(w * 0.5, w * 0.5, 1, 10, useVertexColors ? 6 : 1);
+        if (useVertexColors) {
+          applyRodGradientColors(geo, controlValues[0] ?? 0, controlValues[1] ?? controlValues[0] ?? 0);
+        }
+        const mesh = new THREE.Mesh(geo, mat);
+        const p0 = viewMode === "fea_stress" ? deformedPos[firstId] : basePos[firstId];
+        const p1 = viewMode === "fea_stress" ? deformedPos[lastId] : basePos[lastId];
+        orientBeamMesh(mesh, p0, p1);
+        group.add(mesh);
 
-      if (viewMode === "modal") {
-        stateRef.current.modalMeshes.push({ mesh, startId: m.start_id, endId: m.end_id });
+        if (viewMode === "modal") {
+          stateRef.current.modalMeshes.push({ mesh, startId: firstId, endId: lastId });
+        }
+      } else {
+        const baseFirst = basePos[firstId];
+        const baseLast = basePos[lastId];
+        const undeformedAxis = new THREE.Vector3().subVectors(baseLast, baseFirst);
+        if (undeformedAxis.lengthSq() > 1e-10) {
+          undeformedAxis.normalize();
+        } else {
+          undeformedAxis.set(0, 1, 0);
+        }
+
+        const fixedStart = fixedNodeIds.has(firstId);
+        const fixedEnd = fixedNodeIds.has(lastId);
+        const segmentsPerSpan = useVertexColors ? (chain.nodeIds.length >= 3 ? 8 : 6) : 1;
+        const controlPts = chain.nodeIds.map((nid) =>
+          (viewMode === "fea_stress" ? deformedPos[nid] || basePos[nid] : basePos[nid]).clone()
+        );
+
+        const geo = createContinuousBeamGeometry(
+          controlPts,
+          controlValues,
+          w,
+          h,
+          segmentsPerSpan,
+          useVertexColors,
+          undeformedAxis,
+          fixedStart,
+          fixedEnd
+        );
+        const mesh = new THREE.Mesh(geo, mat);
+        if (viewMode === "modal") {
+          mesh.frustumCulled = false;
+          stateRef.current.modalContinuousBeams.push({
+            geometry: geo,
+            nodeIds: chain.nodeIds,
+            controlPts,
+            controlValues,
+            width: w,
+            height: h,
+            segmentsPerSpan,
+            undeformedAxis,
+            fixedStart,
+            fixedEnd,
+          });
+        }
+        group.add(mesh);
+
+        // Continuous T-slot core accent strip on filled stationary frame extrusions (Assembly mode only)
+        if (fillingMat && m.role === "frame") {
+          fillingMatUsed = true;
+          const inlayGeoA = new THREE.BoxGeometry(w * 0.32, 0.96, h * 1.03);
+          const inlayA = new THREE.Mesh(inlayGeoA, fillingMat);
+          orientBeamMesh(inlayA, baseFirst, baseLast);
+          group.add(inlayA);
+
+          const inlayGeoB = new THREE.BoxGeometry(w * 1.03, 0.96, h * 0.32);
+          const inlayB = new THREE.Mesh(inlayGeoB, fillingMat);
+          orientBeamMesh(inlayB, baseFirst, baseLast);
+          group.add(inlayB);
+        }
       }
 
-      // Undeformed ghost reference in FEA / Modal mode
-      if (viewMode === "fea_stress" || viewMode === "modal") {
-        const lineGeo = new THREE.BufferGeometry().setFromPoints([basePos[m.start_id], basePos[m.end_id]]);
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.35 });
-        group.add(new THREE.Line(lineGeo, lineMat));
+      // Single clean undeformed ghost reference line per continuous beam in FEA / Modal mode
+      if (ghostLineMat) {
+        ghostLineMatUsed = true;
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([
+          basePos[firstId],
+          basePos[lastId],
+        ]);
+        group.add(new THREE.Line(lineGeo, ghostLineMat));
       }
+    }
+
+    if (fillingMat && !fillingMatUsed) {
+      fillingMat.dispose();
+    }
+    if (ghostLineMat && !ghostLineMatUsed) {
+      ghostLineMat.dispose();
     }
 
     // Foot anchor markers
     for (const n of geom.nodes) {
-      if (n.fixed) {
+      if (n.fixed && n.role !== "bed") {
         const pad = new THREE.Mesh(
           new THREE.CylinderGeometry(0.14, 0.17, 0.08, 12),
           new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.5 })
@@ -705,9 +1557,18 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // Assembly-only visual feedback: NEMA17 stepper motors at mount nodes & 3D structural panels
+    // Assembly-only visual feedback: NEMA17 stepper motors, gantry brackets & 3D structural panels
     if (viewMode === "assembly") {
-      // NEMA17 stepper motor blocks at every node with role === "mount" (2WD = 2 rear, AWD = all 4 corners)
+      const bracketInfo = geom.gantry_brackets;
+      const bracketColor = new THREE.Color(bracketInfo?.color_hex ?? "#94a3b8");
+      const bracketIsCnc = Boolean(bracketInfo?.cnc_machined);
+      const bracketMat = new THREE.MeshStandardMaterial({
+        color: bracketColor,
+        metalness: bracketIsCnc ? 0.78 : 0.22,
+        roughness: bracketIsCnc ? 0.24 : 0.48,
+      });
+
+      // NEMA17 stepper motor blocks & tinted motor-mount brackets at every node with role === "mount"
       const mountNodes = geom.nodes.filter((n) => n.role === "mount" && basePos[n.id]);
       if (mountNodes.length > 0) {
         const motorBodyGeo = new THREE.BoxGeometry(0.42, 0.38, 0.42);
@@ -716,6 +1577,7 @@ export const PrinterViewport: React.FC<Props> = ({
           metalness: 0.72,
           roughness: 0.32,
         });
+        const mountPlateGeo = new THREE.BoxGeometry(0.56, 0.085, 0.56);
         const motorCapGeo = new THREE.BoxGeometry(0.43, 0.045, 0.43);
         const motorCapMat = new THREE.MeshStandardMaterial({
           color: 0x94a3b8,
@@ -750,17 +1612,22 @@ export const PrinterViewport: React.FC<Props> = ({
           bodyMesh.position.y = -0.19;
           motorGroup.add(bodyMesh);
 
+          // Tinted motor mount bracket plate bridging the stepper & corner extrusion
+          const plateMesh = new THREE.Mesh(mountPlateGeo, bracketMat);
+          plateMesh.position.set(-inwardX * 0.35, 0.035, -inwardZ * 0.35);
+          motorGroup.add(plateMesh);
+
           const capMesh = new THREE.Mesh(motorCapGeo, motorCapMat);
           capMesh.position.y = 0.02;
           motorGroup.add(capMesh);
 
           const pulleyMesh = new THREE.Mesh(pulleyGeo, pulleyMat);
-          pulleyMesh.position.y = 0.11;
+          pulleyMesh.position.y = 0.13;
           motorGroup.add(pulleyMesh);
 
           if (bearingCapGeo && bearingCapMat) {
             const topBearing = new THREE.Mesh(bearingCapGeo, bearingCapMat);
-            topBearing.position.y = 0.2;
+            topBearing.position.y = 0.22;
             motorGroup.add(topBearing);
           }
 
@@ -768,18 +1635,220 @@ export const PrinterViewport: React.FC<Props> = ({
         }
       }
 
-      // Translucent / semi-opaque 3D structural panels on CoreXY Left, Right, and Rear bays
+      // XY-joint carriage bracket blocks (y_car_l / y_car_r) tinted with gantry_brackets.color_hex
+      const xyJointNodes = geom.nodes.filter(
+        (n) => (n.id === "y_car_l" || n.id === "y_car_r") && basePos[n.id]
+      );
+      if (xyJointNodes.length > 0) {
+        const xyJointGeo = new THREE.BoxGeometry(0.32, 0.24, 0.34);
+        for (const n of xyJointNodes) {
+          const jointMesh = new THREE.Mesh(xyJointGeo, bracketMat);
+          jointMesh.position.copy(basePos[n.id]);
+          group.add(jointMesh);
+        }
+      }
+
+      if (mountNodes.length === 0 && xyJointNodes.length === 0) {
+        bracketMat.dispose();
+      }
+
+      // Hardened-steel 3D linear rails bolted onto the chosen faces of X-gantry & CoreXY Y-rail beams
+      {
+        const lr = geom.linear_rails;
+        const xRailMount: XRailMountType =
+          lr?.x_rail_mount ??
+          sim.spec.gantry.x_rail_mount ??
+          (sim.spec.gantry.dual_x_rails ? "dual_top_bottom" : "front");
+        const yRailMount: YRailMountType =
+          lr?.y_rail_mount ?? sim.spec.gantry.y_rail_mount ?? "top";
+        const xRailProf = lr?.x_rail_profile ?? sim.spec.gantry.x_rail_profile ?? "mgn12_rail";
+        const yRailProf = lr?.y_rail_profile ?? sim.spec.gantry.y_rail_profile ?? "mgn9_rail";
+        const xRailW = Math.max(
+          (lr?.x_rail_width_mm ?? (xRailProf.includes("mgn9") ? 9.0 : 12.0)) * SCALE,
+          0.075
+        );
+        const xRailH = Math.max(
+          (lr?.x_rail_height_mm ?? (xRailProf.includes("mgn9") ? 6.5 : 8.0)) * SCALE,
+          0.055
+        );
+        const yRailW = Math.max(
+          (lr?.y_rail_width_mm ?? (yRailProf.includes("mgn9") ? 9.0 : 12.0)) * SCALE,
+          0.075
+        );
+        const yRailH = Math.max(
+          (lr?.y_rail_height_mm ?? (yRailProf.includes("mgn9") ? 6.5 : 8.0)) * SCALE,
+          0.055
+        );
+
+        const railSteelMat = new THREE.MeshStandardMaterial({
+          color: 0x8e9aa8,
+          metalness: 0.75,
+          roughness: 0.28,
+        });
+        const railEdgeMat = new THREE.LineBasicMaterial({
+          color: 0xdbeafe,
+          transparent: true,
+          opacity: 0.36,
+        });
+        let railMatUsed = false;
+
+        const addRailBar = (
+          geo: THREE.BoxGeometry,
+          edgesGeo: THREE.EdgesGeometry,
+          pos: THREE.Vector3
+        ) => {
+          railMatUsed = true;
+          const barMesh = new THREE.Mesh(geo, railSteelMat);
+          barMesh.position.copy(pos);
+          group.add(barMesh);
+          const outline = new THREE.LineSegments(edgesGeo, railEdgeMat);
+          outline.position.copy(pos);
+          group.add(outline);
+        };
+
+        // X gantry linear rail(s) on x_gantry_l + x_gantry_r (CoreXY & Cartesian)
+        const xGantryL = geom.members.find((m) => m.id === "x_gantry_l");
+        const xGantryR = geom.members.find((m) => m.id === "x_gantry_r");
+        if (xGantryL && xGantryR && basePos[xGantryL.start_id] && basePos[xGantryR.end_id]) {
+          const pL = basePos[xGantryL.start_id];
+          const pR = basePos[xGantryR.end_id];
+          const railLenX = Math.max(Math.abs(pR.x - pL.x) - 0.14, 0.15);
+          const beamCX = 0.5 * (pL.x + pR.x);
+          const beamCY = 0.5 * (pL.y + pR.y); // Three.js Y = CAD Z
+          const beamCZ = 0.5 * (pL.z + pR.z); // Three.js Z = -CAD Y
+          const beamHalfCadZ = 0.5 * Math.max(xGantryL.width_mm * SCALE, 0.06);
+          const beamHalfCadY = 0.5 * Math.max(xGantryL.height_mm * SCALE, 0.06);
+
+          if (xRailMount === "front") {
+            // CAD -Y face -> Three.js +Z face; wide face in CAD Z (Three.js Y), thickness in CAD -Y (Three.js +Z)
+            const xGeo = new THREE.BoxGeometry(railLenX, xRailW, xRailH);
+            const xEdges = new THREE.EdgesGeometry(xGeo);
+            addRailBar(
+              xGeo,
+              xEdges,
+              new THREE.Vector3(beamCX, beamCY, beamCZ + beamHalfCadY + xRailH * 0.5)
+            );
+          } else if (xRailMount === "top") {
+            // CAD +Z face -> Three.js +Y face; wide face in CAD Y (Three.js Z), thickness in CAD +Z (Three.js +Y)
+            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
+            const xEdges = new THREE.EdgesGeometry(xGeo);
+            addRailBar(
+              xGeo,
+              xEdges,
+              new THREE.Vector3(beamCX, beamCY + beamHalfCadZ + xRailH * 0.5, beamCZ)
+            );
+          } else if (xRailMount === "bottom") {
+            // CAD -Z face -> Three.js -Y face
+            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
+            const xEdges = new THREE.EdgesGeometry(xGeo);
+            addRailBar(
+              xGeo,
+              xEdges,
+              new THREE.Vector3(beamCX, beamCY - beamHalfCadZ - xRailH * 0.5, beamCZ)
+            );
+          } else if (xRailMount === "dual_top_bottom") {
+            // Dual rails on both +Z (+Y Three.js) and -Z (-Y Three.js) faces
+            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
+            const xEdges = new THREE.EdgesGeometry(xGeo);
+            addRailBar(
+              xGeo,
+              xEdges,
+              new THREE.Vector3(beamCX, beamCY + beamHalfCadZ + xRailH * 0.5, beamCZ)
+            );
+            addRailBar(
+              xGeo,
+              xEdges,
+              new THREE.Vector3(beamCX, beamCY - beamHalfCadZ - xRailH * 0.5, beamCZ)
+            );
+          }
+        }
+
+        // CoreXY Y-axis linear rails on left (x=0) and right (x=W) Y-rail extrusions
+        if (geom.architecture === "corexy") {
+          const yRailLF = geom.members.find((m) => m.id === "y_rail_l_f");
+          const yRailRF = geom.members.find((m) => m.id === "y_rail_r_f");
+          const pLF = basePos["g_fl"];
+          const pLR = basePos["g_rl"];
+          const pRF = basePos["g_fr"];
+          const pRR = basePos["g_rr"];
+          if (yRailLF && yRailRF && pLF && pLR && pRF && pRR) {
+            const railLenY = Math.max(Math.abs(pLR.z - pLF.z) - 0.16, 0.15);
+            const beamHalfCadX = 0.5 * Math.max(yRailLF.width_mm * SCALE, 0.06);
+            const beamHalfCadZ = 0.5 * Math.max(yRailLF.height_mm * SCALE, 0.06);
+            const leftCenter = new THREE.Vector3(
+              pLF.x,
+              0.5 * (pLF.y + pLR.y),
+              0.5 * (pLF.z + pLR.z)
+            );
+            const rightCenter = new THREE.Vector3(
+              pRF.x,
+              0.5 * (pRF.y + pRR.y),
+              0.5 * (pRF.z + pRR.z)
+            );
+
+            if (yRailMount === "top") {
+              const yGeo = new THREE.BoxGeometry(yRailW, yRailH, railLenY);
+              const yEdges = new THREE.EdgesGeometry(yGeo);
+              addRailBar(
+                yGeo,
+                yEdges,
+                leftCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0))
+              );
+              addRailBar(
+                yGeo,
+                yEdges,
+                rightCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0))
+              );
+            } else if (yRailMount === "bottom") {
+              const yGeo = new THREE.BoxGeometry(yRailW, yRailH, railLenY);
+              const yEdges = new THREE.EdgesGeometry(yGeo);
+              addRailBar(
+                yGeo,
+                yEdges,
+                leftCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0))
+              );
+              addRailBar(
+                yGeo,
+                yEdges,
+                rightCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0))
+              );
+            } else if (yRailMount === "inner") {
+              // +X (inner) face of left Y extrusion and -X (inner) face of right Y extrusion
+              const yGeo = new THREE.BoxGeometry(yRailH, yRailW, railLenY);
+              const yEdges = new THREE.EdgesGeometry(yGeo);
+              addRailBar(
+                yGeo,
+                yEdges,
+                leftCenter.clone().add(new THREE.Vector3(beamHalfCadX + yRailH * 0.5, 0, 0))
+              );
+              addRailBar(
+                yGeo,
+                yEdges,
+                rightCenter.clone().add(new THREE.Vector3(-(beamHalfCadX + yRailH * 0.5), 0, 0))
+              );
+            }
+          }
+        }
+
+        if (!railMatUsed) {
+          railSteelMat.dispose();
+          railEdgeMat.dispose();
+        }
+      }
+
+      // Translucent / semi-opaque 3D structural panels mounted flush on outer extrusion faces (CoreXY Left, Right, Rear)
       if (geom.architecture === "corexy" && geom.panels?.enabled) {
         const panels = geom.panels;
         const [fw, fd, fh] = geom.frame_dims_mm;
         const frameMember = geom.members.find((m) => m.role === "frame");
         const extrusionHalfMm = (frameMember?.width_mm ?? 20) * 0.5;
-        const insetMm = extrusionHalfMm + 3;
-
-        const spanX = Math.max(fw - 2 * insetMm, 20) * SCALE;
-        const spanY = Math.max(fd - 2 * insetMm, 20) * SCALE;
-        const spanZ = Math.max(fh - 2 * insetMm, 20) * SCALE;
+        const extHalf = extrusionHalfMm * SCALE;
         const tScene = Math.max((panels.thickness_mm || 3) * SCALE, 0.024);
+
+        // Full outer-perimeter panel dimensions covering the extrusion T-slot faces
+        const spanX = (fw + 2 * extrusionHalfMm) * SCALE;
+        const spanY = (fd + 2 * extrusionHalfMm) * SCALE;
+        const spanZ = (fh + 2 * extrusionHalfMm) * SCALE;
 
         const isTransparentSheet =
           panels.material_id === "acrylic_pmma" || panels.material_id === "polycarbonate";
@@ -791,7 +1860,7 @@ export const PrinterViewport: React.FC<Props> = ({
         const panelMat = new THREE.MeshStandardMaterial({
           color: panelColor,
           transparent: true,
-          opacity: isTransparentSheet ? 0.16 : 0.34,
+          opacity: isTransparentSheet ? 0.16 : 0.32,
           depthWrite: false,
           roughness: isTransparentSheet ? 0.14 : 0.38,
           metalness: isTransparentSheet ? 0.1 : 0.42,
@@ -809,9 +1878,18 @@ export const PrinterViewport: React.FC<Props> = ({
         const sideEdgesGeo = new THREE.EdgesGeometry(sidePanelGeo);
         const rearEdgesGeo = new THREE.EdgesGeometry(rearPanelGeo);
 
-        const leftPos = toThree([0, fd * 0.5, fh * 0.5], cx, cy);
-        const rightPos = toThree([fw, fd * 0.5, fh * 0.5], cx, cy);
-        const rearPos = toThree([fw * 0.5, fd, fh * 0.5], cx, cy);
+        // Mount flush on the OUTSIDE face of Left (-X), Right (+X), and Rear (+Y CAD = -Z Three.js) extrusions
+        const leftCenter = toThree([0, fd * 0.5, fh * 0.5], cx, cy);
+        const rightCenter = toThree([fw, fd * 0.5, fh * 0.5], cx, cy);
+        const rearCenter = toThree([fw * 0.5, fd, fh * 0.5], cx, cy);
+
+        const leftPos = leftCenter.clone().add(new THREE.Vector3(-(extHalf + tScene * 0.5), 0, 0));
+        const rightPos = rightCenter.clone().add(new THREE.Vector3(extHalf + tScene * 0.5, 0, 0));
+        const rearPos = rearCenter.clone().add(new THREE.Vector3(0, 0, -(extHalf + tScene * 0.5)));
+
+        const leftBoltX = leftPos.x - tScene * 0.55;
+        const rightBoltX = rightPos.x + tScene * 0.55;
+        const rearBoltZ = rearPos.z - tScene * 0.55;
 
         const panelSpecs: Array<{
           geo: THREE.BoxGeometry;
@@ -834,47 +1912,56 @@ export const PrinterViewport: React.FC<Props> = ({
           group.add(outline);
         }
 
-        // Subtle metallic perimeter bolt dots when bolted structural mounting is active
+        // Metallic perimeter bolt heads aligned directly on the extrusion T-slot centerlines
         if (isBoltedStructural) {
           const boltCoords: THREE.Vector3[] = [];
-          const margin = 0.12;
-          const steps = 4;
+          const pBot = toThree([0, 0, 0], cx, cy);
+          const pTop = toThree([fw, fd, fh], cx, cy);
+          const yBot = pBot.y;
+          const yTop = pTop.y;
+          const xMin = pBot.x;
+          const xMax = pTop.x;
+          const zFront = pBot.z; // CAD y = 0 (front columns)
+          const zRear = pTop.z;  // CAD y = fd (rear columns)
+          const steps = 5;
 
-          const addSideBolts = (xPos: number) => {
-            const halfY = Math.max(spanZ * 0.5 - margin, 0.1);
-            const halfZ = Math.max(spanY * 0.5 - margin, 0.1);
+          const addSideBolts = (xFace: number) => {
             for (let i = 0; i <= steps; i++) {
-              const frac = -1 + (2 * i) / steps;
-              // Top & bottom edges
-              boltCoords.push(new THREE.Vector3(xPos, leftPos.y + halfY, leftPos.z + frac * halfZ));
-              boltCoords.push(new THREE.Vector3(xPos, leftPos.y - halfY, leftPos.z + frac * halfZ));
-              // Left & right vertical edges (skip corners)
+              const t = i / steps;
+              const zAlong = zFront + t * (zRear - zFront);
+              const yAlong = yBot + t * (yTop - yBot);
+              // Bottom & top horizontal extrusion T-slot centerlines
+              boltCoords.push(new THREE.Vector3(xFace, yBot, zAlong));
+              boltCoords.push(new THREE.Vector3(xFace, yTop, zAlong));
+              // Front & rear vertical column T-slot centerlines (skip corners)
               if (i > 0 && i < steps) {
-                boltCoords.push(new THREE.Vector3(xPos, leftPos.y + frac * halfY, leftPos.z + halfZ));
-                boltCoords.push(new THREE.Vector3(xPos, leftPos.y + frac * halfY, leftPos.z - halfZ));
+                boltCoords.push(new THREE.Vector3(xFace, yAlong, zFront));
+                boltCoords.push(new THREE.Vector3(xFace, yAlong, zRear));
               }
             }
           };
 
-          const addRearBolts = (zPos: number) => {
-            const halfX = Math.max(spanX * 0.5 - margin, 0.1);
-            const halfY = Math.max(spanZ * 0.5 - margin, 0.1);
+          const addRearBolts = (zFace: number) => {
             for (let i = 0; i <= steps; i++) {
-              const frac = -1 + (2 * i) / steps;
-              boltCoords.push(new THREE.Vector3(rearPos.x + frac * halfX, rearPos.y + halfY, zPos));
-              boltCoords.push(new THREE.Vector3(rearPos.x + frac * halfX, rearPos.y - halfY, zPos));
+              const t = i / steps;
+              const xAlong = xMin + t * (xMax - xMin);
+              const yAlong = yBot + t * (yTop - yBot);
+              // Base rear & top rear horizontal extrusion centerlines
+              boltCoords.push(new THREE.Vector3(xAlong, yBot, zFace));
+              boltCoords.push(new THREE.Vector3(xAlong, yTop, zFace));
+              // Left & right rear vertical column centerlines (skip corners)
               if (i > 0 && i < steps) {
-                boltCoords.push(new THREE.Vector3(rearPos.x + halfX, rearPos.y + frac * halfY, zPos));
-                boltCoords.push(new THREE.Vector3(rearPos.x - halfX, rearPos.y + frac * halfY, zPos));
+                boltCoords.push(new THREE.Vector3(xMin, yAlong, zFace));
+                boltCoords.push(new THREE.Vector3(xMax, yAlong, zFace));
               }
             }
           };
 
-          addSideBolts(leftPos.x);
-          addSideBolts(rightPos.x);
-          addRearBolts(rearPos.z);
+          addSideBolts(leftBoltX);
+          addSideBolts(rightBoltX);
+          addRearBolts(rearBoltZ);
 
-          const boltGeo = new THREE.SphereGeometry(0.032, 8, 8);
+          const boltGeo = new THREE.SphereGeometry(0.036, 8, 8);
           const boltMat = new THREE.MeshStandardMaterial({
             color: 0xe2e8f0,
             metalness: 0.85,
@@ -891,8 +1978,7 @@ export const PrinterViewport: React.FC<Props> = ({
           group.add(boltInst);
         }
 
-        // Bright cyan/metallic gantry-line bolt dots along the fixed gantry height (z = z_gantry)
-        // across Left, Right, and Rear panels when bolted directly to the fixed gantry beams
+        // Bright cyan gantry-line bolt heads aligned directly on the fixed Y-rail & rear gantry extrusion T-slots
         if (panels.bolted_to_gantry) {
           const gantryNode =
             geom.nodes.find((n) => n.id === "g_rl") ??
@@ -900,19 +1986,24 @@ export const PrinterViewport: React.FC<Props> = ({
             geom.nodes.find((n) => n.role === "gantry");
           if (gantryNode) {
             const gantryY = toThree(gantryNode.position_mm, cx, cy).y;
-            const margin = 0.14;
-            const halfZ = Math.max(spanY * 0.5 - margin, 0.1);
-            const halfX = Math.max(spanX * 0.5 - margin, 0.1);
-            const gantrySteps = 6;
+            const pBot = toThree([0, 0, 0], cx, cy);
+            const pTop = toThree([fw, fd, fh], cx, cy);
+            const xMin = pBot.x;
+            const xMax = pTop.x;
+            const zFront = pBot.z;
+            const zRear = pTop.z;
+            const gantrySteps = 5;
             const gantryBoltCoords: THREE.Vector3[] = [];
 
             for (let i = 0; i <= gantrySteps; i++) {
-              const frac = -1 + (2 * i) / gantrySteps;
-              // Left & Right side panels along the fixed Y-rail beams
-              gantryBoltCoords.push(new THREE.Vector3(leftPos.x, gantryY, leftPos.z + frac * halfZ));
-              gantryBoltCoords.push(new THREE.Vector3(rightPos.x, gantryY, rightPos.z + frac * halfZ));
-              // Rear panel along the fixed rear gantry / motor extrusion
-              gantryBoltCoords.push(new THREE.Vector3(rearPos.x + frac * halfX, gantryY, rearPos.z));
+              const t = i / gantrySteps;
+              const zAlong = zFront + t * (zRear - zFront);
+              const xAlong = xMin + t * (xMax - xMin);
+              // Left & Right side panels bolted along the fixed Y-rail extrusions
+              gantryBoltCoords.push(new THREE.Vector3(leftBoltX, gantryY, zAlong));
+              gantryBoltCoords.push(new THREE.Vector3(rightBoltX, gantryY, zAlong));
+              // Rear panel bolted along the fixed rear gantry motor extrusion
+              gantryBoltCoords.push(new THREE.Vector3(xAlong, gantryY, rearBoltZ));
             }
 
             const gantryBoltRadius = Math.max(0.044, tScene * 0.65);
@@ -942,7 +2033,7 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // Heated bed plate
+    // Heated bed plate (deforms with bed_surface in Frame FEA & animates in Modal mode)
     const [bedX, bedY] = geom.bed_size_mm;
     const bedGeo = new THREE.BoxGeometry(bedX * SCALE, 0.08, bedY * SCALE);
     const bedMat = new THREE.MeshStandardMaterial({
@@ -950,12 +2041,42 @@ export const PrinterViewport: React.FC<Props> = ({
       metalness: 0.4,
       roughness: 0.45,
       transparent: viewMode === "fea_stress" || viewMode === "modal",
-      opacity: viewMode === "fea_stress" || viewMode === "modal" ? 0.35 : 0.95,
+      opacity: viewMode === "fea_stress" || viewMode === "modal" ? 0.42 : 0.95,
     });
     const bedMesh = new THREE.Mesh(bedGeo, bedMat);
-    bedMesh.position.copy(toThree(geom.bed_center_mm, cx, cy));
-    bedMesh.position.y -= 0.04;
+    const bedBaseCenter = toThree(geom.bed_center_mm, cx, cy);
+    bedBaseCenter.y -= 0.04;
+    const bedNodeId = geom.bed_node_id || "bed_surface";
+    const bedNodeBase = basePos[bedNodeId];
+    const bedVisualOffset = bedNodeBase
+      ? bedBaseCenter.clone().sub(bedNodeBase)
+      : new THREE.Vector3(0, -0.04, 0);
+
+    if (viewMode === "fea_stress" && deformedPos[bedNodeId]) {
+      bedMesh.position.copy(deformedPos[bedNodeId]).add(bedVisualOffset);
+    } else {
+      bedMesh.position.copy(bedBaseCenter);
+    }
+    if (viewMode === "modal" && bedNodeBase) {
+      bedMesh.frustumCulled = false;
+      stateRef.current.modalBedMesh = bedMesh;
+      stateRef.current.modalBedNodeId = bedNodeId;
+      stateRef.current.modalBedOffset.copy(bedVisualOffset);
+    }
     group.add(bedMesh);
+
+    // Subtle undeformed bed plate ghost reference in FEA & Modal modes to visualize bed sway/motion
+    if ((viewMode === "fea_stress" || viewMode === "modal") && bedNodeBase) {
+      const bedGhostEdges = new THREE.EdgesGeometry(bedGeo);
+      const bedGhostMat = new THREE.LineBasicMaterial({
+        color: 0x475569,
+        transparent: true,
+        opacity: 0.35,
+      });
+      const bedGhost = new THREE.LineSegments(bedGhostEdges, bedGhostMat);
+      bedGhost.position.copy(bedBaseCenter);
+      group.add(bedGhost);
+    }
 
     // Build volume wireframe
     const [bx, by, bz] = geom.build_volume_mm;
@@ -1012,17 +2133,23 @@ export const PrinterViewport: React.FC<Props> = ({
 
     if (isCogNozMode && thAnchor && cogAnchor && nozAnchor) {
       const mountMatId = geom.mount_material ?? sim.spec.toolhead.mount_material ?? "abs_printed";
-      const carriageColor =
-        mountMatId === "aluminum_6061_t6"
-          ? 0xcbd5e1
-          : mountMatId === "pa12_cf_printed"
-            ? 0x475569
-            : 0xe63946;
+      const isAluminumMount =
+        mountMatId === "aluminum_6061_t6" || mountMatId === "aluminum_7075_t6";
+      const mountColorMap: Record<string, number> = {
+        abs_printed: 0xe63946,
+        pet_cf_printed: 0x3b4252,
+        pa12_cf_printed: 0x475569,
+        ppa_cf_printed: 0x2d333b,
+        pps_cf_printed: 0x23272e,
+        aluminum_6061_t6: 0xc6d0db,
+        aluminum_7075_t6: 0xd1dae6,
+      };
+      const carriageColor = mountColorMap[mountMatId] ?? 0xe63946;
       const strutColor =
         viewMode === "assembly"
-          ? mountMatId === "aluminum_6061_t6"
+          ? isAluminumMount
             ? 0xe2e8f0
-            : mountMatId === "pa12_cf_printed"
+            : mountMatId.includes("_cf_")
               ? 0x64748b
               : 0x94a3b8
           : 0x38bdf8;
@@ -1033,8 +2160,8 @@ export const PrinterViewport: React.FC<Props> = ({
         new THREE.BoxGeometry(0.42, 0.28, 0.30),
         new THREE.MeshStandardMaterial({
           color: carriageColor,
-          metalness: mountMatId === "aluminum_6061_t6" ? 0.72 : 0.28,
-          roughness: mountMatId === "aluminum_6061_t6" ? 0.26 : 0.45,
+          metalness: isAluminumMount ? 0.72 : 0.28,
+          roughness: isAluminumMount ? 0.26 : 0.45,
           transparent: viewMode !== "assembly",
           opacity: viewMode === "assembly" ? 0.92 : 0.55,
         })
@@ -1235,6 +2362,33 @@ export const PrinterViewport: React.FC<Props> = ({
 
   const maxLayers = Math.max(0, (sim?.virtual_print.layer_count ?? 1) - 1);
   const activeMode = sim?.modal_fea.modes[selectedModeIdx];
+
+  const xRailMountHud: XRailMountType =
+    sim?.geometry.linear_rails?.x_rail_mount ??
+    sim?.spec.gantry.x_rail_mount ??
+    (sim?.spec.gantry.dual_x_rails ? "dual_top_bottom" : "front");
+  const yRailMountHud: YRailMountType =
+    sim?.geometry.linear_rails?.y_rail_mount ?? sim?.spec.gantry.y_rail_mount ?? "top";
+  const isCoreXyHud = sim?.geometry.architecture === "corexy";
+  const X_MOUNT_HUD_LABELS: Record<XRailMountType, string> = {
+    front: "Front",
+    top: "Top",
+    bottom: "Bottom",
+    dual_top_bottom: "Dual Top+Bot",
+  };
+  const Y_MOUNT_HUD_LABELS: Record<YRailMountType, string> = {
+    top: "Top",
+    inner: "Inner",
+    bottom: "Bottom",
+  };
+  const railHudBadgeText =
+    sim &&
+    sim.geometry.architecture !== "delta" &&
+    (xRailMountHud !== "front" || (isCoreXyHud && yRailMountHud !== "top"))
+      ? isCoreXyHud
+        ? `X ${X_MOUNT_HUD_LABELS[xRailMountHud]} · Y ${Y_MOUNT_HUD_LABELS[yRailMountHud]}`
+        : `X ${X_MOUNT_HUD_LABELS[xRailMountHud]}`
+      : null;
 
   return (
     <div className="viewport-wrap">
@@ -1486,6 +2640,35 @@ export const PrinterViewport: React.FC<Props> = ({
             <span>
               <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle Tip
             </span>
+            {sim?.geometry.gantry_brackets && (
+              <span className="hud-inline-badge">
+                <span
+                  className="swatch-dot"
+                  style={{ background: sim.geometry.gantry_brackets.color_hex }}
+                />
+                Brackets:{" "}
+                <strong style={{ color: "var(--text)" }}>
+                  {sim.geometry.gantry_brackets.short_name}
+                </strong>
+              </span>
+            )}
+            {sim?.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
+              <span className="hud-fill-badge">
+                <span
+                  className="swatch-dot"
+                  style={{ background: sim.geometry.extrusion_filling.color_hex }}
+                />
+                Fill: <strong>{sim.geometry.extrusion_filling.short_name}</strong> (+
+                {sim.geometry.extrusion_filling.added_mass_kg.toFixed(1)} kg, ζ=
+                {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
+              </span>
+            )}
+            {railHudBadgeText && (
+              <span className="hud-fill-badge">
+                <span className="swatch-dot" style={{ background: "#8e9aa8" }} />
+                Rails: <strong>{railHudBadgeText}</strong>
+              </span>
+            )}
             <span>|</span>
             <span>Drag to orbit • Scroll to zoom</span>
           </div>
@@ -1504,6 +2687,20 @@ export const PrinterViewport: React.FC<Props> = ({
                 {activeMode.toolhead_participation_xyz.map((v) => `${Math.round(v * 100)}%`).join(" / ")}
               </strong>
             </span>
+            {sim?.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
+              <>
+                <span style={{ color: "var(--muted)" }}>|</span>
+                <span className="hud-fill-badge">
+                  <span
+                    className="swatch-dot"
+                    style={{ background: sim.geometry.extrusion_filling.color_hex }}
+                  />
+                  Fill: <strong>{sim.geometry.extrusion_filling.short_name}</strong> (+
+                  {sim.geometry.extrusion_filling.added_mass_kg.toFixed(1)} kg, ζ=
+                  {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
+                </span>
+              </>
+            )}
           </div>
         )}
       </div>
