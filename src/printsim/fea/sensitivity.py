@@ -31,9 +31,9 @@ from printsim.fea.beam3d import (
 )
 from printsim.fea.modal import ModalResult
 from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
-from printsim.fea.solver import StaticFEAResult, _build_factorized_solver
+from printsim.fea.solver import StaticFEAResult, _build_factorized_solver, classify_part_group
 from printsim.geometry.builder import AssemblyModel, StructuralMember
-from printsim.schema import EXTRUSION_FILLINGS, get_material
+from printsim.schema import EXTRUSION_FILLINGS, PrinterSpec, get_material
 
 
 @dataclass
@@ -50,6 +50,7 @@ class SensitivityReport:
     lumped_mass_sensitivities: dict[str, dict[str, Any]] = field(default_factory=dict)
     top_stiffen_targets: list[dict[str, Any]] = field(default_factory=list)
     top_lighten_targets: list[dict[str, Any]] = field(default_factory=list)
+    summary_diagnosis: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +64,7 @@ class SensitivityReport:
             "lumped_mass_sensitivities": self.lumped_mass_sensitivities,
             "top_stiffen_targets": self.top_stiffen_targets,
             "top_lighten_targets": self.top_lighten_targets,
+            "summary_diagnosis": self.summary_diagnosis,
         }
 
 
@@ -179,30 +181,205 @@ def _member_mass_and_cost(
     return m_exact, m_ref, m_ref * cost_kg, cost_kg
 
 
-def _stiffen_hint(entry_id: str, role: str) -> str:
-    if role == "toolhead" or entry_id in ("toolhead_mount", "nozzle_stem"):
-        return "Upgrade toolhead carriage mount from polymer to CNC Al 6061 / PPA-CF or shorten nozzle overhang."
-    if role == "rail":
-        return "Upgrade linear rail profile (e.g. MGN9 -> MGN12/15) or bolt structural side panels to Y-rail extrusion."
-    if role == "panel" or entry_id.startswith("bay_"):
-        return "Increase panel thickness (4-5mm) or switch to bolted aluminum_5052_sheet / carbon_fiber_plate."
-    if role == "brace":
-        return "Upgrade diagonal truss brace cross-section or switch to full_truss bracing."
-    if role == "gantry":
-        return "Step up X-gantry beam section (e.g. 2020 -> 2040/cf_tube) or add dual top+bottom X rails."
-    return "Step up frame extrusion profile (2020 -> 3030), add diagonal bracing, or bolt structural panels."
+def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> str:
+    if spec is None:
+        if role == "toolhead" or group_id == "toolhead_mount":
+            return "Upgrade toolhead carriage mount from polymer to CNC Al 6061 / PPA-CF or shorten nozzle overhang."
+        if role == "rail" or group_id == "y_axis_rail_beams":
+            return "Upgrade linear rail profile (e.g. MGN9 -> MGN12/15) or bolt structural side panels to Y-rail extrusion."
+        if role == "panel" or group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
+            return "Increase panel thickness (4–5 mm) or switch to bolted Aluminum 5052 / Carbon Fiber Plate."
+        if role == "brace" or group_id == "frame_bracing":
+            return "Upgrade diagonal truss brace cross-section or switch to full_truss bracing."
+        if role == "gantry" or group_id == "x_gantry_beam":
+            return "Step up X-gantry beam section (2020 -> 2040/CF tube) or add dual top+bottom X rails."
+        return "Step up frame extrusion profile (2020 -> 3030), add diagonal bracing, or bolt structural panels."
+
+    prof_short = spec.frame.profile.replace("extrusion_", "")
+    next_prof = {
+        "1515": "2020 / 3030",
+        "2020": "3030",
+        "2040": "3030 / 4040",
+        "3030": "4040",
+    }.get(prof_short, "larger section")
+
+    if group_id in (
+        "front_frame_columns",
+        "rear_frame_columns",
+        "frame_columns",
+        "frame_perimeter_beams",
+    ):
+        if spec.architecture == "corexy":
+            if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
+                return (
+                    f"Switch Panel Mounting -> Bolted Structural (4 mm Aluminum 5052), "
+                    f"or upgrade Frame Profile {prof_short} -> {next_prof}"
+                )
+            if (
+                spec.frame.panel_material not in ("aluminum_5052_sheet", "carbon_fiber_plate")
+                or spec.frame.panel_thickness_mm < 4.0
+            ):
+                return (
+                    f"Upgrade Structural Panels -> 4–5 mm Aluminum 5052 (bolted), "
+                    f"or upgrade Frame Profile {prof_short} -> {next_prof}"
+                )
+            parts: list[str] = []
+            if prof_short in ("1515", "2020", "2040"):
+                parts.append(f"Upgrade Frame Profile {prof_short} -> {next_prof}")
+            if spec.frame.extrusion_filling not in ("epoxy_granite", "uhpc_grout"):
+                parts.append("add Epoxy Granite / UHPC cavity fill")
+            if spec.frame.corner_joint_type != "corner_cube":
+                parts.append("switch Corner Joints -> Corner Cube")
+            return ", ".join(parts) if parts else "Add full_truss diagonal bracing or step up to 4040 extrusions."
+        if spec.architecture == "cartesian_bedslinger":
+            if spec.frame.bracing != "full_truss":
+                return (
+                    f"Add Diagonal Portal Bracing (rear_cross / full_truss) "
+                    f"or upgrade Frame Profile {prof_short} -> {next_prof}."
+                )
+            return f"Upgrade Frame Profile {prof_short} -> {next_prof} or add Epoxy Granite cavity fill."
+        return f"Upgrade Frame Profile {prof_short} -> {next_prof} or fill tower cavities with Epoxy Granite / UHPC."
+
+    if group_id == "z_gantry_uprights":
+        if spec.frame.bracing != "full_truss":
+            return (
+                f"Add Diagonal Portal Bracing (rear_cross / full_truss) "
+                f"or upgrade Z-Upright Profile {prof_short} -> {next_prof}."
+            )
+        return f"Upgrade Z-Upright Profile {prof_short} -> {next_prof}, switch Corner Joints -> Corner Cube, or add Epoxy Granite fill."
+
+    if group_id == "delta_towers":
+        if spec.frame.bracing != "full_truss":
+            return f"Upgrade Delta Tower Profile {prof_short} -> {next_prof} and enable full_truss perimeter bracing."
+        return f"Upgrade Delta Tower Profile {prof_short} -> {next_prof} or fill tower extrusions with Epoxy Granite / UHPC."
+
+    if group_id == "delta_arms":
+        return "Upgrade diagonal delta arms to larger-OD Carbon Fiber tubes, shorten arm length, or lighten the effector."
+
+    if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels") or role == "panel":
+        if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
+            return "Switch Panel Mounting -> Bolted Structural (4–5 mm Aluminum 5052 or Carbon Fiber Plate)."
+        if (
+            spec.frame.panel_material not in ("aluminum_5052_sheet", "carbon_fiber_plate")
+            or spec.frame.panel_thickness_mm < 4.0
+        ):
+            return "Upgrade Panel Material -> 4–5 mm Aluminum 5052 Sheet or Carbon Fiber Plate (bolted)."
+        return "Step up panel thickness to 5 mm or switch to Carbon Fiber Plate bolted directly to frame & gantry."
+
+    if group_id == "y_axis_rail_beams" or role == "rail":
+        if spec.architecture == "corexy" and not spec.panels_bolted_to_gantry_effective and not spec.is_flying_gantry:
+            return (
+                "Bolt 4 mm Aluminum 5052 structural panels to the Y-rail extrusions, "
+                "or upgrade Y-rail to MGN12/MGN15 (inner mount)."
+            )
+        if spec.gantry.y_rail_profile in ("mgn7_rail", "mgn9_rail") or spec.gantry.y_rail_mount != "inner":
+            return "Upgrade Y-axis rail to MGN12/MGN15, switch Y-Rail Mount -> inner, or step Frame Profile -> 3030."
+        return "Upgrade gantry XY brackets to CNC Aluminum 6061, use MGN15 Y-rails, or step Frame Profile -> 3030."
+
+    if group_id == "x_gantry_beam" or role == "gantry":
+        if not spec.gantry.effective_dual_x_rails:
+            return (
+                "Switch X-Rail Mount -> dual_top_bottom, upgrade X-Gantry Beam to Carbon Fiber Tube / 2040, "
+                "or lighten the toolhead."
+            )
+        return "Step up X-beam section (e.g., 2040 or larger CF tube), use H-long Z1/ZA rail block, or cut toolhead mass."
+
+    if group_id == "toolhead_mount" or role == "toolhead":
+        if spec.architecture == "delta":
+            if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
+                return (
+                    f"Upgrade Effector Mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
+                    "and shorten nozzle/CoG overhang."
+                )
+            return "Shorten effector nozzle/CoG overhang or lighten the hotend & cooling shroud."
+        if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
+            return (
+                f"Upgrade Toolhead Mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
+                "use H-long Z1/ZA rail block, and shorten nozzle overhang."
+            )
+        return "Shorten toolhead CoG / nozzle Z overhang, upgrade rail carriage to H-long ZA preload, or use dual_top_bottom X rails."
+
+    if group_id == "bed_support" or role == "bed":
+        if spec.architecture == "corexy" and spec.bed.z_drive != "leadscrew_triple":
+            return "Switch Z Drive -> Triple Leadscrew (leadscrew_triple) or stiffen bed plate (8–10 mm Cast Aluminum)."
+        if spec.architecture == "cartesian_bedslinger":
+            return "Use a stiffer Y-bed carriage frame, upgrade to 9 mm GT2 Y-belt, or step up cast bed plate thickness."
+        return "Use 8–10 mm Cast MIC-6 Aluminum bed plate, shorter bed support arms, or stiffer rear Z-rail extrusions."
+
+    if group_id == "frame_bracing" or role == "brace":
+        if spec.frame.bracing != "full_truss":
+            return "Switch Frame Bracing -> full_truss (or rear_cross) with steel/carbon diagonal rods."
+        return "Upgrade diagonal brace profile or combine bracing with bolted 4 mm Aluminum 5052 structural panels."
+
+    return f"Upgrade {prof_short} extrusion profile, add diagonal bracing, or bolt structural Aluminum 5052 panels."
 
 
-def _lighten_hint(entry_id: str, role: str) -> str:
-    if role in ("cog", "toolhead", "nozzle") or "toolhead" in entry_id:
-        return "Reduce moving toolhead mass (compact direct-drive extruder, CPAP remote cooling, lighter hotend)."
-    if role == "gantry" or "x_gantry" in entry_id:
-        return "Switch moving X-gantry beam to roll-wrapped carbon_fiber_tube or hollow lighter extrusion."
-    if role == "rail":
+def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
+    if comp_pct >= 1.5 and est_hz_gain >= 0.4:
+        if group_id in ("front_frame_columns", "rear_frame_columns", "frame_columns"):
+            return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex & controls frame sway (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "z_gantry_uprights":
+            return f"Drives portal bending in Y and carries {comp_pct:.0f}% of toolhead flex (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "delta_arms":
+            return f"Carries {comp_pct:.0f}% of effector-to-frame flex & drives primary resonance (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "y_axis_rail_beams":
+            return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex along Y & supports gantry inertia (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "x_gantry_beam":
+            return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex under X/Y acceleration (+{est_hz_gain:.1f} Hz potential)"
+        if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
+            return f"Acts as a structural shear diaphragm carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
+        return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex & boosts structural resonance (+{est_hz_gain:.1f} Hz potential)"
+    if comp_pct >= 1.5:
+        if group_id == "toolhead_mount":
+            return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex via carriage pitch & nozzle overhang"
+        return f"Carries {comp_pct:.0f}% of static nozzle-to-bed flex under peak acceleration"
+    if est_hz_gain >= 0.3:
+        return f"Strongly participates in the fundamental vibration mode (+{est_hz_gain:.1f} Hz potential for +50% stiffness)"
+    return "Contributes structural stiffness along the nozzle-to-bed load path"
+
+
+def _lighten_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> str:
+    if role in ("cog", "toolhead", "nozzle") or group_id == "toolhead_assembly":
+        return "Reduce moving toolhead mass (compact direct-drive extruder, remote CPAP cooling, lighter hotend)."
+    if group_id == "x_gantry_beam" or (role == "gantry" and "x_gantry" in group_id):
+        if spec is not None and spec.gantry.x_beam_material == "carbon_fiber_tube":
+            return "Trim X-gantry hardware weight, use a hollow thin-wall CF tube, or match rail size (MGN9 vs MGN12)."
+        return "Switch moving X-gantry beam from aluminum extrusion to roll-wrapped Carbon Fiber Tube."
+    if group_id in ("y_carriages", "z_carriages", "delta_carriages"):
+        if group_id == "z_carriages":
+            return "Use lighter CNC/CF XY motor mounts and hollowed Z-carriage brackets to trim portal top inertia."
+        return "Switch XY-joint/carriage brackets to hollowed PPA-CF or skeletal CNC Aluminum 6061."
+    if group_id == "moving_y_bed" or role == "bed":
+        return "Lighten moving heated bed plate (thinner cast Al / spring-steel sheet) to raise Y-axis resonance."
+    if role == "rail" or group_id == "y_axis_rail_beams":
         return "Use hollow/lightened rail backing or match rail size (MGN9 vs MGN12) to carriage load."
-    if role == "bed":
-        return "Lighten moving heated bed plate (thinner cast Al / mag plate) to raise Y-axis resonance."
-    return "Trim non-structural upper frame mass or substitute lower-density structural material."
+    return "Trim non-structural moving or upper-frame mass to raise natural frequency without sacrificing stiffness."
+
+
+def _lighten_why(group_id: str, hz_gain_100g: float, is_moving: bool) -> str:
+    if group_id == "toolhead_assembly":
+        return (
+            f"Toolhead accelerates on every X and Y move — cutting 100 g adds +{hz_gain_100g:.2f} Hz "
+            "and trims inertial flex without changing the frame"
+        )
+    if group_id == "x_gantry_beam":
+        return (
+            f"Entire X-gantry beam accelerates on every Y move — cutting 100 g adds +{hz_gain_100g:.2f} Hz "
+            "while lowering Y-motor torque load"
+        )
+    if group_id in ("y_carriages", "z_carriages", "delta_carriages"):
+        return (
+            f"Carriage mass rides on the gantry ends — cutting 100 g adds +{hz_gain_100g:.2f} Hz "
+            "to gantry and portal resonance"
+        )
+    if group_id == "moving_y_bed":
+        return (
+            f"Heavy bed accelerates on every Y move — cutting 100 g adds +{hz_gain_100g:.2f} Hz "
+            "and reduces Y-belt stretch"
+        )
+    if is_moving:
+        return f"Moving mass accelerates on every print move — cutting 100 g raises resonance by +{hz_gain_100g:.2f} Hz"
+    return f"Upper-frame mass lowers structural frequency — trimming 100 g adds +{hz_gain_100g:.2f} Hz"
 
 
 def compute_structural_sensitivities(
@@ -373,7 +550,8 @@ def compute_structural_sensitivities(
             ke_panel = float(phi_p @ M_ff @ phi_p)
             is_isolated_panel_drum = (
                 (ke_panel > 0.55 and noz_norm_all < 0.12)
-                or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.15)
+                or (ke_panel > 0.58 and noz_norm_all < 0.25)
+                or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.28)
                 or (np_max < 0.25 and gantry_max < 0.20)
             )
             tr_struct = trans_raw[non_panel_indices]
@@ -763,50 +941,128 @@ def compute_structural_sensitivities(
             "hz_per_100g": round(0.1 * ms_f / max(node.lumped_mass_kg, 1e-5), 4),
         }
 
-    # 5. Top 5 stiffening ROI hotspots & Top 3 weight-reduction hotspots
+    # 5. Top 5 stiffening ROI hotspots & Top 3 weight-reduction hotspots (grouped by physical part)
+    spec = assembly.spec
+    group_acc: dict[str, dict[str, Any]] = {}
+    for m in raw_members:
+        gid, label = classify_part_group(m["member_id"], m["role"])
+        g = group_acc.setdefault(
+            gid,
+            {
+                "id": gid,
+                "label": label,
+                "role": m["role"],
+                "stiffness_sens_hz": 0.0,
+                "mass_sens_hz": 0.0,
+                "compliance_share_pct": 0.0,
+                "cost_usd": 0.0,
+                "mass_kg": 0.0,
+            },
+        )
+        g["stiffness_sens_hz"] += float(m["stiffness_sens_hz"])
+        g["mass_sens_hz"] += float(m["mass_sens_hz"])
+        g["compliance_share_pct"] += float(m["_comp_raw"] * comp_scale)
+        g["cost_usd"] += float(m["cost_usd"])
+        g["mass_kg"] += float(m["mass_kg"])
+
+    for bay_key, b in bay_acc.items():
+        if b["n_elements"] <= 0:
+            continue
+        gid, label = classify_part_group(f"bay_{bay_key}", "panel")
+        g = group_acc.setdefault(
+            gid,
+            {
+                "id": gid,
+                "label": label,
+                "role": "panel",
+                "stiffness_sens_hz": 0.0,
+                "mass_sens_hz": 0.0,
+                "compliance_share_pct": 0.0,
+                "cost_usd": 0.0,
+                "mass_kg": 0.0,
+            },
+        )
+        g["stiffness_sens_hz"] += float(b["stiffness_sens_hz"])
+        g["mass_sens_hz"] += float(b["mass_sens_hz"])
+        g["compliance_share_pct"] += float(b["_comp_raw"] * comp_scale)
+        g["cost_usd"] += float(b["cost_usd"])
+        g["mass_kg"] += float(b["mass_kg"])
+
     stiffen_pool: list[dict[str, Any]] = []
-    for mid, d in member_sensitivities.items():
-        if d["stiffness_sens_hz"] + d["mass_sens_hz"] > 0.0 or d["compliance_share_pct"] > 0.5:
-            if d["hz_per_usd"] > 0.0 or d["compliance_share_pct"] > 1.0:
-                stiffen_pool.append(
-                    {
-                        "id": mid,
-                        "role": d["role"],
-                        "hz_per_usd": round(d["hz_per_usd"], 4),
-                        "compliance_share_pct": round(d["compliance_share_pct"], 2),
-                        "action_hint": _stiffen_hint(mid, d["role"]),
-                    }
-                )
-    for bay_key, b in panel_bay_sensitivities.items():
-        if b["n_elements"] > 0 and (b["hz_per_usd"] > 0.0 or b["compliance_share_pct"] > 0.5):
-            stiffen_pool.append(
-                {
-                    "id": f"bay_{bay_key}",
-                    "role": "panel",
-                    "hz_per_usd": round(b["hz_per_usd"], 4),
-                    "compliance_share_pct": round(b["compliance_share_pct"], 2),
-                    "action_hint": _stiffen_hint(f"bay_{bay_key}", "panel"),
-                }
-            )
+    for gid, g in group_acc.items():
+        stiff_hz = float(g["stiffness_sens_hz"])
+        mass_hz = float(g["mass_sens_hz"])
+        net_hz = stiff_hz + mass_hz
+        comp_pct = float(g["compliance_share_pct"])
+        cost_usd = max(float(g["cost_usd"]), 1.0)
+        if not ((stiff_hz > 1e-4 and (net_hz > 0.0 or comp_pct > 0.5)) or comp_pct > 1.0):
+            continue
+        est_hz_gain = round(0.5 * max(stiff_hz, 0.0), 1)
+        hz_per_usd = net_hz / cost_usd
+        impact_score = max(est_hz_gain, 0.1) * (1.0 + comp_pct / 25.0) + 0.05 * comp_pct
+        stiffen_pool.append(
+            {
+                "id": gid,
+                "role": g["role"],
+                "label": g["label"],
+                "hz_per_usd": round(hz_per_usd, 4),
+                "compliance_share_pct": round(comp_pct, 2),
+                "est_hz_gain": est_hz_gain,
+                "why_it_hurts": _stiffen_why(gid, comp_pct, est_hz_gain),
+                "action_hint": _stiffen_hint(gid, g["role"], spec),
+                "_score": impact_score,
+            }
+        )
     stiffen_pool.sort(
-        key=lambda x: (x["hz_per_usd"], x["compliance_share_pct"]),
+        key=lambda x: (x["_score"], x["est_hz_gain"], x["compliance_share_pct"]),
         reverse=True,
     )
-    top_stiffen_targets = stiffen_pool[:5]
+    top_stiffen_targets = [
+        {k: v for k, v in item.items() if k != "_score"} for item in stiffen_pool[:5]
+    ]
 
-    lighten_pool: list[dict[str, Any]] = []
-    for mid, d in member_sensitivities.items():
-        if d["mass_sens_hz"] < -1e-4 and (d["stiffness_sens_hz"] + d["mass_sens_hz"]) < 0.0:
-            lighten_pool.append(
-                {
-                    "id": mid,
-                    "role": d["role"],
-                    "mass_sens_hz": round(d["mass_sens_hz"], 4),
-                    "hz_per_100g": round(d["hz_per_100g"], 4),
-                    "action_hint": _lighten_hint(mid, d["role"]),
-                }
+    lighten_groups: dict[str, dict[str, Any]] = {}
+
+    def _add_lighten_group(
+        gid: str,
+        label: str,
+        role: str,
+        mass_sens_hz: float,
+        net_hz: float,
+        mass_kg: float,
+        is_moving: bool,
+    ) -> None:
+        g = lighten_groups.setdefault(
+            gid,
+            {
+                "id": gid,
+                "label": label,
+                "role": role,
+                "mass_sens_hz": 0.0,
+                "net_hz": 0.0,
+                "mass_kg": 0.0,
+                "is_moving": is_moving,
+            },
+        )
+        g["mass_sens_hz"] += mass_sens_hz
+        g["net_hz"] += net_hz
+        g["mass_kg"] += mass_kg
+        g["is_moving"] = g["is_moving"] or is_moving
+
+    for gid, g in group_acc.items():
+        net_hz = float(g["stiffness_sens_hz"]) + float(g["mass_sens_hz"])
+        if g["mass_sens_hz"] < -1e-4 and net_hz < 0.0 and g["mass_kg"] > 1e-5:
+            _add_lighten_group(
+                gid=gid,
+                label=g["label"],
+                role=g["role"],
+                mass_sens_hz=float(g["mass_sens_hz"]),
+                net_hz=net_hz,
+                mass_kg=float(g["mass_kg"]),
+                is_moving=(gid in ("x_gantry_beam", "delta_arms")),
             )
-    # Include moving lumped-mass bodies (toolhead assembly + carriages, plus bed on bedslingers)
+
+    # Moving lumped-mass bodies grouped by physical assembly (toolhead, carriages, moving bed)
     th_group_ids = [
         nid
         for nid in (
@@ -821,33 +1077,85 @@ def compute_structural_sensitivities(
         th_ms = sum(lumped_mass_sensitivities[nid]["mass_sens_hz"] for nid in th_unique)
         th_kg = sum(lumped_mass_sensitivities[nid]["mass_kg"] for nid in th_unique)
         if th_ms < -1e-4 and th_kg > 1e-5:
-            lighten_pool.append(
-                {
-                    "id": "toolhead_assembly",
-                    "role": "toolhead",
-                    "mass_sens_hz": round(th_ms, 4),
-                    "hz_per_100g": round(0.1 * th_ms / th_kg, 4),
-                    "action_hint": _lighten_hint("toolhead_assembly", "toolhead"),
-                }
+            _add_lighten_group(
+                gid="toolhead_assembly",
+                label="Toolhead Assembly",
+                role="toolhead",
+                mass_sens_hz=th_ms,
+                net_hz=th_ms,
+                mass_kg=th_kg,
+                is_moving=True,
             )
+
     for nid, ld in lumped_mass_sensitivities.items():
         if nid in th_unique:
             continue
-        if ld["role"] == "bed" and assembly.spec.architecture != "cartesian_bedslinger":
+        if ld["role"] == "bed" and spec.architecture != "cartesian_bedslinger":
             continue
-        if ld["role"] in ("gantry", "bed") and ld["mass_sens_hz"] < -1e-4:
-            lighten_pool.append(
-                {
-                    "id": nid,
-                    "role": ld["role"],
-                    "mass_sens_hz": round(ld["mass_sens_hz"], 4),
-                    "hz_per_100g": round(ld["hz_per_100g"], 4),
-                    "action_hint": _lighten_hint(nid, ld["role"]),
-                }
-            )
+        if ld["role"] not in ("gantry", "bed") or ld["mass_sens_hz"] >= -1e-4:
+            continue
+        if nid.startswith("y_car_"):
+            lgid, llabel, lrole = "y_carriages", "Y-Axis Gantry Carriages", "gantry"
+        elif nid in ("z_l", "z_r"):
+            lgid, llabel, lrole = "z_carriages", "Z-Axis Carriages & X-Motor", "gantry"
+        elif nid.startswith("c_"):
+            lgid, llabel, lrole = "delta_carriages", "Delta Tower Carriages", "gantry"
+        elif ld["role"] == "bed":
+            lgid, llabel, lrole = "moving_y_bed", "Moving Heated Bed", "bed"
+        else:
+            lgid, llabel = classify_part_group(nid, ld["role"])
+            lrole = ld["role"]
+        _add_lighten_group(
+            gid=lgid,
+            label=llabel,
+            role=lrole,
+            mass_sens_hz=float(ld["mass_sens_hz"]),
+            net_hz=float(ld["mass_sens_hz"]),
+            mass_kg=float(ld["mass_kg"]),
+            is_moving=True,
+        )
 
-    lighten_pool.sort(key=lambda x: x["mass_sens_hz"])  # most negative first
-    top_lighten_targets = lighten_pool[:3]
+    lighten_pool: list[dict[str, Any]] = []
+    for gid, lg in lighten_groups.items():
+        if lg["mass_sens_hz"] >= -1e-4 or lg["mass_kg"] <= 1e-5:
+            continue
+        hz_per_100g = 0.1 * lg["net_hz"] / lg["mass_kg"]
+        hz_gain_100g = round(abs(hz_per_100g), 2)
+        lighten_pool.append(
+            {
+                "id": gid,
+                "role": lg["role"],
+                "label": lg["label"],
+                "mass_sens_hz": round(lg["mass_sens_hz"], 4),
+                "hz_per_100g": round(hz_per_100g, 4),
+                "hz_gain_per_100g_saved": hz_gain_100g,
+                "why_it_hurts": _lighten_why(gid, hz_gain_100g, bool(lg["is_moving"])),
+                "action_hint": _lighten_hint(gid, lg["role"], spec),
+                "_is_moving": bool(lg["is_moving"]),
+            }
+        )
+
+    lighten_pool.sort(
+        key=lambda x: (not x["_is_moving"], -x["hz_gain_per_100g_saved"], x["mass_sens_hz"])
+    )
+    top_lighten_targets = [
+        {k: v for k, v in item.items() if k != "_is_moving"} for item in lighten_pool[:3]
+    ]
+
+    summary_parts: list[str] = []
+    if top_stiffen_targets:
+        s0 = top_stiffen_targets[0]
+        summary_parts.append(
+            f"Biggest stiffness win: {s0['label']} — {s0['action_hint'].rstrip('.')}."
+        )
+    if top_lighten_targets:
+        l0 = top_lighten_targets[0]
+        gain = float(l0["hz_gain_per_100g_saved"])
+        gain_str = f"{gain:.1f}" if gain >= 0.1 else f"{gain:.2f}"
+        summary_parts.append(
+            f"Biggest weight win: {l0['label']} (+{gain_str} Hz per 100g saved)."
+        )
+    summary_diagnosis = " ".join(summary_parts)
 
     return SensitivityReport(
         fundamental_freq_hz=f_fund,
@@ -860,4 +1168,5 @@ def compute_structural_sensitivities(
         lumped_mass_sensitivities=lumped_mass_sensitivities,
         top_stiffen_targets=top_stiffen_targets,
         top_lighten_targets=top_lighten_targets,
+        summary_diagnosis=summary_diagnosis,
     )

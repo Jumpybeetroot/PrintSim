@@ -599,6 +599,12 @@ class ToolheadSpec(BaseModel):
         "abs_printed",
         description="Toolhead carriage & XY-joint mount material affecting nozzle pitch/twist stiffness",
     )
+    internal_stiffness_n_per_mm: float = Field(
+        450.0,
+        ge=25.0,
+        le=20000.0,
+        description="Overall internal toolhead structural stiffness from linear carriage to nozzle tip (N/mm), modeling flex inside the printed/CNC toolhead body, carriage plate, and hotend clamp.",
+    )
     envelope_mm: tuple[float, float, float] = (68.0, 74.0, 95.0)
     hotend: HotendSpec = Field(default_factory=HotendSpec)
     extruder: ExtruderSpec = Field(default_factory=ExtruderSpec)
@@ -612,6 +618,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -22.0, -28.0],
         "nozzle_offset_mm": [0.0, -26.0, -66.0],
         "mount_material": "abs_printed",
+        "internal_stiffness_n_per_mm": 350.0,
     },
     "xol_compact": {
         "preset_id": "xol_compact",
@@ -620,6 +627,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -15.0, -18.0],
         "nozzle_offset_mm": [0.0, -18.0, -54.0],
         "mount_material": "pa12_cf_printed",
+        "internal_stiffness_n_per_mm": 650.0,
     },
     "archetype_cpap": {
         "preset_id": "archetype_cpap",
@@ -628,6 +636,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -11.0, -12.0],
         "nozzle_offset_mm": [0.0, -14.0, -48.0],
         "mount_material": "aluminum_6061_t6",
+        "internal_stiffness_n_per_mm": 1800.0,
     },
     "heavy_uhf_long": {
         "preset_id": "heavy_uhf_long",
@@ -636,6 +645,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -26.0, -34.0],
         "nozzle_offset_mm": [0.0, -28.0, -78.0],
         "mount_material": "abs_printed",
+        "internal_stiffness_n_per_mm": 250.0,
     },
 }
 

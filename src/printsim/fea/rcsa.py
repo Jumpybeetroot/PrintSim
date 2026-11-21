@@ -20,7 +20,7 @@ from scipy.linalg import block_diag, expm
 
 from printsim.fea.components import hertzian_rail_carriage_stiffness
 from printsim.fea.modal import ModalResult
-from printsim.geometry.builder import AssemblyModel
+from printsim.geometry.builder import AssemblyModel, compute_toolhead_link_props
 from printsim.schema import get_material
 
 
@@ -217,47 +217,26 @@ def lm_fbs_couple(
 def _effective_member_stiffness_scale(assembly: AssemblyModel) -> float:
     """Detect direct stiffness/material mutations on toolhead_mount / nozzle_stem members."""
     spec = assembly.spec
-    th = spec.toolhead
-    base_mat = get_material(th.mount_material)
-    e_base = base_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
+    nmap = assembly.node_map
+    base_node = nmap.get(assembly.toolhead_node_id)
+    cog_node = nmap.get(assembly.toolhead_cog_node_id)
+    noz_node = nmap.get(assembly.nozzle_node_id)
+    l_mount = (
+        float(np.linalg.norm(cog_node.position_m - base_node.position_m))
+        if base_node is not None and cog_node is not None
+        else float(np.linalg.norm(np.array(spec.toolhead.cog_offset_mm) * 1e-3))
+    )
+    l_stem = (
+        float(np.linalg.norm(noz_node.position_m - cog_node.position_m))
+        if noz_node is not None and cog_node is not None
+        else 0.04
+    )
+    props = compute_toolhead_link_props(spec, l_mount_m=l_mount, l_stem_m=l_stem)
 
     mount_scale = 1.0
     mount_mem = next((m for m in assembly.members if m.id == "toolhead_mount"), None)
     if mount_mem is not None:
-        # Compute nominal expected profile EI matching builder._attach_toolhead_cog_and_nozzle
-        iy_nom = 1.2e-8
-        iz_nom = 1.8e-8
-        if spec.architecture != "delta":
-            nmap = assembly.node_map
-            base_node = nmap.get(assembly.toolhead_node_id)
-            cog_node = nmap.get(assembly.toolhead_cog_node_id)
-            if base_node is not None and cog_node is not None:
-                l_mount = max(float(np.linalg.norm(cog_node.position_m - base_node.position_m)), 0.004)
-            else:
-                l_mount = max(float(np.linalg.norm(np.array(th.cog_offset_mm) * 1e-3)), 0.004)
-            car = hertzian_rail_carriage_stiffness(
-                spec.gantry.x_rail_profile,
-                preload=spec.gantry.rail_preload,
-                block_type=spec.gantry.rail_block_type,
-            )
-            car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
-            g_nom = e_base / (2.0 * (1.0 + base_mat.poisson_ratio))
-            _ = g_nom  # keep clarity
-            eta_rot_y = (car["k_rx_nm_rad"] * car_mult) / max(
-                car["k_rx_nm_rad"] * car_mult + e_base * iy_nom / l_mount, 1e-9
-            )
-            eta_tip_y = (car["k_zz_n_m"] * car_mult) / max(
-                car["k_zz_n_m"] * car_mult + 3.0 * e_base * iy_nom / (l_mount**3), 1e-9
-            )
-            k_rot_car_z = 0.5 * (car["k_ry_nm_rad"] + car["k_rz_nm_rad"]) * car_mult
-            eta_rot_z = k_rot_car_z / max(k_rot_car_z + e_base * iz_nom / l_mount, 1e-9)
-            eta_tip_z = (car["k_yy_n_m"] * car_mult) / max(
-                car["k_yy_n_m"] * car_mult + 3.0 * e_base * iz_nom / (l_mount**3), 1e-9
-            )
-            iy_nom *= eta_rot_y * eta_tip_y
-            iz_nom *= eta_rot_z * eta_tip_z
-
-        nom_ei = e_base * (iy_nom + iz_nom)
+        nom_ei = props["e_mount_eff"] * (props["iy_mount"] + props["iz_mount"])
         actual_ei = mount_mem.material.youngs_modulus_pa * (
             mount_mem.profile.iy_m4 + mount_mem.profile.iz_m4
         )
@@ -267,8 +246,7 @@ def _effective_member_stiffness_scale(assembly: AssemblyModel) -> float:
     stem_scale = 1.0
     stem_mem = next((m for m in assembly.members if m.id == "nozzle_stem"), None)
     if stem_mem is not None:
-        al_e = get_material("aluminum_6061_t6").youngs_modulus_pa
-        nom_stem_ei = al_e * 1.2e-8
+        nom_stem_ei = props["e_stem"] * (2.0 * props["i_stem"])
         actual_stem_ei = stem_mem.material.youngs_modulus_pa * (
             stem_mem.profile.iy_m4 + stem_mem.profile.iz_m4
         )
@@ -409,6 +387,18 @@ def analyze_toolhead_rcsa(
     k_t1 = 150.0 * e_ratio / (1.0 + 0.04 * e_ratio)
     k_u2 = 8.0e6 * e_ratio / (1.0 + 0.08 * e_ratio)
     k_t2 = 170.0 * e_ratio / (1.0 + 0.04 * e_ratio)
+
+    # Wire user's internal_stiffness_n_per_mm (N/m, T-modulated) in series with J1 carriage-mount joint
+    k_int_n_m = (
+        float(th.internal_stiffness_n_per_mm)
+        * 1e3
+        * mmat.modulus_retention_at_temp(chamber_c)
+        * eff_scale
+    )
+    k_int_u = k_int_n_m * 2.0 * (max(e_ratio, 0.1) ** 0.35)
+    k_int_rot = k_int_n_m * (0.045**2) * (max(e_ratio, 0.1) ** 0.65)
+    k_u1 = (k_u1 * k_int_u) / max(k_u1 + k_int_u, 1e-9)
+    k_t1 = (k_t1 * k_int_rot) / max(k_t1 + k_int_rot, 1e-9)
 
     zeta_j = 0.04
     c_u1 = 2.0 * zeta_j * math.sqrt(k_u1 * m_mount)

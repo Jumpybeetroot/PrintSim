@@ -252,6 +252,7 @@ class AssemblyModel:
             "cog_offset_mm": list(self.spec.toolhead.cog_offset_mm),
             "nozzle_offset_mm": list(self.spec.toolhead.nozzle_offset_mm),
             "mount_material": self.spec.toolhead.mount_material,
+            "internal_stiffness_n_per_mm": self.spec.toolhead.internal_stiffness_n_per_mm,
             "toolhead_envelope_mm": list(self.spec.toolhead.envelope_mm),
             "nodes": [
                 {
@@ -878,11 +879,93 @@ def _apply_corner_joint_compliance(
         )
 
 
+def compute_toolhead_link_props(
+    spec: PrinterSpec,
+    l_mount_m: float,
+    l_stem_m: float,
+) -> dict[str, float]:
+    """Compute physical stiffness, area, and second-moment properties for toolhead mount & nozzle stem."""
+    base_mount_mat = get_material(spec.toolhead.mount_material)
+    retention = base_mount_mat.modulus_retention_at_temp(spec.frame.chamber_temp_c)
+    e_mount_eff = base_mount_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
+    g_mount = e_mount_eff / (2.0 * (1.0 + base_mount_mat.poisson_ratio))
+
+    k_int_n_m = float(spec.toolhead.internal_stiffness_n_per_mm) * 1e3 * retention
+    k_int_ratio = k_int_n_m / 450.0e3
+    mat_scale = (e_mount_eff / 2.1e9) ** 0.50
+    k_rot_th = k_int_n_m * (0.075**2) * mat_scale
+
+    if spec.architecture != "delta":
+        from printsim.fea.components import hertzian_rail_carriage_stiffness
+
+        car = hertzian_rail_carriage_stiffness(
+            spec.gantry.x_rail_profile,
+            preload=spec.gantry.rail_preload,
+            block_type=spec.gantry.rail_block_type,
+        )
+        car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
+        k_rx_car = car["k_rx_nm_rad"] * car_mult
+        k_ry_car = car["k_ry_nm_rad"] * car_mult
+        k_rz_car = car["k_rz_nm_rad"] * car_mult
+        k_rad_car = 0.5 * (car["k_yy_n_m"] + car["k_zz_n_m"]) * car_mult
+    else:
+        k_rx_car = k_ry_car = k_rz_car = 2500.0
+        k_rad_car = 2.0e8
+
+    k_r_car_eff = 3.0 / (1.0 / k_rx_car + 1.0 / k_ry_car + 1.0 / k_rz_car)
+    k_r_spring = (k_r_car_eff * k_rot_th) / max(k_r_car_eff + k_rot_th, 1e-9)
+    k_plate_t = 5000.0 * k_int_n_m
+    k_t_spring = (10.0 * k_rad_car * k_plate_t) / max(10.0 * k_rad_car + k_plate_t, 1e-9)
+
+    l_m = max(float(l_mount_m), 1e-4)
+    iy_mount = 1.6e-8 * k_int_ratio
+    iz_mount = 6.0e-8 * k_int_ratio
+    j_mount = 1.6e-8 * k_int_ratio
+
+    k_ry_joint = (k_rx_car * k_rot_th) / max(k_rx_car + k_rot_th, 1e-9)
+    k_rz_joint = (0.5 * (k_ry_car + k_rz_car) * k_rot_th) / max(
+        0.5 * (k_ry_car + k_rz_car) + k_rot_th, 1e-9
+    )
+    k_tor_joint = (k_rz_car * k_rot_th) / max(k_rz_car + k_rot_th, 1e-9)
+
+    iy_mount *= k_ry_joint / max(k_ry_joint + e_mount_eff * iy_mount / l_m, 1e-9)
+    iz_mount *= k_rz_joint / max(k_rz_joint + e_mount_eff * iz_mount / l_m, 1e-9)
+    j_mount *= k_tor_joint / max(k_tor_joint + g_mount * j_mount / l_m, 1e-9)
+    area_mount = min(2.2e-4, 5.0e8 * l_m / max(e_mount_eff, 1e6))
+
+    stem_mat = get_material("aluminum_6061_t6")
+    e_stem = stem_mat.youngs_modulus_pa
+    l_s = max(float(l_stem_m), 1e-4)
+    k_stem_eff = 3.5 * k_int_n_m * (mat_scale**0.40)
+    i_stem = float(np.clip(k_stem_eff * (l_s**3) / (3.0 * e_stem), 1e-13, 1e-5))
+    j_stem = max(1.3 * i_stem, 1e-13)
+    area_stem = min(1.2e-4, 5.0e8 * l_s / max(e_stem, 1e6))
+
+    return {
+        "e_mount_eff": e_mount_eff,
+        "g_mount": g_mount,
+        "k_int_n_m": k_int_n_m,
+        "k_rot_th": k_rot_th,
+        "k_t_spring": k_t_spring,
+        "k_r_spring": k_r_spring,
+        "area_mount": area_mount,
+        "iy_mount": iy_mount,
+        "iz_mount": iz_mount,
+        "j_mount": j_mount,
+        "e_stem": e_stem,
+        "k_stem_eff": k_stem_eff,
+        "area_stem": area_stem,
+        "i_stem": i_stem,
+        "j_stem": j_stem,
+    }
+
+
 def _attach_toolhead_cog_and_nozzle(
     nodes: list[StructuralNode],
     members: list[StructuralMember],
     spec: PrinterSpec,
     base_node_id: str = "toolhead",
+    fastener_springs: list[FastenerSpring] | None = None,
 ) -> None:
     """Attach explicit 6-DOF toolhead_cog and nozzle_tip nodes via carriage mount & hotend stem."""
     nmap = {n.id: n for n in nodes}
@@ -907,7 +990,8 @@ def _attach_toolhead_cog_and_nozzle(
                     off[1] = min(0.0, off[1] + 0.006)
                 elif off[1] > 0.0:
                     off[1] = max(0.0, off[1] - 0.006)
-                off[2] -= 0.006
+                if abs(off[2]) > 1e-12:
+                    off[2] -= 0.006
         elif x_mount == "bottom":
             for off in (cog_offset, nozzle_offset):
                 if off[1] < 0.0:
@@ -915,22 +999,20 @@ def _attach_toolhead_cog_and_nozzle(
                 elif off[1] > 0.0:
                     off[1] = max(0.0, off[1] - 0.005)
             if cog_offset[2] < 0.0:
-                cog_offset[2] = min(-0.004, cog_offset[2] + 0.012)
+                cog_offset[2] = min(0.0, cog_offset[2] + 0.012)
             if nozzle_offset[2] < 0.0:
                 nozzle_offset[2] = min(-0.010, nozzle_offset[2] + 0.012)
 
-    if float(np.linalg.norm(cog_offset)) < 0.004:
-        cog_offset = np.array([0.0, 0.0, -0.004], dtype=float)
-    cog_pos = base_pos + cog_offset
+    cog_norm = float(np.linalg.norm(cog_offset))
+    is_zero_cog = cog_norm < 1e-4
+    cog_pos = base_pos.copy() if is_zero_cog else (base_pos + cog_offset)
 
     nozzle_pos = base_pos + nozzle_offset
     stem_vec = nozzle_pos - cog_pos
     stem_len = float(np.linalg.norm(stem_vec))
-    if stem_len < 0.005:
-        if stem_len > 1e-9:
-            nozzle_pos = cog_pos + (stem_vec / stem_len) * 0.005
-        else:
-            nozzle_pos = cog_pos + np.array([0.0, 0.0, -0.005], dtype=float)
+    is_zero_stem = stem_len < 1e-4
+    if is_zero_stem:
+        nozzle_pos = cog_pos.copy()
 
     nodes.append(
         StructuralNode(
@@ -949,103 +1031,96 @@ def _attach_toolhead_cog_and_nozzle(
         )
     )
 
+    l_mount_m = 0.0 if is_zero_cog else float(np.linalg.norm(cog_pos - base_pos))
+    l_stem_m = 0.0 if is_zero_stem else stem_len
+    props = compute_toolhead_link_props(spec, l_mount_m=l_mount_m, l_stem_m=l_stem_m)
+
     base_mount_mat = get_material(spec.toolhead.mount_material)
-    e_mount_eff = base_mount_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
     mount_mat = base_mount_mat.model_copy(
         update={
-            "youngs_modulus_pa": e_mount_eff,
-            "shear_modulus_pa": e_mount_eff / (2.0 * (1.0 + base_mount_mat.poisson_ratio)),
+            "youngs_modulus_pa": props["e_mount_eff"],
+            "shear_modulus_pa": props["g_mount"],
             "density_kg_m3": 1e-3,
             "cost_per_kg_usd": 0.0,
         }
     )
-    iy_mount = 1.2e-8
-    iz_mount = 1.8e-8
-    j_mount = 1.4e-8
 
-    if spec.architecture != "delta":
-        from printsim.fea.components import hertzian_rail_carriage_stiffness
-
-        l_mount = max(float(np.linalg.norm(cog_pos - base_pos)), 0.004)
-        car = hertzian_rail_carriage_stiffness(
-            spec.gantry.x_rail_profile,
-            preload=spec.gantry.rail_preload,
-            block_type=spec.gantry.rail_block_type,
+    if is_zero_cog and fastener_springs is not None:
+        fastener_springs.append(
+            FastenerSpring(
+                id="toolhead_cog_spring",
+                bay="toolhead",
+                shell_node_id=base_node_id,
+                frame_node_id="toolhead_cog",
+                k_shear_n_m=props["k_t_spring"],
+                k_normal_n_m=props["k_t_spring"],
+                k_rot_nm_rad=props["k_r_spring"],
+                normal_vec=(0.0, 0.0, 1.0),
+                offset_m=(0.0, 0.0, 0.0),
+            )
         )
-        car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
-        g_mount = mount_mat.effective_shear_modulus_pa
-
-        # Series coupling: mount beam rotational/tip stiffness with 6-DOF Hertzian rail carriage
-        k_rot_car_y = car["k_rx_nm_rad"] * car_mult
-        k_rot_beam_y = e_mount_eff * iy_mount / l_mount
-        eta_rot_y = k_rot_car_y / max(k_rot_car_y + k_rot_beam_y, 1e-9)
-
-        k_tip_beam_y = 3.0 * e_mount_eff * iy_mount / (l_mount**3)
-        k_rad_car_y = car["k_zz_n_m"] * car_mult
-        eta_tip_y = k_rad_car_y / max(k_rad_car_y + k_tip_beam_y, 1e-9)
-
-        k_rot_car_z = 0.5 * (car["k_ry_nm_rad"] + car["k_rz_nm_rad"]) * car_mult
-        k_rot_beam_z = e_mount_eff * iz_mount / l_mount
-        eta_rot_z = k_rot_car_z / max(k_rot_car_z + k_rot_beam_z, 1e-9)
-
-        k_tip_beam_z = 3.0 * e_mount_eff * iz_mount / (l_mount**3)
-        k_rad_car_z = car["k_yy_n_m"] * car_mult
-        eta_tip_z = k_rad_car_z / max(k_rad_car_z + k_tip_beam_z, 1e-9)
-
-        k_tor_car = car["k_rz_nm_rad"] * car_mult
-        k_tor_beam = g_mount * j_mount / l_mount
-        eta_tor = k_tor_car / max(k_tor_car + k_tor_beam, 1e-9)
-
-        iy_mount *= eta_rot_y * eta_tip_y
-        iz_mount *= eta_rot_z * eta_tip_z
-        j_mount *= eta_tor
-
-    mount_prof = ProfileSpec.model_construct(
-        id="toolhead_mount_profile",
-        name=f"Toolhead Carriage Mount ({spec.toolhead.mount_material})",
-        shape="solid_bar",
-        width_m=0.026,
-        height_m=0.018,
-        area_m2=2.2e-4,
-        iy_m4=iy_mount,
-        iz_m4=iz_mount,
-        j_m4=j_mount,
-    )
-    members.append(
-        StructuralMember(
-            id="toolhead_mount",
-            start_id=base_node_id,
-            end_id="toolhead_cog",
-            profile=mount_prof,
-            material=mount_mat,
-            role="toolhead",
+    else:
+        mount_prof = ProfileSpec.model_construct(
+            id="toolhead_mount_profile",
+            name=f"Toolhead Carriage Mount ({spec.toolhead.mount_material})",
+            shape="solid_bar",
+            width_m=0.026,
+            height_m=0.018,
+            area_m2=props["area_mount"],
+            iy_m4=props["iy_mount"],
+            iz_m4=props["iz_mount"],
+            j_m4=props["j_mount"],
         )
-    )
-
-    stem_mat = get_material("aluminum_6061_t6").model_copy(
-        update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0}
-    )
-    stem_prof = ProfileSpec.model_construct(
-        id="nozzle_stem_profile",
-        name="Hotend Nozzle Stem",
-        shape="rod",
-        width_m=0.012,
-        height_m=0.012,
-        area_m2=1.2e-4,
-        iy_m4=6.0e-9,
-        iz_m4=6.0e-9,
-        j_m4=8.0e-9,
-    )
-    members.append(
-        StructuralMember(
-            id="nozzle_stem",
-            start_id="toolhead_cog",
-            end_id="nozzle_tip",
-            profile=stem_prof,
-            material=stem_mat,
-            role="toolhead",
+        members.append(
+            StructuralMember(
+                id="toolhead_mount",
+                start_id=base_node_id,
+                end_id="toolhead_cog",
+                profile=mount_prof,
+                material=mount_mat,
+                role="toolhead",
+            )
         )
-    )
+
+    if is_zero_stem and fastener_springs is not None:
+        fastener_springs.append(
+            FastenerSpring(
+                id="nozzle_stem_spring",
+                bay="toolhead",
+                shell_node_id="toolhead_cog",
+                frame_node_id="nozzle_tip",
+                k_shear_n_m=props["k_stem_eff"],
+                k_normal_n_m=props["k_stem_eff"],
+                k_rot_nm_rad=max(props["k_rot_th"] * 1.5, 500.0),
+                normal_vec=(0.0, 0.0, 1.0),
+                offset_m=(0.0, 0.0, 0.0),
+            )
+        )
+    else:
+        stem_mat = get_material("aluminum_6061_t6").model_copy(
+            update={"density_kg_m3": 1e-3, "cost_per_kg_usd": 0.0}
+        )
+        stem_prof = ProfileSpec.model_construct(
+            id="nozzle_stem_profile",
+            name="Hotend Nozzle Stem",
+            shape="rod",
+            width_m=0.012,
+            height_m=0.012,
+            area_m2=props["area_stem"],
+            iy_m4=props["i_stem"],
+            iz_m4=props["i_stem"],
+            j_m4=props["j_stem"],
+        )
+        members.append(
+            StructuralMember(
+                id="nozzle_stem",
+                start_id="toolhead_cog",
+                end_id="nozzle_tip",
+                profile=stem_prof,
+                material=stem_mat,
+                role="toolhead",
+            )
+        )
 
 
 def _apply_extrusion_filling(model: AssemblyModel) -> None:
@@ -1852,7 +1927,9 @@ def _build_corexy(
         + bkt_delta_kg
     )
 
-    _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+    _attach_toolhead_cog_and_nozzle(
+        nodes, members, spec, base_node_id="toolhead", fastener_springs=fastener_springs
+    )
 
     return AssemblyModel(
         spec=spec,
@@ -2097,7 +2174,10 @@ def _build_cartesian_bedslinger(
             )
         )
 
-    _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+    fastener_springs: list[FastenerSpring] = []
+    _attach_toolhead_cog_and_nozzle(
+        nodes, members, spec, base_node_id="toolhead", fastener_springs=fastener_springs
+    )
     if bkt_delta_kg > 0.0:
         next(n for n in nodes if n.id == "toolhead").lumped_mass_kg += bkt_delta_kg
 
@@ -2105,6 +2185,7 @@ def _build_cartesian_bedslinger(
         spec=spec,
         nodes=nodes,
         members=members,
+        fastener_springs=fastener_springs,
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",
@@ -2228,7 +2309,10 @@ def _build_delta(
         )
 
     eff_mass = toolhead_kg + 0.09  # ultra-light effector + arm portion
-    _attach_toolhead_cog_and_nozzle(nodes, members, spec, base_node_id="toolhead")
+    fastener_springs: list[FastenerSpring] = []
+    _attach_toolhead_cog_and_nozzle(
+        nodes, members, spec, base_node_id="toolhead", fastener_springs=fastener_springs
+    )
     if bkt_delta_kg > 0.0:
         next(n for n in nodes if n.id == "toolhead").lumped_mass_kg += bkt_delta_kg
 
@@ -2236,6 +2320,7 @@ def _build_delta(
         spec=spec,
         nodes=nodes,
         members=members,
+        fastener_springs=fastener_springs,
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",

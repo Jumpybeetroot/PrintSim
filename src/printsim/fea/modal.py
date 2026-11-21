@@ -42,6 +42,10 @@ class ModeShape:
     toolhead_participation_xyz: list[float]
     nodal_vectors: dict[str, list[float]]  # normalized 3D displacement per node for animation
     excited_axis: str = "XY"
+    mode_label: str = ""
+    what_is_shaking: str = ""
+    how_to_fix: str = ""
+    severity: str = "moderate"
 
 
 @dataclass
@@ -96,6 +100,10 @@ class ModalResult:
                     "excited_axis": m.excited_axis,
                     "toolhead_participation_xyz": [round(v, 3) for v in m.toolhead_participation_xyz],
                     "nodal_vectors": m.nodal_vectors,
+                    "mode_label": m.mode_label,
+                    "what_is_shaking": m.what_is_shaking,
+                    "how_to_fix": m.how_to_fix,
+                    "severity": m.severity,
                 }
                 for m in self.modes
             ],
@@ -218,6 +226,208 @@ def _recommend_shaper(
     return rec, graph
 
 
+def _mode_severity(freq_hz: float) -> str:
+    if freq_hz < 65.0:
+        return "critical"
+    if freq_hz < 115.0:
+        return "moderate"
+    return "stiff"
+
+
+def _frame_mode_fix_hint(assembly: AssemblyModel) -> str:
+    spec = assembly.spec
+    if spec.architecture == "corexy":
+        if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
+            return (
+                "Switch Panel Mounting -> Bolted Structural (4–5 mm Aluminum 5052), "
+                "add Corner Gussets/Cross Bracing, or step Frame Profile up to 3030."
+            )
+        if (
+            spec.frame.panel_material not in ("aluminum_5052_sheet", "carbon_fiber_plate")
+            or spec.frame.panel_thickness_mm < 4.0
+        ):
+            return (
+                "Upgrade structural panels to 4–5 mm Aluminum 5052 or Carbon Fiber Plate (bolted), "
+                "add Cross Bracing, or step Frame Profile up to 3030."
+            )
+        return (
+            "Step up Frame Profile (2020 -> 3030), switch Corner Joints -> Corner Cube, "
+            "or add Epoxy Granite / UHPC cavity filling."
+        )
+    if spec.architecture == "cartesian_bedslinger":
+        return (
+            "Add Diagonal Portal Bracing (rear_cross or full_truss) and step up Z-upright "
+            "extrusion profile to 3030 / 2040."
+        )
+    return (
+        "Step up Delta tower extrusions to 3030 / 4040, enable full_truss perimeter bracing, "
+        "or fill tower extrusions with Epoxy Granite / UHPC."
+    )
+
+
+def _toolhead_mode_fix_hint(assembly: AssemblyModel) -> str:
+    spec = assembly.spec
+    if spec.architecture == "delta":
+        if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
+            return (
+                f"Upgrade effector mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
+                "shorten nozzle/CoG overhang, or use a lighter hotend."
+            )
+        return "Shorten effector nozzle/CoG overhang or reduce hotend/cooling shroud mass."
+    if spec.toolhead.mount_material not in ("aluminum_6061_t6", "aluminum_7075_t6", "ppa_cf_printed"):
+        return (
+            f"Upgrade toolhead mount from {spec.toolhead.mount_material} to CNC Al 6061 or PPA-CF, "
+            "use an H-long Z1/ZA rail block, shorten nozzle/CoG overhang, or use a lighter toolhead."
+        )
+    if not spec.gantry.effective_dual_x_rails:
+        return (
+            "Upgrade rail block to H-long with Z1/ZA preload (or dual_top_bottom X rails), "
+            "shorten nozzle/CoG overhang, or use a lighter direct-drive/CPAP toolhead."
+        )
+    return (
+        "Shorten toolhead CoG / nozzle Z overhang, upgrade rail preload to ZA/ZB, "
+        "or reduce hotend/extruder mass."
+    )
+
+
+def _gantry_mode_fix_hint(assembly: AssemblyModel) -> str:
+    spec = assembly.spec
+    if spec.architecture == "delta":
+        return (
+            "Step up Delta tower extrusions to 3030 / 4040, add full_truss bracing, "
+            "or upgrade diagonal arms to stiffer larger-OD carbon fiber tubes."
+        )
+    if not spec.gantry.effective_dual_x_rails and spec.gantry.x_beam_material != "carbon_fiber_tube":
+        return (
+            "Switch X-Gantry Beam to Carbon Fiber Tube or 2040 + Dual Top/Bottom Rails, "
+            "use an H-long Z1 rail, or lighten the toolhead."
+        )
+    return (
+        "Step up X-beam section / Y-rail size (MGN12/MGN15), upgrade XY-joint brackets to CNC Al 6061, "
+        "or lighten the toolhead and carriages."
+    )
+
+
+def _bed_mode_fix_hint(assembly: AssemblyModel) -> str:
+    spec = assembly.spec
+    if spec.architecture == "cartesian_bedslinger":
+        return (
+            "Use a stiffer lighter heated bed carriage, upgrade to wider 9 mm GT2 Y-belt with higher "
+            "pretension, or trim heated bed plate mass."
+        )
+    if spec.bed.z_drive != "leadscrew_triple":
+        return (
+            "Switch Z drive to Triple Leadscrew (leadscrew_triple), use an 8–10 mm Cast MIC-6 bed plate, "
+            "or shorten bed support arms."
+        )
+    return (
+        "Use a stiffer cast aluminum bed plate (8–10 mm MIC-6), shorter bed support arms, "
+        "or stiffer Z-rail backing extrusions."
+    )
+
+
+def _classify_mode_diagnosis(
+    assembly: AssemblyModel,
+    freq_hz: float,
+    dom_axis: str,
+    excited_axis: str,
+    frame_ke_share: float,
+    gantry_ke_share: float,
+    th_ke_share: float,
+    bed_ke_share: float,
+    frame_amp: float,
+    gantry_amp: float,
+    noz_amp: float,
+    th_amp: float,
+    is_torsional: bool,
+) -> tuple[str, str, str, str]:
+    """Return ``(mode_label, what_is_shaking, how_to_fix, severity)`` for a structural mode."""
+    spec = assembly.spec
+    severity = _mode_severity(freq_hz)
+    axis_use = excited_axis if excited_axis in ("X", "Y") else (dom_axis if dom_axis in ("X", "Y") else "XY")
+
+    if is_torsional and frame_amp > 0.40 and frame_ke_share > 0.25 and noz_amp < 0.75:
+        return (
+            "Frame Torsional Twist",
+            "Opposite sides of the outer frame twist out of phase in torsion during rapid gantry cornering.",
+            _frame_mode_fix_hint(assembly),
+            severity,
+        )
+
+    if frame_ke_share > 0.42 or (
+        frame_amp > 0.75 and noz_amp < 0.45 and bed_ke_share < 0.50 and gantry_ke_share < 0.35
+    ):
+        frame_desc = "Z-axis portal frame" if spec.architecture == "cartesian_bedslinger" else "outer extrusion frame"
+        if axis_use == "Y":
+            label = "Whole-Frame Y Sway"
+            shaking = (
+                f"The {frame_desc} rocks sideways as a parallelogram when the gantry accelerates in Y."
+            )
+        elif axis_use == "X":
+            label = "Whole-Frame X Racking"
+            shaking = (
+                f"The {frame_desc} shears and racks side-to-side along X under rapid toolhead acceleration."
+            )
+        else:
+            label = "Frame Torsional Twist"
+            shaking = f"The {frame_desc} flexes diagonally across X and Y during rapid cornering moves."
+        return label, shaking, _frame_mode_fix_hint(assembly), severity
+
+    if (noz_amp > 1.25 * max(th_amp, 1e-6) and (th_ke_share > 0.35 or noz_amp > 0.50)) or th_ke_share > 0.55:
+        anchor = "effector" if spec.architecture == "delta" else "linear carriage"
+        return (
+            "Toolhead & Nozzle Pitch Whip",
+            f"The nozzle tip whips relative to the {anchor} due to toolhead CoG overhang and mount compliance.",
+            _toolhead_mode_fix_hint(assembly),
+            severity,
+        )
+
+    if bed_ke_share >= 0.45 and bed_ke_share > (gantry_ke_share + th_ke_share):
+        if spec.architecture == "cartesian_bedslinger":
+            shaking = (
+                "The moving heated bed assembly flexes on its Y-belt and carriage supports during rapid Y acceleration."
+            )
+        else:
+            shaking = "The heated bed assembly flexes relative to the nozzle and frame during rapid acceleration."
+        return "Bed Support Vibration", shaking, _bed_mode_fix_hint(assembly), severity
+
+    if gantry_ke_share >= 0.25 or gantry_amp >= 0.65:
+        if spec.architecture == "delta":
+            return (
+                "Delta Tower & Arm Resonance",
+                "The diagonal carbon arms and tower carriages vibrate against the vertical towers during rapid effector moves.",
+                _gantry_mode_fix_hint(assembly),
+                severity,
+            )
+        if axis_use == "Y":
+            return (
+                "Moving X-Gantry Flex",
+                "The moving X-gantry beam bends and twists along Y under rapid toolhead acceleration.",
+                _gantry_mode_fix_hint(assembly),
+                severity,
+            )
+        return (
+            "Gantry & Y-Rail Flex",
+            "The moving X-gantry and Y-axis rail beams flex laterally under rapid acceleration.",
+            _gantry_mode_fix_hint(assembly),
+            severity,
+        )
+
+    if frame_ke_share >= max(gantry_ke_share, th_ke_share, bed_ke_share):
+        fix_hint = _frame_mode_fix_hint(assembly)
+    elif th_ke_share >= max(gantry_ke_share, bed_ke_share):
+        fix_hint = _toolhead_mode_fix_hint(assembly)
+    else:
+        fix_hint = _gantry_mode_fix_hint(assembly)
+
+    return (
+        "Coupled Frame & Gantry Resonance",
+        f"Coupled vibration of the frame, gantry, and toolhead along {excited_axis} during rapid print moves.",
+        fix_hint,
+        severity,
+    )
+
+
 def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     """Solve generalized structural eigenproblem K phi = omega^2 M phi."""
     K, M, _, node_idx, free_dofs = assemble_global_matrices(assembly)
@@ -313,11 +523,36 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         else:
             fy_exc[6 * cog_idx + 1] = 1.0
 
-    # Precompute panel-DOF mask in free_dofs space for fast modal kinetic energy ratio
+    # Precompute role-DOF masks in free_dofs space for fast modal kinetic energy partitioning
     free_panel_mask = np.zeros(n_free, dtype=bool)
     if has_panels:
         panel_dof_set = {6 * pi + d for pi in panel_indices for d in range(6)}
         free_panel_mask = np.array([dof in panel_dof_set for dof in free_dofs], dtype=bool)
+
+    frame_node_indices = [
+        i for i, n in enumerate(assembly.nodes) if n.role in ("frame", "mount", "foot", "tower")
+    ]
+    active_frame_indices = [
+        i
+        for i, n in enumerate(assembly.nodes)
+        if n.role in ("frame", "mount", "tower") and not n.fixed
+    ]
+    gantry_only_indices = [i for i, n in enumerate(assembly.nodes) if n.role == "gantry"]
+    th_all_indices = [
+        i for i, n in enumerate(assembly.nodes) if n.role in ("toolhead", "cog", "nozzle")
+    ]
+    bed_all_indices = [i for i, n in enumerate(assembly.nodes) if n.role == "bed"]
+
+    def _free_mask(node_list: list[int]) -> np.ndarray:
+        if not node_list:
+            return np.zeros(n_free, dtype=bool)
+        dset = {6 * ni + d for ni in node_list for d in range(6)}
+        return np.array([dof in dset for dof in free_dofs], dtype=bool)
+
+    free_frame_mask = _free_mask(frame_node_indices)
+    free_gantry_mask = _free_mask(gantry_only_indices)
+    free_th_mask = _free_mask(th_all_indices)
+    free_bed_mask = _free_mask(bed_all_indices)
 
     candidates: list[dict] = []
     receptance_x: list[tuple[float, float]] = []
@@ -329,7 +564,8 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         lam = max(float(eigvals[idx]), 0.0)
         freq_hz = math.sqrt(lam) / (2.0 * math.pi)
         phi = eigvecs[:, idx]
-        m_gen = max(float(phi @ M_ff @ phi), 1e-18)
+        m_phi = M_ff @ phi
+        m_gen = max(float(phi @ m_phi), 1e-18)
 
         full_vec = np.zeros(n_dof, dtype=float)
         full_vec[free_dofs] = phi
@@ -344,6 +580,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         )
         noz_norm_all = float(np.linalg.norm(noz_rel_all))
 
+        ke_panel = 0.0
         if has_panels:
             np_max = float(np.max(np.linalg.norm(trans[non_panel_indices], axis=1)))
             gantry_max = (
@@ -378,6 +615,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             )
             bed_z_amp = abs(float(trans_raw[bed_idx][2] / max_struct)) if bed_idx is not None else 0.0
             axis_energy = np.sum(tr_struct**2, axis=0)
+            tr_norm = trans_raw / max_struct
         else:
             is_isolated_panel_drum = False
             noz_rel = noz_rel_all
@@ -386,6 +624,39 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             )
             bed_z_amp = abs(float(trans[bed_idx][2])) if bed_idx is not None else 0.0
             axis_energy = np.sum(trans**2, axis=0)
+            tr_norm = trans
+
+        ke_struct = max(1.0 - max(0.0, ke_panel), 1e-6)
+        frame_ke_share = max(0.0, float(phi[free_frame_mask] @ m_phi[free_frame_mask]) / m_gen) / ke_struct
+        gantry_ke_share = max(0.0, float(phi[free_gantry_mask] @ m_phi[free_gantry_mask]) / m_gen) / ke_struct
+        th_ke_share = max(0.0, float(phi[free_th_mask] @ m_phi[free_th_mask]) / m_gen) / ke_struct
+        bed_ke_share = max(0.0, float(phi[free_bed_mask] @ m_phi[free_bed_mask]) / m_gen) / ke_struct
+
+        frame_amp = (
+            float(np.max(np.linalg.norm(tr_norm[active_frame_indices], axis=1)))
+            if active_frame_indices
+            else 0.0
+        )
+        gantry_amp = (
+            float(np.max(np.linalg.norm(tr_norm[gantry_only_indices], axis=1)))
+            if gantry_only_indices
+            else 0.0
+        )
+
+        is_torsional = False
+        if all(cid in node_idx for cid in ("t_fl", "t_fr", "t_rl", "t_rr")) and frame_amp > 1e-6:
+            v_fl = tr_norm[node_idx["t_fl"]]
+            v_fr = tr_norm[node_idx["t_fr"]]
+            v_rl = tr_norm[node_idx["t_rl"]]
+            opp_y = v_fl[1] * v_fr[1] < -0.02 and min(abs(v_fl[1]), abs(v_fr[1])) > 0.25 * frame_amp
+            opp_x = v_fl[0] * v_rl[0] < -0.02 and min(abs(v_fl[0]), abs(v_rl[0])) > 0.25 * frame_amp
+            is_torsional = bool(opp_y or opp_x)
+        elif all(cid in node_idx for cid in ("p_tl", "p_tr")) and frame_amp > 1e-6:
+            v_pl = tr_norm[node_idx["p_tl"]]
+            v_pr = tr_norm[node_idx["p_tr"]]
+            is_torsional = bool(
+                v_pl[1] * v_pr[1] < -0.02 and min(abs(v_pl[1]), abs(v_pr[1])) > 0.25 * frame_amp
+            )
 
         noz_norm = float(np.linalg.norm(noz_rel))
         th_norm = float(np.linalg.norm(th_rel))
@@ -432,6 +703,13 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 "is_bed_z_mode": is_bed_z_mode,
                 "rec_x": rec_x,
                 "rec_y": rec_y,
+                "frame_ke_share": frame_ke_share,
+                "gantry_ke_share": gantry_ke_share,
+                "th_ke_share": th_ke_share,
+                "bed_ke_share": bed_ke_share,
+                "frame_amp": frame_amp,
+                "gantry_amp": gantry_amp,
+                "is_torsional": is_torsional,
             }
         )
 
@@ -490,6 +768,21 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                     node.id: [round(float(v), 4) for v in trans[i]]
                     for i, node in enumerate(assembly.nodes)
                 }
+                m_lbl, m_shake, m_fix, m_sev = _classify_mode_diagnosis(
+                    assembly=assembly,
+                    freq_hz=freq_hz,
+                    dom_axis=dom_axis,
+                    excited_axis=excited_axis,
+                    frame_ke_share=float(c["frame_ke_share"]),
+                    gantry_ke_share=float(c["gantry_ke_share"]),
+                    th_ke_share=float(c["th_ke_share"]),
+                    bed_ke_share=float(c["bed_ke_share"]),
+                    frame_amp=float(c["frame_amp"]),
+                    gantry_amp=float(c["gantry_amp"]),
+                    noz_amp=noz_norm,
+                    th_amp=th_norm,
+                    is_torsional=bool(c["is_torsional"]),
+                )
                 modes.append(
                     ModeShape(
                         mode_number=len(modes) + 1,
@@ -498,6 +791,10 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                         toolhead_participation_xyz=part,
                         nodal_vectors=nodal_vectors,
                         excited_axis=excited_axis,
+                        mode_label=m_lbl,
+                        what_is_shaking=m_shake,
+                        how_to_fix=m_fix,
+                        severity=m_sev,
                     )
                 )
         elif len(fallback_modes) < k_ret:
@@ -506,6 +803,21 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 node.id: [round(float(v), 4) for v in trans[i]]
                 for i, node in enumerate(assembly.nodes)
             }
+            m_lbl, m_shake, m_fix, m_sev = _classify_mode_diagnosis(
+                assembly=assembly,
+                freq_hz=freq_hz,
+                dom_axis=dom_axis,
+                excited_axis=excited_axis,
+                frame_ke_share=float(c["frame_ke_share"]),
+                gantry_ke_share=float(c["gantry_ke_share"]),
+                th_ke_share=float(c["th_ke_share"]),
+                bed_ke_share=float(c["bed_ke_share"]),
+                frame_amp=float(c["frame_amp"]),
+                gantry_amp=float(c["gantry_amp"]),
+                noz_amp=noz_norm,
+                th_amp=th_norm,
+                is_torsional=bool(c["is_torsional"]),
+            )
             fallback_modes.append(
                 ModeShape(
                     mode_number=len(fallback_modes) + 1,
@@ -514,6 +826,10 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                     toolhead_participation_xyz=part,
                     nodal_vectors=nodal_vectors,
                     excited_axis=excited_axis,
+                    mode_label=m_lbl,
+                    what_is_shaking=m_shake,
+                    how_to_fix=m_fix,
+                    severity=m_sev,
                 )
             )
 

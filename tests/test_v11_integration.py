@@ -285,3 +285,81 @@ def test_mcp_v11_new_tools() -> None:
     assert len(se_res["fixed_interface_freqs_hz"]) == 6
     assert len(se_res["source_hash"]) == 64
     assert all(val > 0.0 for val in se_res["port_stiffness_diag"].values())
+
+
+def test_human_readable_fea_modal_and_grouped_sensitivity_diagnoses() -> None:
+    """Verify grouped ROI targets, mode diagnoses, and plain-English static FEA summaries."""
+    for fname in (
+        "voron_trident_300.yaml",
+        "voron_monolith_awd.yaml",
+        "cartesian_bedslinger.yaml",
+        "delta_racer.yaml",
+    ):
+        spec = PrinterSpec.from_yaml(EXAMPLES_DIR / fname)
+        rep = evaluate_printer(spec, panel_mesh_n=2)
+        d = rep.to_dict(include_toolpath_segments=False)
+
+        # Static FEA human-readable stress part & flex explanation
+        assert rep.static_fea.peak_stress_part_label
+        assert rep.static_fea.top_flex_explanation
+        assert d["static_fea"]["peak_stress_part_label"] == rep.static_fea.peak_stress_part_label
+        assert d["static_fea"]["top_flex_explanation"] == rep.static_fea.top_flex_explanation
+        assert "__s" not in rep.static_fea.peak_stress_part_label
+
+        # Modal FEA per-mode plain-English diagnoses and severity thresholds
+        assert len(rep.modal_fea.modes) > 0
+        for m, md in zip(rep.modal_fea.modes, d["modal_fea"]["modes"]):
+            assert m.mode_label
+            assert m.what_is_shaking
+            assert m.how_to_fix
+            assert m.severity in {"critical", "moderate", "stiff"}
+            if m.frequency_hz < 65.0:
+                assert m.severity == "critical"
+            elif m.frequency_hz < 115.0:
+                assert m.severity == "moderate"
+            else:
+                assert m.severity == "stiff"
+            assert md["mode_label"] == m.mode_label
+            assert md["what_is_shaking"] == m.what_is_shaking
+            assert md["how_to_fix"] == m.how_to_fix
+            assert md["severity"] == m.severity
+
+        # Sensitivity grouped targets & summary diagnosis
+        sens = d["sensitivity"]
+        assert sens is not None
+        assert sens["summary_diagnosis"]
+
+        stiffen_ids = [t["id"] for t in sens["top_stiffen_targets"]]
+        assert len(stiffen_ids) == len(set(stiffen_ids)), f"Duplicate stiffen targets in {fname}: {stiffen_ids}"
+        for t in sens["top_stiffen_targets"]:
+            assert "__s" not in t["id"]
+            assert t["label"]
+            assert t["why_it_hurts"]
+            assert t["action_hint"]
+            assert isinstance(t["est_hz_gain"], float)
+            assert t["est_hz_gain"] >= 0.0
+            assert {"id", "role", "hz_per_usd", "compliance_share_pct", "action_hint"} <= set(t.keys())
+
+        lighten_ids = [t["id"] for t in sens["top_lighten_targets"]]
+        assert len(lighten_ids) == len(set(lighten_ids)), f"Duplicate lighten targets in {fname}: {lighten_ids}"
+        for t in sens["top_lighten_targets"]:
+            assert "__s" not in t["id"]
+            assert t["label"]
+            assert t["why_it_hurts"]
+            assert t["action_hint"]
+            assert t["hz_gain_per_100g_saved"] > 0.0
+            assert {"id", "role", "mass_sens_hz", "hz_per_100g", "action_hint"} <= set(t.keys())
+
+    # Spec-tailored action hints check: Trident (clip acrylic) vs Monolith (already bolted 4mm Al)
+    trident_rep = evaluate_printer(PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml"))
+    monolith_rep = evaluate_printer(PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml"))
+    assert trident_rep.sensitivity is not None and monolith_rep.sensitivity is not None
+    trident_col = next(
+        t for t in trident_rep.sensitivity.top_stiffen_targets if t["id"] == "front_frame_columns"
+    )
+    monolith_col = next(
+        t for t in monolith_rep.sensitivity.top_stiffen_targets if t["id"] == "front_frame_columns"
+    )
+    assert "Bolted Structural" in trident_col["action_hint"]
+    assert "Bolted Structural" not in monolith_col["action_hint"]
+    assert "3030" in monolith_col["action_hint"] or "Epoxy Granite" in monolith_col["action_hint"]

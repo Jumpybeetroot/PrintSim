@@ -14,6 +14,67 @@ from printsim.fea.shell_mitc4 import mitc4_shell_von_mises_mpa
 from printsim.geometry.builder import AssemblyModel
 
 
+def classify_part_group(member_id: str, role: str = "") -> tuple[str, str]:
+    """Map internal split member/bay IDs to clean physical ``(group_id, label)`` pairs."""
+    mid = member_id.strip()
+    if mid.startswith(("col_fl", "col_fr")):
+        return "front_frame_columns", "Front Frame Columns"
+    if mid.startswith(("col_rl", "col_rr")):
+        return "rear_frame_columns", "Rear Frame Columns"
+    if mid.startswith("col_"):
+        return "frame_columns", "Frame Vertical Columns"
+    if mid.startswith("z_col_"):
+        return "z_gantry_uprights", "Z-Axis Gantry Uprights"
+    if mid.startswith("tower_") or role == "tower":
+        return "delta_towers", "Delta Vertical Towers"
+    if mid.startswith("arm_"):
+        return "delta_arms", "Delta Diagonal Arms"
+    if mid.startswith(("x_gantry", "x_beam")):
+        return "x_gantry_beam", "Moving X-Gantry Beam"
+    if mid.startswith(("y_rail", "gantry_y")):
+        return "y_axis_rail_beams", "Y-Axis Rail Beams"
+    if mid.startswith(("toolhead_mount", "nozzle_stem")):
+        return "toolhead_mount", "Toolhead & Nozzle Mount"
+    if mid.startswith(("bed_", "z_bed")):
+        return "bed_support", "Bed Support & Z Arms"
+    if mid.startswith("panel_shear_"):
+        if "left" in mid or "right" in mid:
+            return "side_panels", "Left & Right Enclosure Panels"
+        if "rear" in mid:
+            return "rear_panel", "Rear Enclosure Panel"
+        if "top" in mid:
+            return "top_panel", "Top Enclosure Panel"
+        return "enclosure_panels", "Enclosure Shear Panels"
+    if mid.startswith(("brace_", "diag_")):
+        return "frame_bracing", "Frame Diagonal Bracing"
+    if mid.startswith(("bay_left", "bay_right")):
+        return "side_panels", "Left & Right Enclosure Panels"
+    if mid.startswith("bay_rear"):
+        return "rear_panel", "Rear Enclosure Panel"
+    if mid.startswith("bay_top"):
+        return "top_panel", "Top Enclosure Panel"
+    if mid.startswith(
+        ("top_", "bot_", "base_", "g_front", "g_rear", "g_left", "g_right", "gantry_rear_bar", "portal_top")
+    ):
+        return "frame_perimeter_beams", "Frame Perimeter Beams"
+
+    if role == "rail":
+        return "y_axis_rail_beams", "Y-Axis Rail Beams"
+    if role == "gantry":
+        return "x_gantry_beam", "Moving X-Gantry Beam"
+    if role == "brace":
+        return "frame_bracing", "Frame Diagonal Bracing"
+    if role == "bed":
+        return "bed_support", "Bed Support & Z Arms"
+    if role == "toolhead":
+        return "toolhead_mount", "Toolhead & Nozzle Mount"
+    if role == "panel" or mid.startswith("bay_"):
+        return "enclosure_panels", "Enclosure Panels"
+    if role == "frame":
+        return "frame_perimeter_beams", "Frame Perimeter Beams"
+    return mid, mid.replace("_", " ").title()
+
+
 @dataclass
 class MemberStressResult:
     member_id: str
@@ -61,6 +122,8 @@ class StaticFEAResult:
     nodal_displacements_xy_mm: dict[str, list[float]] = field(default_factory=dict)
     member_stresses: list[MemberStressResult] = field(default_factory=list)
     shell_panel_stresses: list[ShellStressResult] = field(default_factory=list)
+    peak_stress_part_label: str = ""
+    top_flex_explanation: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +144,8 @@ class StaticFEAResult:
             "min_safety_factor": round(min(self.min_safety_factor, 999.0), 2),
             "peak_inertial_force_x_n": round(self.peak_inertial_force_x_n, 2),
             "peak_inertial_force_y_n": round(self.peak_inertial_force_y_n, 2),
+            "peak_stress_part_label": self.peak_stress_part_label,
+            "top_flex_explanation": self.top_flex_explanation,
             "nodal_displacements_mm": self.nodal_displacements_mm,
             "nodal_displacements_x_mm": self.nodal_displacements_x_mm,
             "nodal_displacements_y_mm": self.nodal_displacements_y_mm,
@@ -396,6 +461,38 @@ def solve_static_fea(
             )
         )
 
+    resolved_sf = min_sf if np.isfinite(min_sf) else 999.0
+    sf_disp = min(resolved_sf, 999.0)
+
+    peak_member = max(member_stresses, key=lambda m: m.von_mises_mpa, default=None)
+    peak_shell = max(shell_panel_stresses, key=lambda s: s.von_mises_mpa, default=None)
+    if peak_shell is not None and (
+        peak_member is None or peak_shell.von_mises_mpa > peak_member.von_mises_mpa
+    ):
+        bay_base = peak_shell.bay.split("_")[0]
+        _, peak_stress_label = classify_part_group(f"bay_{bay_base}", "panel")
+    elif peak_member is not None:
+        _, peak_stress_label = classify_part_group(peak_member.member_id, peak_member.role)
+    else:
+        peak_stress_label = "Frame Structure"
+
+    if max(defl_x_um, defl_y_um) >= grav_sag_um:
+        top_flex_explanation = (
+            f"Under horizontal XY print acceleration, the nozzle flexes {defl_x_um:.1f} µm (X) / "
+            f"{defl_y_um:.1f} µm (Y) relative to the bed vs {grav_sag_um:.1f} µm gravity sag "
+            f"(peak stress in {peak_stress_label}: {max_vm:.1f} MPa, SF {sf_disp:.0f}×)."
+        )
+    else:
+        top_flex_explanation = (
+            f"Static gravity sag is {grav_sag_um:.1f} µm while XY print acceleration adds "
+            f"{defl_x_um:.1f} µm (X) / {defl_y_um:.1f} µm (Y) nozzle-to-bed flex "
+            f"(peak stress in {peak_stress_label}: {max_vm:.1f} MPa, SF {sf_disp:.0f}×)."
+        )
+    if nozzle_twist_amp_pct > 25.0:
+        top_flex_explanation += (
+            f" Toolhead pitch adds +{nozzle_twist_amp_pct:.0f}% lever-arm twist at the nozzle tip."
+        )
+
     return StaticFEAResult(
         gravity_sag_toolhead_um=grav_sag_um,
         accel_deflection_x_um=defl_x_um,
@@ -411,7 +508,7 @@ def solve_static_fea(
         toolhead_stiffness_y_n_per_mm=stiff_y,
         toolhead_stiffness_z_n_per_mm=stiff_z,
         max_von_mises_mpa=max_vm,
-        min_safety_factor=min_sf if np.isfinite(min_sf) else 999.0,
+        min_safety_factor=resolved_sf,
         peak_inertial_force_x_n=f_inertial_x,
         peak_inertial_force_y_n=f_inertial_y,
         nodal_displacements_mm=nodal_disp_mm,
@@ -420,4 +517,6 @@ def solve_static_fea(
         nodal_displacements_xy_mm=nodal_disp_xy_mm,
         member_stresses=member_stresses,
         shell_panel_stresses=shell_panel_stresses,
+        peak_stress_part_label=peak_stress_label,
+        top_flex_explanation=top_flex_explanation,
     )
