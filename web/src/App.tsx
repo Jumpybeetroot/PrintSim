@@ -7,6 +7,7 @@ import {
   CatalogResponse,
   CompareMode,
   DeepVerifyResponse,
+  FeaLoadCase,
   HistorySnapshot,
   ParetoOptResponse,
   ParetoPointData,
@@ -108,6 +109,12 @@ const RAIL_PROFILE_LABELS: Record<string, string> = {
   mgn12_rail: "MGN12H",
 };
 
+const DRIVE_TYPE_LABELS: Record<string, string> = {
+  open_loop_stepper: "Open-Loop Stepper",
+  closed_loop_stepper: "Closed-Loop Stepper",
+  foc_servo: "FOC Servo (Closed-Loop)",
+};
+
 function formatPanelDesc(frame: PrinterSpecData["frame"]): string {
   const mounting = !frame.enclosed_panels ? "none" : frame.panel_mounting || "bolted_structural";
   if (!frame.enclosed_panels || mounting === "none") return "Open";
@@ -188,6 +195,26 @@ function describeSpecDiff(
       EXTRUSION_FILLING_LABELS[nextFill] ??
       nextFill;
     diffs.push(`Extrusion Fill: ${prevFillLabel} → ${nextFillLabel}`);
+  }
+  if ((prev.frame.corner_joint_type ?? "blind_joint") !== (next.frame.corner_joint_type ?? "blind_joint")) {
+    diffs.push(
+      `Corner Joint: ${prev.frame.corner_joint_type ?? "blind_joint"} → ${next.frame.corner_joint_type ?? "blind_joint"}`
+    );
+  }
+  if (Math.round(prev.frame.chamber_temp_c ?? 25) !== Math.round(next.frame.chamber_temp_c ?? 25)) {
+    diffs.push(
+      `Chamber Temp: ${Math.round(prev.frame.chamber_temp_c ?? 25)}°C → ${Math.round(next.frame.chamber_temp_c ?? 25)}°C`
+    );
+  }
+  if (Math.round(prev.bed.target_temp_c ?? 60) !== Math.round(next.bed.target_temp_c ?? 60)) {
+    diffs.push(
+      `Bed Temp: ${Math.round(prev.bed.target_temp_c ?? 60)}°C → ${Math.round(next.bed.target_temp_c ?? 60)}°C`
+    );
+  }
+  if ((prev.bed.mount_type ?? "kinematic_3pt") !== (next.bed.mount_type ?? "kinematic_3pt")) {
+    diffs.push(
+      `Bed Mount: ${prev.bed.mount_type ?? "kinematic_3pt"} → ${next.bed.mount_type ?? "kinematic_3pt"}`
+    );
   }
   if (prev.bed.z_drive !== next.bed.z_drive) {
     diffs.push(
@@ -314,6 +341,28 @@ function describeSpecDiff(
   if (prev.gantry.belt.pretension_n !== next.gantry.belt.pretension_n) {
     diffs.push(`Belt Tension: ${prev.gantry.belt.pretension_n} N → ${next.gantry.belt.pretension_n} N`);
   }
+  if ((prev.gantry.rail_preload ?? "Z0") !== (next.gantry.rail_preload ?? "Z0")) {
+    diffs.push(`Rail Preload: ${prev.gantry.rail_preload ?? "Z0"} → ${next.gantry.rail_preload ?? "Z0"}`);
+  }
+  if ((prev.gantry.rail_block_type ?? "H") !== (next.gantry.rail_block_type ?? "H")) {
+    diffs.push(`Carriage Block: ${prev.gantry.rail_block_type ?? "H"} → ${next.gantry.rail_block_type ?? "H"}`);
+  }
+  if ((prev.gantry.rail_bolt_pitch_mm ?? 25) !== (next.gantry.rail_bolt_pitch_mm ?? 25)) {
+    diffs.push(`Rail Bolt Pitch: ${prev.gantry.rail_bolt_pitch_mm ?? 25}mm → ${next.gantry.rail_bolt_pitch_mm ?? 25}mm`);
+  }
+  if ((prev.gantry.rail_backer_material ?? "none") !== (next.gantry.rail_backer_material ?? "none")) {
+    diffs.push(`Rail Backer: ${prev.gantry.rail_backer_material ?? "none"} → ${next.gantry.rail_backer_material ?? "none"}`);
+  }
+  if ((prev.gantry.belt.idler_shaft_diameter_mm ?? 5) !== (next.gantry.belt.idler_shaft_diameter_mm ?? 5)) {
+    diffs.push(
+      `Idler Shaft: ${prev.gantry.belt.idler_shaft_diameter_mm ?? 5}mm → ${next.gantry.belt.idler_shaft_diameter_mm ?? 5}mm`
+    );
+  }
+  if ((prev.gantry.belt.bearing_clearance_class ?? "CN") !== (next.gantry.belt.bearing_clearance_class ?? "CN")) {
+    diffs.push(
+      `Bearing Play: ${prev.gantry.belt.bearing_clearance_class ?? "CN"} → ${next.gantry.belt.bearing_clearance_class ?? "CN"}`
+    );
+  }
   if (prev.kinematics.max_velocity_mm_s !== next.kinematics.max_velocity_mm_s) {
     diffs.push(`Max Vel: ${prev.kinematics.max_velocity_mm_s} → ${next.kinematics.max_velocity_mm_s} mm/s`);
   }
@@ -324,6 +373,26 @@ function describeSpecDiff(
   }
   if (prev.kinematics.input_shaper !== next.kinematics.input_shaper) {
     diffs.push(`Input Shaper: ${prev.kinematics.input_shaper.toUpperCase()} → ${next.kinematics.input_shaper.toUpperCase()}`);
+  }
+  const prevDriveType = prev.kinematics.drive_type ?? "open_loop_stepper";
+  const nextDriveType = next.kinematics.drive_type ?? "open_loop_stepper";
+  if (prevDriveType !== nextDriveType) {
+    diffs.push(
+      `Drive Control: ${DRIVE_TYPE_LABELS[prevDriveType] ?? prevDriveType} → ${
+        DRIVE_TYPE_LABELS[nextDriveType] ?? nextDriveType
+      }`
+    );
+  }
+  const prevNotch = prev.kinematics.notch_filter_hz ?? null;
+  const nextNotch = next.kinematics.notch_filter_hz ?? null;
+  if (prevNotch !== nextNotch) {
+    const fmtNotch = (v: number | null) => (v != null && v > 0 ? `${Math.round(v)} Hz` : "Off");
+    diffs.push(`Notch Filter: ${fmtNotch(prevNotch)} → ${fmtNotch(nextNotch)}`);
+  }
+  const prevVelBw = prev.kinematics.servo_vel_bw_hz ?? 120;
+  const nextVelBw = next.kinematics.servo_vel_bw_hz ?? 120;
+  if (nextDriveType !== "open_loop_stepper" && Math.round(prevVelBw) !== Math.round(nextVelBw)) {
+    diffs.push(`Servo Vel BW: ${Math.round(prevVelBw)} Hz → ${Math.round(nextVelBw)} Hz`);
   }
   if (
     (prev.kinematics.xy_stepper.preset_id ?? "") !== (next.kinematics.xy_stepper.preset_id ?? "") ||
@@ -450,6 +519,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("assembly");
   const [selectedModeIdx, setSelectedModeIdx] = useState<number>(0);
   const [feaScale, setFeaScale] = useState<number>(600);
+  const [feaLoadCase, setFeaLoadCase] = useState<FeaLoadCase>("xy");
   const [layerLimit, setLayerLimit] = useState<number>(999);
 
   // Refs for atomic history capture & stale-request guarding
@@ -1165,7 +1235,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-badge">PrintSim 0.9</span>
+          <span className="brand-badge">PrintSim 1.1</span>
           <span>Multiphysics 3D Printer Studio</span>
           {optMessage && (
             <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
@@ -1238,7 +1308,6 @@ export default function App() {
           filamentId={filamentId}
           onFilamentChange={handleFilamentChange}
           spec={spec}
-          baselineSpec={baselineSpec}
           onSpecChange={handleSpecChange}
           yamlText={yamlText}
           onYamlChange={setYamlText}
@@ -1268,6 +1337,8 @@ export default function App() {
           onSelectModeIdx={setSelectedModeIdx}
           feaScale={feaScale}
           onFeaScaleChange={setFeaScale}
+          feaLoadCase={feaLoadCase}
+          onFeaLoadCaseChange={setFeaLoadCase}
           layerLimit={layerLimit}
           onLayerLimitChange={setLayerLimit}
         />
@@ -1296,6 +1367,7 @@ export default function App() {
           activeSolidEngine={activeSolidEngine}
           topoResult={topoResult}
           viewMode={viewMode}
+          onViewModeChange={setViewMode}
           bom={bom}
           bomLoading={bomLoading}
           stockLengthMm={stockLengthMm}

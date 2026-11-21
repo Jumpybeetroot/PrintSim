@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  FeaLoadCase,
   GeometryMember,
   ShellPanelGeometryData,
   SimulationResponse,
@@ -26,6 +27,8 @@ interface Props {
   onSelectModeIdx: (idx: number) => void;
   feaScale: number;
   onFeaScaleChange: (s: number) => void;
+  feaLoadCase: FeaLoadCase;
+  onFeaLoadCaseChange: (lc: FeaLoadCase) => void;
   layerLimit: number;
   onLayerLimitChange: (l: number) => void;
 }
@@ -109,6 +112,31 @@ function stressColorInto(t: number, out: THREE.Color): THREE.Color {
 
 function stressColor(t: number): THREE.Color {
   return stressColorInto(t, new THREE.Color());
+}
+
+const SENS_NEG_MAX = new THREE.Color("#06b6d4"); // electric cyan (-1.0)
+const SENS_NEG_MID = new THREE.Color("#38bdf8"); // sky (-0.5)
+const SENS_NEUTRAL = new THREE.Color("#334155"); // slate (0.0)
+const SENS_POS_MID = new THREE.Color("#f59e0b"); // amber (+0.5)
+const SENS_POS_MAX = new THREE.Color("#ef4444"); // blazing crimson (+1.0)
+
+function sensitivityColorInto(score: number, out: THREE.Color): THREE.Color {
+  const s = Math.max(-1, Math.min(1, Number.isFinite(score) ? score : 0));
+  if (s >= 0) {
+    if (s < 0.5) {
+      out.lerpColors(SENS_NEUTRAL, SENS_POS_MID, s / 0.5);
+    } else {
+      out.lerpColors(SENS_POS_MID, SENS_POS_MAX, (s - 0.5) / 0.5);
+    }
+  } else {
+    const a = -s;
+    if (a < 0.5) {
+      out.lerpColors(SENS_NEUTRAL, SENS_NEG_MID, a / 0.5);
+    } else {
+      out.lerpColors(SENS_NEG_MID, SENS_NEG_MAX, (a - 0.5) / 0.5);
+    }
+  }
+  return out;
 }
 
 function toThree(ptMm: [number, number, number], cx: number, cy: number): THREE.Vector3 {
@@ -773,6 +801,8 @@ export const PrinterViewport: React.FC<Props> = ({
   onSelectModeIdx,
   feaScale,
   onFeaScaleChange,
+  feaLoadCase,
+  onFeaLoadCaseChange,
   layerLimit,
   onLayerLimitChange,
 }) => {
@@ -1341,19 +1371,32 @@ export const PrinterViewport: React.FC<Props> = ({
     const deformedPos: Record<string, THREE.Vector3> = {};
     const fixedNodeIds = new Set<string>();
 
+    const activeNodalDisplacements: Record<string, [number, number, number]> =
+      feaLoadCase === "x"
+        ? sim.static_fea.nodal_displacements_x_mm ?? sim.static_fea.nodal_displacements_mm
+        : feaLoadCase === "y"
+          ? sim.static_fea.nodal_displacements_y_mm ?? sim.static_fea.nodal_displacements_mm
+          : feaLoadCase === "gravity"
+            ? sim.static_fea.nodal_displacements_mm
+            : sim.static_fea.nodal_displacements_xy_mm ?? sim.static_fea.nodal_displacements_mm;
+
     for (const n of geom.nodes) {
       const p0 = toThree(n.position_mm, cx, cy);
       basePos[n.id] = p0;
       if (n.fixed) fixedNodeIds.add(n.id);
 
-      const disp = sim.static_fea.nodal_displacements_mm[n.id] || [0, 0, 0];
+      const disp = activeNodalDisplacements[n.id] || [0, 0, 0];
       const dispVec = new THREE.Vector3(disp[0] * SCALE, disp[2] * SCALE, -disp[1] * SCALE);
       deformedPos[n.id] = p0.clone().addScaledVector(dispVec, feaScale);
     }
     stateRef.current.basePositions = basePos;
 
     // Modal displacement vectors
-    const activeMode = sim.modal_fea.modes[selectedModeIdx] || sim.modal_fea.modes[0];
+    const modeIdx =
+      sim.modal_fea.modes.length > 0
+        ? Math.min(selectedModeIdx, sim.modal_fea.modes.length - 1)
+        : 0;
+    const activeMode = sim.modal_fea.modes[modeIdx];
     const mVecs: Record<string, THREE.Vector3> = {};
     let maxModalAmp = 0;
     if (activeMode) {
@@ -1420,7 +1463,17 @@ export const PrinterViewport: React.FC<Props> = ({
       : null;
     let ghostLineMatUsed = false;
 
-    const beamChains = groupContinuousBeams(structuralMembers, basePos, fixedNodeIds);
+    const beamChains: ContinuousBeamChain[] =
+      viewMode === "sensitivity"
+        ? structuralMembers.map((m) => ({
+            nodeIds: [m.start_id, m.end_id],
+            members: [m],
+            template: m,
+            isRod: m.shape === "rod",
+          }))
+        : groupContinuousBeams(structuralMembers, basePos, fixedNodeIds);
+
+    const memberSensMap = sim.sensitivity?.member_sensitivities ?? {};
 
     for (const chain of beamChains) {
       const m = chain.template;
@@ -1468,7 +1521,18 @@ export const PrinterViewport: React.FC<Props> = ({
       }
 
       let matColor = new THREE.Color(0xffffff);
-      if (!useVertexColors) {
+      let sensEmissive = new THREE.Color(0x000000);
+      let sensEmissiveIntensity = 0;
+
+      if (viewMode === "sensitivity") {
+        const heatScore = memberSensMap[m.id]?.heat_score ?? 0;
+        sensitivityColorInto(heatScore, matColor);
+        const absScore = Math.min(1, Math.abs(heatScore));
+        if (absScore > 0.2) {
+          sensEmissive.copy(matColor);
+          sensEmissiveIntensity = absScore * 0.28;
+        }
+      } else if (!useVertexColors) {
         matColor = new THREE.Color(m.color_hex);
         if (m.role === "brace") {
           matColor = new THREE.Color("#38bdf8");
@@ -1482,8 +1546,24 @@ export const PrinterViewport: React.FC<Props> = ({
       const mat = new THREE.MeshStandardMaterial({
         color: matColor,
         vertexColors: useVertexColors,
-        metalness: useVertexColors ? 0.25 : m.material.includes("carbon") ? 0.15 : 0.55,
-        roughness: useVertexColors ? 0.4 : m.material.includes("carbon") ? 0.65 : 0.35,
+        emissive: sensEmissive,
+        emissiveIntensity: sensEmissiveIntensity,
+        metalness:
+          viewMode === "sensitivity"
+            ? 0.22
+            : useVertexColors
+              ? 0.25
+              : m.material.includes("carbon")
+                ? 0.15
+                : 0.55,
+        roughness:
+          viewMode === "sensitivity"
+            ? 0.42
+            : useVertexColors
+              ? 0.4
+              : m.material.includes("carbon")
+                ? 0.65
+                : 0.35,
         transparent: frameOpacity < 1,
         opacity: frameOpacity,
       });
@@ -1593,9 +1673,10 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // TRUE 2D MITC4 Shell Panel 3D Stress Heatmaps (fea_stress) & Live 3D Panel Drum/Flex Modes (modal)
+    // TRUE 2D MITC4 Shell Panel 3D Stress Heatmaps (fea_stress), Live 3D Panel Modes (modal),
+    // and Adjoint Sensitivity ROI Bay Heatmaps (sensitivity)
     if (
-      (viewMode === "fea_stress" || viewMode === "modal") &&
+      (viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity") &&
       geom.shell_panels &&
       geom.shell_panels.length > 0
     ) {
@@ -1670,19 +1751,24 @@ export const PrinterViewport: React.FC<Props> = ({
             positions[o + 1] = pt.y;
             positions[o + 2] = pt.z;
 
-            let scalar = 0;
-            if (viewMode === "fea_stress") {
-              const bayKey = `${bay}:${nid}`;
-              const avgVm = panelStressCount[bayKey]
-                ? panelStressSum[bayKey] / panelStressCount[bayKey]
-                : panelStressCount[nid]
-                  ? panelStressSum[nid] / panelStressCount[nid]
-                  : 0;
-              scalar = avgVm / maxStress;
+            if (viewMode === "sensitivity") {
+              const bayScore = sim.sensitivity?.panel_bay_sensitivities?.[bay]?.heat_score ?? 0;
+              sensitivityColorInto(bayScore, _beamCol);
             } else {
-              scalar = Math.min(1, (mVecs[nid]?.length() ?? 0) / modalAmpNorm);
+              let scalar = 0;
+              if (viewMode === "fea_stress") {
+                const bayKey = `${bay}:${nid}`;
+                const avgVm = panelStressCount[bayKey]
+                  ? panelStressSum[bayKey] / panelStressCount[bayKey]
+                  : panelStressCount[nid]
+                    ? panelStressSum[nid] / panelStressCount[nid]
+                    : 0;
+                scalar = avgVm / maxStress;
+              } else {
+                scalar = Math.min(1, (mVecs[nid]?.length() ?? 0) / modalAmpNorm);
+              }
+              stressColorInto(scalar, _beamCol);
             }
-            stressColorInto(scalar, _beamCol);
             colors[o] = _beamCol.r;
             colors[o + 1] = _beamCol.g;
             colors[o + 2] = _beamCol.b;
@@ -1770,7 +1856,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
         const sidePanels = validPanels.filter((p) => p.bay !== "top");
         const topPanels = validPanels.filter((p) => p.bay === "top");
-        addShellLayer(sidePanels, 0.72);
+        addShellLayer(sidePanels, viewMode === "sensitivity" ? 0.65 : 0.72);
         addShellLayer(topPanels, 0.28);
       }
     }
@@ -2258,8 +2344,9 @@ export const PrinterViewport: React.FC<Props> = ({
       color: 0x2a3444,
       metalness: 0.4,
       roughness: 0.45,
-      transparent: viewMode === "fea_stress" || viewMode === "modal",
-      opacity: viewMode === "fea_stress" || viewMode === "modal" ? 0.42 : 0.95,
+      transparent: viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity",
+      opacity:
+        viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity" ? 0.38 : 0.95,
     });
     const bedMesh = new THREE.Mesh(bedGeo, bedMat);
     const bedBaseCenter = toThree(geom.bed_center_mm, cx, cy);
@@ -2347,7 +2434,10 @@ export const PrinterViewport: React.FC<Props> = ({
     const nozAnchor = viewMode === "fea_stress" ? deformedPos[nozNodeId] : basePos[nozNodeId];
 
     const isCogNozMode =
-      viewMode === "assembly" || viewMode === "fea_stress" || viewMode === "modal";
+      viewMode === "assembly" ||
+      viewMode === "fea_stress" ||
+      viewMode === "modal" ||
+      viewMode === "sensitivity";
 
     if (isCogNozMode && thAnchor && cogAnchor && nozAnchor) {
       const mountMatId = geom.mount_material ?? sim.spec.toolhead.mount_material ?? "abs_printed";
@@ -2575,11 +2665,16 @@ export const PrinterViewport: React.FC<Props> = ({
     viewMode,
     selectedModeIdx,
     feaScale,
+    feaLoadCase,
     layerLimit,
   ]);
 
   const maxLayers = Math.max(0, (sim?.virtual_print.layer_count ?? 1) - 1);
-  const activeMode = sim?.modal_fea.modes[selectedModeIdx];
+  const clampedModeIdx =
+    sim && sim.modal_fea.modes.length > 0
+      ? Math.min(selectedModeIdx, sim.modal_fea.modes.length - 1)
+      : 0;
+  const activeMode = sim?.modal_fea.modes[clampedModeIdx];
 
   const xRailMountHud: XRailMountType =
     sim?.geometry.linear_rails?.x_rail_mount ??
@@ -2619,6 +2714,7 @@ export const PrinterViewport: React.FC<Props> = ({
               ["assembly", "Assembly"],
               ["fea_stress", "Frame FEA"],
               ["modal", "Modal"],
+              ["sensitivity", "Adjoint ROI"],
               ["toolpath", "Virtual Print"],
               ["solid_part", "3D Solid Part"],
               ["topology", "Topo Opt"],
@@ -2652,51 +2748,100 @@ export const PrinterViewport: React.FC<Props> = ({
 
       <div className="viewport-hud-bottom">
         {viewMode === "fea_stress" && sim && (
-          <div className="hud-card">
-            {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
-              <span className="badge-pill">
-                MITC4 {sim.geometry.panel_mesh_n ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}` : "Shell"} ·{" "}
-                {sim.geometry.shell_panels.length} quads
+          <>
+            <div className="hud-card">
+              <span style={{ color: "var(--muted)", fontWeight: 600 }}>Load:</span>
+              {(
+                [
+                  ["xy", "XY Accel", "Combined horizontal X+Y print acceleration (zero gravity Z-sag)"],
+                  ["x", "X Accel", "Pure horizontal X-axis print acceleration (zero gravity Z-sag)"],
+                  ["y", "Y Accel", "Pure horizontal Y-axis print acceleration (zero gravity Z-sag)"],
+                  ["gravity", "+Gravity", "Full load envelope including static gravity Z-sag"],
+                ] as Array<[FeaLoadCase, string, string]>
+              ).map(([id, label, tip]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`hud-pill ${feaLoadCase === id ? "active" : ""}`}
+                  style={{ padding: "3px 8px", fontSize: 11 }}
+                  title={tip}
+                  onClick={() => onFeaLoadCaseChange(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="hud-card">
+              {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
+                <span className="badge-pill">
+                  MITC4 {sim.geometry.panel_mesh_n ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}` : "Shell"} ·{" "}
+                  {sim.geometry.shell_panels.length} quads
+                </span>
+              )}
+              <span>0 MPa</span>
+              <div className="legend-gradient" />
+              <span>
+                {Math.max(
+                  sim.static_fea.max_von_mises_mpa,
+                  sim.static_fea.panel_max_von_mises_mpa ?? 0
+                ).toFixed(2)}{" "}
+                MPa
               </span>
-            )}
-            <span>0 MPa</span>
-            <div className="legend-gradient" />
-            <span>
-              {Math.max(
-                sim.static_fea.max_von_mises_mpa,
-                sim.static_fea.panel_max_von_mises_mpa ?? 0
-              ).toFixed(2)}{" "}
-              MPa
-            </span>
-            <span style={{ color: "var(--muted)" }}>|</span>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
-              Deflection ×{feaScale}
-              <input
-                type="range"
-                min={50}
-                max={2500}
-                step={50}
-                value={feaScale}
-                onChange={(e) => onFeaScaleChange(Number(e.target.value))}
-                style={{ width: 100 }}
-              />
-            </label>
-          </div>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
+                Deflection ×{feaScale}
+                <input
+                  type="range"
+                  min={50}
+                  max={2500}
+                  step={50}
+                  value={feaScale}
+                  onChange={(e) => onFeaScaleChange(Number(e.target.value))}
+                  style={{ width: 100 }}
+                />
+              </label>
+            </div>
+          </>
         )}
 
         {viewMode === "modal" && sim && (
           <div className="hud-card">
             <span>Mode:</span>
-            {sim.modal_fea.modes.slice(0, 6).map((m, idx) => (
-              <button
-                key={m.mode_number}
-                className={`hud-pill ${selectedModeIdx === idx ? "active" : ""}`}
-                style={{ padding: "4px 8px" }}
-                onClick={() => onSelectModeIdx(idx)}
-              >
-                M{m.mode_number}: {m.frequency_hz.toFixed(1)}Hz ({m.dominant_axis})
-              </button>
-            ))}
+            {sim.modal_fea.modes.slice(0, 6).map((m, idx) => {
+              const axisTag = m.excited_axis ? `${m.excited_axis}-Accel` : m.dominant_axis;
+              return (
+                <button
+                  key={m.mode_number}
+                  type="button"
+                  className={`hud-pill ${clampedModeIdx === idx ? "active" : ""}`}
+                  style={{ padding: "4px 8px" }}
+                  onClick={() => onSelectModeIdx(idx)}
+                  title={`Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz) — excited by ${axisTag}`}
+                >
+                  Mode {m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {viewMode === "sensitivity" && sim && (
+          <div className="hud-card">
+            <div className="legend-gradient sensitivity" />
+            <span style={{ color: "#22d3ee", fontWeight: 700 }}>Cyan = Lighten Mass (-Hz/100g)</span>
+            <span style={{ color: "var(--muted)" }}>·</span>
+            <span style={{ color: "#94a3b8", fontWeight: 600 }}>Slate = Neutral</span>
+            <span style={{ color: "var(--muted)" }}>·</span>
+            <span style={{ color: "#f87171", fontWeight: 700 }}>Red = Stiffen Hotspot (+Hz/USD)</span>
+            {sim.sensitivity?.top_stiffen_targets?.[0] && (
+              <>
+                <span style={{ color: "var(--muted)" }}>|</span>
+                <span className="badge-pill warn">
+                  #1 Stiffen: {sim.sensitivity.top_stiffen_targets[0].id} (+
+                  {sim.sensitivity.top_stiffen_targets[0].hz_per_usd.toFixed(2)} Hz/$)
+                </span>
+              </>
+            )}
           </div>
         )}
 
@@ -2906,6 +3051,12 @@ export const PrinterViewport: React.FC<Props> = ({
 
         {viewMode === "modal" && activeMode && (
           <div className="hud-card">
+            {activeMode.excited_axis && (
+              <>
+                <span className="badge-pill">{activeMode.excited_axis}-Accel Excited</span>
+                <span style={{ color: "var(--muted)" }}>|</span>
+              </>
+            )}
             <span>
               <strong style={{ color: "#f59e0b" }}>●</strong> CoG &amp;{" "}
               <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle Pitch

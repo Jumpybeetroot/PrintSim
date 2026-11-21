@@ -71,6 +71,25 @@ export type XRailMountType = "front" | "top" | "bottom" | "dual_top_bottom";
 
 export type YRailMountType = "top" | "inner" | "bottom";
 
+export type CornerJointType =
+  | "rigid"
+  | "l_bracket"
+  | "blind_joint"
+  | "gusset_plate"
+  | "corner_cube";
+
+export type RailPreloadType = "ZF" | "Z0" | "Z1" | "ZA" | "ZB";
+
+export type RailBlockType = "C" | "H";
+
+export type RailBackerMaterialType = "none" | "steel_4140" | "titanium_grade5";
+
+export type BearingClearanceClass = "C2" | "CN" | "C3";
+
+export type BedMountType = "kinematic_3pt" | "floating_4pt" | "rigid_4pt";
+
+export type DriveType = "open_loop_stepper" | "closed_loop_stepper" | "foc_servo";
+
 export interface RailMountOption<T extends string = string> {
   id: T;
   name: string;
@@ -320,6 +339,8 @@ export interface PrinterSpecData {
     panel_thickness_mm: number;
     bolt_panels_to_gantry?: boolean;
     extrusion_filling?: ExtrusionFillingType;
+    corner_joint_type?: CornerJointType;
+    chamber_temp_c?: number;
   };
   gantry: {
     x_beam_profile: string;
@@ -330,6 +351,11 @@ export interface PrinterSpecData {
     x_rail_mount?: XRailMountType;
     y_rail_mount?: YRailMountType;
     dual_x_rails: boolean;
+    rail_preload?: RailPreloadType;
+    rail_block_type?: RailBlockType;
+    rail_bolt_pitch_mm?: number;
+    rail_backer_material?: RailBackerMaterialType;
+    rail_backer_thickness_mm?: number;
     drive_mode: "2wd" | "awd";
     double_shear_pulleys: boolean;
     bracket_material?: BracketMaterialType;
@@ -340,6 +366,9 @@ export interface PrinterSpecData {
       pulley_teeth: number;
       pitch_mm: number;
       pretension_n: number;
+      wrap_angle_deg?: number;
+      idler_shaft_diameter_mm?: number;
+      bearing_clearance_class?: BearingClearanceClass;
     };
   };
   kinematics: {
@@ -349,7 +378,20 @@ export interface PrinterSpecData {
     max_z_velocity_mm_s: number;
     max_z_accel_mm_s2: number;
     square_corner_velocity_mm_s: number;
-    input_shaper: "auto" | "none" | "zv" | "mzv" | "ei" | "2hump_ei";
+    input_shaper:
+      | "auto"
+      | "none"
+      | "zv"
+      | "mzv"
+      | "ei"
+      | "2hump_ei"
+      | "zvdd"
+      | "smooth_zv"
+      | "smooth_ei";
+    drive_type?: DriveType;
+    servo_vel_bw_hz?: number;
+    servo_pos_bw_hz?: number;
+    notch_filter_hz?: number | null;
     delta_arm_length_mm: number;
     delta_radius_mm: number;
     xy_stepper: {
@@ -405,6 +447,8 @@ export interface PrinterSpecData {
     heater_power_w: number;
     mass_g: number;
     z_drive: string;
+    target_temp_c?: number;
+    mount_type?: BedMountType;
   };
 }
 
@@ -474,6 +518,7 @@ export interface ModeShapeData {
   mode_number: number;
   frequency_hz: number;
   dominant_axis: string;
+  excited_axis?: string;
   toolhead_participation_xyz: [number, number, number];
   nodal_vectors: Record<string, [number, number, number]>;
 }
@@ -678,6 +723,9 @@ export interface StaticFeaData {
   peak_inertial_force_x_n: number;
   peak_inertial_force_y_n: number;
   nodal_displacements_mm: Record<string, [number, number, number]>;
+  nodal_displacements_x_mm?: Record<string, [number, number, number]>;
+  nodal_displacements_y_mm?: Record<string, [number, number, number]>;
+  nodal_displacements_xy_mm?: Record<string, [number, number, number]>;
   shell_panel_stresses?: ShellPanelStressData[];
   member_stresses: Array<{
     member_id: string;
@@ -735,7 +783,113 @@ export interface KinematicsData {
   motor_voltage_efficiency_pct?: number;
   motor_heat_w_each?: number;
   motor_overcurrent_risk?: boolean;
+  tooth_mesh_stiffness_n_per_mm?: number;
+  idler_shaft_stiffness_n_per_mm?: number;
+  idler_shaft_deflection_um?: number;
+  bearing_play_um?: number;
+  bracket_modulus_retention_pct?: number;
   delta_workspace_valid: boolean;
+}
+
+export interface ThermalStructuralReport {
+  chamber_temp_c: number;
+  delta_t_k: number;
+  gantry_bimetallic_bow_um: number;
+  gantry_backer_reduction_pct: number;
+  bed_target_temp_c: number;
+  bed_mount_type: string;
+  bed_gradient_bow_um: number;
+  bed_buckling_taco_um: number;
+  frame_z_drift_um: number;
+  bracket_modulus_retention_pct: number;
+  bracket_tg_warning: boolean;
+  total_thermal_z_error_um: number;
+  rail_newmark_gamma: number;
+  rail_carriage_roll_nm_per_rad: number;
+  rail_carriage_radial_n_per_um: number;
+}
+
+export interface WorkspaceFRFData {
+  grid_n: number;
+  u_coords: number[];
+  v_coords: number[];
+  freq_x_grid_hz: number[][];
+  freq_y_grid_hz: number[][];
+  min_axis_freq_grid_hz: number[][];
+  xy_cross_coupling_grid_pct: number[][];
+  center_freq_hz: number;
+  min_freq_hz: number;
+  max_freq_hz: number;
+  worst_corner_drop_pct: number;
+  max_cross_coupling_pct: number;
+  reflected_rotor_mass_g: number;
+  drive_type: string;
+  midband_instability_risk: boolean;
+}
+
+export interface TimeDomainMetrologyData {
+  corner_rounding_um: number;
+  corner_overshoot_um: number;
+  ringing_peak_to_peak_um: number;
+  ringing_unshaped_um: number;
+  ringing_reduction_pct: number;
+  ringing_decay_mm: number;
+  corner_trace: {
+    ideal_x_mm: number[];
+    ideal_y_mm: number[];
+    actual_x_mm: number[];
+    actual_y_mm: number[];
+    unshaped_x_mm: number[];
+    unshaped_y_mm: number[];
+  };
+  ballbar_radius_mm: number;
+  ballbar_speed_mm_s: number;
+  circularity_gxy_um: number;
+  mean_radial_lag_um: number;
+  quadrant_glitch_um: number;
+  ballbar_angles_deg: number[];
+  ballbar_radial_error_um: number[];
+}
+
+export interface RCSAData {
+  sensor_peak_freq_hz: number;
+  nozzle_tip_peak_freq_hz: number;
+  nozzle_to_sensor_amp_ratio: number;
+  hotend_bending_stiffness_n_per_mm: number;
+  whip_risk: boolean;
+  warning_message: string;
+}
+
+export interface SensitivityEntryData {
+  hz_per_100g: number;
+  hz_per_usd: number;
+  stiffness_sens_hz: number;
+  mass_sens_hz: number;
+  compliance_share_pct: number;
+  heat_score: number;
+}
+
+export interface SensitivityStiffenTarget {
+  id: string;
+  role: string;
+  hz_per_usd: number;
+  compliance_share_pct: number;
+  action_hint: string;
+}
+
+export interface SensitivityLightenTarget {
+  id: string;
+  role: string;
+  hz_per_100g: number;
+  mass_sens_hz: number;
+  action_hint: string;
+}
+
+export interface SensitivityData {
+  member_sensitivities: Record<string, SensitivityEntryData>;
+  panel_bay_sensitivities: Record<string, SensitivityEntryData>;
+  top_stiffen_targets: SensitivityStiffenTarget[];
+  top_lighten_targets: SensitivityLightenTarget[];
 }
 
 export interface SimulationResponse {
@@ -763,6 +917,11 @@ export interface SimulationResponse {
   static_fea: StaticFeaData;
   modal_fea: ModalFeaData;
   kinematics: KinematicsData;
+  thermal_structural?: ThermalStructuralReport;
+  workspace_frf?: WorkspaceFRFData;
+  time_domain_metrology?: TimeDomainMetrologyData;
+  rcsa?: RCSAData;
+  sensitivity?: SensitivityData;
   thermal: {
     filament_id: string;
     filament_name: string;
@@ -804,7 +963,16 @@ export interface SimulationResponse {
   };
 }
 
-export type ViewMode = "assembly" | "fea_stress" | "modal" | "toolpath" | "solid_part" | "topology";
+export type ViewMode =
+  | "assembly"
+  | "fea_stress"
+  | "modal"
+  | "sensitivity"
+  | "toolpath"
+  | "solid_part"
+  | "topology";
+
+export type FeaLoadCase = "xy" | "x" | "y" | "gravity";
 
 export type CompareMode = "last" | "baseline";
 

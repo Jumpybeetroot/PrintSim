@@ -1,12 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  BearingClearanceClass,
+  BedMountType,
   BracketMaterialType,
   CatalogResponse,
+  CornerJointType,
+  DriveType,
   ExtrusionFillingInfo,
   ExtrusionFillingType,
   GantryBracketInfo,
   PrinterSpecData,
+  RailBackerMaterialType,
+  RailBlockType,
   RailMountOption,
+  RailPreloadType,
   SimulationResponse,
   SolidFeaEngine,
   ToolheadMountMaterial,
@@ -23,7 +30,6 @@ interface Props {
   filamentId: string;
   onFilamentChange: (id: string) => void;
   spec: PrinterSpecData | null;
-  baselineSpec: PrinterSpecData | null;
   onSpecChange: (next: PrinterSpecData, changeLabel?: string) => void;
   yamlText: string;
   onYamlChange: (txt: string) => void;
@@ -87,7 +93,16 @@ const SHAPER_LABELS: Record<PrinterSpecData["kinematics"]["input_shaper"], strin
   mzv: "MZV",
   ei: "EI",
   "2hump_ei": "2HUMP_EI",
+  zvdd: "ZVDD",
+  smooth_zv: "SMOOTH_ZV (Kalico)",
+  smooth_ei: "SMOOTH_EI (Kalico)",
 };
+
+const DRIVE_TYPE_OPTIONS: Array<{ id: DriveType; label: string; shortLabel: string }> = [
+  { id: "open_loop_stepper", label: "Open-Loop Stepper", shortLabel: "Open-Loop Stepper" },
+  { id: "closed_loop_stepper", label: "Closed-Loop Stepper", shortLabel: "Closed-Loop Stepper" },
+  { id: "foc_servo", label: "FOC Servo (Closed-Loop)", shortLabel: "FOC Servo" },
+];
 
 const HEATBREAK_LABELS: Record<string, string> = {
   titanium_grade5: "Titanium Gr.5",
@@ -371,16 +386,44 @@ function formatPanelSummary(frame: PrinterSpecData["frame"]): string {
   return `${frame.panel_thickness_mm}mm ${mat} (${mnt})`;
 }
 
-interface QuickUpgradeItem {
-  id: string;
-  title: string;
-  subtitle: string;
-  disabled?: (s: PrinterSpecData) => boolean;
-  disabledHint?: string;
-  isActive: (s: PrinterSpecData) => boolean;
-  apply: (d: PrinterSpecData) => void;
-  revert: (d: PrinterSpecData, base: PrinterSpecData | null) => void;
-}
+const CORNER_JOINT_OPTIONS: Array<{ id: CornerJointType; label: string; shortLabel: string }> = [
+  { id: "blind_joint", label: "Blind Joint (T-Slot)", shortLabel: "Blind Joint" },
+  { id: "l_bracket", label: "L-Bracket (Die-Cast)", shortLabel: "L-Bracket" },
+  { id: "gusset_plate", label: "Gusset Plate", shortLabel: "Gusset Plate" },
+  { id: "corner_cube", label: "3-Way Corner Cube", shortLabel: "Corner Cube" },
+  { id: "rigid", label: "Ideal Rigid", shortLabel: "Ideal Rigid" },
+];
+
+const RAIL_PRELOAD_OPTIONS: Array<{ id: RailPreloadType; label: string; shortLabel: string }> = [
+  { id: "ZF", label: "ZF Clearance", shortLabel: "ZF" },
+  { id: "Z0", label: "Z0 Very Light", shortLabel: "Z0" },
+  { id: "Z1", label: "Z1 Light Preload", shortLabel: "Z1" },
+  { id: "ZA", label: "ZA Medium", shortLabel: "ZA" },
+  { id: "ZB", label: "ZB Heavy", shortLabel: "ZB" },
+];
+
+const RAIL_BLOCK_OPTIONS: Array<{ id: RailBlockType; label: string; shortLabel: string }> = [
+  { id: "C", label: "C Standard", shortLabel: "C" },
+  { id: "H", label: "H Long", shortLabel: "H" },
+];
+
+const RAIL_BACKER_OPTIONS: Array<{ id: RailBackerMaterialType; label: string; shortLabel: string }> = [
+  { id: "none", label: "None", shortLabel: "None" },
+  { id: "titanium_grade5", label: "Titanium Gr5 (Anti-Bow)", shortLabel: "Ti Gr5" },
+  { id: "steel_4140", label: "Steel 4140 (Anti-Bow)", shortLabel: "Steel 4140" },
+];
+
+const BEARING_CLEARANCE_OPTIONS: Array<{ id: BearingClearanceClass; label: string; shortLabel: string }> = [
+  { id: "C2", label: "C2 Tight", shortLabel: "C2" },
+  { id: "CN", label: "CN Standard", shortLabel: "CN" },
+  { id: "C3", label: "C3 Loose", shortLabel: "C3" },
+];
+
+const BED_MOUNT_OPTIONS: Array<{ id: BedMountType; label: string; shortLabel: string }> = [
+  { id: "kinematic_3pt", label: "3-Pt Kinematic (Maxwell)", shortLabel: "3-Pt Kinematic" },
+  { id: "floating_4pt", label: "4-Pt Floating", shortLabel: "4-Pt Floating" },
+  { id: "rigid_4pt", label: "4-Pt Rigid (Over-Constrained)", shortLabel: "4-Pt Rigid" },
+];
 
 export const DesignPanel: React.FC<Props> = ({
   catalog,
@@ -390,7 +433,6 @@ export const DesignPanel: React.FC<Props> = ({
   filamentId,
   onFilamentChange,
   spec,
-  baselineSpec,
   onSpecChange,
   yamlText,
   onYamlChange,
@@ -448,6 +490,20 @@ export const DesignPanel: React.FC<Props> = ({
   );
   const nozzleZTimerRef = useRef<number | null>(null);
 
+  const [chamberTempDraft, setChamberTempDraft] = useState<number>(
+    Math.round(spec?.frame.chamber_temp_c ?? 25)
+  );
+  const chamberTempTimerRef = useRef<number | null>(null);
+
+  const [bedTempDraft, setBedTempDraft] = useState<number>(
+    Math.round(spec?.bed.target_temp_c ?? 60)
+  );
+  const bedTempTimerRef = useRef<number | null>(null);
+
+  const [notchDraft, setNotchDraft] = useState<string>(
+    spec?.kinematics.notch_filter_hz != null ? String(Math.round(spec.kinematics.notch_filter_hz)) : ""
+  );
+
   useEffect(() => {
     if (spec?.gantry.belt.pretension_n != null) {
       setTensionDraft(spec.gantry.belt.pretension_n);
@@ -479,12 +535,33 @@ export const DesignPanel: React.FC<Props> = ({
   }, [spec?.toolhead.nozzle_offset_mm?.[2]]);
 
   useEffect(() => {
+    if (spec) {
+      setChamberTempDraft(Math.round(spec.frame.chamber_temp_c ?? 25));
+    }
+  }, [spec?.frame.chamber_temp_c]);
+
+  useEffect(() => {
+    if (spec) {
+      setBedTempDraft(Math.round(spec.bed.target_temp_c ?? 60));
+    }
+  }, [spec?.bed.target_temp_c]);
+
+  useEffect(() => {
+    if (spec) {
+      const nf = spec.kinematics.notch_filter_hz;
+      setNotchDraft(nf != null && nf > 0 ? String(Math.round(nf)) : "");
+    }
+  }, [spec?.kinematics.notch_filter_hz]);
+
+  useEffect(() => {
     return () => {
       if (tensionTimerRef.current != null) window.clearTimeout(tensionTimerRef.current);
       if (currentTimerRef.current != null) window.clearTimeout(currentTimerRef.current);
       if (cogYTimerRef.current != null) window.clearTimeout(cogYTimerRef.current);
       if (cogZTimerRef.current != null) window.clearTimeout(cogZTimerRef.current);
       if (nozzleZTimerRef.current != null) window.clearTimeout(nozzleZTimerRef.current);
+      if (chamberTempTimerRef.current != null) window.clearTimeout(chamberTempTimerRef.current);
+      if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
     };
   }, []);
 
@@ -521,13 +598,6 @@ export const DesignPanel: React.FC<Props> = ({
     if (!Number.isFinite(val) || val <= 0) return;
     update((d) => mutator(d, val), changeLabelBuilder(val));
   };
-
-  // Resolve real catalog ID for carbon square tube (Voron 20x20 CF beam)
-  const cfProfileId =
-    catalog.profiles.find((p) => p.id === "cf_tube_20x20x2")?.id ||
-    catalog.profiles.find((p) => p.id === "cf_square_20")?.id ||
-    catalog.profiles.find((p) => p.id.startsWith("cf_"))?.id ||
-    "cf_tube_20x20x2";
 
   const commitBeltTension = (rawVal: number) => {
     const val = Math.max(15, Math.min(120, Math.round(rawVal)));
@@ -653,150 +723,86 @@ export const DesignPanel: React.FC<Props> = ({
     nozzleZTimerRef.current = window.setTimeout(() => commitNozzleZ(nextVal), 220);
   };
 
-  const quickUpgrades: QuickUpgradeItem[] = [
-    {
-      id: "awd_4motor",
-      title: "4-Motor AWD",
-      subtitle: "2× torque & half belt span → huge accel",
-      disabled: (s) => s.architecture !== "corexy",
-      disabledHint: "4-Motor AWD is only available on CoreXY frames",
-      isActive: (s) => s.architecture === "corexy" && (s.gantry.drive_mode ?? "2wd") === "awd",
-      apply: (d) => {
-        d.gantry.drive_mode = "awd";
-        d.gantry.double_shear_pulleys = true;
-      },
-      revert: (d, base) => {
-        const useBase = base && (base.gantry.drive_mode ?? "2wd") !== "awd";
-        d.gantry.drive_mode = useBase ? base.gantry.drive_mode : "2wd";
-        const keepDoubleShear =
-          d.gantry.belt.pretension_n >= 46 || (base ? Boolean(base.gantry.double_shear_pulleys) : false);
-        d.gantry.double_shear_pulleys = keepDoubleShear;
-      },
-    },
-    {
-      id: "ht_9mm_aramid",
-      title: "High-Tension 9mm Aramid",
-      subtitle: "Stiff high-tension belts for crisp corners",
-      isActive: (s) =>
-        s.gantry.belt.type === "gt2_9mm" &&
-        s.gantry.belt.core === "aramid" &&
-        s.gantry.belt.pretension_n >= 60,
-      apply: (d) => {
-        d.gantry.belt.type = "gt2_9mm";
-        d.gantry.belt.core = "aramid";
-        d.gantry.belt.pretension_n = 65;
-        d.gantry.double_shear_pulleys = true;
-      },
-      revert: (d, base) => {
-        const baseWasSame =
-          base &&
-          base.gantry.belt.type === "gt2_9mm" &&
-          base.gantry.belt.core === "aramid" &&
-          base.gantry.belt.pretension_n >= 60;
-        const useBase = Boolean(base && !baseWasSame);
-        d.gantry.belt.type = useBase && base ? base.gantry.belt.type : "gt2_6mm";
-        d.gantry.belt.core = useBase && base ? base.gantry.belt.core : "fiberglass";
-        d.gantry.belt.pretension_n = useBase && base ? base.gantry.belt.pretension_n : 28;
-        const keepDoubleShear =
-          (d.gantry.drive_mode ?? "2wd") === "awd" || (base ? Boolean(base.gantry.double_shear_pulleys) : false);
-        d.gantry.double_shear_pulleys = keepDoubleShear;
-      },
-    },
-    {
-      id: "acm_4mm_structural",
-      title: "4mm ACM Structural",
-      subtitle: "Bolted shear panels lock frame square",
-      isActive: (s) =>
-        s.frame.enclosed_panels &&
-        s.frame.panel_mounting === "bolted_structural" &&
-        s.frame.panel_material === "acm_dibond" &&
-        s.frame.panel_thickness_mm >= 4,
-      apply: (d) => {
-        d.frame.enclosed_panels = true;
-        d.frame.panel_mounting = "bolted_structural";
-        d.frame.panel_material = "acm_dibond";
-        d.frame.panel_thickness_mm = 4.0;
-        d.frame.bolt_panels_to_gantry = true;
-      },
-      revert: (d, base) => {
-        const baseWasSame =
-          base &&
-          base.frame.enclosed_panels &&
-          base.frame.panel_mounting === "bolted_structural" &&
-          base.frame.panel_material === "acm_dibond" &&
-          base.frame.panel_thickness_mm >= 4;
-        const useBase = Boolean(base && !baseWasSame);
-        d.frame.enclosed_panels = useBase && base ? base.frame.enclosed_panels : false;
-        d.frame.panel_mounting = useBase && base ? base.frame.panel_mounting : "none";
-        d.frame.panel_material = useBase && base ? base.frame.panel_material : "acrylic_pmma";
-        d.frame.panel_thickness_mm = useBase && base ? base.frame.panel_thickness_mm : 3.0;
-        d.frame.bolt_panels_to_gantry = useBase && base ? (base.frame.bolt_panels_to_gantry ?? true) : true;
-      },
-    },
-    {
-      id: "cf_x_beam",
-      title: "Carbon X Beam",
-      subtitle: "Lighter gantry → higher Y resonance",
-      isActive: (s) =>
-        s.gantry.x_beam_material === "carbon_fiber_tube" &&
-        (s.gantry.x_beam_profile === cfProfileId || s.gantry.x_beam_profile.startsWith("cf_")),
-      apply: (d) => {
-        d.gantry.x_beam_profile = cfProfileId;
-        d.gantry.x_beam_material = "carbon_fiber_tube";
-      },
-      revert: (d, base) => {
-        const useBase =
-          base &&
-          base.gantry.x_beam_material !== "carbon_fiber_tube" &&
-          !base.gantry.x_beam_profile.startsWith("cf_");
-        d.gantry.x_beam_profile = useBase ? base.gantry.x_beam_profile : "extrusion_2020";
-        d.gantry.x_beam_material = useBase ? base.gantry.x_beam_material : "aluminum_6063_t5";
-      },
-    },
-    {
-      id: "uhf_hotend",
-      title: "UHF High-Flow",
-      subtitle: "High-speed extrusion flow (mm³/s)",
-      isActive: (s) =>
-        s.toolhead.hotend.melt_zone_length_mm >= 26 && s.toolhead.hotend.heater_power_w >= 100,
-      apply: (d) => {
-        d.toolhead.hotend.melt_zone_length_mm = 26;
-        d.toolhead.hotend.heater_power_w = 100;
-      },
-      revert: (d, base) => {
-        const useBaseMelt = base && base.toolhead.hotend.melt_zone_length_mm < 26;
-        const useBaseHeat = base && base.toolhead.hotend.heater_power_w < 100;
-        d.toolhead.hotend.melt_zone_length_mm = useBaseMelt
-          ? base.toolhead.hotend.melt_zone_length_mm
-          : 16;
-        d.toolhead.hotend.heater_power_w = useBaseHeat ? base.toolhead.hotend.heater_power_w : 60;
-      },
-    },
-    {
-      id: "48v_steppers",
-      title: "48V Steppers",
-      subtitle: "Strong torque at 500–700+ mm/s",
-      isActive: (s) => s.kinematics.xy_stepper.supply_voltage_v >= 48,
-      apply: (d) => {
-        d.kinematics.xy_stepper.supply_voltage_v = 48;
-      },
-      revert: (d, base) => {
-        const useBase = base && base.kinematics.xy_stepper.supply_voltage_v < 48;
-        d.kinematics.xy_stepper.supply_voltage_v = useBase
-          ? base.kinematics.xy_stepper.supply_voltage_v
-          : 24;
-      },
-    },
-  ];
-
-  const handleToggleUpgrade = (upg: QuickUpgradeItem) => {
-    if (upg.disabled?.(spec)) return;
-    const active = upg.isActive(spec);
-    if (active) {
-      update((d) => upg.revert(d, baselineSpec), `Removed Upgrade: ${upg.title}`);
-    } else {
-      update((d) => upg.apply(d), `Added Upgrade: ${upg.title}`);
+  const specChamberTempC = Math.round(spec.frame.chamber_temp_c ?? 25);
+  const commitChamberTemp = (rawVal: number) => {
+    const val = Math.max(25, Math.min(85, Math.round(rawVal)));
+    if (chamberTempTimerRef.current != null) {
+      window.clearTimeout(chamberTempTimerRef.current);
+      chamberTempTimerRef.current = null;
     }
+    if (val === specChamberTempC) return;
+    update(
+      (d) => {
+        d.frame.chamber_temp_c = val;
+      },
+      `Chamber Temp: ${specChamberTempC}°C → ${val}°C`
+    );
+  };
+
+  const handleChamberTempSliderChange = (nextVal: number) => {
+    setChamberTempDraft(nextVal);
+    if (chamberTempTimerRef.current != null) window.clearTimeout(chamberTempTimerRef.current);
+    chamberTempTimerRef.current = window.setTimeout(() => commitChamberTemp(nextVal), 220);
+  };
+
+  const specBedTempC = Math.round(spec.bed.target_temp_c ?? 60);
+  const commitBedTemp = (rawVal: number) => {
+    const val = Math.max(25, Math.min(130, Math.round(rawVal)));
+    if (bedTempTimerRef.current != null) {
+      window.clearTimeout(bedTempTimerRef.current);
+      bedTempTimerRef.current = null;
+    }
+    if (val === specBedTempC) return;
+    update(
+      (d) => {
+        d.bed.target_temp_c = val;
+      },
+      `Bed Temp: ${specBedTempC}°C → ${val}°C`
+    );
+  };
+
+  const handleBedTempSliderChange = (nextVal: number) => {
+    setBedTempDraft(nextVal);
+    if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
+    bedTempTimerRef.current = window.setTimeout(() => commitBedTemp(nextVal), 220);
+  };
+
+  const currentCornerJoint: CornerJointType = spec.frame.corner_joint_type ?? "blind_joint";
+  const currentRailPreload: RailPreloadType = spec.gantry.rail_preload ?? "Z0";
+  const currentRailBlock: RailBlockType = spec.gantry.rail_block_type ?? "H";
+  const currentRailBoltPitch: number = spec.gantry.rail_bolt_pitch_mm ?? 25;
+  const currentRailBacker: RailBackerMaterialType = spec.gantry.rail_backer_material ?? "none";
+  const currentIdlerShaftMm: number = spec.gantry.belt.idler_shaft_diameter_mm ?? 5;
+  const currentBearingClass: BearingClearanceClass = spec.gantry.belt.bearing_clearance_class ?? "CN";
+  const currentBedMount: BedMountType = spec.bed.mount_type ?? "kinematic_3pt";
+  const currentDriveType: DriveType = spec.kinematics.drive_type ?? "open_loop_stepper";
+  const currentServoVelBw: number = spec.kinematics.servo_vel_bw_hz ?? 120;
+
+  const commitNotchFilter = (raw: string) => {
+    const trimmed = raw.trim();
+    const prevVal = spec.kinematics.notch_filter_hz ?? null;
+    if (trimmed === "") {
+      if (prevVal === null) return;
+      update(
+        (d) => {
+          d.kinematics.notch_filter_hz = null;
+        },
+        `Notch Filter: ${Math.round(prevVal)} Hz → Off`
+      );
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const clamped = Math.max(20, Math.min(500, Math.round(parsed)));
+    setNotchDraft(String(clamped));
+    if (prevVal != null && Math.round(prevVal) === clamped) return;
+    const prevLbl = prevVal != null && prevVal > 0 ? `${Math.round(prevVal)} Hz` : "Off";
+    update(
+      (d) => {
+        d.kinematics.notch_filter_hz = clamped;
+      },
+      `Notch Filter: ${prevLbl} → ${clamped} Hz`
+    );
   };
 
   const effectivePanelMounting: PrinterSpecData["frame"]["panel_mounting"] = !spec.frame.enclosed_panels
@@ -971,44 +977,6 @@ export const DesignPanel: React.FC<Props> = ({
 
         {tab === "params" && (
           <>
-            {/* 1-Click Quick Upgrades */}
-            <div className="section-card upgrade-card">
-              <div className="section-title">
-                <span>Quick Upgrades (Try &amp; Compare)</span>
-                <span style={{ color: "var(--muted)", fontSize: 10, fontWeight: 500, textTransform: "none" }}>
-                  Click to toggle
-                </span>
-              </div>
-              <div className="upgrade-grid">
-                {quickUpgrades.map((upg) => {
-                  const active = upg.isActive(spec);
-                  const isDisabled = Boolean(upg.disabled?.(spec));
-                  return (
-                    <button
-                      key={upg.id}
-                      type="button"
-                      disabled={isDisabled}
-                      className={`upgrade-btn ${active ? "active" : ""}`}
-                      onClick={() => handleToggleUpgrade(upg)}
-                      title={
-                        isDisabled
-                          ? upg.disabledHint || `${upg.title} unavailable`
-                          : active
-                            ? `Click to revert ${upg.title} to stock`
-                            : `Apply ${upg.title}`
-                      }
-                    >
-                      <span className="upgrade-btn-head">
-                        <span className="upgrade-btn-title">{upg.title}</span>
-                        <span className="upgrade-check">{active ? "✓" : "+"}</span>
-                      </span>
-                      <span className="upgrade-btn-sub">{upg.subtitle}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             <div className="section-card">
               <div className="section-title">Frame &amp; Structure (FEA)</div>
               <div className="field-row">
@@ -1177,25 +1145,53 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="hint-line">Cuts frame wobble &amp; ghosting dramatically for low cost</div>
               )}
 
-              <div className="field-row">
-                <label>Bracing</label>
-                <select
-                  value={spec.frame.bracing}
-                  onChange={(e) => {
-                    const nextVal = e.target.value as PrinterSpecData["frame"]["bracing"];
-                    update(
-                      (d) => {
-                        d.frame.bracing = nextVal;
-                      },
-                      `Bracing: ${BRACING_LABELS[spec.frame.bracing]} → ${BRACING_LABELS[nextVal]}`
-                    );
-                  }}
-                >
-                  <option value="none">None (Open Frame)</option>
-                  <option value="corner_gussets">Corner Gussets</option>
-                  <option value="rear_cross">Rear Cross + Top</option>
-                  <option value="full_truss">Full 3D Truss</option>
-                </select>
+              <div className="field-grid-2">
+                <div className="field-row">
+                  <label>Bracing</label>
+                  <select
+                    value={spec.frame.bracing}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as PrinterSpecData["frame"]["bracing"];
+                      update(
+                        (d) => {
+                          d.frame.bracing = nextVal;
+                        },
+                        `Bracing: ${BRACING_LABELS[spec.frame.bracing]} → ${BRACING_LABELS[nextVal]}`
+                      );
+                    }}
+                  >
+                    <option value="none">None (Open Frame)</option>
+                    <option value="corner_gussets">Corner Gussets</option>
+                    <option value="rear_cross">Rear Cross + Top</option>
+                    <option value="full_truss">Full 3D Truss</option>
+                  </select>
+                </div>
+                <div className="field-row">
+                  <label>Corner Joint Type</label>
+                  <select
+                    value={currentCornerJoint}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as CornerJointType;
+                      const prevLbl =
+                        CORNER_JOINT_OPTIONS.find((o) => o.id === currentCornerJoint)?.shortLabel ??
+                        currentCornerJoint;
+                      const nextLbl =
+                        CORNER_JOINT_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                      update(
+                        (d) => {
+                          d.frame.corner_joint_type = nextVal;
+                        },
+                        `Corner Joint: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {CORNER_JOINT_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="field-row">
@@ -1411,6 +1407,53 @@ export const DesignPanel: React.FC<Props> = ({
                       )}
                     </div>
                   )}
+
+                <div className="slider-row" style={{ marginTop: 4 }}>
+                  <label>
+                    <span>Chamber Temp (°C)</span>
+                    <span className="tension-readout">
+                      <strong style={{ color: chamberTempDraft >= 55 ? "var(--amber)" : "var(--text)" }}>
+                        {chamberTempDraft} °C
+                      </strong>
+                      <span className="kpi-sub">
+                        {chamberTempDraft <= 25 ? "ambient" : `ΔT +${chamberTempDraft - 25} K`}
+                      </span>
+                    </span>
+                  </label>
+                  <div className="tension-control-row">
+                    <input
+                      type="range"
+                      min={25}
+                      max={85}
+                      step={5}
+                      value={Math.max(25, Math.min(85, chamberTempDraft))}
+                      onChange={(e) => handleChamberTempSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitChamberTemp(chamberTempDraft)}
+                      onKeyUp={() => commitChamberTemp(chamberTempDraft)}
+                    />
+                    <input
+                      type="number"
+                      className="tension-num-input"
+                      min={25}
+                      max={85}
+                      step={5}
+                      value={chamberTempDraft}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        setChamberTempDraft(v);
+                        if (v >= 25 && v <= 85) commitChamberTemp(v);
+                      }}
+                      onBlur={() => commitChamberTemp(chamberTempDraft)}
+                    />
+                  </div>
+                  {showHints && (
+                    <div className="hint-line">
+                      Heated chambers drive aluminum-steel bimetallic gantry bow, frame Z-drift, and
+                      printed bracket E(T) softening near polymer Tg.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1765,6 +1808,103 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
                 )}
 
+                <div className="field-grid-2">
+                  <div className="field-row">
+                    <label>Rail Preload</label>
+                    <select
+                      value={currentRailPreload}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as RailPreloadType;
+                        update(
+                          (d) => {
+                            d.gantry.rail_preload = nextVal;
+                          },
+                          `Rail Preload: ${currentRailPreload} → ${nextVal}`
+                        );
+                      }}
+                    >
+                      {RAIL_PRELOAD_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field-row">
+                    <label>Carriage Block</label>
+                    <select
+                      value={currentRailBlock}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as RailBlockType;
+                        const prevLbl =
+                          RAIL_BLOCK_OPTIONS.find((o) => o.id === currentRailBlock)?.label ?? currentRailBlock;
+                        const nextLbl =
+                          RAIL_BLOCK_OPTIONS.find((o) => o.id === nextVal)?.label ?? nextVal;
+                        update(
+                          (d) => {
+                            d.gantry.rail_block_type = nextVal;
+                          },
+                          `Carriage Block: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {RAIL_BLOCK_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="field-grid-2">
+                  <div className="field-row">
+                    <label>Rail Bolt Pitch</label>
+                    <select
+                      value={currentRailBoltPitch}
+                      onChange={(e) => {
+                        const nextVal = Number(e.target.value);
+                        if (!Number.isFinite(nextVal) || nextVal <= 0) return;
+                        update(
+                          (d) => {
+                            d.gantry.rail_bolt_pitch_mm = nextVal;
+                          },
+                          `Rail Bolt Pitch: ${currentRailBoltPitch}mm → ${nextVal}mm`
+                        );
+                      }}
+                    >
+                      <option value={25}>25 mm (Every Hole)</option>
+                      <option value={50}>50 mm (Every Other)</option>
+                    </select>
+                  </div>
+                  <div className="field-row">
+                    <label>Thermal Rail Backer</label>
+                    <select
+                      value={currentRailBacker}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as RailBackerMaterialType;
+                        const prevLbl =
+                          RAIL_BACKER_OPTIONS.find((o) => o.id === currentRailBacker)?.shortLabel ??
+                          currentRailBacker;
+                        const nextLbl =
+                          RAIL_BACKER_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                        update(
+                          (d) => {
+                            d.gantry.rail_backer_material = nextVal;
+                          },
+                          `Rail Backer: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {RAIL_BACKER_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 {simLinearRails && (
                   <div className="inline-readout-strip">
                     <span>
@@ -1835,6 +1975,54 @@ export const DesignPanel: React.FC<Props> = ({
                     <option value="fiberglass">Fiberglass</option>
                     <option value="aramid">Aramid</option>
                     <option value="steel">Steel</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="field-grid-2">
+                <div className="field-row">
+                  <label>Idler Shaft</label>
+                  <select
+                    value={currentIdlerShaftMm}
+                    onChange={(e) => {
+                      const nextVal = Number(e.target.value);
+                      if (!Number.isFinite(nextVal) || nextVal <= 0) return;
+                      update(
+                        (d) => {
+                          d.gantry.belt.idler_shaft_diameter_mm = nextVal;
+                        },
+                        `Idler Shaft: ${currentIdlerShaftMm}mm → ${nextVal}mm Pin`
+                      );
+                    }}
+                  >
+                    <option value={5}>5 mm Pin</option>
+                    <option value={6}>6 mm Pin</option>
+                  </select>
+                </div>
+                <div className="field-row">
+                  <label>Bearing Play</label>
+                  <select
+                    value={currentBearingClass}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as BearingClearanceClass;
+                      const prevLbl =
+                        BEARING_CLEARANCE_OPTIONS.find((o) => o.id === currentBearingClass)?.shortLabel ??
+                        currentBearingClass;
+                      const nextLbl =
+                        BEARING_CLEARANCE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                      update(
+                        (d) => {
+                          d.gantry.belt.bearing_clearance_class = nextVal;
+                        },
+                        `Bearing Play: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {BEARING_CLEARANCE_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -2060,6 +2248,93 @@ export const DesignPanel: React.FC<Props> = ({
                     />
                   </div>
                 </div>
+                <div className="field-row">
+                  <label>
+                    <span>Drive Control</span>
+                    <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                      {DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
+                        currentDriveType}
+                    </span>
+                  </label>
+                  <select
+                    value={currentDriveType}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as DriveType;
+                      if (nextVal === currentDriveType) return;
+                      const prevLbl =
+                        DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
+                        currentDriveType;
+                      const nextLbl =
+                        DRIVE_TYPE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                      update(
+                        (d) => {
+                          d.kinematics.drive_type = nextVal;
+                          if (nextVal !== "open_loop_stepper" && d.kinematics.servo_vel_bw_hz == null) {
+                            d.kinematics.servo_vel_bw_hz = nextVal === "foc_servo" ? 180 : 120;
+                          }
+                        },
+                        `Drive Control: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {DRIVE_TYPE_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {currentDriveType !== "open_loop_stepper" && (
+                  <div className="field-grid-2">
+                    <div className="field-row">
+                      <label>
+                        <span>Notch Filter (Hz)</span>
+                        <span style={{ fontSize: 10, color: "var(--muted)" }}>blank = Off</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={20}
+                        max={500}
+                        step={5}
+                        placeholder="Off (e.g. 120)"
+                        value={notchDraft}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setNotchDraft(raw);
+                          if (raw.trim() === "") {
+                            commitNotchFilter("");
+                          }
+                        }}
+                        onBlur={() => commitNotchFilter(notchDraft)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            commitNotchFilter(notchDraft);
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="field-row">
+                      <label>Vel BW (Hz)</label>
+                      <input
+                        type="number"
+                        min={20}
+                        max={1000}
+                        step={10}
+                        value={currentServoVelBw}
+                        onChange={(e) =>
+                          updatePositiveNum(
+                            e.target.value,
+                            (d, v) => {
+                              d.kinematics.servo_vel_bw_hz = Math.max(20, Math.min(1000, v));
+                            },
+                            (v) => `Servo Vel BW: ${Math.round(currentServoVelBw)} Hz → ${Math.round(v)} Hz`
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="field-grid-2">
@@ -2109,7 +2384,7 @@ export const DesignPanel: React.FC<Props> = ({
                       (d) => {
                         d.kinematics.input_shaper = nextVal;
                       },
-                      `Input Shaper: ${SHAPER_LABELS[spec.kinematics.input_shaper]} → ${SHAPER_LABELS[nextVal]}`
+                      `Input Shaper: ${SHAPER_LABELS[spec.kinematics.input_shaper] ?? spec.kinematics.input_shaper} → ${SHAPER_LABELS[nextVal] ?? nextVal}`
                     );
                   }}
                 >
@@ -2118,6 +2393,10 @@ export const DesignPanel: React.FC<Props> = ({
                   <option value="zv">ZV</option>
                   <option value="mzv">MZV</option>
                   <option value="ei">EI</option>
+                  <option value="2hump_ei">2HUMP_EI</option>
+                  <option value="zvdd">ZVDD</option>
+                  <option value="smooth_zv">SMOOTH_ZV (Kalico)</option>
+                  <option value="smooth_ei">SMOOTH_EI (Kalico)</option>
                 </select>
               </div>
             </div>
@@ -2433,6 +2712,85 @@ export const DesignPanel: React.FC<Props> = ({
                   <option value="titanium_grade5">Titanium Gr.5</option>
                   <option value="stainless_304">Stainless 304</option>
                   <option value="brass_c360">Brass C360</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="section-card">
+              <div className="section-title">
+                <span>Build Plate &amp; Bed Mount</span>
+                <span className="sub-block-tag">{bedTempDraft}°C</span>
+              </div>
+
+              {showHints && (
+                <div className="hint-line">
+                  Rigid 4-point mounts constrain aluminum expansion at high bed temps, causing thermal
+                  &quot;taco&quot; buckling; 3-point Maxwell kinematic mounts keep the plate flat.
+                </div>
+              )}
+
+              <div className="slider-row">
+                <label>
+                  <span>Bed Temp (°C)</span>
+                  <span className="tension-readout">
+                    <strong style={{ color: bedTempDraft >= 100 ? "var(--amber)" : "var(--text)" }}>
+                      {bedTempDraft} °C
+                    </strong>
+                  </span>
+                </label>
+                <div className="tension-control-row">
+                  <input
+                    type="range"
+                    min={25}
+                    max={130}
+                    step={5}
+                    value={Math.max(25, Math.min(130, bedTempDraft))}
+                    onChange={(e) => handleBedTempSliderChange(Number(e.target.value))}
+                    onPointerUp={() => commitBedTemp(bedTempDraft)}
+                    onKeyUp={() => commitBedTemp(bedTempDraft)}
+                  />
+                  <input
+                    type="number"
+                    className="tension-num-input"
+                    min={25}
+                    max={130}
+                    step={5}
+                    value={bedTempDraft}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      setBedTempDraft(v);
+                      if (v >= 25 && v <= 130) commitBedTemp(v);
+                    }}
+                    onBlur={() => commitBedTemp(bedTempDraft)}
+                  />
+                </div>
+              </div>
+
+              <div className="field-row">
+                <label>Bed Mount</label>
+                <select
+                  value={currentBedMount}
+                  onChange={(e) => {
+                    const nextVal = e.target.value as BedMountType;
+                    const prevLbl =
+                      BED_MOUNT_OPTIONS.find((o) => o.id === currentBedMount)?.shortLabel ??
+                      currentBedMount;
+                    const nextLbl =
+                      BED_MOUNT_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                    update(
+                      (d) => {
+                        d.bed.mount_type = nextVal;
+                      },
+                      `Bed Mount: ${prevLbl} → ${nextLbl}`
+                    );
+                  }}
+                >
+                  {BED_MOUNT_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
