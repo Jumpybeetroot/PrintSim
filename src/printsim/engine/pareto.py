@@ -540,6 +540,7 @@ def _evaluate_spec_candidate(
     report: SimulationReport = evaluate_printer(
         spec,
         filament_id=filament_id,
+        panel_mesh_n=2,
         include_advanced_analysis=False,
     )
     bom: PrinterBOM = generate_bom(report.assembly)

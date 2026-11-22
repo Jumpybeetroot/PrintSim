@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from printsim.schema import get_material, get_profile
-from printsim.schema.printer import BED_MOUNT_CATALOG, BeltSpec
+from printsim.schema.printer import BED_MOUNT_CATALOG, RAIL_QUALITY_CATALOG, BeltSpec
 
 if TYPE_CHECKING:
     from printsim.geometry.builder import AssemblyModel
@@ -88,11 +88,13 @@ def hertzian_rail_carriage_stiffness(
     rail_profile_id: str,
     preload: str = "Z1",
     block_type: str = "H",
+    rail_quality: str = "hiwin_genuine",
 ) -> dict[str, float]:
     """Compute 6-DOF Hertzian ball-raceway contact stiffness & drag for a linear rail carriage.
 
     Includes 15% Hung et al. (2011) carriage-skirt structural compliance in series with the
-    Hertzian elliptical point-contact stiffness (conformity f = 0.525, 45 deg contact angle).
+    Hertzian elliptical point-contact stiffness (conformity f = 0.525, 45 deg contact angle),
+    scaled by ``rail_quality`` raceway grinding & ball-sorting load-sharing multipliers.
     """
     key = rail_profile_id.lower().strip()
     if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
@@ -108,6 +110,11 @@ def hertzian_rail_carriage_stiffness(
     pre_key = preload.upper()
     f_pre = _PRELOAD_FRACTION.get(pre_key, 0.030)
     f_pre_z1 = _PRELOAD_FRACTION["Z1"]
+
+    qual_key = str(rail_quality).lower().strip() if rail_quality else "hiwin_genuine"
+    qual_cfg = RAIL_QUALITY_CATALOG.get(qual_key, RAIL_QUALITY_CATALOG["hiwin_genuine"])
+    stiffness_mult = float(qual_cfg["stiffness_mult"])
+    drag_mult = float(qual_cfg["drag_mult"])
 
     # Active balls in the loaded raceway zone along L1 (~1.05 * d_b pitch)
     n_b = max(4, int(round(l1 / (1.05 * d_b))))
@@ -132,6 +139,8 @@ def hertzian_rail_carriage_stiffness(
     # Slight clearance ZF unloads opposing ball row under initial load -> ~55% contact stiffness
     if pre_key == "ZF":
         k_hertz_raw *= 0.55
+    # Ball-tolerance load sharing and raceway grinding conformity scale Hertzian contact stiffness
+    k_hertz_raw *= stiffness_mult
 
     # 15% Hung carriage-skirt structural compliance referenced to Z1 nominal block stiffness
     k_skirt = _raw_hertz_radial(f_pre_z1) / 0.15
@@ -148,8 +157,9 @@ def hertzian_rail_carriage_stiffness(
 
     q_total_preload = f_pre * c_dyn
     mu_roll = 0.0025
-    rolling_friction = mu_roll * q_total_preload
-    breakaway_friction = 1.6 * rolling_friction + 1.35 * seal_drag
+    rolling_friction = mu_roll * q_total_preload * drag_mult
+    seal_drag_eff = seal_drag * drag_mult
+    breakaway_friction = 1.6 * rolling_friction + 1.35 * seal_drag_eff
 
     return {
         "k_yy_n_m": k_yy,
@@ -158,7 +168,7 @@ def hertzian_rail_carriage_stiffness(
         "k_ry_nm_rad": k_ry,
         "k_rz_nm_rad": k_rz,
         "rolling_friction_n": rolling_friction,
-        "seal_drag_n": seal_drag,
+        "seal_drag_n": seal_drag_eff,
         "breakaway_friction_n": breakaway_friction,
     }
 
@@ -393,6 +403,7 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
         spec.gantry.x_rail_profile,
         preload=spec.gantry.rail_preload,
         block_type=spec.gantry.rail_block_type,
+        rail_quality=spec.gantry.rail_quality,
     )
     car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
     roll_nm_rad = carriage["k_rx_nm_rad"] * car_mult

@@ -112,12 +112,13 @@ def evaluate(
 def verify(
     spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
     filament: str = typer.Option("pla", "--filament", "-f", help="Filament ID"),
-    mesh_n: int = typer.Option(6, "--mesh-n", "-m", min=4, max=10, help="Deep MITC4 shell grid density (n x n per bay)"),
+    mesh_n: int = typer.Option(8, "--mesh-n", "-m", min=4, max=10, help="Deep MITC4 shell grid density (n x n per bay)"),
+    bed_mesh_n: int = typer.Option(16, "--bed-mesh-n", min=8, max=20, help="Deep 2D MITC4 bed plate mesh grid"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON deep verification report"),
 ) -> None:
-    """Run deep 6x6 MITC4 shell + Huth CBUSH mesh convergence verification vs fast 2x2 mode."""
+    """Run maximum-accuracy 8x8 shell + 16x16 bed MITC4 verification vs balanced 3x3/8x8 default."""
     spec = PrinterSpec.from_yaml(spec_path)
-    res = verify_printer_deep(spec, filament_id=filament, deep_mesh_n=mesh_n)
+    res = verify_printer_deep(spec, filament_id=filament, deep_mesh_n=mesh_n, deep_bed_mesh_n=bed_mesh_n)
 
     if json_out:
         print(json.dumps(res, indent=2))

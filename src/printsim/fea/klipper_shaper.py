@@ -581,7 +581,24 @@ def calibrate_axis_shapers(
             psd *= 100.0 / peak
 
     peak_freq = float(freqs[int(np.argmax(psd))])
-    measured_zeta = estimate_psd_damping_ratio(freqs, psd)
+    if raw_psd is None:
+        # Measure half-power bandwidth on a fine 0.15 Hz local grid around primary_freq_hz
+        # so narrow low-frequency peaks (~15-35 Hz, FWHM ~2-4 Hz) never alias on the 2 Hz display grid.
+        f_p = max(float(primary_freq_hz), 5.0)
+        fine_lo = max(2.0, f_p * 0.5)
+        fine_hi = min(MAX_FREQ_HZ, max(f_p * 1.6, f_p + 12.0))
+        fine_freqs = np.arange(fine_lo, fine_hi + 0.05, 0.15, dtype=float)
+        _, fine_psd = synthesize_axis_psd(
+            axis=axis,
+            primary_freq_hz=primary_freq_hz,
+            secondary_modes=secondary_modes,
+            damping_primary=psd_zeta,
+            damping_secondary=psd_zeta,
+            freqs_hz=fine_freqs,
+        )
+        measured_zeta = estimate_psd_damping_ratio(fine_freqs, fine_psd)
+    else:
+        measured_zeta = estimate_psd_damping_ratio(freqs, psd)
 
     vibr_threshold = float(np.max(psd)) / SHAPER_VIBRATION_REDUCTION
     all_vibrations = max(float(np.sum(np.maximum(psd - vibr_threshold, 0.0))), 1e-12)

@@ -409,6 +409,7 @@ def simulate_time_domain_metrology(
         spec.gantry.x_rail_profile,
         preload=spec.gantry.rail_preload,
         block_type=spec.gantry.rail_block_type,
+        rail_quality=spec.gantry.rail_quality,
     )
     f_coulomb = float(rail_info["rolling_friction_n"] + rail_info["seal_drag_n"])
     f_break = float(rail_info["breakaway_friction_n"])

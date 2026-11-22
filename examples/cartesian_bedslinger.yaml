@@ -48,13 +48,17 @@ kinematics:
 toolhead:
   preset_id: custom
   name: Standard V6 Direct Drive
-  total_mass_g: 460
+  total_mass_g: 418
   cog_offset_mm: [0, -22, -28]
   nozzle_offset_mm: [0, -24, -68]
   mount_material: abs_printed
   internal_stiffness_n_per_mm: 400.0
   envelope_mm: [70, 76, 98]
   hotend:
+    preset_id: e3d_v6_groove
+    mount_style: groove_mount
+    structural_stiffness_n_per_mm: 45.0
+    overall_length_mm: 62.3
     name: Classic V6 Aluminum/Stainless
     heater_power_w: 40
     block_material: aluminum_6061_t6
@@ -82,3 +86,5 @@ bed:
   heater_power_w: 240
   mass_g: 1050
   z_drive: leadscrew_dual
+  z_rail_profile: mgn9_rail
+  z_leadscrew_type: tr8x8_pom

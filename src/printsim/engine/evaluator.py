@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import time
+from typing import Any
 
 from printsim.fea.bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from printsim.fea.components import ThermalStructuralReport, compute_thermal_structural_report
@@ -64,6 +66,7 @@ class SimulationReport:
     rcsa: RCSAResult | None = None
     sensitivity: SensitivityReport | None = None
     bed_plate_fea: BedPlateFEAResult | None = None
+    weight_shaper_gains: dict[str, Any] | None = None
 
     def to_dict(self, include_toolpath_segments: bool = True) -> dict:
         vp = self.virtual_print.to_dict(max_segments=1500 if include_toolpath_segments else 0)
@@ -91,6 +94,7 @@ class SimulationReport:
             "bed_plate_fea": (
                 self.bed_plate_fea.to_dict() if self.bed_plate_fea is not None else None
             ),
+            "weight_shaper_gains": self.weight_shaper_gains,
         }
 
 
@@ -415,12 +419,403 @@ def _compute_scores_and_diagnostics(
     )
 
 
+def _extract_struct_mass_slope(
+    sensitivity: SensitivityReport | None,
+    node_ids: tuple[str, ...] | list[str],
+    member_ids: tuple[str, ...] | list[str],
+    ms_key: str,
+) -> float:
+    """Return positive structural frequency slope ``df / d(-100 g)`` in ``Hz / -100g``."""
+    if sensitivity is None:
+        return 0.0
+    lumped = getattr(sensitivity, "lumped_mass_sensitivities", None) or {}
+    members = getattr(sensitivity, "member_sensitivities", None) or {}
+    ms_tot = 0.0
+    mass_tot = 0.0
+    fallback_hz_weighted = 0.0
+    has_ms = False
+    for coll, ids in ((lumped, node_ids), (members, member_ids)):
+        for key in ids:
+            d = coll.get(key)
+            if not isinstance(d, dict):
+                continue
+            mk = float(d.get("mass_kg", 0.0) or 0.0)
+            if mk <= 1e-8:
+                continue
+            mass_tot += mk
+            if ms_key in d or "mass_sens_hz" in d:
+                has_ms = True
+                ms_tot += float(d.get(ms_key, d.get("mass_sens_hz", 0.0)) or 0.0)
+            else:
+                fallback_hz_weighted += float(d.get("hz_per_100g", 0.0) or 0.0) * mk
+    if mass_tot <= 1e-8:
+        return 0.0
+    if has_ms:
+        return max(0.0, -0.1 * ms_tot / mass_tot)
+    return max(0.0, -fallback_hz_weighted / mass_tot)
+
+
+def compute_weight_shaper_gains(
+    assembly: AssemblyModel,
+    modal_fea: ModalResult,
+    sensitivity: SensitivityReport | None = None,
+) -> dict[str, Any]:
+    """Compute coupled drive + structural input-shaper gains from component weight cuts."""
+    sx = modal_fea.shaper_x
+    sy = modal_fea.shaper_y
+    if sx is None or sy is None:
+        limiting_axis = "Y"
+        lim = sy if sy is not None else sx
+    elif sx.max_accel_mm_s2 < sy.max_accel_mm_s2:
+        limiting_axis = "X"
+        lim = sx
+    elif sy.max_accel_mm_s2 < sx.max_accel_mm_s2:
+        limiting_axis = "Y"
+        lim = sy
+    elif sx.effective_freq_hz < sy.effective_freq_hz:
+        limiting_axis = "X"
+        lim = sx
+    else:
+        limiting_axis = "Y"
+        lim = sy
+
+    if lim is not None:
+        f_eff = float(lim.effective_freq_hz)
+        f_struct = float(lim.structural_freq_hz)
+        f_drive = float(lim.drive_freq_hz)
+        a_max = float(lim.max_accel_mm_s2)
+    else:
+        f_eff = max(float(modal_fea.fundamental_freq_hz), 5.0)
+        f_struct = f_eff
+        f_drive = f_eff
+        a_max = max(float(modal_fea.recommended_max_accel_mm_s2), 0.0)
+
+    m_lim_g = float(
+        assembly.x_moving_mass_kg if limiting_axis == "X" else assembly.y_moving_mass_kg
+    ) * 1000.0
+    ms_key = "mass_sens_x_hz" if limiting_axis == "X" else "mass_sens_y_hz"
+
+    def _coupled_gain(
+        cut_g: float,
+        moves_on_limiting: bool,
+        struct_hz_per_100g: float,
+    ) -> tuple[float, float]:
+        if m_lim_g <= 1.0 or f_eff <= 0.0:
+            return 0.0, 0.0
+        cut_safe = max(0.0, min(float(cut_g), 0.75 * m_lim_g))
+        if cut_safe <= 0.0:
+            return 0.0, 0.0
+        f_drive_new = (
+            f_drive * math.sqrt(m_lim_g / max(m_lim_g - cut_safe, 1.0))
+            if moves_on_limiting
+            else f_drive
+        )
+        struct_cap = (
+            f_struct * math.sqrt(m_lim_g / max(m_lim_g - cut_safe, 1.0))
+            if moves_on_limiting
+            else f_struct * 1.35
+        )
+        f_struct_new = min(
+            f_struct + max(0.0, float(struct_hz_per_100g)) * (cut_safe / 100.0),
+            struct_cap,
+        )
+        f_eff_new = 1.0 / math.sqrt(
+            1.0 / (max(f_struct_new, 5.0) ** 2) + 1.0 / (max(f_drive_new, 5.0) ** 2)
+        )
+        df_hz = max(0.0, f_eff_new - f_eff)
+        da = max(0.0, a_max * ((f_eff_new / max(f_eff, 1.0)) ** 2 - 1.0))
+        return df_hz, da
+
+    spec = assembly.spec
+    arch = spec.architecture
+    nmap = assembly.node_map
+    gantry_members = [m for m in assembly.members if m.role == "gantry"]
+
+    hotend_mass_g = float(spec.toolhead.hotend.mass_g)
+    toolhead_mass_g = float(assembly.x_moving_mass_kg) * 1000.0
+    if toolhead_mass_g <= 0.0:
+        toolhead_mass_g = float(spec.toolhead.total_mass_g) + hotend_mass_g
+
+    hotend_slope = _extract_struct_mass_slope(sensitivity, ("nozzle_tip",), (), ms_key)
+    toolhead_slope = _extract_struct_mass_slope(
+        sensitivity, ("toolhead_cog", "toolhead", "nozzle_tip"), (), ms_key
+    )
+
+    x_beam_mass_g = float(getattr(assembly, "x_beam_mass_kg", 0.0) or 0.0) * 1000.0
+    if x_beam_mass_g <= 0.0:
+        x_beam_mass_g = (
+            sum(
+                max(m.mass_kg(nmap) - m.rail_mass_kg - m.backer_mass_kg - m.fill_mass_kg, 0.0)
+                for m in gantry_members
+                if m.start_id in nmap and m.end_id in nmap
+            )
+            * 1000.0
+        )
+
+    x_rail_mass_g = float(getattr(assembly, "x_rail_mass_kg", 0.0) or 0.0) * 1000.0
+    x_backer_mass_g = float(getattr(assembly, "x_backer_mass_kg", 0.0) or 0.0) * 1000.0
+    x_rail_backer_g = x_rail_mass_g + x_backer_mass_g
+    if x_rail_backer_g <= 0.0:
+        x_rail_backer_g = (
+            sum(m.rail_mass_kg + m.backer_mass_kg for m in gantry_members) * 1000.0
+        )
+
+    y_carriages_g = float(getattr(assembly, "y_carriage_joints_mass_kg", 0.0) or 0.0) * 1000.0
+    if y_carriages_g <= 0.0:
+        y_carriages_g = float(spec.gantry.carriage_mass_g)
+
+    member_sens = (getattr(sensitivity, "member_sensitivities", None) or {}) if sensitivity else {}
+    x_gantry_mids = ("x_gantry_l", "x_gantry_r")
+    x_gantry_slope = _extract_struct_mass_slope(sensitivity, (), x_gantry_mids, ms_key)
+
+    raw_items: list[tuple[str, str, float, float, str, bool, float, str]] = []
+    if arch == "cartesian_bedslinger":
+        raw_items.append(
+            (
+                "hotend",
+                "Hotend & Nozzle",
+                hotend_mass_g,
+                round(min(25.0, 0.35 * hotend_mass_g), 1),
+                "X",
+                limiting_axis == "X",
+                hotend_slope,
+                "Bare hotend, heatbreak, and heatsink assembly mass; translates on the X carriage and loads the nozzle cantilever.",
+            )
+        )
+        raw_items.append(
+            (
+                "toolhead",
+                "Toolhead Total",
+                toolhead_mass_g,
+                round(min(100.0, 0.30 * toolhead_mass_g), 1),
+                "X",
+                limiting_axis == "X",
+                toolhead_slope,
+                "Total X-moving toolhead, carriage block, extruder, and probe mass; accelerates along X only and is stationary during Y bed moves.",
+            )
+        )
+        moving_bed_g = float(assembly.y_moving_mass_kg) * 1000.0
+        if moving_bed_g <= 0.0:
+            moving_bed_g = float(spec.bed.mass_g)
+        bed_slope = _extract_struct_mass_slope(sensitivity, ("bed_surface",), (), ms_key)
+        raw_items.append(
+            (
+                "moving_bed",
+                "Moving Y-Bed Assembly",
+                moving_bed_g,
+                round(0.25 * moving_bed_g, 1),
+                "Y",
+                limiting_axis == "Y",
+                bed_slope,
+                "Total Y-moving heated bed plate, magnetic sheet, heater, and Y-carriage mass; carries full Y-axis inertial and belt-drive load.",
+            )
+        )
+        if x_rail_mass_g > 0.0:
+            bs_x_beam_g = x_beam_mass_g + x_rail_mass_g
+        else:
+            bs_x_beam_g = (
+                sum(
+                    max(m.mass_kg(nmap) - m.backer_mass_kg - m.fill_mass_kg, 0.0)
+                    for m in gantry_members
+                    if m.start_id in nmap and m.end_id in nmap
+                )
+                * 1000.0
+            )
+        raw_items.append(
+            (
+                "x_beam",
+                "X-Beam & Rail",
+                bs_x_beam_g,
+                round(min(100.0, 0.35 * bs_x_beam_g), 1),
+                "X",
+                False,
+                x_gantry_slope,
+                "X-axis portal crossbeam and linear rail mass; stationary during X and Y print moves while contributing to X/Z portal structural modes.",
+            )
+        )
+        total_struct_slope = bed_slope if limiting_axis == "Y" else toolhead_slope
+    elif arch == "delta":
+        arm_mids = [mid for mid in member_sens if mid.startswith("arm_")]
+        delta_car_nodes = ("c_0", "c_1", "c_2")
+        delta_car_slope = _extract_struct_mass_slope(sensitivity, delta_car_nodes, arm_mids, ms_key)
+        delta_total_slope = _extract_struct_mass_slope(
+            sensitivity,
+            ("nozzle_tip", "toolhead_cog", "toolhead", "c_0", "c_1", "c_2"),
+            arm_mids,
+            ms_key,
+        )
+        y_gantry_total_g = float(assembly.y_moving_mass_kg) * 1000.0
+        if y_gantry_total_g <= 0.0:
+            y_gantry_total_g = toolhead_mass_g
+        raw_items.extend(
+            [
+                (
+                    "hotend",
+                    "Hotend & Nozzle",
+                    hotend_mass_g,
+                    round(min(25.0, 0.35 * hotend_mass_g), 1),
+                    "XY",
+                    True,
+                    hotend_slope,
+                    "Bare hotend, heatbreak, and heatsink assembly mass; moves with the effector in X, Y, and Z at the nozzle cantilever tip.",
+                ),
+                (
+                    "toolhead",
+                    "Effector & Toolhead Total",
+                    toolhead_mass_g,
+                    round(min(100.0, 0.30 * toolhead_mass_g), 1),
+                    "XY",
+                    True,
+                    toolhead_slope,
+                    "Total moving effector, toolhead, probe, and bracket mass; accelerates in all XY directions across the parallel delta linkage.",
+                ),
+                (
+                    "y_carriages",
+                    "Arms & Carriages",
+                    y_carriages_g,
+                    round(min(80.0, 0.35 * y_carriages_g), 1),
+                    "XY",
+                    True,
+                    delta_car_slope,
+                    "Tower linear carriages and delta rod linkage mass coupled into 3-axis effector acceleration.",
+                ),
+                (
+                    "y_gantry_total",
+                    "Total Moving Effector + Arms",
+                    y_gantry_total_g,
+                    round(0.25 * y_gantry_total_g, 1),
+                    "XY",
+                    True,
+                    delta_total_slope,
+                    "Total equivalent moving effector and delta arm inertia reflected to the XY/Z parallel drive.",
+                ),
+            ]
+        )
+        total_struct_slope = delta_total_slope
+    else:
+        y_car_slope = _extract_struct_mass_slope(sensitivity, ("y_car_l", "y_car_r"), (), ms_key)
+        y_gantry_total_g = float(assembly.y_moving_mass_kg) * 1000.0
+        if y_gantry_total_g <= 0.0:
+            y_gantry_total_g = toolhead_mass_g + x_beam_mass_g + x_rail_backer_g + y_carriages_g
+        y_gantry_slope = _extract_struct_mass_slope(
+            sensitivity,
+            ("nozzle_tip", "toolhead_cog", "toolhead", "y_car_l", "y_car_r"),
+            x_gantry_mids,
+            ms_key,
+        )
+        raw_items.extend(
+            [
+                (
+                    "hotend",
+                    "Hotend & Nozzle",
+                    hotend_mass_g,
+                    round(min(25.0, 0.35 * hotend_mass_g), 1),
+                    "XY",
+                    True,
+                    hotend_slope,
+                    "Bare hotend, heatbreak, and heatsink assembly mass; moves on both X and Y axes and sits at the nozzle cantilever tip.",
+                ),
+                (
+                    "toolhead",
+                    "Toolhead Total",
+                    toolhead_mass_g,
+                    round(min(100.0, 0.30 * toolhead_mass_g), 1),
+                    "XY",
+                    True,
+                    toolhead_slope,
+                    "Total X-moving toolhead, carriage block, extruder, probe, and mount mass; accelerates on every X and Y print move.",
+                ),
+                (
+                    "x_beam",
+                    "X-Beam (Bare)",
+                    x_beam_mass_g,
+                    round(min(100.0, 0.40 * x_beam_mass_g), 1),
+                    "Y",
+                    limiting_axis == "Y",
+                    x_gantry_slope,
+                    "Bare X-gantry beam structural mass excluding linear rail and backer; accelerates on every Y move and governs X-gantry span inertia.",
+                ),
+                (
+                    "x_rail_backer",
+                    "X-Rail & Backer",
+                    x_rail_backer_g,
+                    round(min(100.0, 0.35 * x_rail_backer_g), 1),
+                    "Y",
+                    limiting_axis == "Y",
+                    x_gantry_slope,
+                    "X-axis linear guide rail and backer bar mass mounted along the X gantry; rides along on every Y acceleration.",
+                ),
+                (
+                    "y_carriages",
+                    "XY-Joints & Y-Carriages",
+                    y_carriages_g,
+                    round(min(80.0, 0.35 * y_carriages_g), 1),
+                    "Y",
+                    limiting_axis == "Y",
+                    y_car_slope,
+                    "Combined left/right Y-rail carriages and XY-joint bracket hardware; accelerates on Y moves and carries gantry belt tension.",
+                ),
+                (
+                    "y_gantry_total",
+                    "Total Moving Y-Gantry",
+                    y_gantry_total_g,
+                    round(0.25 * y_gantry_total_g, 1),
+                    "Y",
+                    limiting_axis == "Y",
+                    y_gantry_slope,
+                    "Combined Y-axis moving assembly (toolhead, X-beam, X-rail, backer, and XY-joints/carriages) accelerated by the Y drive path.",
+                ),
+            ]
+        )
+        total_struct_slope = y_gantry_slope if limiting_axis == "Y" else toolhead_slope
+
+    delta_cut = min(10.0, 0.25 * m_lim_g) if m_lim_g > 1.0 else 0.0
+    slope_scale = (100.0 / delta_cut) if delta_cut > 0.0 else 0.0
+
+    items: list[dict[str, Any]] = []
+    for item_id, label, mass_g, cut_g, affects_axis, moves_on_lim, struct_slope, note in raw_items:
+        df_hz, da = _coupled_gain(cut_g, moves_on_lim, struct_slope)
+        hz_100 = (
+            _coupled_gain(delta_cut, moves_on_lim, struct_slope)[0] * slope_scale
+            if delta_cut > 0.0
+            else 0.0
+        )
+        items.append(
+            {
+                "id": item_id,
+                "label": label,
+                "current_mass_g": round(float(mass_g), 1),
+                "example_cut_g": round(float(cut_g), 1),
+                "hz_per_100g": round(float(hz_100), 2),
+                "est_hz_gain": round(float(df_hz), 2),
+                "est_accel_gain_mm_s2": round(float(da), 0),
+                "affects_axis": affects_axis,
+                "note": note,
+            }
+        )
+
+    total_potential_cut_g = round(0.25 * m_lim_g, 1)
+    tot_df_hz, tot_da = _coupled_gain(total_potential_cut_g, True, total_struct_slope)
+
+    return {
+        "limiting_axis": limiting_axis,
+        "limiting_shaper_hz": round(float(f_eff), 2),
+        "limiting_max_accel_mm_s2": round(float(a_max), 0),
+        "limiting_moving_mass_g": round(float(m_lim_g), 1),
+        "total_potential_cut_g": total_potential_cut_g,
+        "total_potential_hz_gain": round(float(tot_df_hz), 2),
+        "total_potential_accel_gain_mm_s2": round(float(tot_da), 0),
+        "items": items,
+    }
+
+
 def evaluate_printer(
     spec: PrinterSpec,
     gcode_text: str | None = None,
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
     filament_id: str = "pla",
-    panel_mesh_n: int = 2,
+    panel_mesh_n: int = 3,
+    bed_mesh_n: int = 8,
     include_advanced_analysis: bool = True,
     accel_override_mm_s2: float | None = None,
 ) -> SimulationReport:
@@ -457,7 +852,7 @@ def evaluate_printer(
         )
         rcsa = analyze_toolhead_rcsa(assembly, modal_fea)
         sensitivity = compute_structural_sensitivities(assembly, static_fea, modal_fea)
-        bed_plate_fea = solve_bed_plate_fem(spec)
+        bed_plate_fea = solve_bed_plate_fem(spec, mesh_n=max(4, int(bed_mesh_n)))
 
     if gcode_text is None:
         bx, by, _ = spec.kinematics.build_volume_mm
@@ -487,6 +882,8 @@ def evaluate_printer(
         bed_plate_fea=bed_plate_fea,
     )
 
+    weight_shaper_gains = compute_weight_shaper_gains(assembly, modal_fea, sensitivity)
+
     return SimulationReport(
         spec=spec,
         assembly=assembly,
@@ -504,10 +901,12 @@ def evaluate_printer(
         rcsa=rcsa,
         sensitivity=sensitivity,
         bed_plate_fea=bed_plate_fea,
+        weight_shaper_gains=weight_shaper_gains,
     )
 
 
 def _extract_verify_summary(report: SimulationReport, solve_time_ms: float) -> dict:
+    bp = report.bed_plate_fea
     return {
         "fundamental_freq_hz": round(float(report.modal_fea.fundamental_freq_hz), 2),
         "recommended_max_accel_mm_s2": round(float(report.modal_fea.recommended_max_accel_mm_s2), 0),
@@ -515,6 +914,8 @@ def _extract_verify_summary(report: SimulationReport, solve_time_ms: float) -> d
         "panel_drum_freq_hz": round(float(report.modal_fea.panel_drum_freq_hz), 2),
         "panel_max_von_mises_mpa": round(float(report.static_fea.panel_max_von_mises_mpa), 3),
         "num_shell_elements": len(report.assembly.shell_elements),
+        "bed_flatness_error_um": round(float(bp.total_flatness_error_um), 2) if bp else 0.0,
+        "bed_first_mode_hz": round(float(bp.plate_first_mode_hz), 2) if bp else 0.0,
         "solve_time_ms": round(float(solve_time_ms), 1),
     }
 
@@ -524,11 +925,14 @@ def verify_printer_deep(
     gcode_text: str | None = None,
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5),
     filament_id: str = "pla",
-    deep_mesh_n: int = 6,
+    deep_mesh_n: int = 8,
+    deep_bed_mesh_n: int = 16,
 ) -> dict:
-    """Compare fast 2x2 shell FEA vs deep nxn mesh verification and report convergence."""
-    fast_n = 2
+    """Compare balanced interactive 3x3/8x8 FEA vs maximum-accuracy 8x8/16x16 verification."""
+    fast_n = 3
+    fast_bed_n = 8
     deep_n = max(4, int(deep_mesh_n))
+    deep_bed_n = max(8, int(deep_bed_mesh_n))
 
     t0 = time.perf_counter()
     fast_report = evaluate_printer(
@@ -537,6 +941,7 @@ def verify_printer_deep(
         toolhead_rel_pos=toolhead_rel_pos,
         filament_id=filament_id,
         panel_mesh_n=fast_n,
+        bed_mesh_n=fast_bed_n,
     )
     fast_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -547,6 +952,7 @@ def verify_printer_deep(
         toolhead_rel_pos=toolhead_rel_pos,
         filament_id=filament_id,
         panel_mesh_n=deep_n,
+        bed_mesh_n=deep_bed_n,
     )
     deep_ms = (time.perf_counter() - t1) * 1000.0
 
@@ -568,6 +974,8 @@ def verify_printer_deep(
     return {
         "fast_mesh_n": fast_n,
         "deep_mesh_n": deep_n,
+        "fast_bed_mesh_n": fast_bed_n,
+        "deep_bed_mesh_n": deep_bed_n,
         "fast_summary": fast_summary,
         "deep_summary": deep_summary,
         "convergence": {

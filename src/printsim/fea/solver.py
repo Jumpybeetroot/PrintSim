@@ -127,6 +127,7 @@ class StaticFEAResult:
     shell_panel_stresses: list[ShellStressResult] = field(default_factory=list)
     peak_stress_part_label: str = ""
     top_flex_explanation: str = ""
+    toolhead_flex_breakdown: dict[str, float | str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -149,6 +150,7 @@ class StaticFEAResult:
             "peak_inertial_force_y_n": round(self.peak_inertial_force_y_n, 2),
             "peak_stress_part_label": self.peak_stress_part_label,
             "top_flex_explanation": self.top_flex_explanation,
+            "toolhead_flex_breakdown": self.toolhead_flex_breakdown,
             "nodal_displacements_mm": self.nodal_displacements_mm,
             "nodal_displacements_x_mm": self.nodal_displacements_x_mm,
             "nodal_displacements_y_mm": self.nodal_displacements_y_mm,
@@ -294,19 +296,69 @@ def solve_static_fea(
     grav_sag_um = abs(float(_rel_disp_vec(u_grav)[2])) * 1e6
 
     # 2. Unit load compliance probing across structural loop (+1 N nozzle / -1 N bed in X, Y, Z)
-    def _probe_stiffness(axis: int) -> float:
+    nmap_fea = assembly.node_map
+    r_th = nmap_fea[assembly.toolhead_node_id].position_m
+    r_cog = nmap_fea[cog_id].position_m
+    r_noz = nmap_fea[noz_id].position_m
+
+    def _probe_stiffness(axis: int) -> tuple[float, tuple[float, float, float]]:
         f_unit = np.zeros(n_dof, dtype=float)
         f_unit[noz_dof + axis] = 1.0
         if has_bed:
             f_unit[bed_dof + axis] = -1.0
         u_unit = solve_rhs(f_unit)
-        rel_disp = float(u_unit[noz_dof + axis] - (u_unit[bed_dof + axis] if has_bed else 0.0))
-        disp_mm = abs(rel_disp) * 1e3
-        return 1.0 / max(disp_mm, 1e-9)
+        u_bed = u_unit[bed_dof : bed_dof + 3] if has_bed else np.zeros(3, dtype=float)
+        u_th = u_unit[th_dof : th_dof + 3]
+        th_th = u_unit[th_dof + 3 : th_dof + 6]
+        u_cog = u_unit[cog_dof : cog_dof + 3]
+        th_cog = u_unit[cog_dof + 3 : cog_dof + 6]
+        u_noz = u_unit[noz_dof : noz_dof + 3]
 
-    stiff_x = _probe_stiffness(0)
-    stiff_y = _probe_stiffness(1)
-    stiff_z = _probe_stiffness(2)
+        p_th_at_noz = u_th + np.cross(th_th, r_noz - r_th)
+        p_cog_at_noz = u_cog + np.cross(th_cog, r_noz - r_cog)
+
+        d1 = max(0.0, float((p_th_at_noz - u_bed)[axis]))
+        d2 = max(0.0, float((p_cog_at_noz - p_th_at_noz)[axis]))
+        d3 = max(0.0, float((u_noz - p_cog_at_noz)[axis]))
+        rel_disp = float((u_noz - u_bed)[axis])
+        disp_mm = abs(rel_disp) * 1e3
+        return 1.0 / max(disp_mm, 1e-9), (d1, d2, d3)
+
+    stiff_x, (c1_x, c2_x, c3_x) = _probe_stiffness(0)
+    stiff_y, (c1_y, c2_y, c3_y) = _probe_stiffness(1)
+    stiff_z, _ = _probe_stiffness(2)
+
+    c1_xy = c1_x + c1_y
+    c2_xy = c2_x + c2_y
+    c3_xy = c3_x + c3_y
+    c_xy_tot = max(c1_xy + c2_xy + c3_xy, 1e-18)
+    pct_rail = 100.0 * c1_xy / c_xy_tot
+    pct_car = 100.0 * c2_xy / c_xy_tot
+    pct_hot = 100.0 * c3_xy / c_xy_tot
+    dom_flex_source = max(
+        (("rail_xbeam", pct_rail), ("carriage_body", pct_car), ("hotend_nozzle", pct_hot)),
+        key=lambda item: item[1],
+    )[0]
+    stage_stiff = assembly.toolhead_stage_stiffnesses_n_per_mm
+    toolhead_flex_breakdown: dict[str, float | str] = {
+        "rail_and_xbeam_pct": round(pct_rail, 2),
+        "carriage_and_body_pct": round(pct_car, 2),
+        "hotend_and_nozzle_pct": round(100.0 - round(pct_rail, 2) - round(pct_car, 2), 2),
+        "effective_tip_stiffness_n_per_mm": round((2.0 / max(c_xy_tot, 1e-12)) * 1e-3, 2),
+        "hotend_stiffness_n_per_mm": round(
+            float(
+                stage_stiff.get(
+                    "hotend_total_n_per_mm",
+                    assembly.spec.toolhead.hotend.structural_stiffness_n_per_mm,
+                )
+            ),
+            2,
+        ),
+        "carriage_mount_stiffness_n_per_mm": round(
+            float(stage_stiff.get("carriage_mount_n_per_mm", 0.0)), 2
+        ),
+        "dominant_flex_source": dom_flex_source,
+    }
 
     # 3. Peak inertial loads applied at toolhead_cog (+ gantry / moving bed) during max X and max Y accel
     f_inertial_x = assembly.x_moving_mass_kg * accel_m_s2
@@ -531,4 +583,5 @@ def solve_static_fea(
         shell_panel_stresses=shell_panel_stresses,
         peak_stress_part_label=peak_stress_label,
         top_flex_explanation=top_flex_explanation,
+        toolhead_flex_breakdown=toolhead_flex_breakdown,
     )

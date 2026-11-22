@@ -54,11 +54,17 @@ from printsim.schema import (
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
     GANTRY_BRACKET_CATALOG,
+    GANTRY_WEIGHT_CLASSES,
+    HOTEND_CATALOG,
     MATERIAL_CATALOG,
     PROFILE_CATALOG,
+    RAIL_QUALITY_CATALOG,
     STEPPER_CATALOG,
+    TOOLHEAD_CONSTRUCTION_CATALOG,
     TOOLHEAD_PRESETS,
+    Z_DRIVE_MECHANISM_CATALOG,
     Z_PROBE_CATALOG,
+    Z_RAIL_PROFILES,
     PrinterSpec,
 )
 from printsim.thermal import FILAMENT_CATALOG
@@ -74,7 +80,8 @@ class SimulateRequest(BaseModel):
     filament_id: str = "pla"
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
     include_toolpath_segments: bool = True
-    panel_mesh_n: int = Field(2, ge=2, le=8)
+    panel_mesh_n: int = Field(3, ge=2, le=10)
+    bed_mesh_n: int = Field(8, ge=4, le=16)
     accel_override_mm_s2: float | None = Field(None, ge=500.0, le=100000.0)
 
 
@@ -84,7 +91,8 @@ class DeepVerifyRequest(BaseModel):
     gcode_text: str | None = None
     filament_id: str = "pla"
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
-    deep_mesh_n: int = Field(6, ge=4, le=10)
+    deep_mesh_n: int = Field(8, ge=4, le=10)
+    deep_bed_mesh_n: int = Field(16, ge=8, le=20)
 
 
 class OptimizeRequest(BaseModel):
@@ -279,8 +287,10 @@ def create_app() -> FastAPI:
             "filaments": [f.model_dump(mode="json") for f in FILAMENT_CATALOG.values()],
             "steppers": list(STEPPER_CATALOG.values()),
             "toolhead_presets": list(TOOLHEAD_PRESETS.values()),
+            "toolhead_constructions": list(TOOLHEAD_CONSTRUCTION_CATALOG.values()),
             "extrusion_fillings": list(EXTRUSION_FILLINGS.values()),
             "gantry_brackets": list(GANTRY_BRACKET_CATALOG.values()),
+            "gantry_weight_classes": list(GANTRY_WEIGHT_CLASSES.values()),
             "x_rail_mounts": [
                 {"id": "front", "name": "Front Face (Voron Standard)", "short_name": "Front", "notes": "Bolted to front (-Y) face: max Y-accel bending stiffness; standard forward CoG"},
                 {"id": "top", "name": "Top Face (RatRig / Annex)", "short_name": "Top", "notes": "Bolted to top (+Z) face: max Z stiffness & shorter Y overhang; slightly taller nozzle drop"},
@@ -306,6 +316,7 @@ def create_app() -> FastAPI:
                 {"id": "ZA", "name": "ZA (Medium Preload)", "short_name": "ZA"},
                 {"id": "ZB", "name": "ZB (Heavy Preload)", "short_name": "ZB"},
             ],
+            "rail_qualities": list(RAIL_QUALITY_CATALOG.values()),
             "rail_block_types": [
                 {"id": "C", "name": "C Block (Standard Length)", "short_name": "C"},
                 {"id": "H", "name": "H Block (Long Heavy-Load)", "short_name": "H"},
@@ -319,6 +330,9 @@ def create_app() -> FastAPI:
             "frame_feet": list(FRAME_FEET_CATALOG.values()),
             "z_probes": list(Z_PROBE_CATALOG.values()),
             "belt_routings": list(BELT_ROUTING_CATALOG.values()),
+            "hotend_presets": list(HOTEND_CATALOG.values()),
+            "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
+            "z_rail_profiles": Z_RAIL_PROFILES,
             "bearing_clearances": [
                 {"id": "C2", "name": "ISO C2 Tight Clearance (3.5 um)", "short_name": "C2"},
                 {"id": "CN", "name": "ISO CN Normal Clearance (7.5 um)", "short_name": "CN"},
@@ -405,6 +419,7 @@ def create_app() -> FastAPI:
                 toolhead_rel_pos=req.toolhead_rel_pos,
                 filament_id=req.filament_id,
                 panel_mesh_n=req.panel_mesh_n,
+                bed_mesh_n=req.bed_mesh_n,
                 accel_override_mm_s2=req.accel_override_mm_s2,
             )
             payload = report.to_dict(include_toolpath_segments=req.include_toolpath_segments)
@@ -428,6 +443,7 @@ def create_app() -> FastAPI:
                 toolhead_rel_pos=req.toolhead_rel_pos,
                 filament_id=req.filament_id,
                 deep_mesh_n=req.deep_mesh_n,
+                deep_bed_mesh_n=req.deep_bed_mesh_n,
             )
             deep_sim = result.get("deep_simulation")
             if isinstance(deep_sim, dict):

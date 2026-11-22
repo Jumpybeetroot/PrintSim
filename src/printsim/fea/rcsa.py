@@ -377,6 +377,7 @@ def analyze_toolhead_rcsa(
             spec.gantry.x_rail_profile,
             preload=spec.gantry.rail_preload,
             block_type=spec.gantry.rail_block_type,
+            rail_quality=spec.gantry.rail_quality,
         )
         car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
         k_rot_car = car["k_rx_nm_rad"] * car_mult

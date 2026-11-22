@@ -28,10 +28,13 @@ from printsim.schema import (
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
     GANTRY_BRACKET_CATALOG,
+    HOTEND_CATALOG,
     MATERIAL_CATALOG,
     PROFILE_CATALOG,
     STEPPER_CATALOG,
     TOOLHEAD_PRESETS,
+    Z_DRIVE_MECHANISM_CATALOG,
+    Z_RAIL_PROFILES,
     PrinterSpec,
 )
 from printsim.thermal import FILAMENT_CATALOG
@@ -72,6 +75,16 @@ def _apply_dot_overrides(base_data: dict[str, Any], overrides: dict[str, Any]) -
                 raise ValueError(f"Unknown toolhead preset '{value}'.")
             cur_th = dict(out.get("toolhead", {}))
             cur_th.update(TOOLHEAD_PRESETS[value])
+            out["toolhead"] = cur_th
+            continue
+        if key in ("toolhead.hotend", "toolhead.hotend.preset_id") and isinstance(value, str):
+            if value not in HOTEND_CATALOG:
+                raise ValueError(f"Unknown hotend preset '{value}'.")
+            cur_th = dict(out.get("toolhead", {}))
+            cur_he = dict(cur_th.get("hotend", {}))
+            cur_he.update(HOTEND_CATALOG[value])
+            cur_he["preset_id"] = value
+            cur_th["hotend"] = cur_he
             out["toolhead"] = cur_th
             continue
 
@@ -184,9 +197,16 @@ TOOLS_SCHEMA = [
                 "panel_mesh_n": {
                     "type": "integer",
                     "minimum": 2,
-                    "maximum": 8,
-                    "default": 2,
-                    "description": "MITC4 shell panel refinement grid per bay (2..8; default 2)",
+                    "maximum": 10,
+                    "default": 3,
+                    "description": "MITC4 shell panel refinement grid per bay (2..10; default 3 for <300ms balanced accuracy)",
+                },
+                "bed_mesh_n": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": 16,
+                    "default": 8,
+                    "description": "2D MITC4 heated bed plate mesh grid (4..16; default 8)",
                 },
                 "accel_override_mm_s2": {
                     "type": "number",
@@ -435,7 +455,8 @@ TOOLS_SCHEMA = [
             "properties": {
                 "yaml_text": {"type": "string", "description": "Declarative PrintSim YAML specification"},
                 "filament_id": {"type": "string", "default": "pla"},
-                "deep_mesh_n": {"type": "integer", "default": 6, "minimum": 4, "maximum": 10},
+                "deep_mesh_n": {"type": "integer", "default": 8, "minimum": 4, "maximum": 10},
+                "deep_bed_mesh_n": {"type": "integer", "default": 16, "minimum": 8, "maximum": 20},
                 "toolhead_rel_pos": {
                     "type": "array",
                     "items": {"type": "number"},
@@ -638,6 +659,9 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             ],
             "bed_mounts": list(BED_MOUNT_CATALOG.values()),
             "frame_feet": list(FRAME_FEET_CATALOG.values()),
+            "hotend_presets": list(HOTEND_CATALOG.values()),
+            "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
+            "z_rail_profiles": Z_RAIL_PROFILES,
             "x_rail_mounts": ["front", "top", "bottom", "dual_top_bottom"],
             "y_rail_mounts": ["top", "inner", "bottom"],
             "drive_types": ["open_loop_stepper", "closed_loop_stepper", "foc_servo"],
@@ -679,9 +703,12 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             if len(raw_pos) != 3:
                 raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
             rel_pos = (float(raw_pos[0]), float(raw_pos[1]), float(raw_pos[2]))
-        panel_mesh_n = int(args.get("panel_mesh_n", 2))
-        if panel_mesh_n < 2 or panel_mesh_n > 8:
-            raise ValueError("panel_mesh_n must be an integer between 2 and 8")
+        panel_mesh_n = int(args.get("panel_mesh_n", 3))
+        if panel_mesh_n < 2 or panel_mesh_n > 10:
+            raise ValueError("panel_mesh_n must be an integer between 2 and 10")
+        bed_mesh_n = int(args.get("bed_mesh_n", 8))
+        if bed_mesh_n < 4 or bed_mesh_n > 16:
+            raise ValueError("bed_mesh_n must be an integer between 4 and 16")
         raw_accel = args.get("accel_override_mm_s2")
         accel_override = float(raw_accel) if raw_accel is not None else None
         report = evaluate_printer(
@@ -690,6 +717,7 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             toolhead_rel_pos=rel_pos,
             filament_id=args.get("filament_id", "pla"),
             panel_mesh_n=panel_mesh_n,
+            bed_mesh_n=bed_mesh_n,
             accel_override_mm_s2=accel_override,
         )
         payload = report.to_dict(include_toolpath_segments=False)
@@ -940,7 +968,8 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             spec,
             toolhead_rel_pos=rel_pos,
             filament_id=str(args.get("filament_id", "pla")),
-            deep_mesh_n=int(args.get("deep_mesh_n", 6)),
+            deep_mesh_n=int(args.get("deep_mesh_n", 8)),
+            deep_bed_mesh_n=int(args.get("deep_bed_mesh_n", 16)),
         )
 
     if name == "analyze_sensitivity_hotspots":

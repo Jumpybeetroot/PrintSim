@@ -61,23 +61,27 @@ kinematics:
 toolhead:
   preset_id: stealthburner
   name: Voron StealthBurner + Clockwork 2
-  total_mass_g: 380
+  total_mass_g: 284
   cog_offset_mm: [0, -22, -28]
   nozzle_offset_mm: [0, -26, -66]
   mount_material: abs_printed
   internal_stiffness_n_per_mm: 350.0
   envelope_mm: [68, 74, 95]
   hotend:
-    name: Revo Voron / Rapido Standard Flow
-    heater_power_w: 60
+    preset_id: mellow_goliath_air
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 750.0
+    overall_length_mm: 69.2
+    name: Mellow Goliath Air
+    heater_power_w: 100
     block_material: copper_c110
     block_mass_g: 14
     nozzle_material: brass_c360
     nozzle_diameter_mm: 0.4
-    melt_zone_length_mm: 16
+    melt_zone_length_mm: 50
     heatbreak_material: titanium_grade5
     heatbreak_length_mm: 12
-    heatbreak_wall_mm: 0.25
+    heatbreak_wall_mm: 0.30
     heatbreak_id_mm: 2.0
     heatsink_thermal_resistance_k_w: 3.2
     part_cooling_cfm: 9.0
@@ -95,3 +99,5 @@ bed:
   heater_power_w: 650
   mass_g: 2800
   z_drive: leadscrew_triple
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom

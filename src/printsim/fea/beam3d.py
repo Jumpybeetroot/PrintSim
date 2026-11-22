@@ -243,8 +243,10 @@ def assemble_global_matrices(
             M[base, base] += node.lumped_mass_kg
             M[base + 1, base + 1] += node.lumped_mass_kg
             M[base + 2, base + 2] += node.lumped_mass_kg
-            # Small rotational inertia for toolhead/motor body (approx radius ~25mm)
-            rot_i = node.lumped_mass_kg * (0.025**2)
+            # Rotational inertia: compact ~7mm gyration radius for heater block/nozzle,
+            # ~25mm for toolhead/motor bodies (prevents phantom low-Hz nozzle Z-spin modes)
+            r_gyr = 0.007 if node.role == "nozzle" else 0.025
+            rot_i = node.lumped_mass_kg * (r_gyr**2)
             M[base + 3, base + 3] += rot_i
             M[base + 4, base + 4] += rot_i
             M[base + 5, base + 5] += rot_i

@@ -250,7 +250,7 @@ def optimize_design(
 ) -> OptimizationResult:
     """Run an evolutionary hill-climbing search to improve a 3D printer design."""
     rng = random.Random(seed)
-    base_report = evaluate_printer(base_spec, include_advanced_analysis=False)
+    base_report = evaluate_printer(base_spec, panel_mesh_n=2, include_advanced_analysis=False)
     base_obj = _score_objective(base_report, objective)
 
     best_spec = copy.deepcopy(base_spec)
@@ -279,7 +279,7 @@ def optimize_design(
         parent = best_spec if rng.random() < 0.75 else base_spec
         cand_spec, changes = _mutate_spec(parent, rng)
         cand_spec.name = f"{base_spec.name} (Opt #{it})"
-        rep = evaluate_printer(cand_spec, include_advanced_analysis=False)
+        rep = evaluate_printer(cand_spec, panel_mesh_n=2, include_advanced_analysis=False)
         val = _score_objective(rep, objective)
 
         history.append(

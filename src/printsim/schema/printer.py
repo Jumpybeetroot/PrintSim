@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -46,6 +46,12 @@ InputShaperType = Literal[
 ]
 CornerJointType = Literal["rigid", "l_bracket", "blind_joint", "gusset_plate", "corner_cube"]
 RailPreloadType = Literal["ZF", "Z0", "Z1", "ZA", "ZB"]
+RailQualityType = Literal[
+    "budget_generic",
+    "midgrade_matched",
+    "hiwin_genuine",
+    "precision_thk_nsk",
+]
 RailBlockType = Literal["C", "H"]
 RailBackerMaterialType = Literal["none", "steel_4140", "titanium_grade5"]
 BedMountType = Literal[
@@ -60,6 +66,421 @@ FrameFeetType = Literal["rigid_bolted", "rubber_feet", "anti_vib_pads", "paver_o
 BearingClearanceType = Literal["C2", "CN", "C3"]
 ZProbeType = Literal["static_eddy", "klicky_inductive", "cnc_tap", "printed_tap"]
 BeltRoutingType = Literal["stock_corexy", "monolith_short"]
+HotendMountStyleType = Literal[
+    "groove_mount", "rigid_4bolt_m3", "dragon_4bolt_m25", "chube_6bolt_m3_18pcd"
+]
+ToolheadConstructionType = Literal[
+    "multi_piece_clamshell",
+    "compact_cage",
+    "plate_sandwich_cf",
+    "extruder_as_chassis",
+    "cnc_monoblock",
+    "cantilever_bowden",
+]
+ZRailProfileType = Literal[
+    "mgn12_rail",
+    "mgn9_rail",
+    "steel_rod_8mm",
+    "steel_rod_10mm",
+    "steel_rod_12mm",
+    "none",
+]
+ZLeadscrewType = Literal[
+    "auto",
+    "tr8x4_pom",
+    "tr8x8_pom",
+    "tr8x8_brass",
+    "sfu1204_bk10",
+    "gt2_6mm_z_belt",
+    "gt2_9mm_z_belt",
+]
+
+# Commercial hotend thermomechanical & structural stiffness catalog
+# Sources: manufacturer CAD/datasheets, CNC kitchen / Luke's Laboratory Chube structural benchmarks
+HOTEND_CATALOG: dict[str, dict] = {
+    "e3d_v6_groove": {
+        "id": "e3d_v6_groove",
+        "preset_id": "e3d_v6_groove",
+        "name": "E3D V6 Groove-Mount (40W Al Block)",
+        "short_name": "E3D V6 Groove",
+        "mount_style": "groove_mount",
+        "structural_stiffness_n_per_mm": 45.0,
+        "mass_g": 42.0,
+        "overall_length_mm": 62.3,
+        "melt_zone_length_mm": 12.5,
+        "heater_power_w": 40.0,
+        "block_material": "aluminum_6061_t6",
+        "block_mass_g": 12.0,
+        "nozzle_material": "brass_c360",
+        "heatbreak_material": "stainless_304",
+        "heatbreak_wall_mm": 0.30,
+        "heatbreak_length_mm": 11.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 4.2,
+        "max_temp_c": 285.0,
+        "cost_usd": 55.0,
+        "notes": "Classic J-head groove-mount collar with 0.30 mm SS304 heatbreak and Al block; compliant collar permits substantial nozzle whip",
+    },
+    "e3d_revo_voron": {
+        "id": "e3d_revo_voron",
+        "preset_id": "e3d_revo_voron",
+        "name": "E3D Revo Voron (40W RapidChange)",
+        "short_name": "Revo Voron",
+        "mount_style": "rigid_4bolt_m3",
+        "structural_stiffness_n_per_mm": 165.0,
+        "mass_g": 30.0,
+        "overall_length_mm": 52.0,
+        "melt_zone_length_mm": 15.5,
+        "heater_power_w": 40.0,
+        "block_material": "brass_c360",
+        "block_mass_g": 8.0,
+        "nozzle_material": "brass_c360",
+        "heatbreak_material": "stainless_304",
+        "heatbreak_wall_mm": 0.15,
+        "heatbreak_length_mm": 10.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 3.6,
+        "max_temp_c": 300.0,
+        "cost_usd": 95.0,
+        "notes": "Ultra-light 30g 4-bolt M3 rigid heatsink with 0.15 mm SS304 thin-wall integrated nozzle/heatbreak",
+    },
+    "phaetus_dragon_hf": {
+        "id": "phaetus_dragon_hf",
+        "preset_id": "phaetus_dragon_hf",
+        "name": "Phaetus Dragon HF (4-Bolt Rigid)",
+        "short_name": "Dragon HF",
+        "mount_style": "dragon_4bolt_m25",
+        "structural_stiffness_n_per_mm": 550.0,
+        "mass_g": 46.0,
+        "overall_length_mm": 62.2,
+        "melt_zone_length_mm": 17.5,
+        "heater_power_w": 50.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 13.0,
+        "nozzle_material": "brass_c360",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.20,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 3.4,
+        "max_temp_c": 350.0,
+        "cost_usd": 85.0,
+        "notes": "4x M2.5 rigid mount with 4 titanium structural standoffs bypassing the 0.20 mm Ti bi-metal heatbreak",
+    },
+    "phaetus_dragon_uhf": {
+        "id": "phaetus_dragon_uhf",
+        "preset_id": "phaetus_dragon_uhf",
+        "name": "Phaetus Dragon UHF (Extended Melt)",
+        "short_name": "Dragon UHF",
+        "mount_style": "dragon_4bolt_m25",
+        "structural_stiffness_n_per_mm": 340.0,
+        "mass_g": 56.0,
+        "overall_length_mm": 81.6,
+        "melt_zone_length_mm": 30.0,
+        "heater_power_w": 70.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 18.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 3.2,
+        "max_temp_c": 350.0,
+        "cost_usd": 105.0,
+        "notes": "Extended 81.6 mm UHF copper melt zone; longer unsupported lower extender lowers tip stiffness vs Dragon HF",
+    },
+    "phaetus_rapido_2_hf": {
+        "id": "phaetus_rapido_2_hf",
+        "preset_id": "phaetus_rapido_2_hf",
+        "name": "Phaetus Rapido 2 HF (85W Ceramic)",
+        "short_name": "Rapido 2 HF",
+        "mount_style": "dragon_4bolt_m25",
+        "structural_stiffness_n_per_mm": 500.0,
+        "mass_g": 50.0,
+        "overall_length_mm": 71.0,
+        "melt_zone_length_mm": 22.0,
+        "heater_power_w": 85.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 14.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 3.0,
+        "max_temp_c": 350.0,
+        "cost_usd": 95.0,
+        "notes": "4-bolt rigid mount with 3 Ti screws and 85W cylindrical ceramic copper melt core",
+    },
+    "phaetus_rapido_2_uhf": {
+        "id": "phaetus_rapido_2_uhf",
+        "preset_id": "phaetus_rapido_2_uhf",
+        "name": "Phaetus Rapido 2 UHF (85W Extended)",
+        "short_name": "Rapido 2 UHF",
+        "mount_style": "dragon_4bolt_m25",
+        "structural_stiffness_n_per_mm": 320.0,
+        "mass_g": 62.0,
+        "overall_length_mm": 79.2,
+        "melt_zone_length_mm": 34.0,
+        "heater_power_w": 85.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 17.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 2.9,
+        "max_temp_c": 350.0,
+        "cost_usd": 115.0,
+        "notes": "79.2 mm UHF ceramic-ring hotend with copper melt extender; extra lower lever arm trades tip stiffness for flow",
+    },
+    "mellow_goliath_air": {
+        "id": "mellow_goliath_air",
+        "preset_id": "mellow_goliath_air",
+        "name": "Mellow Goliath Air (100W Long-Melt)",
+        "short_name": "Goliath Air",
+        "mount_style": "dragon_4bolt_m25",
+        "structural_stiffness_n_per_mm": 750.0,
+        "mass_g": 96.0,
+        "overall_length_mm": 69.2,
+        "melt_zone_length_mm": 50.0,
+        "heater_power_w": 100.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 26.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.30,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 2.8,
+        "max_temp_c": 400.0,
+        "cost_usd": 145.0,
+        "notes": "Heavy 96g high-flow VzBot hotend with 50 mm copper melt zone and wide Ti structural posts",
+    },
+    "chube_compact": {
+        "id": "chube_compact",
+        "preset_id": "chube_compact",
+        "name": "Luke's Lab Chube Compact (80W Ti Shell)",
+        "short_name": "Chube Compact",
+        "mount_style": "chube_6bolt_m3_18pcd",
+        "structural_stiffness_n_per_mm": 2200.0,
+        "mass_g": 62.0,
+        "overall_length_mm": 48.0,
+        "melt_zone_length_mm": 33.0,
+        "heater_power_w": 80.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 15.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 11.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 2.6,
+        "max_temp_c": 450.0,
+        "cost_usd": 185.0,
+        "notes": "Compact 48 mm monocoque Ti structural shell with 6-bolt M3 18 mm PCD flange (~2200 N/mm tip stiffness)",
+    },
+    "chube_air": {
+        "id": "chube_air",
+        "preset_id": "chube_air",
+        "name": "Luke's Lab Chube Air (100W Ti Shell)",
+        "short_name": "Chube Air",
+        "mount_style": "chube_6bolt_m3_18pcd",
+        "structural_stiffness_n_per_mm": 2600.0,
+        "mass_g": 86.0,
+        "overall_length_mm": 60.0,
+        "melt_zone_length_mm": 42.0,
+        "heater_power_w": 100.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 18.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 2.5,
+        "max_temp_c": 450.0,
+        "cost_usd": 210.0,
+        "notes": "Finned air-cooled Ti monocoque shell (42 mm Cu melt core, 6-bolt M3 18 mm PCD, ~2600 N/mm tip stiffness)",
+    },
+    "chube_conduction": {
+        "id": "chube_conduction",
+        "preset_id": "chube_conduction",
+        "name": "Luke's Lab Chube Conduction (120W Ti Shell)",
+        "short_name": "Chube Conduction",
+        "mount_style": "chube_6bolt_m3_18pcd",
+        "structural_stiffness_n_per_mm": 3600.0,
+        "mass_g": 82.0,
+        "overall_length_mm": 60.0,
+        "melt_zone_length_mm": 52.0,
+        "heater_power_w": 120.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 20.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 12.0,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 2.2,
+        "max_temp_c": 450.0,
+        "cost_usd": 235.0,
+        "notes": "Conductive-mount full Ti monocoque shell with 52 mm Cu melt core and 6-bolt M3 18 mm PCD mount (~3600 N/mm)",
+    },
+}
+
+# Z-axis drive mechanism catalog (ISO 2901 TR8 leadscrews, HIWIN/TBI SFU1204+BK10 ballscrew, Gates 2GT Z belts)
+Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
+    "tr8x4_pom": {
+        "id": "tr8x4_pom",
+        "name": "TR8x4 Leadscrew + POM Nut (2-Start)",
+        "short_name": "TR8x4 POM",
+        "kind": "leadscrew",
+        "lead_mm": 4.0,
+        "root_area_m2": 2.38e-5,
+        "k_nut_n_per_um": 11.0,
+        "k_thrust_n_per_um": 18.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 28.0,
+        "mass_kg_per_m": 0.28,
+        "diameter_mm": 8.0,
+        "notes": "Voron Trident standard 2-start 4 mm lead screw with anti-backdrive POM flanged nut",
+    },
+    "tr8x8_pom": {
+        "id": "tr8x8_pom",
+        "name": "TR8x8 Leadscrew + POM Nut (4-Start)",
+        "short_name": "TR8x8 POM",
+        "kind": "leadscrew",
+        "lead_mm": 8.0,
+        "root_area_m2": 2.38e-5,
+        "k_nut_n_per_um": 6.5,
+        "k_thrust_n_per_um": 14.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 45.0,
+        "mass_kg_per_m": 0.27,
+        "diameter_mm": 8.0,
+        "notes": "Common 4-start 8 mm lead screw with Delrin/POM nut; higher helix reduces nut axial stiffness and allows backdrive",
+    },
+    "tr8x8_brass": {
+        "id": "tr8x8_brass",
+        "name": "TR8x8 Leadscrew + Brass Nut (4-Start)",
+        "short_name": "TR8x8 Brass",
+        "kind": "leadscrew",
+        "lead_mm": 8.0,
+        "root_area_m2": 2.38e-5,
+        "k_nut_n_per_um": 38.0,
+        "k_thrust_n_per_um": 22.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 35.0,
+        "mass_kg_per_m": 0.27,
+        "diameter_mm": 8.0,
+        "notes": "Machined C360 brass nut raises thread-flank stiffness substantially over POM on 8 mm leadscrews",
+    },
+    "sfu1204_bk10": {
+        "id": "sfu1204_bk10",
+        "name": "SFU1204 Ballscrew + BK10 Angular Bearing",
+        "short_name": "SFU1204 + BK10",
+        "kind": "ballscrew",
+        "lead_mm": 4.0,
+        "root_area_m2": 7.09e-5,
+        "k_nut_n_per_um": 85.0,
+        "k_thrust_n_per_um": 150.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 8.0,
+        "mass_kg_per_m": 0.68,
+        "diameter_mm": 12.0,
+        "notes": "12 mm rolled ballscrew with recirculating steel ball nut and preloaded BK10 angular-contact thrust block",
+    },
+    "gt2_6mm_z_belt": {
+        "id": "gt2_6mm_z_belt",
+        "name": "Gates GT2 6mm Z-Belt Drive (5:1 Reduction)",
+        "short_name": "GT2 6mm Z-Belt",
+        "kind": "belt",
+        "lead_mm": 8.0,
+        "root_area_m2": 9.6e-6,
+        "k_nut_n_per_um": 0.0,
+        "k_thrust_n_per_um": 0.0,
+        "k_drive_n_per_um_per_corner": 0.18,
+        "backlash_um": 18.0,
+        "mass_kg_per_m": 0.017,
+        "diameter_mm": 6.0,
+        "notes": "Voron 2.4 standard 6 mm fiberglass GT2 Z-belt loop (~180 N/mm effective axial stiffness per corner)",
+    },
+    "gt2_9mm_z_belt": {
+        "id": "gt2_9mm_z_belt",
+        "name": "Gates GT2 9mm Z-Belt Drive (5:1 Reduction)",
+        "short_name": "GT2 9mm Z-Belt",
+        "kind": "belt",
+        "lead_mm": 8.0,
+        "root_area_m2": 1.44e-5,
+        "k_nut_n_per_um": 0.0,
+        "k_thrust_n_per_um": 0.0,
+        "k_drive_n_per_um_per_corner": 0.27,
+        "backlash_um": 12.0,
+        "mass_kg_per_m": 0.025,
+        "diameter_mm": 9.0,
+        "notes": "Heavy-duty 9 mm fiberglass GT2 Z-belt upgrade (+50% Z-corner axial stiffness vs 6 mm belt)",
+    },
+}
+
+# Z-axis linear guideway profile catalog
+Z_RAIL_PROFILES: dict[str, dict] = {
+    "mgn12_rail": {
+        "id": "mgn12_rail",
+        "name": "MGN12H Linear Rail (12x8mm)",
+        "short_name": "MGN12H Rail",
+        "kind": "linear_rail",
+        "width_mm": 12.0,
+        "height_mm": 8.0,
+        "notes": "Bolted 12 mm steel guideway providing strong Newmark composite column stiffening and high carriage pitch rigidity",
+    },
+    "mgn9_rail": {
+        "id": "mgn9_rail",
+        "name": "MGN9H Linear Rail (9x6.5mm)",
+        "short_name": "MGN9H Rail",
+        "kind": "linear_rail",
+        "width_mm": 9.0,
+        "height_mm": 6.5,
+        "notes": "Lightweight 9 mm steel linear guideway bolted to Z columns/uprights",
+    },
+    "steel_rod_8mm": {
+        "id": "steel_rod_8mm",
+        "name": "8mm Hardened Linear Rod + LM8UU",
+        "short_name": "8mm Smooth Rod",
+        "kind": "smooth_rod",
+        "width_mm": 8.0,
+        "height_mm": 8.0,
+        "notes": "Unsupported 8 mm chrome steel shaft with LM8UU ball bushing (no extrusion composite flange action)",
+    },
+    "steel_rod_10mm": {
+        "id": "steel_rod_10mm",
+        "name": "10mm Hardened Linear Rod + LM10UU",
+        "short_name": "10mm Smooth Rod",
+        "kind": "smooth_rod",
+        "width_mm": 10.0,
+        "height_mm": 10.0,
+        "notes": "Unsupported 10 mm chrome steel shaft with LM10UU ball bushing (2.44x bending EI vs 8 mm rod)",
+    },
+    "steel_rod_12mm": {
+        "id": "steel_rod_12mm",
+        "name": "12mm Hardened Linear Rod + LM12UU",
+        "short_name": "12mm Smooth Rod",
+        "kind": "smooth_rod",
+        "width_mm": 12.0,
+        "height_mm": 12.0,
+        "notes": "Heavy 12 mm chrome steel shaft with LM12UU ball bushing (5.06x bending EI vs 8 mm rod)",
+    },
+    "none": {
+        "id": "none",
+        "name": "None (Bare Frame / No Z Guide Rail)",
+        "short_name": "None",
+        "kind": "none",
+        "width_mm": 0.0,
+        "height_mm": 0.0,
+        "notes": "Baseline bare frame column without bolted Z rail or steel guide rod",
+    },
+}
 
 # Z-probe carriage architecture catalog (mass, forward CoG overhang shift, sliding-rail pitch compliance)
 Z_PROBE_CATALOG: dict[str, dict] = {
@@ -407,6 +828,93 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
 }
 
 
+# Y-gantry / XY-joint / carriage / idler / umbilical moving hardware weight classes
+GANTRY_WEIGHT_CLASSES: dict[str, dict] = {
+    "ultralight_printed": {
+        "id": "ultralight_printed",
+        "name": "Ultralight Printed (Minimalist / Umbilical)",
+        "short_name": "Ultralight Printed",
+        "carriage_mass_g": 85.0,
+        "suggested_bracket_material": "abs_printed",
+        "notes": "Minimalist printed XY-joints with umbilical wiring (no drag chain) and lightweight MGN9/12 blocks.",
+    },
+    "standard_printed": {
+        "id": "standard_printed",
+        "name": "Standard Printed (Stock Voron ABS/ASA)",
+        "short_name": "Standard Printed",
+        "carriage_mass_g": 140.0,
+        "suggested_bracket_material": "abs_printed",
+        "notes": "Stock Voron Trident/2.4 printed ABS/ASA XY-joints, MGN blocks, idlers, and cable chain hardware.",
+    },
+    "stiffness_opt_printed": {
+        "id": "stiffness_opt_printed",
+        "name": "Stiffness-Optimized Printed (CF/GF + Double-Shear)",
+        "short_name": "Stiff Printed (CF)",
+        "carriage_mass_g": 185.0,
+        "suggested_bracket_material": "pet_cf_printed",
+        "notes": "Thicker ribbed PET-CF/PA-CF XY-joints with M5 double-shear shafts and steel idler stacks.",
+    },
+    "cnc_aluminum_light": {
+        "id": "cnc_aluminum_light",
+        "name": "CNC Aluminum Lightweight (Pocketed 6061)",
+        "short_name": "CNC Al (Light)",
+        "carriage_mass_g": 210.0,
+        "suggested_bracket_material": "aluminum_6061_t6",
+        "notes": "Pocketed billet CNC 6061 XY-joints (ChaoticLab/Vitalii/Funssor lightweight style) with zero creep.",
+    },
+    "cnc_aluminum_hd": {
+        "id": "cnc_aluminum_hd",
+        "name": "CNC Aluminum Heavy-Duty (Monolith / AWD Billet)",
+        "short_name": "CNC Al (Heavy-Duty)",
+        "carriage_mass_g": 280.0,
+        "suggested_bracket_material": "aluminum_6061_t6",
+        "notes": "Thick solid billet CNC 6061/7075 double-shear XY-joints for 9mm/12mm AWD belt tension and MGN12H/15H blocks.",
+    },
+}
+
+
+# Linear rail & carriage manufacturing/grinding precision grade catalog
+# Calibrated to Hertzian ball-sharing across tolerance grades (ISO P / HIWIN C/H / sorted / generic)
+RAIL_QUALITY_CATALOG: dict[str, dict] = {
+    "budget_generic": {
+        "id": "budget_generic",
+        "name": "Budget / Generic Clone (Loose Raceway)",
+        "short_name": "Budget Clone",
+        "stiffness_mult": 0.58,
+        "drag_mult": 1.45,
+        "cost_mult": 0.45,
+        "notes": "Wider ball-diameter tolerance (~60% active load-sharing balls) and rougher raceway grinding; noticeable roll play even with Z0/Z1 preload.",
+    },
+    "midgrade_matched": {
+        "id": "midgrade_matched",
+        "name": "Matched 3D-Printer Grade (LDO / HoneyBadger / Fysetc)",
+        "short_name": "LDO / Matched",
+        "stiffness_mult": 0.88,
+        "drag_mult": 1.05,
+        "cost_mult": 0.85,
+        "notes": "Hand-sorted balls and consistent preload matched for high-speed CoreXY printers.",
+    },
+    "hiwin_genuine": {
+        "id": "hiwin_genuine",
+        "name": "Genuine HIWIN / PMI (Grade C/H)",
+        "short_name": "HIWIN Genuine",
+        "stiffness_mult": 1.00,
+        "drag_mult": 1.00,
+        "cost_mult": 1.00,
+        "notes": "Catalog HIWIN Gothic-arch ground raceways and precision-sorted balls (baseline Hertzian stiffness).",
+    },
+    "precision_thk_nsk": {
+        "id": "precision_thk_nsk",
+        "name": "Precision Ground (THK / NSK / IKO Grade P)",
+        "short_name": "THK / NSK P",
+        "stiffness_mult": 1.22,
+        "drag_mult": 0.82,
+        "cost_mult": 2.10,
+        "notes": "High-conformity ground raceways with G5 ball sorting for near-100% ball sharing, higher roll stiffness, and lower seal drag.",
+    },
+}
+
+
 class FrameNodeSpec(BaseModel):
     """Explicit 3D structural joint node (coordinates in mm)."""
 
@@ -563,6 +1071,10 @@ class GantrySpec(BaseModel):
     rail_preload: RailPreloadType = Field(
         "Z1", description="HIWIN MGN/HGH carriage ball preload class (ZF, Z0, Z1, ZA, ZB)"
     )
+    rail_quality: RailQualityType = Field(
+        "hiwin_genuine",
+        description="Linear rail & carriage manufacturing/grinding precision grade affecting Hertzian ball-sharing stiffness and rolling drag",
+    )
     rail_block_type: RailBlockType = Field(
         "H", description="Linear carriage block length class (C standard vs H long)"
     )
@@ -576,7 +1088,9 @@ class GantrySpec(BaseModel):
         3.0, ge=1.0, le=8.0, description="Opposite-face rail backer bar thickness (mm)"
     )
     dual_x_rails: bool = False
-    carriage_mass_g: float = Field(140.0, gt=0, description="Combined X/Y gantry carriages & joints (g)")
+    carriage_mass_g: float = Field(
+        140.0, ge=20.0, le=1200.0, description="Combined X/Y gantry carriages & joints (g)"
+    )
     belt: BeltSpec = Field(default_factory=BeltSpec)
 
     @property
@@ -752,16 +1266,46 @@ class KinematicsSpec(BaseModel):
     delta_radius_mm: float = Field(145.0, gt=30)
 
 
+_HOTEND_PRESET_FIELDS = (
+    "name",
+    "mount_style",
+    "structural_stiffness_n_per_mm",
+    "mass_g",
+    "overall_length_mm",
+    "melt_zone_length_mm",
+    "heater_power_w",
+    "block_material",
+    "block_mass_g",
+    "nozzle_material",
+    "heatbreak_material",
+    "heatbreak_wall_mm",
+    "heatbreak_length_mm",
+    "heatbreak_id_mm",
+    "heatsink_thermal_resistance_k_w",
+    "max_temp_c",
+)
+
+
 class HotendSpec(BaseModel):
     """Thermomechanical hotend & melt-zone specification."""
 
+    preset_id: str | None = None
+    mount_style: HotendMountStyleType = "dragon_4bolt_m25"
+    structural_stiffness_n_per_mm: float = Field(450.0, ge=15.0, le=6000.0)
+    mass_g: float = Field(
+        45.0,
+        ge=5.0,
+        le=400.0,
+        description="Assembled bare hotend weight (g) including heatsink, heatbreak, heater block, heater/thermistor, and nozzle",
+    )
+    overall_length_mm: float = Field(62.0, ge=30.0, le=120.0)
     name: str = "High-Flow Bi-Metal Hotend"
     heater_power_w: float = Field(60.0, gt=5)
     block_material: str = "copper_c110"
     block_mass_g: float = Field(14.0, gt=1)
     nozzle_material: str = "brass_c360"
     nozzle_diameter_mm: float = Field(0.4, gt=0.1, le=2.0)
-    melt_zone_length_mm: float = Field(16.0, gt=4.0, le=50.0)
+    melt_zone_length_mm: float = Field(16.0, gt=4.0, le=80.0)
     heatbreak_material: str = "titanium_grade5"
     heatbreak_length_mm: float = Field(12.0, gt=3.0)
     heatbreak_wall_mm: float = Field(0.25, gt=0.05)
@@ -773,6 +1317,30 @@ class HotendSpec(BaseModel):
     max_temp_c: float = Field(300.0, gt=180.0, le=550.0)
     ambient_temp_c: float = Field(25.0, ge=0.0, le=100.0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_hotend_preset_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            pid = data.get("preset_id")
+            if isinstance(pid, str) and pid in HOTEND_CATALOG:
+                preset = HOTEND_CATALOG[pid]
+                merged = dict(data)
+                for field_name in _HOTEND_PRESET_FIELDS:
+                    if field_name not in merged or merged[field_name] is None:
+                        if field_name in preset:
+                            merged[field_name] = preset[field_name]
+                return merged
+        return data
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        prev = self.__dict__.get("preset_id") if name == "preset_id" else None
+        super().__setattr__(name, value)
+        if name == "preset_id" and isinstance(value, str) and value in HOTEND_CATALOG and value != prev:
+            preset = HOTEND_CATALOG[value]
+            for field_name in _HOTEND_PRESET_FIELDS:
+                if field_name in preset:
+                    super().__setattr__(field_name, preset[field_name])
+
 
 class ExtruderSpec(BaseModel):
     """Filament drive extruder specification."""
@@ -781,6 +1349,64 @@ class ExtruderSpec(BaseModel):
     gear_ratio: float = Field(5.0, gt=0.5)
     max_push_force_n: float = Field(55.0, gt=5.0)
     filament_diameter_mm: float = Field(1.75, gt=1.0)
+
+
+TOOLHEAD_CONSTRUCTION_CATALOG: dict[str, dict] = {
+    "multi_piece_clamshell": {
+        "id": "multi_piece_clamshell",
+        "name": "Multi-Piece Clamshell (StealthBurner / Afterburner)",
+        "short_name": "Clamshell",
+        "body_stiffness_base_n_per_mm": 110.0,
+        "torsion_mult": 0.72,
+        "mass_delta_g": 0.0,
+        "notes": "Split bolted housing halves with heat-set seam compliance along the carriage-to-hotend load path; easy maintenance but lower torsional rigidity.",
+    },
+    "compact_cage": {
+        "id": "compact_cage",
+        "name": "Compact Open-Cage Box (XOL / Dragon Burner / A4T)",
+        "short_name": "Open Cage",
+        "body_stiffness_base_n_per_mm": 185.0,
+        "torsion_mult": 0.92,
+        "mass_delta_g": 0.0,
+        "notes": "Single-piece core cage with stiffening side cheeks and short X-carriage load path.",
+    },
+    "plate_sandwich_cf": {
+        "id": "plate_sandwich_cf",
+        "name": "Plate Sandwich + Standoffs (Archetype / VzBot / EVA)",
+        "short_name": "Plate Sandwich",
+        "body_stiffness_base_n_per_mm": 270.0,
+        "torsion_mult": 1.05,
+        "mass_delta_g": 0.0,
+        "notes": "Twin flat structural plates tied with metal standoffs for high in-plane roll and bending stiffness.",
+    },
+    "extruder_as_chassis": {
+        "id": "extruder_as_chassis",
+        "name": "Integrated Extruder-as-Chassis (Direct-Bolted Core)",
+        "short_name": "Extruder Core",
+        "body_stiffness_base_n_per_mm": 320.0,
+        "torsion_mult": 1.15,
+        "mass_delta_g": 0.0,
+        "notes": "Extruder gear frame & hotend clamp bolt directly to the X-carriage with minimal shroud load path.",
+    },
+    "cnc_monoblock": {
+        "id": "cnc_monoblock",
+        "name": "CNC Monoblock / Ribbed Billet Chassis",
+        "short_name": "CNC Monoblock",
+        "body_stiffness_base_n_per_mm": 480.0,
+        "torsion_mult": 1.35,
+        "mass_delta_g": 0.0,
+        "notes": "Single-piece machined chassis uniting carriage mount, gusseted webs, and hotend clamp with zero seam slip.",
+    },
+    "cantilever_bowden": {
+        "id": "cantilever_bowden",
+        "name": "Minimalist Bowden / Remote-Drive Mount",
+        "short_name": "Bowden Bracket",
+        "body_stiffness_base_n_per_mm": 230.0,
+        "torsion_mult": 1.00,
+        "mass_delta_g": 0.0,
+        "notes": "Compact hotend-only bracket providing a short, direct cantilever load path to the X-carriage for remote-drive setups.",
+    },
+}
 
 
 class ToolheadSpec(BaseModel):
@@ -801,6 +1427,40 @@ class ToolheadSpec(BaseModel):
         "abs_printed",
         description="Toolhead carriage & XY-joint mount material affecting nozzle pitch/twist stiffness",
     )
+    carriage_mount_material: str | None = Field(
+        None,
+        description="Optional override material for X-carriage backplate (falls back to mount_material)",
+    )
+    body_material: str | None = Field(
+        None,
+        description="Optional override material for toolhead body/shroud (falls back to mount_material)",
+    )
+    hotend_mount_material: str | None = Field(
+        None,
+        description="Optional override material for hotend mounting collar/clamp (falls back to mount_material)",
+    )
+    carriage_plate_thickness_mm: float = Field(
+        5.0,
+        ge=2.0,
+        le=15.0,
+        description="X-carriage backplate thickness (mm)",
+    )
+    body_wall_thickness_mm: float = Field(
+        4.0,
+        ge=2.0,
+        le=12.0,
+        description="Toolhead/extruder body housing wall thickness (mm)",
+    )
+    hotend_mount_thickness_mm: float = Field(
+        8.0,
+        ge=3.0,
+        le=20.0,
+        description="Hotend mount/clamp collar thickness (mm)",
+    )
+    body_construction: ToolheadConstructionType | None = Field(
+        None,
+        description="Structural architecture of the toolhead chassis (when set, derives Stage 2 body stiffness from construction + body_material + body_wall_thickness_mm instead of internal_stiffness_n_per_mm)",
+    )
     internal_stiffness_n_per_mm: float = Field(
         450.0,
         ge=25.0,
@@ -815,6 +1475,18 @@ class ToolheadSpec(BaseModel):
     hotend: HotendSpec = Field(default_factory=HotendSpec)
     extruder: ExtruderSpec = Field(default_factory=ExtruderSpec)
 
+    @property
+    def effective_carriage_mount_material(self) -> str:
+        return self.carriage_mount_material or self.mount_material
+
+    @property
+    def effective_body_material(self) -> str:
+        return self.body_material or self.mount_material
+
+    @property
+    def effective_hotend_mount_material(self) -> str:
+        return self.hotend_mount_material or self.mount_material
+
 
 TOOLHEAD_PRESETS: dict[str, dict] = {
     "stealthburner": {
@@ -824,6 +1496,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -22.0, -28.0],
         "nozzle_offset_mm": [0.0, -26.0, -66.0],
         "mount_material": "abs_printed",
+        "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 350.0,
         "z_probe_type": "static_eddy",
     },
@@ -834,6 +1507,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -22.0, -28.0],
         "nozzle_offset_mm": [0.0, -26.0, -66.0],
         "mount_material": "abs_printed",
+        "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 350.0,
         "z_probe_type": "printed_tap",
     },
@@ -844,6 +1518,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -15.0, -18.0],
         "nozzle_offset_mm": [0.0, -18.0, -54.0],
         "mount_material": "pa12_cf_printed",
+        "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 650.0,
         "z_probe_type": "static_eddy",
     },
@@ -854,6 +1529,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -13.0, -15.0],
         "nozzle_offset_mm": [0.0, -16.0, -52.0],
         "mount_material": "ppa_cf_printed",
+        "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 1150.0,
         "z_probe_type": "static_eddy",
     },
@@ -864,6 +1540,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -14.0, -16.0],
         "nozzle_offset_mm": [0.0, -16.0, -50.0],
         "mount_material": "pa12_cf_printed",
+        "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 720.0,
         "z_probe_type": "static_eddy",
     },
@@ -874,6 +1551,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -11.0, -12.0],
         "nozzle_offset_mm": [0.0, -14.0, -48.0],
         "mount_material": "aluminum_6061_t6",
+        "body_construction": "plate_sandwich_cf",
         "internal_stiffness_n_per_mm": 1800.0,
         "z_probe_type": "static_eddy",
     },
@@ -884,6 +1562,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cog_offset_mm": [0.0, -26.0, -34.0],
         "nozzle_offset_mm": [0.0, -28.0, -78.0],
         "mount_material": "abs_printed",
+        "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 250.0,
         "z_probe_type": "static_eddy",
     },
@@ -901,6 +1580,14 @@ class BedSpec(BaseModel):
     z_drive: Literal[
         "leadscrew_single", "leadscrew_dual", "leadscrew_triple", "belted_quad_z"
     ] = "belted_quad_z"
+    z_rail_profile: ZRailProfileType = Field(
+        "mgn12_rail",
+        description="Z-axis vertical guideway profile: mgn12_rail, mgn9_rail, steel_rod_8mm/10mm/12mm, or none",
+    )
+    z_leadscrew_type: ZLeadscrewType = Field(
+        "auto",
+        description="Z-axis drive screw/belt mechanism (auto resolves from z_drive)",
+    )
     target_temp_c: float = Field(60.0, ge=20.0, le=160.0, description="Heated bed target temperature (C)")
     mount_type: BedMountType = Field(
         "kinematic_3pt",
@@ -909,6 +1596,17 @@ class BedSpec(BaseModel):
             "rigid_4pt, floating_4pt, silicone_4pt, or springs_4pt"
         ),
     )
+
+    @property
+    def effective_z_leadscrew_type(self) -> str:
+        """Resolve 'auto' Z-drive mechanism from z_drive architecture."""
+        if self.z_leadscrew_type != "auto":
+            return self.z_leadscrew_type
+        if self.z_drive == "belted_quad_z":
+            return "gt2_6mm_z_belt"
+        if self.z_drive == "leadscrew_triple":
+            return "tr8x4_pom"
+        return "tr8x8_pom"
 
 
 class PrinterSpec(BaseModel):

@@ -63,13 +63,17 @@ kinematics:
 toolhead:
   preset_id: stealthburner
   name: Stealth-Style Direct Drive
-  total_mass_g: 380
+  total_mass_g: 334
   cog_offset_mm: [0, -22, -28]
   nozzle_offset_mm: [0, -26, -66]
   mount_material: abs_printed
   internal_stiffness_n_per_mm: 350.0
   envelope_mm: [68, 74, 95]
   hotend:
+    preset_id: phaetus_dragon_hf
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 550.0
+    overall_length_mm: 62.2
     name: Rapido-Class Bi-Metal
     heater_power_w: 70
     block_material: copper_c110
@@ -97,3 +101,5 @@ bed:
   heater_power_w: 650
   mass_g: 2800
   z_drive: belted_quad_z
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: gt2_6mm_z_belt

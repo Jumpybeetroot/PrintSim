@@ -63,14 +63,18 @@ kinematics:
 toolhead:
   preset_id: archetype_cpap
   name: Monolith / XOL Carbon Direct + CPAP
-  total_mass_g: 290
+  total_mass_g: 208
   cog_offset_mm: [0, -12, -14]
   nozzle_offset_mm: [0, -16, -50]
   mount_material: aluminum_6061_t6
   internal_stiffness_n_per_mm: 1800.0
   envelope_mm: [58, 62, 85]
   hotend:
-    name: Rapido 2 UHF / Goliath-Class
+    preset_id: chube_conduction
+    mount_style: chube_6bolt_m3_18pcd
+    structural_stiffness_n_per_mm: 3600.0
+    overall_length_mm: 60.0
+    name: Luke's Lab Chube Conduction / Monolith UHF
     heater_power_w: 100
     block_material: copper_c110
     block_mass_g: 16
@@ -97,3 +101,5 @@ bed:
   heater_power_w: 650
   mass_g: 2800
   z_drive: leadscrew_triple
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom

@@ -68,7 +68,7 @@ kinematics:
 toolhead:
   preset_id: a4t_beacon
   name: A4T / XOL 2 + Static Beacon
-  total_mass_g: 270
+  total_mass_g: 208
   cog_offset_mm: [0, -13, -15]
   nozzle_offset_mm: [0, -16, -52]
   mount_material: ppa_cf_printed
@@ -76,6 +76,10 @@ toolhead:
   z_probe_type: static_eddy
   envelope_mm: [62, 66, 88]
   hotend:
+    preset_id: phaetus_rapido_2_uhf
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 320.0
+    overall_length_mm: 79.2
     name: Rapido 2 UHF High-Flow
     heater_power_w: 100
     block_material: copper_c110
@@ -103,4 +107,6 @@ bed:
   heater_power_w: 750
   mass_g: 3150
   z_drive: leadscrew_triple
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom
   mount_type: whopping_pochard_kinematic

@@ -41,6 +41,7 @@ class ModeShape:
     dominant_axis: str
     toolhead_participation_xyz: list[float]
     nodal_vectors: dict[str, list[float]]  # normalized 3D displacement per node for animation
+    nodal_rotations: dict[str, list[float]] = field(default_factory=dict)
     excited_axis: str = "XY"
     mode_label: str = ""
     what_is_shaking: str = ""
@@ -111,6 +112,7 @@ class ModalResult:
                     "excited_axis": m.excited_axis,
                     "toolhead_participation_xyz": [round(v, 3) for v in m.toolhead_participation_xyz],
                     "nodal_vectors": m.nodal_vectors,
+                    "nodal_rotations": m.nodal_rotations,
                     "mode_label": m.mode_label,
                     "what_is_shaking": m.what_is_shaking,
                     "how_to_fix": m.how_to_fix,
@@ -577,8 +579,10 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
         # Extract translational 3D displacements per node and normalize max translation to 1.0
         trans_raw = np.array([full_vec[6 * i : 6 * i + 3] for i in range(len(assembly.nodes))])
+        rot_raw = np.array([full_vec[6 * i + 3 : 6 * i + 6] for i in range(len(assembly.nodes))])
         max_amp = float(np.max(np.linalg.norm(trans_raw, axis=1)))
         trans = trans_raw / max_amp if max_amp > 1e-12 else trans_raw.copy()
+        rot = rot_raw / max_amp if max_amp > 1e-12 else rot_raw.copy()
 
         noz_rel_all = (
             np.abs(trans[noz_idx] - trans[bed_idx]) if bed_idx is not None else np.abs(trans[noz_idx])
@@ -728,6 +732,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 "dom_axis": dom_axis,
                 "part": part,
                 "trans": trans,
+                "rot": rot,
                 "noz_rel": noz_rel,
                 "noz_norm": noz_norm,
                 "th_norm": th_norm,
@@ -748,6 +753,19 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
     rx_max = max((c["rec_x"] for c in candidates), default=0.0)
     ry_max = max((c["rec_y"] for c in candidates), default=0.0)
+    rot_node_ids: list[str] = []
+    for nid in (
+        assembly.toolhead_node_id,
+        assembly.toolhead_cog_node_id,
+        assembly.nozzle_node_id,
+        assembly.bed_node_id,
+        "toolhead",
+        "toolhead_cog",
+        "nozzle_tip",
+        "bed_surface",
+    ):
+        if nid and nid in node_idx and nid not in rot_node_ids:
+            rot_node_ids.append(nid)
 
     def _build_mode_shape(
         c: dict,
@@ -799,6 +817,11 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             node.id: [round(float(v), 4) for v in trans[i]]
             for i, node in enumerate(assembly.nodes)
         }
+        rot = c["rot"]
+        nodal_rotations = {
+            nid: [round(float(v), 4) for v in rot[node_idx[nid]]]
+            for nid in rot_node_ids
+        }
         m_lbl, m_shake, m_fix, m_sev = _classify_mode_diagnosis(
             assembly=assembly,
             freq_hz=freq_hz,
@@ -840,6 +863,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             dominant_axis=dom_axis,
             toolhead_participation_xyz=part,
             nodal_vectors=nodal_vectors,
+            nodal_rotations=nodal_rotations,
             excited_axis=excited_axis,
             mode_label=m_lbl,
             what_is_shaking=m_shake,

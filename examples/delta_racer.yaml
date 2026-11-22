@@ -50,13 +50,17 @@ kinematics:
 toolhead:
   preset_id: custom
   name: Flying-Extruder Lightweight Effector
-  total_mass_g: 195
+  total_mass_g: 149
   cog_offset_mm: [0, 0, -18]
   nozzle_offset_mm: [0, 0, -45]
   mount_material: pa12_cf_printed
   internal_stiffness_n_per_mm: 800.0
   envelope_mm: [60, 60, 80]
   hotend:
+    preset_id: phaetus_dragon_hf
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 550.0
+    overall_length_mm: 62.2
     name: High-Flow Copper Bi-Metal
     heater_power_w: 80
     block_material: copper_c110
@@ -84,3 +88,5 @@ bed:
   heater_power_w: 450
   mass_g: 1600
   z_drive: leadscrew_triple
+  z_rail_profile: mgn9_rail
+  z_leadscrew_type: gt2_6mm_z_belt

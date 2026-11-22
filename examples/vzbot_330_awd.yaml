@@ -64,7 +64,7 @@ kinematics:
 toolhead:
   preset_id: archetype_cpap
   name: VzBot / Goliath Ultra-Light CPAP
-  total_mass_g: 225
+  total_mass_g: 129
   cog_offset_mm: [0, -11, -12]
   nozzle_offset_mm: [0, -14, -48]
   mount_material: aluminum_6061_t6
@@ -72,6 +72,10 @@ toolhead:
   z_probe_type: static_eddy
   envelope_mm: [56, 60, 82]
   hotend:
+    preset_id: mellow_goliath_air
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 750.0
+    overall_length_mm: 69.2
     name: Goliath / Rapido UHF CPAP
     heater_power_w: 110
     block_material: copper_c110
@@ -99,4 +103,6 @@ bed:
   heater_power_w: 750
   mass_g: 2450
   z_drive: leadscrew_dual
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom
   mount_type: kinematic_3pt
