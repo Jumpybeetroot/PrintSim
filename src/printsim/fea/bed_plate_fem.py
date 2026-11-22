@@ -203,7 +203,11 @@ def _compute_thermal_warp_field_um(
     rx_nodes = np.array([grid_x_rel[i] for _ in grid_y_rel for i in range(len(grid_x_rel))], dtype=float)
     ry_nodes = np.array([ry for ry in grid_y_rel for _ in grid_x_rel], dtype=float)
 
-    w_grad = bed_grad_bow_um * (1.0 - 2.0 * (rx_nodes**2 + ry_nodes**2))
+    # Bottom-heated plate (q_top > 0 => dT/dz = -q_top/k < 0) curves concave-up:
+    # d^2w/dx^2 = d^2w/dy^2 = +alpha * q_top / k > 0 (edges/corners curl upward).
+    w_grad = 4.0 * bed_grad_bow_um * (
+        ((lx_m / l_bed) * rx_nodes) ** 2 + ((ly_m / l_bed) * ry_nodes) ** 2
+    )
     w_taco = taco_buckling_um * (
         np.cos(math.pi * rx_nodes) * np.cos(math.pi * ry_nodes)
         - 0.35 * (rx_nodes**2 - ry_nodes**2)
@@ -273,7 +277,8 @@ def _solve_plate_modes(
     evals, evecs = eigh(k_mat, m_mat, subset_by_index=[0, n_req - 1], check_finite=False)
 
     z_modes: list[tuple[float, np.ndarray]] = []
-    fallback_modes: list[tuple[float, np.ndarray]] = []
+    z_indices: set[int] = set()
+    fallback_modes: list[tuple[int, float, np.ndarray]] = []
     for idx in range(evals.size):
         lam = float(evals[idx])
         if lam <= (2.0 * math.pi * 1.0) ** 2:
@@ -285,11 +290,16 @@ def _solve_plate_modes(
         uz = phi[2::6]
         z_energy = float(np.dot(uz, uz))
         trans_energy = float(np.dot(ux, ux) + np.dot(uy, uy) + z_energy)
-        fallback_modes.append((freq_hz, uz))
+        fallback_modes.append((idx, freq_hz, uz))
         if z_energy > 0.25 * max(trans_energy, 1e-30):
             z_modes.append((freq_hz, uz))
+            z_indices.add(idx)
 
-    selected = z_modes if len(z_modes) >= 3 else (z_modes + [m for m in fallback_modes if m not in z_modes])
+    selected = (
+        z_modes
+        if len(z_modes) >= 3
+        else (z_modes + [(f, uz) for idx, f, uz in fallback_modes if idx not in z_indices])
+    )
     if not selected:
         selected = [(1.0, np.zeros(n_dof // 6, dtype=float))]
 

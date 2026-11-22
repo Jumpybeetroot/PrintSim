@@ -9,6 +9,8 @@ import numpy as np
 _GP_COORDS: tuple[float, float] = (-1.0 / math.sqrt(3.0), 1.0 / math.sqrt(3.0))
 _NODE_XI: tuple[float, ...] = (-1.0, 1.0, 1.0, -1.0)
 _NODE_ETA: tuple[float, ...] = (-1.0, -1.0, 1.0, 1.0)
+# Hughes-Brezzi / MacNeal-Harder frame-invariant drilling stabilization factor
+_ALPHA_DRILL: float = 1e-6
 
 
 def mitc4_local_frame(coords_3d: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -170,6 +172,8 @@ def mitc4_shell_matrices(
 
     k_m = np.zeros((8, 8), dtype=float)
     k_b = np.zeros((12, 12), dtype=float)
+    k_drill = np.zeros((12, 12), dtype=float)
+    gt_mem = float(d_m[2, 2])
     m_shape_diag = np.zeros(4, dtype=float)
     area = 0.0
 
@@ -193,6 +197,7 @@ def mitc4_shell_matrices(
 
             b_m = np.zeros((3, 8), dtype=float)
             b_b = np.zeros((3, 12), dtype=float)
+            b_d = np.zeros(12, dtype=float)
             for k in range(4):
                 b_m[0, 2 * k] = dn_dx[k]
                 b_m[1, 2 * k + 1] = dn_dy[k]
@@ -204,6 +209,12 @@ def mitc4_shell_matrices(
                 b_b[2, 3 * k + 1] = -dn_dx[k]
                 b_b[2, 3 * k + 2] = dn_dy[k]
 
+                # Hughes-Brezzi / MacNeal-Harder frame-invariant drilling strain:
+                # theta_z - omega_z = sum_k [ 0.5*dN_k/dy * u_k - 0.5*dN_k/dx * v_k + N_k * theta_zk ]
+                b_d[3 * k] = 0.5 * dn_dy[k]
+                b_d[3 * k + 1] = -0.5 * dn_dx[k]
+                b_d[3 * k + 2] = n_vals[k]
+
             g_cov = np.vstack(
                 [
                     0.5 * (1.0 - eta) * g_a + 0.5 * (1.0 + eta) * g_c,
@@ -214,18 +225,16 @@ def mitc4_shell_matrices(
 
             k_m += (b_m.T @ d_m @ b_m) * det_j
             k_b += (b_b.T @ d_b @ b_b + b_s.T @ d_s @ b_s) * det_j
+            k_drill += (_ALPHA_DRILL * gt_mem) * np.outer(b_d, b_d) * det_j
             m_shape_diag += (n_vals * n_vals) * det_j
 
     k_loc = np.zeros((24, 24), dtype=float)
     mem_dofs = [6 * k + d for k in range(4) for d in (0, 1)]
     bend_dofs = [6 * k + d for k in range(4) for d in (2, 3, 4)]
+    drill_dofs = [6 * k + d for k in range(4) for d in (0, 1, 5)]
     k_loc[np.ix_(mem_dofs, mem_dofs)] = k_m
     k_loc[np.ix_(bend_dofs, bend_dofs)] = k_b
-
-    # Drilling DOF (theta_z) stabilization
-    k_drill = 1e-4 * e_mem_h * area
-    for k in range(4):
-        k_loc[6 * k + 5, 6 * k + 5] = k_drill
+    k_loc[np.ix_(drill_dofs, drill_dofs)] += k_drill
     k_loc = 0.5 * (k_loc + k_loc.T)
 
     # HRZ lumped mass matrix with exact total mass and rotary inertia (1/12)*m_node*t^2

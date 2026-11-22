@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -25,6 +26,8 @@ def classify_part_group(member_id: str, role: str = "") -> tuple[str, str]:
         return "frame_columns", "Frame Vertical Columns"
     if mid.startswith("z_col_"):
         return "z_gantry_uprights", "Z-Axis Gantry Uprights"
+    if mid.startswith("z_joint"):
+        return "z_gantry_joints", "Z-Axis Gantry Joints"
     if mid.startswith("tower_") or role == "tower":
         return "delta_towers", "Delta Vertical Towers"
     if mid.startswith("arm_"):
@@ -319,12 +322,10 @@ def solve_static_fea(
 
     F_y = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "cartesian_bedslinger":
-        # Bed inertia kicks bed carriage/base in -Y; toolhead CoG sees reaction inertial load in +Y
-        F_y[cog_dof + 1] = assembly.x_moving_mass_kg * accel_m_s2
-        if not has_explicit_cog:
-            F_y[th_dof + 3] = -(assembly.x_moving_mass_kg * accel_m_s2) * cog_z_m
+        # Bedslinger Y acceleration moves only the heated bed + Y-carriage;
+        # stationary Z-portal & toolhead see zero direct Y inertial force.
         if has_bed:
-            F_y[bed_dof + 1] = -(assembly.spec.bed.mass_g * 1e-3) * accel_m_s2
+            F_y[bed_dof + 1] = -f_inertial_y
     else:
         # Toolhead + X gantry accelerate in Y -> load distributed on toolhead_cog and Y carriages
         th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
@@ -341,20 +342,21 @@ def solve_static_fea(
     u_y = solve_rhs(F_y)
     defl_y_um = float(np.linalg.norm(_rel_disp_vec(u_y))) * 1e6
 
-    # 4. Belt-induced frame preload (true CoreXY belt routing: self-equilibrating, sum F = 0)
+    # 4. Belt-induced frame preload (true CoreXY belt routing: self-equilibrating, sum F = 0, sum M = 0)
     # Neither 2WD nor AWD CoreXY runs a belt across the open front door (g_fl <-> g_fr).
     # Belt spans run along: rear bar (g_rl <-> g_rr), left/right Y rails (g_fl <-> y_car_l <-> g_rl),
-    # and the moving X gantry beam (y_car_l <-> y_car_r).
+    # and the moving X gantry beam (y_car_l <-> y_car_r), with equal forward/backward Y tensions
+    # cancelling to 0 net Y force on y_car_l / y_car_r.
     F_belt = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "corexy":
         t0 = assembly.spec.gantry.belt.pretension_n
         belt_loads = [
-            ("g_rl", +2.0 * t0, -t0),
-            ("g_rr", -2.0 * t0, -t0),
+            ("g_rl", +2.0 * t0, -2.0 * t0),
+            ("g_rr", -2.0 * t0, -2.0 * t0),
             ("g_fl", 0.0, +2.0 * t0),
             ("g_fr", 0.0, +2.0 * t0),
-            ("y_car_l", +2.0 * t0, -t0),
-            ("y_car_r", -2.0 * t0, -t0),
+            ("y_car_l", +2.0 * t0, 0.0),
+            ("y_car_r", -2.0 * t0, 0.0),
         ]
         for nid, fx, fy in belt_loads:
             if nid in node_idx:
@@ -363,24 +365,34 @@ def solve_static_fea(
                 F_belt[bi + 1] += fy
     u_belt = solve_rhs(F_belt)
 
-    # 5. Combined worst-case envelope (gravity + belt preload + 0.707*(+-ux) + 0.707*(+-uy))
+    # 5. Combined worst-case envelope (gravity + belt preload + peak unit-circle XY acceleration)
+    s_diag = math.sqrt(0.5)
+    accel_dirs = (
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (s_diag, s_diag),
+        (s_diag, -s_diag),
+        (-s_diag, s_diag),
+        (-s_diag, -s_diag),
+    )
     u_base = u_grav + u_belt
-    u_comb = u_base + 0.7071 * u_x + 0.7071 * u_y
+    u_comb = u_base + u_x
     best_peak = -1.0
-    u_xy_comb = 0.7071 * u_x + 0.7071 * u_y
+    u_xy_comb = u_x.copy()
     best_xy_peak = -1.0
-    for sx in (1.0, -1.0):
-        for sy in (1.0, -1.0):
-            cand = u_base + sx * 0.7071 * u_x + sy * 0.7071 * u_y
-            peak = float(np.linalg.norm(_rel_disp_vec(cand)))
-            if peak > best_peak:
-                best_peak = peak
-                u_comb = cand
-            cand_xy = sx * 0.7071 * u_x + sy * 0.7071 * u_y
-            xy_peak = float(np.linalg.norm(_rel_disp_vec(cand_xy)))
-            if xy_peak > best_xy_peak:
-                best_xy_peak = xy_peak
-                u_xy_comb = cand_xy
+    for sx, sy in accel_dirs:
+        cand_xy = sx * u_x + sy * u_y
+        cand = u_base + cand_xy
+        peak = float(np.linalg.norm(_rel_disp_vec(cand)))
+        if peak > best_peak:
+            best_peak = peak
+            u_comb = cand
+        xy_peak = float(np.linalg.norm(_rel_disp_vec(cand_xy)))
+        if xy_peak > best_xy_peak:
+            best_xy_peak = xy_peak
+            u_xy_comb = cand_xy
 
     def _to_disp_map(u_vec: np.ndarray) -> dict[str, list[float]]:
         return {

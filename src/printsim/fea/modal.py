@@ -458,7 +458,26 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
     if not used_sparse:
         k_scan = min(target_scan, n_free)
-        eigvals, eigvecs = eigh(K_ff, M_ff, subset_by_index=[0, k_scan - 1])
+        try:
+            # Invert to M_ff phi = mu K_ff phi so eigh Cholesky-factorizes well-conditioned SPD K_ff
+            mu, eigvecs = eigh(
+                M_ff,
+                K_ff,
+                subset_by_index=[n_free - k_scan, n_free - 1],
+            )
+            mu = mu[::-1]
+            eigvecs = eigvecs[:, ::-1].copy()
+            eigvals = 1.0 / np.maximum(mu, 1e-30)
+        except np.linalg.LinAlgError:
+            # Clean fallback if K_ff is singular/semidefinite (e.g. unconstrained mechanism)
+            eigvals, eigvecs = eigh(K_ff, M_ff, subset_by_index=[0, k_scan - 1])
+
+    eigvals = np.maximum(eigvals, 0.0)
+    for j in range(eigvecs.shape[1]):
+        v = eigvecs[:, j]
+        m_gen_j = float(v @ M_ff @ v)
+        if m_gen_j > 1e-24:
+            eigvecs[:, j] = v / math.sqrt(m_gen_j)
 
     th_idx = node_idx[assembly.toolhead_node_id]
     cog_id = (
@@ -483,9 +502,10 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
     fy_exc = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "cartesian_bedslinger":
-        fy_exc[6 * cog_idx + 1] = 1.0
         if bed_idx is not None:
             fy_exc[6 * bed_idx + 1] = -1.0
+        else:
+            fy_exc[6 * cog_idx + 1] = 1.0
     else:
         th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
         fy_exc[6 * cog_idx + 1] = th_share

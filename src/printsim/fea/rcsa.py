@@ -335,7 +335,7 @@ def analyze_toolhead_rcsa(
         zeta=0.025,
     )
 
-    # 2. Extract carriage interface receptance from modal_result (decoupling attached mass)
+    # 2. Extract bare carriage/gantry interface receptance from modal_result (avoid double-counting local toolhead whip)
     m_attached = m_mount + m_hb + m_blk
     th_modes = [
         m
@@ -343,7 +343,18 @@ def analyze_toolhead_rcsa(
         if m.frequency_hz >= 5.0
         and float(np.linalg.norm(m.nodal_vectors.get(assembly.toolhead_node_id, [1.0, 0.0, 0.0]))) > 0.05
     ]
-    dom_mode = th_modes[0] if th_modes else (modal_result.modes[0] if modal_result.modes else None)
+    gantry_modes = [
+        m
+        for m in th_modes
+        if m.nozzle_whip_ratio <= 1.45 and m.dominant_problem_area != "bed"
+    ]
+    if not gantry_modes:
+        gantry_modes = [m for m in th_modes if m.nozzle_whip_ratio <= 1.45]
+    dom_mode = (
+        gantry_modes[0]
+        if gantry_modes
+        else (th_modes[0] if th_modes else (modal_result.modes[0] if modal_result.modes else None))
+    )
     f0 = max(
         dom_mode.frequency_hz if dom_mode is not None else modal_result.fundamental_freq_hz,
         15.0,
@@ -378,7 +389,7 @@ def analyze_toolhead_rcsa(
     Y_car[:, 1, 1] = 1.0 / (
         k_rot_car
         - (w**2) * j_car
-        + 1j * 2.0 * z_f * math.sqrt(k_rot_car * j_car) * (w / max(w0, 1.0))
+        + 1j * (2.0 * z_f * math.sqrt(k_rot_car * j_car)) * w
     )
 
     # 3. Bolted joint impedances Z_j = K_j + i*w*C_j (Carriage-Mount J1 & Mount-Hotend J2)

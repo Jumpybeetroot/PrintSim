@@ -72,11 +72,15 @@ class SensitivityReport:
         }
 
 
-def _classify_sensitivity_group(member_id: str, role: str = "") -> tuple[str, str]:
-    """Local grouping helper extending ``classify_part_group`` with machine feet pads."""
+def _classify_sensitivity_group(
+    member_id: str, role: str = "", bay: str = ""
+) -> tuple[str, str]:
+    """Local grouping helper extending ``classify_part_group`` with feet and Z gantry joints."""
     mid = member_id.strip()
-    if mid.startswith("feet_") or role == "foot":
+    if mid.startswith("feet_") or role == "foot" or bay == "feet":
         return "frame_feet", "Machine Feet & Benchtop Pads"
+    if bay == "z_joint" or mid.startswith("z_joint"):
+        return "z_gantry_joints", "Z-Axis Gantry Joints"
     return classify_part_group(member_id, role)
 
 
@@ -111,7 +115,19 @@ def _solve_eigen_modes(
             used_sparse = False
 
     if not used_sparse:
-        eigvals, eigvecs = eigh(K_ff, M_ff, subset_by_index=[0, k_scan - 1])
+        try:
+            # Invert to M_ff phi = mu K_ff phi so eigh Cholesky-factorizes well-conditioned SPD K_ff
+            mu, eigvecs = eigh(
+                M_ff,
+                K_ff,
+                subset_by_index=[n_free - k_scan, n_free - 1],
+            )
+            mu = mu[::-1]
+            eigvecs = eigvecs[:, ::-1].copy()
+            eigvals = 1.0 / np.maximum(mu, 1e-30)
+        except np.linalg.LinAlgError:
+            # Clean fallback if K_ff is singular/semidefinite (e.g. unconstrained mechanism)
+            eigvals, eigvecs = eigh(K_ff, M_ff, subset_by_index=[0, k_scan - 1])
 
     eigvals = np.maximum(eigvals, 0.0)
     for j in range(eigvecs.shape[1]):
@@ -240,6 +256,9 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
         if spec.frame.bracing != "full_truss":
             return "Main limit: Z-upright portal bending stiffness and fore-aft diagonal racking rigidity."
         return "Main limit: Z-upright extrusion bending/torsional stiffness and corner-joint rigidity."
+
+    if group_id == "z_gantry_joints":
+        return "Main limit: flying-gantry Z-belt/carriage joint compliance coupling the gantry to the 4 corner columns."
 
     if group_id == "delta_towers":
         if spec.frame.bracing != "full_truss":
@@ -425,11 +444,8 @@ def compute_structural_sensitivities(
     F_y = np.zeros(n_dof, dtype=float)
     f_inertial_y = assembly.y_moving_mass_kg * accel_m_s2
     if assembly.spec.architecture == "cartesian_bedslinger":
-        F_y[6 * cog_idx + 1] = assembly.x_moving_mass_kg * accel_m_s2
-        if not has_explicit_cog:
-            F_y[6 * th_idx + 3] = -(assembly.x_moving_mass_kg * accel_m_s2) * cog_z_m
         if has_bed and bed_idx is not None:
-            F_y[6 * bed_idx + 1] = -(assembly.spec.bed.mass_g * 1e-3) * accel_m_s2
+            F_y[6 * bed_idx + 1] = -f_inertial_y
     else:
         th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
         F_y[6 * cog_idx + 1] = f_inertial_y * th_share
@@ -485,9 +501,10 @@ def compute_structural_sensitivities(
     fx_exc[6 * cog_idx + 0] = 1.0
     fy_exc = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "cartesian_bedslinger":
-        fy_exc[6 * cog_idx + 1] = 1.0
         if has_bed and bed_idx is not None:
             fy_exc[6 * bed_idx + 1] = -1.0
+        else:
+            fy_exc[6 * cog_idx + 1] = 1.0
     else:
         th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
         fy_exc[6 * cog_idx + 1] = th_share
@@ -822,7 +839,7 @@ def compute_structural_sensitivities(
         stiff_x = float(px @ k_sp @ px) * inv_8pi2_x
         stiff_y = float(py @ k_sp @ py) * inv_8pi2_y
 
-        if bay_raw not in ("bed_mount", "toolhead", "feet") and bay_prefix in bay_acc:
+        if bay_raw not in ("bed_mount", "toolhead", "feet", "z_joint") and bay_prefix in bay_acc:
             b = bay_acc[bay_prefix]
             b["du_rel_x_dlnE_m"] += dux
             b["du_rel_y_dlnE_m"] += duy
@@ -837,6 +854,8 @@ def compute_structural_sensitivities(
             sp_role, sp_cost, sp_ref_mass = "bed", 20.0, 0.25
         elif bay_raw == "toolhead":
             sp_role, sp_cost, sp_ref_mass = "toolhead", 25.0, 0.06
+        elif bay_raw == "z_joint":
+            sp_role, sp_cost, sp_ref_mass = "gantry", 25.0, 0.15
         else:
             sp_role, sp_cost, sp_ref_mass = "frame", 15.0, 0.10
 
@@ -844,6 +863,7 @@ def compute_structural_sensitivities(
             {
                 "member_id": sp.id,
                 "role": sp_role,
+                "_bay": bay_raw,
                 "mass_kg": 0.0,
                 "ref_mass_kg": sp_ref_mass,
                 "cost_usd": sp_cost,
@@ -1158,7 +1178,7 @@ def compute_structural_sensitivities(
     spec = assembly.spec
     group_acc: dict[str, dict[str, Any]] = {}
     for m in raw_members:
-        gid, label = _classify_sensitivity_group(m["member_id"], m["role"])
+        gid, label = _classify_sensitivity_group(m["member_id"], m["role"], m.get("_bay", ""))
         g = group_acc.setdefault(
             gid,
             {
