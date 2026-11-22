@@ -165,16 +165,23 @@ def test_real_world_preset_touchstone_bands_and_catalog_parity() -> None:
     assert dx > 60.0 and dy > 60.0
     assert abs(dx - dy) / max(dx, dy) < 0.03
 
-    # Stock 2WD clip-enclosure Vorons: note that existing unit tests bound stock open/clip 2WD
-    # frames and 6mm fiberglass belt/Dunkerley series (35-55 Hz open fundamental), keeping stock
-    # Trident (~31/24 Hz) and V2.4 (~27/24 Hz) below tuned/bolted Klipper builds while preserving
-    # exact Trident > V2.4, X > Y, and AWD >> 2WD physics rankings.
+    # Stock 2WD 2020 Vorons calibrated to empirical Klipper shaper touchstones:
+    # - Voron Trident 300: X ~48-60 Hz (actual ~51-53 Hz), Y ~42-50 Hz (actual ~45-48 Hz), 5,500-8,000 mm/s^2
+    # - Voron 2.4 300: X ~48-65 Hz (actual ~50 Hz), Y ~42-52 Hz (actual ~43-44 Hz), 5,000-7,500 mm/s^2
+    # while preserving exact Trident > V2.4, X > Y, and AWD >> 2WD physics rankings.
     _, tri = results["voron_trident_300"]
     _, v24 = results["corexy_voron_style"]
+    assert 48.0 <= tri.modal_fea.shaper_x.effective_freq_hz <= 60.0
+    assert 42.0 <= tri.modal_fea.shaper_y.effective_freq_hz <= 50.0
+    assert 5000.0 <= tri.modal_fea.recommended_max_accel_mm_s2 <= 8500.0
+    assert 48.0 <= v24.modal_fea.shaper_x.effective_freq_hz <= 65.0
+    assert 42.0 <= v24.modal_fea.shaper_y.effective_freq_hz <= 52.0
+    assert 5000.0 <= v24.modal_fea.recommended_max_accel_mm_s2 <= 8500.0
     assert tri.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_y.effective_freq_hz
     assert v24.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz
     assert tri.modal_fea.fundamental_freq_hz > v24.modal_fea.fundamental_freq_hz
     assert tri.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_x.effective_freq_hz
     assert tri.modal_fea.shaper_y.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz
     assert vz.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_x.effective_freq_hz * 2.5
-    assert vz.modal_fea.recommended_max_accel_mm_s2 > tri.modal_fea.recommended_max_accel_mm_s2 * 5.0
+    # Calibrated stock Trident (~6,800 mm/s^2) vs VzBot 330 AWD (~30,400 mm/s^2 -> ~4.47x accel)
+    assert vz.modal_fea.recommended_max_accel_mm_s2 > tri.modal_fea.recommended_max_accel_mm_s2 * 3.5

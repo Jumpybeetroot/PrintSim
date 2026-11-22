@@ -313,10 +313,9 @@ def test_panel_fastener_series_compliance_and_vertical_mass_distribution() -> No
     assert mo_clip.fundamental_freq_hz < mo_open.fundamental_freq_hz * 1.15
 
     # Bolted 4mm ACM (+gantry) cuts deflection dramatically and outperforms Bolted 3mm Acrylic
-    # Note: on unpaneled Trident, co-swaying bed already cancels part of frame sway and panel gravity adds ~1.6 um Z sag,
-    # while Y-accel & abs deflection drop ~45%
-    assert st_bolt_4acm.combined_max_deflection_um < st_open.combined_max_deflection_um * 0.80
-    assert st_bolt_4acm.accel_deflection_y_um < st_open.accel_deflection_y_um * 0.60
+    # Bolted 4mm ACM (+gantry) cuts combined deflection ~19% and Y-accel deflection >45% vs Castigliano w_end=0.49 Z-railed open columns
+    assert st_bolt_4acm.combined_max_deflection_um < st_open.combined_max_deflection_um * 0.85
+    assert st_bolt_4acm.accel_deflection_y_um < st_open.accel_deflection_y_um * 0.63
     assert st_bolt_4acm.toolhead_stiffness_x_n_per_mm > st_bolt_acr.toolhead_stiffness_x_n_per_mm
     assert st_bolt_4acm.toolhead_stiffness_y_n_per_mm > st_bolt_acr.toolhead_stiffness_y_n_per_mm
     assert mo_bolt_4acm.fundamental_freq_hz > mo_bolt_acr.fundamental_freq_hz
@@ -365,7 +364,8 @@ def test_updated_trident_vs_monolith_awd_example_specs() -> None:
     assert not rep_m.kinematics.motor_overcurrent_risk
 
     assert rep_m.kinematics.motor_stiffness_n_per_mm > rep_t.kinematics.motor_stiffness_n_per_mm * 2.0
-    assert rep_m.kinematics.drive_stiffness_n_per_mm > rep_t.kinematics.drive_stiffness_n_per_mm * 4.0
+    # Calibrated 2WD Gates 2GT-6mm (50 kN EA) + 500 N/mm ABS brackets gives 141.4 N/mm vs 508.7 N/mm Monolith AWD (3.60x)
+    assert rep_m.kinematics.drive_stiffness_n_per_mm > rep_t.kinematics.drive_stiffness_n_per_mm * 3.2
     assert rep_m.modal_fea.nozzle_pitch_twist_freq_hz > rep_t.modal_fea.nozzle_pitch_twist_freq_hz
     assert rep_m.modal_fea.recommended_max_accel_mm_s2 > rep_t.modal_fea.recommended_max_accel_mm_s2 * 3.0
     assert rep_m.static_fea.combined_max_deflection_um < rep_t.static_fea.combined_max_deflection_um

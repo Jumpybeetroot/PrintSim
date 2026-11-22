@@ -80,9 +80,9 @@ def test_all_seven_bracket_materials_stiffness_order_and_series_formula() -> Non
         asm = build_assembly(spec)
         kin = analyze_kinematics(asm)
 
-        # Analytical series formula check
+        # Analytical series formula check (calibrated 500 N/mm base 2WD ABS chain -> Hex8 ABS FEA)
         e_bkt = get_material(mat_id).youngs_modulus_pa
-        k_mat = 2.6e5 * 1.45 * 1.65 * (e_bkt / 2.1e9)
+        k_mat = 5.0e5 * 1.45 * 1.65 * (e_bkt / 2.1e9)
         expected_k_bkt = (k_mat * 8.0e6) / (k_mat + 8.0e6)
         k_bkt = compute_bracket_stiffness_n_per_m(asm)
         assert k_bkt == pytest.approx(expected_k_bkt, rel=1e-9)
@@ -243,14 +243,14 @@ def test_monolith_awd_preset_and_bracket_upgrade_jump() -> None:
     assert rep_ppa.kinematics.bracket_creep_risk is False
     assert rep_cnc.kinematics.bracket_creep_risk is False
 
-    # Drive stiffness & effective frequency jump significantly over ABS (calibrated for fiberglass default)
-    assert rep_ppa.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.5
-    assert rep_cnc.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.7
+    # Drive stiffness & effective frequency jump significantly over calibrated ABS (500 N/mm base)
+    assert rep_ppa.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.30
+    assert rep_cnc.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.38
     assert rep_ppa.modal_fea.shaper_x is not None and rep_abs.modal_fea.shaper_x is not None
     assert rep_cnc.modal_fea.shaper_x is not None and rep_cnc.modal_fea.shaper_y is not None
     assert rep_ppa.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 8.0
     assert rep_cnc.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 10.0
-    assert rep_cnc.modal_fea.shaper_y.effective_freq_hz > rep_abs.modal_fea.shaper_y.effective_freq_hz + 18.0
+    assert rep_cnc.modal_fea.shaper_y.effective_freq_hz > rep_abs.modal_fea.shaper_y.effective_freq_hz + 12.0
     assert rep_cnc.modal_fea.recommended_max_accel_mm_s2 > rep_abs.modal_fea.recommended_max_accel_mm_s2 * 1.2
 
 
@@ -363,9 +363,10 @@ def test_bonded_vs_unbonded_stiffness_and_monotonic_damping() -> None:
         assert m_bnd.profile.iy_m4 > prof_ref.iy_m4 * 1.10
         assert m_bnd.profile.iz_m4 > prof_ref.iz_m4 * 1.10
         assert m_bnd.profile.j_m4 > prof_ref.j_m4 * 1.10
-        assert statics[bonded_id].toolhead_stiffness_x_n_per_mm > statics["none"].toolhead_stiffness_x_n_per_mm * 1.05
-        # In Y on Trident, ~75% of structural-loop compliance lies in the unfilled moving X-gantry + toolhead
-        assert statics[bonded_id].toolhead_stiffness_y_n_per_mm > statics["none"].toolhead_stiffness_y_n_per_mm * 1.010
+        # Castigliano w_end=0.49 Z-rail stiffening leaves +4.75% X stiffness gain from epoxy/UHPC column fill
+        assert statics[bonded_id].toolhead_stiffness_x_n_per_mm > statics["none"].toolhead_stiffness_x_n_per_mm * 1.04
+        # In Y on Trident with Castigliano w_end=0.49 Z-rails, >90% of loop compliance sits in X-gantry + toolhead
+        assert statics[bonded_id].toolhead_stiffness_y_n_per_mm > statics["none"].toolhead_stiffness_y_n_per_mm * 1.007
         assert statics[bonded_id].combined_max_deflection_um < statics["none"].combined_max_deflection_um
 
     assert statics["uhpc_grout"].toolhead_stiffness_x_n_per_mm > statics["epoxy_granite"].toolhead_stiffness_x_n_per_mm

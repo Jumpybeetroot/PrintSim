@@ -187,7 +187,7 @@ def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
     spec = assembly.spec
     bkt_mat = get_material(spec.gantry.bracket_material)
     e_bkt = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
-    k_ref = 2.6e5  # Base 2WD single-shear ABS bracket stiffness (260 N/mm) at 2.1 GPa
+    k_ref = 5.0e5  # Base 2WD bolted ABS motor+idler+XY-joint chain (500 N/mm at 2.1 GPa; vs 1842 N/mm solid ABS mount FEA)
     ds_mult = 1.45 if spec.gantry.double_shear_pulleys else 1.0
     awd_mult = 1.65 if (spec.architecture == "corexy" and spec.gantry.drive_mode == "awd") else 1.0
     k_mat = k_ref * ds_mult * awd_mult * (e_bkt / 2.1e9)
@@ -223,14 +223,14 @@ def compute_drive_stiffness_details_n_per_m(
     if spec.architecture == "corexy":
         if spec.gantry.drive_mode == "awd":
             # 4-motor AWD divides belt loops into 4 independent motor-to-carriage spans
-            span_len = max(0.25 * (w + d), 0.16) * span_factor
+            span_len = max(0.50 * (w + d), 0.16) * span_factor
             ea_eff = belt_effective_ea_n(belt, span_len)
             k_belt_cord = 4.0 * ea_eff / span_len
             drive_branches = 4.0
         else:
             # 2WD CoreXY: 2 parallel belts, each with short motor branch & long return loop in parallel
-            span_short = max(0.62 * (w + d), 0.22) * span_factor
-            span_long = max(1.58 * (w + d), 0.55) * span_factor
+            span_short = max(0.45 * (w + d), 0.18) * span_factor
+            span_long = max(1.35 * (w + d), 0.48) * span_factor
             ea_short = belt_effective_ea_n(belt, span_short)
             ea_long = belt_effective_ea_n(belt, span_long)
             k_belt_cord = 2.0 * (ea_short / span_short + ea_long / span_long)

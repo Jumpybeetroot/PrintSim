@@ -1009,9 +1009,9 @@ class BeltSpec(BaseModel):
 
     @property
     def stiffness_ea_n(self) -> float:
-        """Dynamic secant tensile modulus EA (Newtons) calibrated to Gates PowerGrip 2M GT2 datasheets."""
+        """Dynamic secant tensile modulus EA (Newtons) calibrated to Gates PowerGrip 2GT datasheets (6mm ~50 kN)."""
         width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.5, "gt2_12mm": 2.0}[self.type]
-        core_base = {"fiberglass": 26000.0, "aramid": 42000.0, "steel": 78000.0}[self.core]
+        core_base = {"fiberglass": 50000.0, "aramid": 72500.0, "steel": 135000.0}[self.core]
         return core_base * width_scale
 
     @property

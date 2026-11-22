@@ -355,10 +355,13 @@ def _estimate_structural_modal_params(
         }
         noz_id = assembly.nozzle_node_id if assembly.nozzle_node_id in nmap else assembly.toolhead_node_id
         for axis_tag, target_f, set_x in (("X", f_sx, True), ("Y", f_sy, False)):
-            best_mode = min(
+            best_mode = max(
                 modal_result.modes,
-                key=lambda md: abs(md.frequency_hz - target_f)
-                + (50.0 if md.excited_axis not in (axis_tag, "XY") else 0.0),
+                key=lambda md: (
+                    md.x_axis_share_pct if axis_tag == "X" else md.y_axis_share_pct,
+                    1.0 if md.excited_axis in (axis_tag, "XY") else 0.0,
+                    -abs(md.frequency_hz - target_f),
+                ),
             )
             if best_mode.nodal_vectors and noz_id in best_mode.nodal_vectors:
                 v_noz = np.asarray(best_mode.nodal_vectors[noz_id], dtype=float)

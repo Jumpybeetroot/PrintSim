@@ -626,7 +626,8 @@ def panel_mechanical_properties(
     k_sheet = psi_buckle * gt_0 * (w_eff / h_eff)
 
     if mounting == "clip_enclosure":
-        k_mount = 28_000.0
+        # Perimeter twist-clips + closed-cell EPDM foam gasket shear coupling (replaces uncoupled soft spring)
+        k_mount = 220_000.0
         eta_comp = 0.0
     elif mounting == "bolted_structural":
         # Huth-Schwarmann (1986) single-shear M5 bolted fastener flexibility
@@ -1103,9 +1104,9 @@ def _apply_corner_joint_compliance(
         kr_in *= 1.50
         kr_tor *= 1.40
     l_col = max(col_length_m, 0.15)
-    # Bolted steel Z rails stop ~10% short of each corner joint; Euler-Bernoulli bending moment
-    # M(x) peaks at the corner ends (~88% of portal span flexibility resides in the un-railed end zones).
-    w_end = 0.88
+    # Bolted steel Z rails stop ~10% short of each corner joint; Castigliano bending-energy
+    # integral M(x)^2 over the un-railed outer 10% ends is 1 - 0.8^3 = 0.488 (~49%).
+    w_end = 0.49
 
     for member in members:
         is_corexy_col = member.id.startswith("col_")
@@ -2011,7 +2012,7 @@ def _add_corexy_shell_panels(
 
         e_mem_eff = e_mem_base * props["psi_buckle"]
         if mounting == "clip_enclosure":
-            k_shear_per_m = 2.0 * 28_000.0 / max(bw, 0.04)
+            k_shear_per_m = 2.0 * 220_000.0 / max(bw, 0.04)
             k_normal_per_m = 2.5e5
             k_rot_per_m = 0.2
         else:
@@ -3059,7 +3060,7 @@ def _build_cartesian_bedslinger(
         )
 
     l_arm = max(w * 0.5, 0.05)
-    k_y_target = 1.15e6 * ((spec.gantry.belt.stiffness_ea_n / 26000.0) ** 0.35)
+    k_y_target = 1.15e6 * ((spec.gantry.belt.stiffness_ea_n / 50000.0) ** 0.35)
     iz_y_carriage = k_y_target * (l_arm**3) / (24.0 * max(bed_vmat.youngs_modulus_pa, 1e6))
     bed_car_prof = ProfileSpec.model_construct(
         id="bed_carriage_arm_profile",
