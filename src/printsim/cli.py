@@ -607,5 +607,413 @@ def serve(
     uvicorn.run("printsim.api.server:app", host=host, port=port, reload=reload)
 
 
+# ---------------------------------------------------------------------------
+# Knowledge Base (`printsim kb ...`) subcommand group
+# ---------------------------------------------------------------------------
+
+kb_app = typer.Typer(
+    help="Local 3D printer engineering touchstone database & calibration",
+    add_completion=False,
+)
+app.add_typer(kb_app, name="kb")
+
+
+@kb_app.command("seed")
+def kb_seed_cmd(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    docs_dir: Optional[Path] = typer.Option(None, "--docs-dir", help="Optional benchmark docs directory"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Seed the local KB from built-in empirical benchmark docs (e.g. monolith_discord_benchmarks.md)."""
+    from printsim.kb import TouchstoneKB, seed_from_benchmark_docs
+
+    with TouchstoneKB(db) as kb:
+        res = seed_from_benchmark_docs(kb, docs_dir=docs_dir)
+        out = {"db_path": str(kb.db_path), **res}
+
+    if json_out:
+        print(json.dumps(out, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Database: [bold cyan]{out['db_path']}[/bold cyan]\n"
+            f"Docs processed: {out['files_processed']} | Raw items added: {out['raw_items_added']}\n"
+            f"Builds: [bold green]+{out['builds_added']}[/bold green] | "
+            f"Material tests: +{out['material_tests_added']} | "
+            f"Troubleshooting cases: +{out['troubleshooting_added']}",
+            title="PrintSim KB Seed",
+        )
+    )
+
+
+@kb_app.command("ingest")
+def kb_ingest_cmd(
+    path: Path = typer.Argument(..., exists=True, help="Local file or directory (Discord JSON, JSONL, MD/TXT, Klipper CSV)"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    min_score: float = typer.Option(0.20, "--min-score", min=0.0, max=1.0, help="Minimum engineering signal score"),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Approve kept items and insert structured records immediately"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Batch-ingest local Discord exports, Klipper shaper CSVs, JSON/JSONL, or Markdown notes."""
+    from printsim.kb import TouchstoneKB, ingest_local_path
+
+    with TouchstoneKB(db) as kb:
+        res = ingest_local_path(kb, path, min_score=min_score, auto_approve=auto_approve)
+        out = {"db_path": str(kb.db_path), **res}
+
+    if json_out:
+        print(json.dumps(out, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Database: [bold cyan]{out['db_path']}[/bold cyan]\n"
+            f"Files scanned: {out['files_scanned']} | Items seen: {out['items_seen']}\n"
+            f"Kept: [bold green]{out['items_kept']}[/bold green] | "
+            f"Skipped (low signal): {out['items_skipped_low_signal']} | "
+            f"Deduplicated: {out['items_deduplicated']}\n"
+            f"Structured added — Builds: {out['builds_added']}, Weights: {out['weights_added']}, "
+            f"Materials: {out['material_tests_added']}, Troubleshooting: {out['troubleshooting_added']}",
+            title="PrintSim KB Local Ingest",
+        )
+    )
+
+
+@kb_app.command("sync-public")
+def kb_sync_public_cmd(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    source: str = typer.Option("all", "--source", help="all | discourse | github"),
+    max_items: int = typer.Option(15, "--max-items", min=1, max=100, help="Max topics/issues per source"),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Auto-approve harvested items"),
+    delay_s: float = typer.Option(0.8, "--delay", min=0.0, help="Polite delay between HTTP requests (seconds)"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Politely harvest public 3D printer engineering posts from Discourse forums and GitHub issues."""
+    from printsim.kb import (
+        DEFAULT_PUBLIC_DISCOURSE_TARGETS,
+        DEFAULT_PUBLIC_GITHUB_REPOS,
+        TouchstoneKB,
+        harvest_discourse,
+        harvest_github_issues,
+    )
+
+    src = source.strip().lower()
+    if src not in ("all", "discourse", "github"):
+        raise typer.BadParameter("--source must be one of: all, discourse, github")
+
+    reports: list[dict] = []
+    with TouchstoneKB(db) as kb:
+        if src in ("all", "discourse"):
+            for base_url, queries in DEFAULT_PUBLIC_DISCOURSE_TARGETS:
+                reports.append(
+                    harvest_discourse(
+                        kb,
+                        base_url=base_url,
+                        queries=queries,
+                        max_topics=max_items,
+                        auto_approve=auto_approve,
+                        delay_s=delay_s,
+                    )
+                )
+        if src in ("all", "github"):
+            for repo, queries in DEFAULT_PUBLIC_GITHUB_REPOS:
+                reports.append(
+                    harvest_github_issues(
+                        kb,
+                        repo=repo,
+                        queries=queries,
+                        max_items=max_items,
+                        auto_approve=auto_approve,
+                        delay_s=delay_s,
+                    )
+                )
+        out = {"db_path": str(kb.db_path), "source": src, "reports": reports}
+
+    if json_out:
+        print(json.dumps(out, indent=2))
+        return
+
+    tbl = Table(title="PrintSim KB Public Sync", show_header=True, header_style="bold magenta")
+    tbl.add_column("Source")
+    tbl.add_column("Seen", justify="right")
+    tbl.add_column("Kept", justify="right")
+    tbl.add_column("Low Signal", justify="right")
+    tbl.add_column("Errors", justify="right")
+    for rep in reports:
+        tbl.add_row(
+            str(rep.get("source") or rep.get("repo") or "-"),
+            str(rep.get("items_seen", 0)),
+            str(rep.get("items_kept", 0)),
+            str(rep.get("items_skipped_low_signal", 0)),
+            str(len(rep.get("errors") or [])),
+        )
+    console.print(tbl)
+
+
+@kb_app.command("discord-scan")
+def kb_discord_scan_cmd(
+    channel: str = typer.Option(..., "--channel", "-c", help="Discord channel ID to scan with an official Bot token"),
+    limit: int = typer.Option(500, "--limit", min=1, max=10000, help="Max messages to scan"),
+    out: Path = typer.Option(Path("review_queue"), "--out", "-o", help="Directory for review_queue.json & review_queue.md"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    bot_token: Optional[str] = typer.Option(
+        None,
+        "--bot-token",
+        envvar="DISCORD_BOT_TOKEN",
+        help="Official Discord Bot token (never use a user self-bot token)",
+    ),
+    min_score: float = typer.Option(0.25, "--min-score", min=0.0, max=1.0, help="Minimum signal score"),
+    download_attachments: Optional[Path] = typer.Option(
+        None,
+        "--download-attachments",
+        help="Optional directory to save matching shaper PNG/CSV attachments",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Scan a Discord channel using an official Discord Bot token and export a human review queue."""
+    from printsim.kb import TouchstoneKB, scan_discord_channel
+
+    with TouchstoneKB(db) as kb:
+        res = scan_discord_channel(
+            kb,
+            channel_id=channel,
+            bot_token=bot_token,
+            limit=limit,
+            min_score=min_score,
+            download_attachments_dir=download_attachments,
+            review_out_dir=out,
+        )
+        payload = {"db_path": str(kb.db_path), **res}
+
+    if json_out:
+        print(json.dumps(payload, indent=2))
+        return
+
+    rev = payload.get("review_export") or {}
+    console.print(
+        Panel.fit(
+            f"Channel: [bold cyan]{payload['channel_id']}[/bold cyan] | Pages: {payload['pages_fetched']}\n"
+            f"Messages scanned: {payload['messages_scanned']} | Kept: [bold green]{payload['items_kept']}[/bold green] | "
+            f"Deduplicated: {payload['items_deduplicated']} | Attachments saved: {payload['attachments_downloaded']}\n"
+            f"Review JSON: {rev.get('json_path', '-')}\n"
+            f"Review Markdown: {rev.get('markdown_path', '-')}",
+            title="PrintSim KB Discord Bot Scan",
+        )
+    )
+
+
+@kb_app.command("review")
+def kb_review_cmd(
+    out: Path = typer.Option(Path("review_queue"), "--out", "-o", help="Output directory for review_queue.json & review_queue.md"),
+    min_score: float = typer.Option(0.25, "--min-score", min=0.0, max=1.0, help="Minimum signal score"),
+    limit: int = typer.Option(100, "--limit", min=1, max=1000, help="Maximum pending items to export"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Export pending high-signal KB items to review_queue.json and review_queue.md."""
+    from printsim.kb import TouchstoneKB
+
+    with TouchstoneKB(db) as kb:
+        res = kb.export_review_queue(out, min_score=min_score, limit=limit)
+        payload = {"db_path": str(kb.db_path), **res}
+
+    if json_out:
+        print(json.dumps(payload, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Exported [bold green]{payload['count']}[/bold green] pending items (min_score >= {min_score:.2f})\n"
+            f"JSON: {payload['json_path']}\n"
+            f"Markdown: {payload['markdown_path']}",
+            title="PrintSim KB Review Queue",
+        )
+    )
+
+
+@kb_app.command("approve")
+def kb_approve_cmd(
+    review_json: Path = typer.Argument(..., exists=True, help="Path to edited review_queue.json"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Apply approve/reject decisions from review_queue.json and insert approved structured records."""
+    from printsim.kb import TouchstoneKB
+
+    with TouchstoneKB(db) as kb:
+        res = kb.apply_review_decisions(review_json)
+        payload = {"db_path": str(kb.db_path), **res}
+
+    if json_out:
+        print(json.dumps(payload, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Approved: [bold green]{payload['approved']}[/bold green] | "
+            f"Rejected: [bold red]{payload['rejected']}[/bold red] | "
+            f"Still pending: {payload['pending']}\n"
+            f"Inserted — Builds: {payload['builds_added']}, Weights: {payload['weights_added']}, "
+            f"Materials: {payload['material_tests_added']}, Troubleshooting: {payload['troubleshooting_added']}",
+            title="PrintSim KB Review Applied",
+        )
+    )
+
+
+@kb_app.command("search")
+def kb_search_cmd(
+    query: str = typer.Argument(..., help="Full-text search query"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    table: Optional[str] = typer.Option(None, "--table", "-t", help="Optional filter: builds|component_weights|material_tests|troubleshooting_cases|raw_items"),
+    limit: int = typer.Option(15, "--limit", "-n", min=1, max=200, help="Maximum hits to show"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON results"),
+) -> None:
+    """Instant FTS5 search across builds, weights, materials, troubleshooting cases, and raw items."""
+    from printsim.kb import TouchstoneKB
+
+    with TouchstoneKB(db) as kb:
+        hits = kb.search(query, table=table, limit=limit)
+
+    if json_out:
+        print(json.dumps(hits, indent=2))
+        return
+
+    if not hits:
+        console.print(f"[yellow]No KB matches found for '{query}'.[/yellow]")
+        return
+
+    tbl = Table(title=f"KB Search: {query} ({len(hits)} hits)", show_header=True, header_style="bold magenta")
+    tbl.add_column("Type")
+    tbl.add_column("ID", justify="right")
+    tbl.add_column("Title")
+    tbl.add_column("Snippet")
+    for h in hits:
+        tbl.add_row(
+            str(h["item_type"]),
+            str(h["ref_id"]),
+            str(h["title"])[:42],
+            str(h["snippet"])[:90],
+        )
+    console.print(tbl)
+
+
+@kb_app.command("stats")
+def kb_stats_cmd(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON stats"),
+) -> None:
+    """Show record counts and source/review breakdowns for the local KB."""
+    from printsim.kb import TouchstoneKB
+
+    with TouchstoneKB(db) as kb:
+        st = kb.stats()
+
+    if json_out:
+        print(json.dumps(st, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Database: [bold cyan]{st['db_path']}[/bold cyan]\n"
+            f"Raw Items: {st['raw_items']} ({st['raw_by_status']})\n"
+            f"Builds: [bold green]{st['builds']}[/bold green] | "
+            f"Weights: {st['component_weights']} | "
+            f"Material Tests: {st['material_tests']} | "
+            f"Troubleshooting: {st['troubleshooting_cases']} | "
+            f"FTS5 Entries: {st['fts_entries']}",
+            title="PrintSim Touchstone KB Stats",
+        )
+    )
+
+
+@kb_app.command("calibrate")
+def kb_calibrate_cmd(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    examples_dir: Optional[Path] = typer.Option(None, "--examples-dir", help="Optional directory containing PrintSim YAML presets"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON calibration report"),
+) -> None:
+    """Compare PrintSim modal/shaper predictions against real measured builds in the local KB."""
+    from printsim.kb import TouchstoneKB, run_kb_calibration
+
+    with TouchstoneKB(db) as kb:
+        rep = run_kb_calibration(kb, examples_dir=examples_dir)
+
+    if json_out:
+        print(json.dumps(rep, indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Builds evaluated: [bold cyan]{rep['builds_evaluated']}[/bold cyan] "
+            f"(across {rep['presets_evaluated']} reference presets)\n"
+            f"X MAPE: [bold]{rep['x_mape_pct']}%[/bold] (mean signed: {rep['x_mean_signed_error_pct']}%) | "
+            f"Y MAPE: [bold]{rep['y_mape_pct']}%[/bold] (mean signed: {rep['y_mean_signed_error_pct']}%) | "
+            f"Overall MAPE: [bold green]{rep['overall_mape_pct']}%[/bold green]",
+            title="PrintSim vs. Real-World KB Calibration",
+        )
+    )
+    tbl = Table(show_header=True, header_style="bold magenta")
+    tbl.add_column("Real Build")
+    tbl.add_column("Matched Preset")
+    tbl.add_column("Meas X", justify="right")
+    tbl.add_column("Pred X", justify="right")
+    tbl.add_column("X Err%", justify="right")
+    tbl.add_column("Meas Y", justify="right")
+    tbl.add_column("Pred Y", justify="right")
+    tbl.add_column("Y Err%", justify="right")
+    for r in rep["results"]:
+        tbl.add_row(
+            str(r["build_name"]),
+            str(r["preset_file"]),
+            f"{r['measured_x_hz']:.1f} Hz" if r["measured_x_hz"] is not None else "-",
+            f"{r['predicted_x_hz']:.1f} Hz",
+            f"{r['x_error_pct']:+.1f}%" if r["x_error_pct"] is not None else "-",
+            f"{r['measured_y_hz']:.1f} Hz" if r["measured_y_hz"] is not None else "-",
+            f"{r['predicted_y_hz']:.1f} Hz",
+            f"{r['y_error_pct']:+.1f}%" if r["y_error_pct"] is not None else "-",
+        )
+    console.print(tbl)
+
+
+@kb_app.command("gaps")
+def kb_gaps_cmd(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON coverage gap report"),
+) -> None:
+    """Report which real-world build classes, weights, and material touchstones are missing from the KB."""
+    from printsim.kb import TouchstoneKB, analyze_coverage_gaps
+
+    with TouchstoneKB(db) as kb:
+        rep = analyze_coverage_gaps(kb)
+
+    if json_out:
+        print(json.dumps(rep, indent=2))
+        return
+
+    tbl = Table(title="KB Coverage Gaps — Real Shaper Builds", show_header=True, header_style="bold magenta")
+    tbl.add_column("Printer Class")
+    tbl.add_column("Have / Target", justify="right")
+    tbl.add_column("Status")
+    tbl.add_column("Where to Look")
+    for g in rep["build_gaps"]:
+        color = "green" if g["status"] == "covered" else ("yellow" if g["status"] == "thin" else "red")
+        tbl.add_row(g["label"], f"{g['have']} / {g['target']}", f"[{color}]{g['status'].upper()}[/{color}]", g["suggested_source"])
+    console.print(tbl)
+
+    wtbl = Table(title="KB Coverage Gaps — Measured Weights & Materials", show_header=True, header_style="bold cyan")
+    wtbl.add_column("Topic")
+    wtbl.add_column("Coverage", justify="right")
+    wtbl.add_column("Status")
+    wtbl.add_column("Where to Look")
+    for g in rep["weight_gaps"]:
+        color = "green" if g["status"] == "covered" else ("yellow" if g["status"] == "thin" else "red")
+        wtbl.add_row(g["label"], f"{g['have']} / {g['target']}", f"[{color}]{g['status'].upper()}[/{color}]", g["suggested_source"])
+    for g in rep["material_gaps"]:
+        color = "green" if g["status"] == "covered" else "red"
+        wtbl.add_row(g["label"], "1 / 1" if g["status"] == "covered" else "0 / 1", f"[{color}]{g['status'].upper()}[/{color}]", g["suggested_source"])
+    console.print(wtbl)
+
+
 if __name__ == "__main__":
     app()
