@@ -18,7 +18,7 @@ gantry:
   y_rail_profile: mgn12_rail
   rail_material: steel_4140
   dual_x_rails: false
-  carriage_mass_g: 180
+  carriage_mass_g: 230
   belt:
     type: gt2_6mm
     core: fiberglass
@@ -48,10 +48,11 @@ kinematics:
 toolhead:
   preset_id: custom
   name: Standard V6 Direct Drive
-  total_mass_g: 418
+  total_mass_g: 380
   cog_offset_mm: [0, -22, -28]
   nozzle_offset_mm: [0, -24, -68]
   mount_material: abs_printed
+  body_construction: multi_piece_clamshell
   internal_stiffness_n_per_mm: 400.0
   envelope_mm: [70, 76, 98]
   hotend:
@@ -59,20 +60,20 @@ toolhead:
     mount_style: groove_mount
     structural_stiffness_n_per_mm: 45.0
     overall_length_mm: 62.3
-    name: Classic V6 Aluminum/Stainless
+    name: E3D V6 Groove-Mount
     heater_power_w: 40
     block_material: aluminum_6061_t6
     block_mass_g: 12
     nozzle_material: brass_c360
     nozzle_diameter_mm: 0.4
-    melt_zone_length_mm: 12
+    melt_zone_length_mm: 12.5
     heatbreak_material: stainless_304
-    heatbreak_length_mm: 10
-    heatbreak_wall_mm: 0.45
+    heatbreak_length_mm: 11
+    heatbreak_wall_mm: 0.30
     heatbreak_id_mm: 2.0
-    heatsink_thermal_resistance_k_w: 4.5
+    heatsink_thermal_resistance_k_w: 4.2
     part_cooling_cfm: 5.5
-    max_temp_c: 265
+    max_temp_c: 285
     ambient_temp_c: 25
   extruder:
     type: direct_drive

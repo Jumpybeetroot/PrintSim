@@ -54,6 +54,7 @@ toolhead:
   cog_offset_mm: [0, 0, -18]
   nozzle_offset_mm: [0, 0, -45]
   mount_material: pa12_cf_printed
+  body_construction: cantilever_bowden
   internal_stiffness_n_per_mm: 800.0
   envelope_mm: [60, 60, 80]
   hotend:
@@ -61,20 +62,20 @@ toolhead:
     mount_style: dragon_4bolt_m25
     structural_stiffness_n_per_mm: 550.0
     overall_length_mm: 62.2
-    name: High-Flow Copper Bi-Metal
-    heater_power_w: 80
+    name: Phaetus Dragon HF
+    heater_power_w: 50
     block_material: copper_c110
-    block_mass_g: 14
+    block_mass_g: 13
     nozzle_material: brass_c360
     nozzle_diameter_mm: 0.4
-    melt_zone_length_mm: 20
+    melt_zone_length_mm: 17.5
     heatbreak_material: titanium_grade5
     heatbreak_length_mm: 12
-    heatbreak_wall_mm: 0.25
+    heatbreak_wall_mm: 0.20
     heatbreak_id_mm: 2.0
-    heatsink_thermal_resistance_k_w: 3.0
+    heatsink_thermal_resistance_k_w: 3.4
     part_cooling_cfm: 11.0
-    max_temp_c: 320
+    max_temp_c: 350
     ambient_temp_c: 25
   extruder:
     type: bowden
@@ -89,4 +90,4 @@ bed:
   mass_g: 1600
   z_drive: leadscrew_triple
   z_rail_profile: mgn9_rail
-  z_leadscrew_type: gt2_6mm_z_belt
+  z_leadscrew_type: auto

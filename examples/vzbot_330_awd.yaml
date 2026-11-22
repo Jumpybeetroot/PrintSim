@@ -26,7 +26,7 @@ gantry:
   y_rail_mount: inner
   rail_material: steel_4140
   dual_x_rails: false
-  carriage_mass_g: 105
+  carriage_mass_g: 185
   belt:
     type: gt2_9mm
     core: fiberglass
@@ -64,10 +64,11 @@ kinematics:
 toolhead:
   preset_id: archetype_cpap
   name: VzBot / Goliath Ultra-Light CPAP
-  total_mass_g: 129
+  total_mass_g: 165
   cog_offset_mm: [0, -11, -12]
   nozzle_offset_mm: [0, -14, -48]
   mount_material: aluminum_6061_t6
+  body_construction: plate_sandwich_cf
   internal_stiffness_n_per_mm: 1800.0
   z_probe_type: static_eddy
   envelope_mm: [56, 60, 82]
@@ -76,20 +77,20 @@ toolhead:
     mount_style: dragon_4bolt_m25
     structural_stiffness_n_per_mm: 750.0
     overall_length_mm: 69.2
-    name: Goliath / Rapido UHF CPAP
-    heater_power_w: 110
+    name: Mellow Goliath Air
+    heater_power_w: 100
     block_material: copper_c110
-    block_mass_g: 16
+    block_mass_g: 26
     nozzle_material: copper_c110
     nozzle_diameter_mm: 0.4
-    melt_zone_length_mm: 26
+    melt_zone_length_mm: 50
     heatbreak_material: titanium_grade5
     heatbreak_length_mm: 12
-    heatbreak_wall_mm: 0.25
+    heatbreak_wall_mm: 0.30
     heatbreak_id_mm: 2.0
-    heatsink_thermal_resistance_k_w: 2.5
+    heatsink_thermal_resistance_k_w: 2.8
     part_cooling_cfm: 22.0
-    max_temp_c: 320
+    max_temp_c: 400
     ambient_temp_c: 25
   extruder:
     type: direct_drive

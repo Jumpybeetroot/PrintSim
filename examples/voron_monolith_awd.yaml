@@ -25,7 +25,7 @@ gantry:
   y_rail_profile: mgn12_rail
   rail_material: steel_4140
   dual_x_rails: false
-  carriage_mass_g: 115
+  carriage_mass_g: 200
   belt:
     type: gt2_9mm
     core: fiberglass
@@ -63,10 +63,11 @@ kinematics:
 toolhead:
   preset_id: archetype_cpap
   name: Monolith / XOL Carbon Direct + CPAP
-  total_mass_g: 208
+  total_mass_g: 175
   cog_offset_mm: [0, -12, -14]
   nozzle_offset_mm: [0, -16, -50]
   mount_material: aluminum_6061_t6
+  body_construction: plate_sandwich_cf
   internal_stiffness_n_per_mm: 1800.0
   envelope_mm: [58, 62, 85]
   hotend:
@@ -74,20 +75,20 @@ toolhead:
     mount_style: chube_6bolt_m3_18pcd
     structural_stiffness_n_per_mm: 3600.0
     overall_length_mm: 60.0
-    name: Luke's Lab Chube Conduction / Monolith UHF
-    heater_power_w: 100
+    name: Luke's Lab Chube Conduction
+    heater_power_w: 120
     block_material: copper_c110
-    block_mass_g: 16
+    block_mass_g: 20
     nozzle_material: copper_c110
     nozzle_diameter_mm: 0.4
-    melt_zone_length_mm: 26
+    melt_zone_length_mm: 52
     heatbreak_material: titanium_grade5
     heatbreak_length_mm: 12
     heatbreak_wall_mm: 0.25
     heatbreak_id_mm: 2.0
-    heatsink_thermal_resistance_k_w: 2.8
+    heatsink_thermal_resistance_k_w: 2.2
     part_cooling_cfm: 18.0
-    max_temp_c: 320
+    max_temp_c: 450
     ambient_temp_c: 25
   extruder:
     type: direct_drive

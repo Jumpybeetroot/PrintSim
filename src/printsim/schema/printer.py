@@ -779,9 +779,9 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
     },
     "ppa_cf_printed": {
         "id": "ppa_cf_printed",
-        "name": "3D-Printed PPA-CF Annealed (11.8 GPa)",
+        "name": "3D-Printed PPA-CF Annealed (10.8 GPa)",
         "short_name": "Printed PPA-CF",
-        "youngs_modulus_gpa": 11.8,
+        "youngs_modulus_gpa": 10.8,
         "hdt_c": 196.0,
         "creep_tension_limit_n": 105.0,
         "cnc_machined": False,
@@ -791,10 +791,10 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
     },
     "pps_cf_printed": {
         "id": "pps_cf_printed",
-        "name": "3D-Printed PPS-CF Annealed (8.5 GPa, 235°C HDT)",
+        "name": "3D-Printed PPS-CF Annealed (9.2 GPa, 252°C HDT)",
         "short_name": "Printed PPS-CF",
-        "youngs_modulus_gpa": 8.5,
-        "hdt_c": 235.0,
+        "youngs_modulus_gpa": 9.2,
+        "hdt_c": 252.0,
         "creep_tension_limit_n": 115.0,
         "cnc_machined": False,
         "kit_cost_usd": 120.0,
@@ -1488,11 +1488,13 @@ class ToolheadSpec(BaseModel):
         return self.hotend_mount_material or self.mount_material
 
 
+# NOTE: total_mass_g specifies toolhead housing + extruder + cooling shroud mass EXCLUDING the hotend
+# (_effective_toolhead_mass_kg adds hotend.mass_g, matching DesignPanel.tsx and ToolheadSpec).
 TOOLHEAD_PRESETS: dict[str, dict] = {
     "stealthburner": {
         "preset_id": "stealthburner",
         "name": "Voron StealthBurner + CW2",
-        "total_mass_g": 380.0,
+        "total_mass_g": 365.0,
         "cog_offset_mm": [0.0, -22.0, -28.0],
         "nozzle_offset_mm": [0.0, -26.0, -66.0],
         "mount_material": "abs_printed",
@@ -1503,7 +1505,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     "stealthburner_tap": {
         "preset_id": "stealthburner_tap",
         "name": "Voron StealthBurner + Printed Tap",
-        "total_mass_g": 380.0,
+        "total_mass_g": 385.0,
         "cog_offset_mm": [0.0, -22.0, -28.0],
         "nozzle_offset_mm": [0.0, -26.0, -66.0],
         "mount_material": "abs_printed",
@@ -1514,7 +1516,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     "xol_compact": {
         "preset_id": "xol_compact",
         "name": "XOL / A4T Compact Dual-5015",
-        "total_mass_g": 285.0,
+        "total_mass_g": 235.0,
         "cog_offset_mm": [0.0, -15.0, -18.0],
         "nozzle_offset_mm": [0.0, -18.0, -54.0],
         "mount_material": "pa12_cf_printed",
@@ -1525,7 +1527,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     "a4t_beacon": {
         "preset_id": "a4t_beacon",
         "name": "A4T / XOL 2 + Static Beacon",
-        "total_mass_g": 270.0,
+        "total_mass_g": 215.0,
         "cog_offset_mm": [0.0, -13.0, -15.0],
         "nozzle_offset_mm": [0.0, -16.0, -52.0],
         "mount_material": "ppa_cf_printed",
@@ -1536,7 +1538,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     "dragon_burner": {
         "preset_id": "dragon_burner",
         "name": "Dragon Burner / Rapid Burner Compact",
-        "total_mass_g": 240.0,
+        "total_mass_g": 195.0,
         "cog_offset_mm": [0.0, -14.0, -16.0],
         "nozzle_offset_mm": [0.0, -16.0, -50.0],
         "mount_material": "pa12_cf_printed",
@@ -1547,7 +1549,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     "archetype_cpap": {
         "preset_id": "archetype_cpap",
         "name": "Archetype / Monolith CPAP Ultra-Low CoG",
-        "total_mass_g": 235.0,
+        "total_mass_g": 175.0,
         "cog_offset_mm": [0.0, -11.0, -12.0],
         "nozzle_offset_mm": [0.0, -14.0, -48.0],
         "mount_material": "aluminum_6061_t6",
@@ -1558,7 +1560,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     "heavy_uhf_long": {
         "preset_id": "heavy_uhf_long",
         "name": "Heavy Long-Nozzle UHF Toolhead",
-        "total_mass_g": 460.0,
+        "total_mass_g": 440.0,
         "cog_offset_mm": [0.0, -26.0, -34.0],
         "nozzle_offset_mm": [0.0, -28.0, -78.0],
         "mount_material": "abs_printed",

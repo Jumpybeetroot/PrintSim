@@ -1083,12 +1083,29 @@ def _apply_corner_joint_compliance(
     from printsim.fea.components import corner_joint_stiffness
 
     cj = corner_joint_stiffness(spec.frame.profile, jtype)
-    kr_in = cj["k_r_inplane_nm_rad"]
-    kr_tor = cj["k_r_torsion_nm_rad"]
+    bp = get_profile(spec.frame.profile)
+    # Any un-railed horizontal frame beam carries the bare frame profile (or bonded core if already applied)
+    unrailed = next(
+        (m for m in members if m.role == "frame" and m.rail_mass_kg == 0.0 and m.id.startswith(("base_", "top_"))),
+        None,
+    )
+    i_ext_y = unrailed.profile.iy_m4 if unrailed is not None else bp.iy_m4
+    i_ext_z = unrailed.profile.iz_m4 if unrailed is not None else bp.iz_m4
+    fill_spec = EXTRUSION_FILLINGS.get(spec.frame.extrusion_filling, EXTRUSION_FILLINGS["none"])
+    joint_fill_boost = 1.0
+    if spec.frame.extrusion_filling != "none" and bool(fill_spec.get("bonded", False)):
+        e_fill = float(fill_spec.get("youngs_modulus_pa", 0.0))
+        # Bonded cast mineral/epoxy core backs up hollow T-slot corner flanges against bolt-bearing ovalization
+        joint_fill_boost = 1.0 + 0.45 * min(1.0, e_fill / 25.0e9)
+    kr_in = cj["k_r_inplane_nm_rad"] * joint_fill_boost
+    kr_tor = cj["k_r_torsion_nm_rad"] * joint_fill_boost
     if spec.frame.bracing == "corner_gussets":
         kr_in *= 1.50
         kr_tor *= 1.40
     l_col = max(col_length_m, 0.15)
+    # Bolted steel Z rails stop ~10% short of each corner joint; Euler-Bernoulli bending moment
+    # M(x) peaks at the corner ends (~88% of portal span flexibility resides in the un-railed end zones).
+    w_end = 0.88
 
     for member in members:
         is_corexy_col = member.id.startswith("col_")
@@ -1096,23 +1113,16 @@ def _apply_corner_joint_compliance(
         if not (is_corexy_col or is_cart_col):
             continue
 
+        iy_span = member.profile.iy_m4
+        iz_span = member.profile.iz_m4
+        if is_corexy_col and member.rail_mass_kg > 0.0:
+            iy_span = 1.0 / (w_end / max(i_ext_y, 1e-18) + (1.0 - w_end) / max(member.profile.iy_m4, 1e-18))
+            iz_span = 1.0 / (w_end / max(i_ext_z, 1e-18) + (1.0 - w_end) / max(member.profile.iz_m4, 1e-18))
+
         e_pa = member.material.youngs_modulus_pa
         g_pa = member.material.effective_shear_modulus_pa
-        eta_iy = 1.0 / (1.0 + (6.0 * e_pa * member.profile.iy_m4) / (l_col * kr_in))
-        eta_iz = 1.0 / (1.0 + (6.0 * e_pa * member.profile.iz_m4) / (l_col * kr_in))
-        if is_corexy_col and member.rail_mass_kg > 0.0:
-            base_p = get_profile(spec.frame.profile)
-            e_base = get_material(spec.frame.material).youngs_modulus_pa
-            eta_iy = min(
-                eta_iy,
-                (base_p.iy_m4 / max(member.profile.iy_m4, 1e-18))
-                / (1.0 + (6.0 * e_base * base_p.iy_m4) / (l_col * kr_in)),
-            )
-            eta_iz = min(
-                eta_iz,
-                (base_p.iz_m4 / max(member.profile.iz_m4, 1e-18))
-                / (1.0 + (6.0 * e_base * base_p.iz_m4) / (l_col * kr_in)),
-            )
+        eta_iy = 1.0 / (1.0 + (6.0 * e_pa * iy_span) / (l_col * kr_in))
+        eta_iz = 1.0 / (1.0 + (6.0 * e_pa * iz_span) / (l_col * kr_in))
         eta_j = 1.0 / (1.0 + (2.0 * g_pa * member.profile.j_m4) / (l_col * kr_tor))
 
         if is_cart_col:
@@ -1123,8 +1133,8 @@ def _apply_corner_joint_compliance(
 
         member.profile = member.profile.model_copy(
             update={
-                "iy_m4": member.profile.iy_m4 * eta_iy,
-                "iz_m4": member.profile.iz_m4 * eta_iz,
+                "iy_m4": iy_span * eta_iy,
+                "iz_m4": iz_span * eta_iz,
                 "j_m4": member.profile.j_m4 * eta_j,
             }
         )
@@ -1163,7 +1173,11 @@ def compute_toolhead_link_props(
 
     cog_x_mm, cog_y_mm, _ = spec.toolhead.cog_offset_mm
     noz_z_drop_m = max(abs(float(spec.toolhead.nozzle_offset_mm[2])) * 1e-3, 0.045)
-    is_axisymmetric = abs(float(cog_x_mm)) < 1e-4 and abs(float(cog_y_mm)) < 1e-4
+    is_axisymmetric = (
+        spec.architecture == "delta"
+        and abs(float(cog_x_mm)) < 1e-4
+        and abs(float(cog_y_mm)) < 1e-4
+    )
 
     # Stage 1: Linear rail carriage Hertzian stiffness + carriage mount backplate
     if spec.architecture != "delta":
@@ -1216,8 +1230,6 @@ def compute_toolhead_link_props(
         cfg = TOOLHEAD_CONSTRUCTION_CATALOG[bc]
         k_body_n_m = (
             (float(cfg["body_stiffness_base_n_per_mm"]) * 1e3)
-            * body_retention
-            * probe_comp
             * (body_ratio**0.72)
             * (r_body**1.35)
         )
@@ -1227,7 +1239,7 @@ def compute_toolhead_link_props(
         k_int_scaled = 350.0e3 * (
             (k_raw / 350.0) ** 1.90 if k_raw < 350.0 else (k_raw / 350.0)
         )
-        k_body_n_m = k_int_scaled * body_retention * probe_comp * (body_ratio**0.55) * (r_body**1.35)
+        k_body_n_m = k_int_scaled * (body_ratio**0.55) * (r_body**1.35)
         torsion_mult = 1.0
     k_body_rot_y = k_body_n_m * (0.091**2)
     k_body_rot_z = k_body_rot_y if is_axisymmetric else (3.3 * k_body_rot_y)
@@ -2696,12 +2708,50 @@ def _build_corexy(
         elif z_drive == "leadscrew_dual":
             z_rail_prof_d = get_profile(z_rail_id)
             for side in ("left", "right"):
+                nx = 1.0 if side == "left" else -1.0
                 for mid in (f"bed_{side}_z_bot", f"bed_{side}_z_top"):
                     if mid in member_by_id:
                         m_obj = member_by_id[mid]
                         old_rho = m_obj.material.density_kg_m3
                         old_rail_mass = m_obj.rail_mass_kg
-                        _apply_smooth_rod_guideway(m_obj, nmap, z_rail_prof_d, rail_mat)
+                        if z_rail_prof_d.shape == "rail":
+                            # Linear-rail dual-Z uses twin side guideway columns with bolted steel rail
+                            # (using frame_prof wall area during Newmark composite EI, then keeping
+                            # leadscrew-equivalent axial area_m2 since rail carriages slide freely along Z).
+                            m_obj.profile = ProfileSpec.model_construct(
+                                id="bed_dual_z_rail_profile",
+                                name="Dual-Z Side Linear Rail + Guide Column",
+                                shape=frame_prof.shape,
+                                width_m=frame_prof.width_m,
+                                height_m=frame_prof.height_m,
+                                area_m2=frame_prof.area_m2,
+                                iy_m4=6.0 * frame_prof.iy_m4,
+                                iz_m4=6.0 * frame_prof.iz_m4,
+                                j_m4=0.22 * frame_prof.j_m4,
+                            )
+                            _apply_bolted_linear_rail(
+                                m_obj,
+                                nmap,
+                                z_rail_prof_d,
+                                rail_mat,
+                                [np.array([nx, 0.0, 0.0])],
+                                beam_shape=frame_prof.shape,
+                                bolt_pitch_m=float(spec.gantry.rail_bolt_pitch_mm) * 1e-3,
+                            )
+                            # Keep bending EI from composite column+rail; axial Z load passes primarily
+                            # through the lower leadscrew span (bed_*_z_bot) since the MGN carriage
+                            # slides along the upper rail guide (bed_*_z_top) with only drag/idler coupling.
+                            m_obj.profile = m_obj.profile.model_copy(update={"area_m2": 2.8e-5})
+                            _rebalance_virtual_bed_rail_mass(m_obj, nmap, old_rho, old_rail_mass)
+                            if mid.endswith("_top"):
+                                top_area = 6.0e-7
+                                m_obj.material = m_obj.material.model_copy(
+                                    update={"density_kg_m3": m_obj.material.density_kg_m3 * (2.8e-5 / top_area)}
+                                )
+                                m_obj.profile = m_obj.profile.model_copy(update={"area_m2": top_area})
+                            continue
+                        else:
+                            _apply_smooth_rod_guideway(m_obj, nmap, z_rail_prof_d, rail_mat)
                         _rebalance_virtual_bed_rail_mass(m_obj, nmap, old_rho, old_rail_mass)
         elif z_drive == "leadscrew_single":
             n_rear = [np.array([0.0, -1.0, 0.0])]
@@ -2953,7 +3003,7 @@ def _build_cartesian_bedslinger(
     if spec.gantry.effective_dual_x_rails:
         x_rail_mass *= 2.0
     x_moving = toolhead_kg + 0.03 + bkt_delta_kg
-    y_moving = bed_kg + 0.35 + bkt_delta_kg
+    y_moving = bed_kg + spec.gantry.carriage_mass_g * 1e-3 + bkt_delta_kg
 
     # Explicit bedslinger Y-bed node mounted to base-level Y-rails (z=0.015 m, split at y_bed)
     bed_center = np.array([w * 0.5, y_bed, orig_z])

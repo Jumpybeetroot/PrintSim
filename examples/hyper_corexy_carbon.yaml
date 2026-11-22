@@ -19,7 +19,7 @@ gantry:
   y_rail_profile: mgn12_rail
   rail_material: steel_4140
   dual_x_rails: false
-  carriage_mass_g: 95
+  carriage_mass_g: 135
   belt:
     type: gt2_9mm
     core: fiberglass
@@ -53,6 +53,7 @@ toolhead:
   cog_offset_mm: [0, -12, -18]
   nozzle_offset_mm: [0, -15, -50]
   mount_material: pa12_cf_printed
+  body_construction: compact_cage
   internal_stiffness_n_per_mm: 800.0
   envelope_mm: [58, 62, 82]
   hotend:
@@ -60,20 +61,20 @@ toolhead:
     mount_style: chube_6bolt_m3_18pcd
     structural_stiffness_n_per_mm: 2200.0
     overall_length_mm: 48.0
-    name: Luke's Lab Chube Compact Titanium/Copper
-    heater_power_w: 100
+    name: Luke's Lab Chube Compact
+    heater_power_w: 80
     block_material: copper_c110
-    block_mass_g: 16
+    block_mass_g: 15
     nozzle_material: copper_c110
     nozzle_diameter_mm: 0.4
-    melt_zone_length_mm: 24
+    melt_zone_length_mm: 33
     heatbreak_material: titanium_grade5
-    heatbreak_length_mm: 13
-    heatbreak_wall_mm: 0.22
+    heatbreak_length_mm: 11
+    heatbreak_wall_mm: 0.25
     heatbreak_id_mm: 2.0
     heatsink_thermal_resistance_k_w: 2.6
     part_cooling_cfm: 14.0
-    max_temp_c: 350
+    max_temp_c: 450
     ambient_temp_c: 25
   extruder:
     type: direct_drive

@@ -327,10 +327,11 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         mahieux_m=14.0,
         is_printed_polymer=True,
     ),
+    # Bambu / Siraya Tech PPA-CF annealed TDS: ~10.8 GPa tensile/flexural modulus (dry annealed)
     "ppa_cf_printed": MaterialSpec(
         id="ppa_cf_printed",
-        name="3D-Printed PPA-CF (Annealed High-Stiffness)",
-        youngs_modulus_pa=11.8e9,
+        name="3D-Printed PPA-CF Annealed (10.8 GPa)",
+        youngs_modulus_pa=10.8e9,
         poisson_ratio=0.35,
         density_kg_m3=1250.0,
         yield_strength_pa=165e6,
@@ -348,10 +349,11 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         mahieux_m=15.0,
         is_printed_polymer=True,
     ),
+    # Bambu / Siraya Tech / Fiberon PPS-CF annealed TDS: ~9.2 GPa flexural/tensile modulus
     "pps_cf_printed": MaterialSpec(
         id="pps_cf_printed",
-        name="3D-Printed PPS-CF (Annealed 260°C HDT)",
-        youngs_modulus_pa=8.5e9,
+        name="3D-Printed PPS-CF Annealed (9.2 GPa, 252°C HDT)",
+        youngs_modulus_pa=9.2e9,
         poisson_ratio=0.35,
         density_kg_m3=1310.0,
         yield_strength_pa=98e6,

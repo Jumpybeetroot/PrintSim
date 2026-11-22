@@ -185,9 +185,18 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "steel_tube_25x25x2": _hollow_square_tube(
         "steel_tube_25x25x2", "Steel Square Tube 25x25x2.0mm", 25.0, 2.0
     ),
-    "mgn9_rail": _solid_rect("mgn9_rail", "MGN9H Linear Rail (9x6.5mm)", 9.0, 6.5, "rail"),
-    "mgn12_rail": _solid_rect("mgn12_rail", "MGN12H Linear Rail (12x8mm)", 12.0, 8.0, "rail"),
-    "mgn15_rail": _solid_rect("mgn15_rail", "MGN15H Linear Rail (15x10mm)", 15.0, 10.0, "rail"),
+    # HIWIN MG Series linear guideways (catalog linear mass @ 7850 kg/m^3 steel_4140:
+    # MGN9R = 0.32 kg/m, MGN12R = 0.65 kg/m, MGN15R = 0.92 kg/m; cross-section includes
+    # bolt counterbores and ball-raceway grooves vs nominal outer W x H bounding box).
+    "mgn9_rail": _solid_rect("mgn9_rail", "MGN9H Linear Rail (9x6.5mm)", 9.0, 6.5, "rail").model_copy(
+        update={"area_m2": 0.320 / 7850.0}
+    ),
+    "mgn12_rail": _solid_rect("mgn12_rail", "MGN12H Linear Rail (12x8mm)", 12.0, 8.0, "rail").model_copy(
+        update={"area_m2": 0.650 / 7850.0}
+    ),
+    "mgn15_rail": _solid_rect("mgn15_rail", "MGN15H Linear Rail (15x10mm)", 15.0, 10.0, "rail").model_copy(
+        update={"area_m2": 0.920 / 7850.0}
+    ),
     "steel_rod_8mm": _round_rod("steel_rod_8mm", "Hardened Linear Rod 8mm", 8.0),
     "steel_rod_10mm": _round_rod("steel_rod_10mm", "Hardened Linear Rod 10mm", 10.0),
     "steel_rod_12mm": _round_rod("steel_rod_12mm", "Hardened Linear Rod 12mm", 12.0),

@@ -10,13 +10,23 @@ from scipy.linalg import eigh
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
-from printsim.fea.beam3d import assemble_global_matrices
+from printsim.fea.beam3d import (
+    assemble_global_matrices,
+    beam_rotation_matrix,
+    local_beam_mass,
+    local_beam_stiffness,
+    transformation_12x12,
+)
 from printsim.fea.klipper_shaper import AxisShaperGraph, calibrate_axis_shapers
+from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
+from printsim.fea.solver import classify_part_group
 from printsim.geometry.builder import AssemblyModel
 from printsim.kinematics.solvers import (
     compute_bracket_stiffness_n_per_m,
+    compute_drive_stiffness_details_n_per_m,
     compute_drive_stiffness_n_per_m,
 )
+from printsim.schema import GANTRY_BRACKET_CATALOG
 
 
 _BOTTLENECK_LABELS: dict[str, str] = {
@@ -31,6 +41,13 @@ _BOTTLENECK_TIPS: dict[str, str] = {
     "belt": "Main limit: belt tensile axial stiffness and free-span drive-path compliance.",
     "motor": "Main limit: stepper electromagnetic stiffness (holding torque headroom and winding L/R back-EMF margin) relative to moving inertia.",
     "bracket": "Main limit: XY-joint / motor-mount bracket compliance and cantilevered pulley shaft bending.",
+}
+
+_LIMITING_KIND_LABELS: dict[str, str] = {
+    "structural": "Frame & Gantry Structure",
+    "belt": "Belt Stretch",
+    "motor": "Stepper Motor Magnetic Stiffness",
+    "bracket": "Gantry Bracket Flex",
 }
 
 
@@ -56,6 +73,12 @@ class ModeShape:
     print_impact_score: float = 0.0
     print_impact_level: str = "low"
     dominant_problem_area: str = "frame"
+    top_causes: list[dict] = field(default_factory=list)
+    limiting_axis_share_pct: float = 0.0
+    x_axis_share_pct: float = 0.0
+    y_axis_share_pct: float = 0.0
+    is_limiting_axis_mode: bool = False
+    is_primary_limiting_mode: bool = False
 
 
 @dataclass
@@ -88,6 +111,7 @@ class ModalResult:
     frame_damping_ratio: float = 0.042
     accel_bottleneck: dict | None = None
     worst_print_mode_number: int = 1
+    limiting_modal_summary: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +122,7 @@ class ModalResult:
             "recommended_max_accel_mm_s2": round(self.recommended_max_accel_mm_s2, 0),
             "accel_bottleneck": self.accel_bottleneck,
             "worst_print_mode_number": self.worst_print_mode_number,
+            "limiting_modal_summary": self.limiting_modal_summary,
             "shaper_x": _shaper_dict(self.shaper_x) if self.shaper_x else None,
             "shaper_y": _shaper_dict(self.shaper_y) if self.shaper_y else None,
             "shaper_graphs": {
@@ -124,6 +149,12 @@ class ModalResult:
                     "print_impact_score": m.print_impact_score,
                     "print_impact_level": m.print_impact_level,
                     "dominant_problem_area": m.dominant_problem_area,
+                    "top_causes": m.top_causes,
+                    "limiting_axis_share_pct": m.limiting_axis_share_pct,
+                    "x_axis_share_pct": m.x_axis_share_pct,
+                    "y_axis_share_pct": m.y_axis_share_pct,
+                    "is_limiting_axis_mode": m.is_limiting_axis_mode,
+                    "is_primary_limiting_mode": m.is_primary_limiting_mode,
                 }
                 for m in self.modes
             ],
@@ -408,6 +439,586 @@ def _classify_mode_diagnosis(
     )
 
 
+def _classify_modal_group(member_id: str, role: str = "", bay: str = "") -> tuple[str, str]:
+    """Map member/spring/bay IDs to canonical physical part groups (matching sensitivity.py)."""
+    mid = member_id.strip()
+    if mid.startswith("feet_") or role == "foot" or bay == "feet":
+        return "frame_feet", "Machine Feet & Benchtop Pads"
+    if bay == "z_joint" or mid.startswith("z_joint"):
+        return "z_gantry_joints", "Z-Axis Gantry Joints"
+    return classify_part_group(member_id, role)
+
+
+def _role_to_subsystem(role: str) -> str:
+    if role in ("toolhead", "cog", "nozzle"):
+        return "toolhead"
+    if role in ("gantry", "rail"):
+        return "gantry"
+    if role == "bed":
+        return "bed"
+    return "frame"
+
+
+def _classify_lumped_mass_group(
+    assembly: AssemblyModel, node_id: str, role: str
+) -> tuple[str, str, str]:
+    """Group non-fixed lumped masses into clean physical moving/structural inertia bodies."""
+    th_ids = {
+        assembly.toolhead_node_id,
+        assembly.toolhead_cog_node_id,
+        assembly.nozzle_node_id,
+    }
+    if node_id in th_ids or role in ("toolhead", "cog", "nozzle"):
+        return "toolhead_assembly", "Toolhead Moving Mass", "toolhead"
+    if node_id.startswith("y_car_"):
+        return "y_carriages", "Y-Axis Gantry Carriages", "gantry"
+    if node_id in ("z_l", "z_r"):
+        return "z_carriages", "Z-Axis Carriages & X-Motor", "gantry"
+    if node_id.startswith("c_") and role == "gantry":
+        return "delta_carriages", "Delta Tower Carriages", "gantry"
+    if role == "bed":
+        if assembly.spec.architecture == "cartesian_bedslinger":
+            return "moving_y_bed", "Moving Y-Bed Mass", "bed"
+        return "bed_assembly", "Heated Bed Assembly", "bed"
+    if role == "foot":
+        return "frame_feet", "Machine Feet & Base Corners", "frame"
+    if role == "gantry":
+        return "gantry_motors_idlers", "Gantry Motors & Idler Corners", "gantry"
+    if role in ("frame", "mount", "tower", "brace"):
+        return "frame_motors_mounts", "Frame Motors & Corner Hardware", "frame"
+    gid, label = _classify_modal_group(node_id, role)
+    return gid, label, _role_to_subsystem(role)
+
+
+def _precompute_modal_element_blocks(
+    assembly: AssemblyModel,
+    node_idx: dict[str, int],
+) -> tuple[
+    list[tuple[str, str, str, list[int], np.ndarray, np.ndarray | None]],
+    list[tuple[str, str, str, int, np.ndarray]],
+]:
+    """Precompute element (Ke, Me) and lumped-mass blocks once per solve_modal_fea call."""
+    elem_blocks: list[tuple[str, str, str, list[int], np.ndarray, np.ndarray | None]] = []
+
+    for mem in assembly.members:
+        i0 = node_idx[mem.start_id]
+        i1 = node_idx[mem.end_id]
+        p0 = assembly.nodes[i0].position_m
+        p1 = assembly.nodes[i1].position_m
+        r_mat, length = beam_rotation_matrix(p0, p1)
+        t_mat = transformation_12x12(r_mat)
+        bend_scale = 0.08 if mem.is_truss else 1.0
+        k_loc = local_beam_stiffness(
+            e_pa=mem.material.youngs_modulus_pa,
+            g_pa=mem.material.effective_shear_modulus_pa,
+            area=mem.profile.area_m2,
+            iy=mem.profile.iy_m4,
+            iz=mem.profile.iz_m4,
+            j_torsion=mem.profile.j_m4,
+            length=length,
+            bending_scale=bend_scale,
+        )
+        m_loc = local_beam_mass(
+            rho=mem.material.density_kg_m3,
+            area=mem.profile.area_m2,
+            iy=mem.profile.iy_m4,
+            iz=mem.profile.iz_m4,
+            length=length,
+        )
+        ke = t_mat.T @ k_loc @ t_mat
+        me = t_mat.T @ m_loc @ t_mat
+        dofs = [6 * i0 + d for d in range(6)] + [6 * i1 + d for d in range(6)]
+        gid, label = _classify_modal_group(mem.id, mem.role)
+        elem_blocks.append((gid, label, _role_to_subsystem(mem.role), dofs, ke, me))
+
+    for sh in assembly.shell_elements:
+        n_indices = [node_idx[nid] for nid in sh.node_ids]
+        coords = np.array([assembly.nodes[ni].position_m for ni in n_indices], dtype=float)
+        k_sh, m_sh, _ = mitc4_shell_matrices(
+            coords_3d=coords,
+            e_pa=sh.material.youngs_modulus_pa,
+            nu=sh.material.poisson_ratio,
+            thickness_m=sh.thickness_m,
+            areal_mass_kg_m2=sh.areal_mass_kg_m2,
+            d_bend_nm=sh.d_bend_nm,
+            g_transverse_h_n_m=sh.g_transverse_h_n_m,
+            e_mem_h_n_m=sh.e_mem_h_n_m,
+        )
+        dofs = [6 * ni + d for ni in n_indices for d in range(6)]
+        bay_prefix = sh.bay.split("_")[0]
+        gid, label = _classify_modal_group(f"bay_{bay_prefix}", "panel")
+        elem_blocks.append((gid, label, "frame", dofs, k_sh, m_sh))
+
+    for sp in assembly.fastener_springs:
+        i_s = node_idx[sp.shell_node_id]
+        i_f = node_idx[sp.frame_node_id]
+        k_sp = fastener_spring_matrices(
+            k_shear_n_m=sp.k_shear_n_m,
+            k_normal_n_m=sp.k_normal_n_m,
+            k_rot_nm_rad=sp.k_rot_nm_rad,
+            normal_vec=np.asarray(sp.normal_vec, dtype=float),
+            offset_vec=np.asarray(sp.offset_m, dtype=float),
+        )
+        dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
+        bay_raw = sp.bay
+        bay_prefix = bay_raw.split("_")[0]
+        if bay_raw not in ("bed_mount", "toolhead", "feet", "z_joint") and bay_prefix in (
+            "left",
+            "right",
+            "rear",
+            "top",
+        ):
+            gid, label = _classify_modal_group(f"bay_{bay_prefix}", "panel")
+            subsys = "frame"
+        else:
+            sp_role = (
+                "bed"
+                if bay_raw == "bed_mount"
+                else (
+                    "toolhead"
+                    if bay_raw == "toolhead"
+                    else ("gantry" if bay_raw == "z_joint" else "frame")
+                )
+            )
+            gid, label = _classify_modal_group(sp.id, sp_role, bay_raw)
+            subsys = _role_to_subsystem(sp_role)
+        elem_blocks.append((gid, label, subsys, dofs, k_sp, None))
+
+    lumped_blocks: list[tuple[str, str, str, int, np.ndarray]] = []
+    for i, node in enumerate(assembly.nodes):
+        if node.lumped_mass_kg <= 0.0 or node.fixed:
+            continue
+        m_val = float(node.lumped_mass_kg)
+        r_gyr = 0.007 if node.role == "nozzle" else 0.025
+        rot_i = m_val * (r_gyr**2)
+        m_diag_6 = np.array([m_val, m_val, m_val, rot_i, rot_i, rot_i], dtype=float)
+        gid, label, subsys = _classify_lumped_mass_group(assembly, node.id, node.role)
+        lumped_blocks.append((gid, label, subsys, 6 * i, m_diag_6))
+
+    return elem_blocks, lumped_blocks
+
+
+def _fmt_hz_gain(gain: float) -> str:
+    return f"{gain:.2f}" if 0.0 < gain < 0.5 else f"{gain:.1f}"
+
+
+def _compute_mode_root_causes(
+    full_vec: np.ndarray,
+    lam: float,
+    freq_hz: float,
+    elem_blocks: list[tuple[str, str, str, list[int], np.ndarray, np.ndarray | None]],
+    lumped_blocks: list[tuple[str, str, str, int, np.ndarray]],
+) -> tuple[list[dict], dict[str, dict], float, dict[str, dict], float]:
+    """Compute exact per-group strain & kinetic energy shares and Fox-Kapoor mode causes."""
+    u_groups: dict[str, dict] = {}
+    t_groups: dict[str, dict] = {}
+    u_total = 0.0
+    t_total = 0.0
+
+    for gid, label, subsys, dofs, ke, me in elem_blocks:
+        u_e = full_vec[dofs]
+        strain_e = max(0.0, float(u_e @ ke @ u_e))
+        u_total += strain_e
+        ug = u_groups.get(gid)
+        if ug is None:
+            u_groups[gid] = {"id": gid, "label": label, "subsystem": subsys, "energy": strain_e}
+        else:
+            ug["energy"] += strain_e
+
+        if me is not None:
+            kin_e = max(0.0, float(u_e @ me @ u_e))
+            t_total += kin_e
+            tg = t_groups.get(gid)
+            if tg is None:
+                t_groups[gid] = {"id": gid, "label": label, "subsystem": subsys, "energy": kin_e}
+            else:
+                tg["energy"] += kin_e
+
+    for gid, label, subsys, base_dof, m_diag_6 in lumped_blocks:
+        u_nd = full_vec[base_dof : base_dof + 6]
+        kin_nd = max(0.0, float(np.sum(m_diag_6 * (u_nd * u_nd))))
+        t_total += kin_nd
+        tg = t_groups.get(gid)
+        if tg is None:
+            t_groups[gid] = {"id": gid, "label": label, "subsystem": subsys, "energy": kin_nd}
+        else:
+            tg["energy"] += kin_nd
+
+    denom_fk = 8.0 * (math.pi**2) * max(freq_hz, 1e-6)
+    u_norm_denom = max(u_total, 1e-18)
+    t_norm_denom = max(t_total, 1e-18)
+
+    stiff_all: list[dict] = []
+    for gid, g in u_groups.items():
+        u_val = float(g["energy"])
+        share_pct = round(100.0 * u_val / u_norm_denom, 1)
+        est_hz = round(0.5 * u_val / denom_fk, 2)
+        hz_s = _fmt_hz_gain(est_hz)
+        if gid in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
+            detail = f"{share_pct:.0f}% of mode shear/panel flex (+{hz_s} Hz if +50% stiffer)"
+        elif gid == "frame_feet":
+            detail = f"{share_pct:.0f}% of mode anchor flex (+{hz_s} Hz if +50% stiffer)"
+        elif gid == "z_gantry_joints":
+            detail = f"{share_pct:.0f}% of mode Z-joint flex (+{hz_s} Hz if +50% stiffer)"
+        else:
+            detail = f"{share_pct:.0f}% of mode bending flex (+{hz_s} Hz if +50% stiffer)"
+        stiff_all.append(
+            {
+                "id": gid,
+                "label": str(g["label"]),
+                "subsystem": str(g["subsystem"]),
+                "kind": "stiffness",
+                "share_pct": float(share_pct),
+                "est_hz_gain": float(est_hz),
+                "detail": detail,
+            }
+        )
+
+    stiff_eligible = [c for c in stiff_all if c["share_pct"] >= 5.0]
+    stiff_eligible.sort(key=lambda c: (-c["est_hz_gain"], -c["share_pct"]))
+    stiff_picked = stiff_eligible[:3]
+    if not stiff_picked and u_total > 1e-18 and stiff_all:
+        stiff_picked = [max(stiff_all, key=lambda c: (c["share_pct"], c["est_hz_gain"]))]
+
+    mass_all: list[dict] = []
+    for gid, g in t_groups.items():
+        t_val = float(g["energy"])
+        share_pct = round(100.0 * t_val / t_norm_denom, 1)
+        est_hz = round(0.25 * max(lam, 0.0) * t_val / denom_fk, 2)
+        hz_s = _fmt_hz_gain(est_hz)
+        mass_all.append(
+            {
+                "id": gid,
+                "label": str(g["label"]),
+                "subsystem": str(g["subsystem"]),
+                "kind": "mass",
+                "share_pct": float(share_pct),
+                "est_hz_gain": float(est_hz),
+                "detail": f"{share_pct:.0f}% of mode swinging inertia (+{hz_s} Hz if 25% lighter)",
+            }
+        )
+
+    mass_eligible = [c for c in mass_all if c["share_pct"] >= 12.0]
+    mass_eligible.sort(key=lambda c: (-c["est_hz_gain"], -c["share_pct"]))
+    mass_picked = mass_eligible[:2]
+
+    top_causes = stiff_picked + mass_picked
+    top_causes.sort(key=lambda c: (-c["est_hz_gain"], c["kind"] != "stiffness", -c["share_pct"]))
+    return top_causes[:5], u_groups, u_total, t_groups, t_total
+
+
+def _build_limiting_modal_summary(
+    assembly: AssemblyModel,
+    limiting: InputShaperRecommendation,
+    other: InputShaperRecommendation,
+    primary_mode: ModeShape | None,
+    primary_u_groups: dict[str, dict],
+    primary_u_total: float,
+    primary_t_groups: dict[str, dict],
+    primary_t_total: float,
+    ratio_lim: float,
+) -> dict:
+    """Build unified limiting-resonance summary bridging 3D structural modes and drive train."""
+    spec = assembly.spec
+    ax = limiting.axis
+    f_eff = float(limiting.effective_freq_hz)
+    struct_hz = float(limiting.structural_freq_hz)
+    belt_hz = float(limiting.belt_freq_hz)
+    accel = float(limiting.max_accel_mm_s2)
+
+    details = compute_drive_stiffness_details_n_per_m(assembly, ax)
+    k_cord = float(details["k_belt_cord_n_m"])  # type: ignore[arg-type]
+    k_mesh = float(details["k_tooth_mesh_n_m"])  # type: ignore[arg-type]
+    k_idler = float(details["k_idler_shaft_n_m"])  # type: ignore[arg-type]
+    k_sub = float(details["k_belt_subsystem_n_m"])  # type: ignore[arg-type]
+    k_motor_axis = float(details["k_motor_axis_n_m"])  # type: ignore[arg-type]
+    k_bracket = float(details["k_bracket_n_m"])  # type: ignore[arg-type]
+
+    inv_cord = 1.0 / max(k_cord, 1e-9)
+    inv_mesh = 1.0 / max(k_mesh, 1e-9)
+    inv_idler = 1.0 / max(k_idler, 1e-9)
+    inv_tot = max(inv_cord + inv_mesh + inv_idler, 1e-18)
+    cord_frac = inv_cord / inv_tot
+    mesh_frac = inv_mesh / inv_tot
+    idler_frac = inv_idler / inv_tot
+
+    raw_belt_shares = {
+        "belt_cord_share_pct": 100.0 * cord_frac,
+        "tooth_mesh_share_pct": 100.0 * mesh_frac,
+        "idler_shaft_share_pct": 100.0 * idler_frac,
+    }
+    belt_shares_rounded = {k: round(v, 1) for k, v in raw_belt_shares.items()}
+    top_belt_key = max(raw_belt_shares, key=lambda k: raw_belt_shares[k])
+    belt_shares_rounded[top_belt_key] = round(
+        belt_shares_rounded[top_belt_key] + round(100.0 - sum(belt_shares_rounded.values()), 1),
+        1,
+    )
+
+    belt = spec.gantry.belt
+    belt_width_str = {"gt2_6mm": "6mm", "gt2_9mm": "9mm", "gt2_12mm": "12mm"}.get(
+        belt.type, belt.type
+    )
+    belt_label = f"GT2 {belt_width_str} {belt.core}"
+
+    belt_sub_breakdown = {
+        "belt_label": belt_label,
+        "k_belt_cord_n_per_mm": round(k_cord * 1e-3, 1),
+        "k_tooth_mesh_n_per_mm": round(k_mesh * 1e-3, 1),
+        "k_idler_shaft_n_per_mm": round(k_idler * 1e-3, 1),
+        "k_belt_total_n_per_mm": round(k_sub * 1e-3, 1),
+        **belt_shares_rounded,
+    }
+
+    s_struct = float(limiting.compliance_share_pct.get("frame", 0.0))
+    s_belt = float(limiting.compliance_share_pct.get("belt", 0.0))
+    s_motor = float(limiting.compliance_share_pct.get("motor", 0.0))
+    s_bracket = float(limiting.compliance_share_pct.get("bracket", 0.0))
+
+    bkt_info = GANTRY_BRACKET_CATALOG.get(
+        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
+    )
+    bkt_name = str(bkt_info.get("short_name", spec.gantry.bracket_material))
+
+    def _overall_gain(share_val: float) -> tuple[float, float]:
+        p = min(max(share_val, 0.0) / 100.0, 0.99)
+        f_new = f_eff / math.sqrt(max(1.0 - p / 3.0, 0.05))
+        hz_gain = round(max(0.0, f_new - f_eff), 2)
+        accel_gain = round(max(0.0, accel * ((f_new / max(f_eff, 1.0)) ** 2 - 1.0)), 0)
+        return float(hz_gain), float(accel_gain)
+
+    raw_overall: list[dict] = []
+
+    def _add_overall_item(
+        item_id: str,
+        label: str,
+        category: str,
+        subsystem: str,
+        raw_share: float,
+        detail_prefix: str,
+    ) -> None:
+        share_r = round(raw_share, 1)
+        if share_r < 1.5:
+            return
+        hz_g, acc_g = _overall_gain(raw_share)
+        hz_s = _fmt_hz_gain(hz_g)
+        raw_overall.append(
+            {
+                "id": item_id,
+                "label": label,
+                "category": category,
+                "subsystem": subsystem,
+                "share_pct": float(share_r),
+                "est_hz_gain": float(hz_g),
+                "est_accel_gain_mm_s2": float(acc_g),
+                "detail": f"{share_r:.0f}% of total {ax} compliance — {detail_prefix}; +50% stiffer adds +{hz_s} Hz",
+            }
+        )
+
+    _add_overall_item(
+        "belt_cord_stretch",
+        f"Belt Cord Stretch ({belt_label})",
+        "belt",
+        "drive",
+        s_belt * cord_frac,
+        f"k_cord = {k_cord * 1e-3:.0f} N/mm",
+    )
+    _add_overall_item(
+        "belt_tooth_mesh",
+        "Pulley Tooth-Mesh Compliance",
+        "belt",
+        "drive",
+        s_belt * mesh_frac,
+        f"k_mesh = {k_mesh * 1e-3:.0f} N/mm",
+    )
+    _add_overall_item(
+        "belt_idler_shaft",
+        "Idler Shaft & Bearing Flex",
+        "belt",
+        "drive",
+        s_belt * idler_frac,
+        f"k_idler = {k_idler * 1e-3:.0f} N/mm",
+    )
+    _add_overall_item(
+        "motor_stiffness",
+        "Stepper Motor Magnetic Stiffness",
+        "motor",
+        "drive",
+        s_motor,
+        f"k_motor = {k_motor_axis * 1e-3:.0f} N/mm ({limiting.motor_freq_hz:.1f} Hz)",
+    )
+    _add_overall_item(
+        "gantry_brackets",
+        f"Gantry Brackets ({bkt_name})",
+        "bracket",
+        "drive",
+        s_bracket,
+        f"k_bracket = {k_bracket * 1e-3:.0f} N/mm ({limiting.bracket_freq_hz:.1f} Hz)",
+    )
+
+    pm_num = primary_mode.mode_number if primary_mode is not None else 1
+    pm_label = primary_mode.mode_label if primary_mode is not None else "Primary Structural Mode"
+
+    struct_parts: dict[str, dict] = {}
+    car_struct_share = s_struct / max(ratio_lim, 1.0)
+    if primary_u_total > 1e-18 and primary_u_groups:
+        for gid, g in primary_u_groups.items():
+            g_share = car_struct_share * (float(g["energy"]) / primary_u_total)
+            struct_parts[gid] = {
+                "id": gid,
+                "label": str(g["label"]),
+                "subsystem": str(g["subsystem"]),
+                "share": g_share,
+            }
+    elif s_struct > 0.0:
+        struct_parts["frame_perimeter_beams"] = {
+            "id": "frame_perimeter_beams",
+            "label": "Frame & Gantry Structure",
+            "subsystem": "frame",
+            "share": car_struct_share,
+        }
+
+    if ratio_lim > 1.05 and s_struct > 0.0:
+        pitch_share = s_struct * (1.0 - 1.0 / ratio_lim)
+        if "toolhead_mount" in struct_parts:
+            struct_parts["toolhead_mount"]["share"] += pitch_share
+            struct_parts["toolhead_mount"]["label"] = "Toolhead & Nozzle Pitch Mount"
+        else:
+            struct_parts["toolhead_mount"] = {
+                "id": "toolhead_mount",
+                "label": "Toolhead & Nozzle Pitch Mount",
+                "subsystem": "toolhead",
+                "share": pitch_share,
+            }
+
+    for sp in struct_parts.values():
+        _add_overall_item(
+            str(sp["id"]),
+            str(sp["label"]),
+            "structural",
+            str(sp["subsystem"]),
+            float(sp["share"]),
+            f"Mode M{pm_num}",
+        )
+
+    raw_overall.sort(key=lambda x: (-x["share_pct"], -x["est_hz_gain"]))
+    top_overall_causes = raw_overall[:6]
+
+    mass_lim_kg = float(assembly.x_moving_mass_kg if ax == "X" else assembly.y_moving_mass_kg)
+    arch = spec.architecture
+    if arch == "delta":
+        mass_label = "Moving Effector + Arms"
+        mov_groups = {"toolhead_assembly", "delta_carriages", "delta_arms"}
+    elif arch == "cartesian_bedslinger":
+        if ax == "Y":
+            mass_label = "Moving Y Heated Bed"
+            mov_groups = {"moving_y_bed"}
+        else:
+            mass_label = "Moving Toolhead"
+            mov_groups = {"toolhead_assembly"}
+    else:
+        if ax == "Y":
+            mass_label = "Moving Y-Gantry + Toolhead"
+            mov_groups = {"toolhead_assembly", "x_gantry_beam", "y_carriages"}
+        else:
+            mass_label = "Moving Toolhead"
+            mov_groups = {"toolhead_assembly"}
+
+    t_mov = sum(
+        float(primary_t_groups[g]["energy"]) for g in mov_groups if g in primary_t_groups
+    )
+    t_mov_share = min(1.0, max(0.0, t_mov / max(primary_t_total, 1e-18))) if primary_t_total > 1e-18 else 0.0
+    f_drive_new = float(limiting.drive_freq_hz) / math.sqrt(0.75)
+    f_struct_new = struct_hz / math.sqrt(max(1.0 - 0.25 * t_mov_share, 0.75))
+    f_eff_new_mass = 1.0 / math.sqrt(
+        1.0 / (max(f_struct_new, 5.0) ** 2) + 1.0 / (max(f_drive_new, 5.0) ** 2)
+    )
+    est_hz_gain_25 = round(max(0.0, f_eff_new_mass - f_eff), 2)
+    est_accel_gain_25 = round(
+        max(0.0, accel * ((f_eff_new_mass / max(f_eff, 1.0)) ** 2 - 1.0)), 0
+    )
+
+    moving_mass_info = {
+        "axis": ax,
+        "mass_g": round(mass_lim_kg * 1000.0, 1),
+        "label": mass_label,
+        "est_hz_gain_25pct_lighter": float(est_hz_gain_25),
+        "est_accel_gain_25pct_lighter_mm_s2": float(est_accel_gain_25),
+    }
+
+    limiting_kind = (
+        "structural" if limiting.primary_bottleneck == "frame" else limiting.primary_bottleneck
+    )
+    limiting_kind_label = _LIMITING_KIND_LABELS.get(limiting_kind, limiting_kind)
+
+    if limiting_kind == "structural":
+        headline = (
+            f"{ax}-Axis @ {f_eff:.1f} Hz ({accel:,.0f} mm/s²) — Limited by Structural Mode "
+            f"M{pm_num} ({pm_label}, {s_struct:.0f}% structural vs {s_belt:.0f}% belt)"
+        )
+    elif limiting_kind == "belt":
+        headline = (
+            f"{ax}-Axis @ {f_eff:.1f} Hz ({accel:,.0f} mm/s²) — Limited by {ax}-Belt Stretch "
+            f"({s_belt:.0f}% belt vs {s_struct:.0f}% structural)"
+        )
+    elif limiting_kind == "motor":
+        headline = (
+            f"{ax}-Axis @ {f_eff:.1f} Hz ({accel:,.0f} mm/s²) — Limited by Stepper Magnetic "
+            f"Stiffness ({s_motor:.0f}% motor vs {s_struct:.0f}% structural)"
+        )
+    else:
+        headline = (
+            f"{ax}-Axis @ {f_eff:.1f} Hz ({accel:,.0f} mm/s²) — Limited by Gantry Bracket Flex "
+            f"({s_bracket:.0f}% bracket vs {s_struct:.0f}% structural)"
+        )
+
+    belt_included_note = (
+        f"Belt stretch IS included in Input Shaper & Max Accel ({s_belt:.0f}% of {ax} compliance, "
+        f"{belt_hz:.1f} Hz belt vs {struct_hz:.1f} Hz structural → {f_eff:.1f} Hz effective). "
+        "The 3D mode animations below isolate pure structural frame/gantry vibration (locked belts)."
+    )
+
+    return {
+        "limiting_axis": ax,
+        "other_axis": other.axis,
+        "effective_freq_hz": round(f_eff, 2),
+        "structural_freq_hz": round(struct_hz, 2),
+        "belt_freq_hz": round(belt_hz, 2),
+        "motor_freq_hz": round(float(limiting.motor_freq_hz), 2),
+        "bracket_freq_hz": round(float(limiting.bracket_freq_hz), 2),
+        "drive_freq_hz": round(float(limiting.drive_freq_hz), 2),
+        "recommended_shaper": limiting.recommended_shaper,
+        "max_accel_mm_s2": round(accel, 0),
+        "other_axis_effective_freq_hz": round(float(other.effective_freq_hz), 2),
+        "other_axis_max_accel_mm_s2": round(float(other.max_accel_mm_s2), 0),
+        "limiting_kind": limiting_kind,
+        "limiting_kind_label": limiting_kind_label,
+        "compliance_share_pct": dict(limiting.compliance_share_pct),
+        "structural_share_pct": round(s_struct, 1),
+        "belt_share_pct": round(s_belt, 1),
+        "motor_share_pct": round(s_motor, 1),
+        "bracket_share_pct": round(s_bracket, 1),
+        "drive_share_pct": round(s_belt + s_motor + s_bracket, 1),
+        "primary_structural_mode_number": int(pm_num),
+        "primary_structural_mode_freq_hz": round(float(primary_mode.frequency_hz), 2)
+        if primary_mode is not None
+        else 0.0,
+        "primary_structural_mode_label": pm_label,
+        "primary_structural_mode_axis": primary_mode.excited_axis
+        if primary_mode is not None
+        else ax,
+        "primary_structural_mode_share_pct": round(float(primary_mode.limiting_axis_share_pct), 1)
+        if primary_mode is not None
+        else 0.0,
+        "nozzle_pitch_amplification_ratio": round(float(ratio_lim), 3),
+        "nozzle_whip_amp_ratio": round(float(ratio_lim), 3),
+        "belt_sub_breakdown": belt_sub_breakdown,
+        "top_overall_causes": top_overall_causes,
+        "moving_mass_info": moving_mass_info,
+        "headline": headline,
+        "belt_included_note": belt_included_note,
+    }
+
+
 def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     """Solve generalized structural eigenproblem K phi = omega^2 M phi."""
     K, M, _, node_idx, free_dofs = assemble_global_matrices(assembly)
@@ -509,7 +1120,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         else:
             fy_exc[6 * cog_idx + 1] = 1.0
     else:
-        th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
+        th_share = assembly.toolhead_moving_mass_kg / max(assembly.y_moving_mass_kg, 1e-6)
         fy_exc[6 * cog_idx + 1] = th_share
         other_gantry = [
             gid
@@ -560,10 +1171,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     receptance_x: list[tuple[float, float]] = []
     receptance_y: list[tuple[float, float]] = []
     car_mode_entries: list[tuple[float, float, float, float]] = []
-    sum_comp_x_car = 0.0
-    sum_comp_y_car = 0.0
-    sum_comp_x_noz = 0.0
-    sum_comp_y_noz = 0.0
+    noz_car_entries: list[tuple[float, float, float, float, float, float]] = []
     panel_drum_freq: float | None = None
     panel_drum_fallback_freq: float | None = None
 
@@ -599,11 +1207,12 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             )
             phi_p = np.where(free_panel_mask, phi, 0.0)
             ke_panel = float(phi_p @ M_ff @ phi_p) / m_gen
+            ke_th_total = max(0.0, float(phi[free_th_mask] @ m_phi[free_th_mask]) / m_gen)
             if ke_panel > 0.50 and panel_drum_fallback_freq is None:
                 panel_drum_fallback_freq = freq_hz
             is_isolated_panel_drum = (
-                (ke_panel > 0.55 and noz_norm_all < 0.12)
-                or (ke_panel > 0.58 and noz_norm_all < 0.25)
+                (ke_panel > 0.55 and noz_norm_all < 0.12 and ke_th_total < 0.04)
+                or (ke_panel > 0.58 and noz_norm_all < 0.25 and ke_th_total < 0.04)
                 or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.28)
                 or (np_max < 0.25 and gantry_max < 0.20)
             )
@@ -720,14 +1329,14 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 receptance_x.append((freq_hz, rec_x))
                 receptance_y.append((freq_hz, rec_y))
                 car_mode_entries.append((freq_hz, comp_x_car, comp_y_car, max(0.0, ke_panel)))
-
-            sum_comp_x_car += comp_x_car
-            sum_comp_y_car += comp_y_car
-            sum_comp_x_noz += comp_x_noz
-            sum_comp_y_noz += comp_y_noz
+                noz_car_entries.append(
+                    (freq_hz, comp_x_car, comp_x_noz, comp_y_car, comp_y_noz, th_ke_share)
+                )
 
         candidates.append(
             {
+                "lam": lam,
+                "full_vec": full_vec,
                 "freq_hz": freq_hz,
                 "dom_axis": dom_axis,
                 "part": part,
@@ -879,9 +1488,12 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
     modes: list[ModeShape] = []
     mode_cks: list[float] = []
+    selected_candidates: list[dict] = []
     fallback_modes: list[ModeShape] = []
     fallback_cks: list[float] = []
+    fallback_candidates: list[dict] = []
     nozzle_twist_freq: float | None = None
+    nozzle_twist_fallback_freq: float | None = None
 
     for c in candidates:
         dom_axis = c["dom_axis"]
@@ -915,15 +1527,23 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         )
 
         if not c["is_isolated_panel_drum"] and not is_pure_vertical_z:
-            if (
-                nozzle_twist_freq is None
-                and has_nozzle
+            is_whip_shape = (
+                has_nozzle
                 and not c["is_bed_z_mode"]
                 and noz_norm > 0.25
                 and noz_norm > 1.25 * max(th_norm, 1e-6)
                 and (part[0] > 0.50 or part[1] > 0.50)
-            ):
-                nozzle_twist_freq = freq_hz
+            )
+            if is_whip_shape:
+                if nozzle_twist_fallback_freq is None:
+                    nozzle_twist_fallback_freq = freq_hz
+                if (
+                    nozzle_twist_freq is None
+                    and float(c["th_ke_share"]) >= 0.18
+                    and float(c["noz_th_diff_norm"]) >= 0.25
+                    and (float(c["frame_ke_share"]) + float(c["bed_ke_share"])) < 0.55
+                ):
+                    nozzle_twist_freq = freq_hz
 
             if len(modes) < k_ret:
                 ms, c_k = _build_mode_shape(
@@ -931,16 +1551,19 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                 )
                 modes.append(ms)
                 mode_cks.append(c_k)
+                selected_candidates.append(c)
         elif len(fallback_modes) < k_ret:
             ms, c_k = _build_mode_shape(
                 c, len(fallback_modes) + 1, dom_axis, excited_axis, noz_norm, th_norm, part
             )
             fallback_modes.append(ms)
             fallback_cks.append(c_k)
+            fallback_candidates.append(c)
 
     if not modes:
         modes = fallback_modes
         mode_cks = fallback_cks
+        selected_candidates = fallback_candidates
 
     c_max = max(mode_cks, default=0.0)
     for m, c_k in zip(modes, mode_cks):
@@ -1032,13 +1655,47 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     _, norm_scanned_x = _receptance_structural_freq_and_psd(receptance_x, fundamental)
     _, norm_scanned_y = _receptance_structural_freq_and_psd(receptance_y, fundamental)
 
-    # Exact signed Rayleigh nozzle-to-carriage compliance amplification ratio
-    ratio_x = max(1.0, abs(sum_comp_x_noz) / max(abs(sum_comp_x_car), 1e-18)) if has_nozzle else 1.0
-    ratio_y = max(1.0, abs(sum_comp_y_noz) / max(abs(sum_comp_y_car), 1e-18)) if has_nozzle else 1.0
+    # Positive-residue, frequency-attenuated nozzle-to-carriage compliance amplification ratio:
+    # avoids signed-residue cancellation from out-of-phase bed modes, prevents high-frequency local
+    # hotend modes from transplanting static compliance down to low frame modes, counts only positive
+    # excess nozzle compliance (c_noz > c_car) so above-resonance anti-phase modes don't falsely stiffen
+    # the nozzle, and smoothly saturates pure-nozzle modes via a C^inf Pade [1/1] bound without cliffs.
+    def _nozzle_amp_ratio(
+        entries: list[tuple[float, float, float]],
+        f_car: float,
+    ) -> float:
+        if not has_nozzle or not entries:
+            return 1.0
+        w_c = 0.0
+        w_n = 0.0
+        for f_k, c_car, c_noz in entries:
+            if c_car <= 0.0 and c_noz <= 0.0:
+                continue
+            c_c = max(c_car, 0.0)
+            c_n = max(c_noz, c_c)
+            att = min(1.0, max(f_car, 1.0) / max(f_k, 1.0))
+            w_c += c_c * att
+            w_n += c_n * att
+        if w_c <= 1e-18:
+            return 1.0
+        raw_ratio = max(1.0, w_n / w_c)
+        excess = raw_ratio - 1.0
+        return 1.0 + excess / (1.0 + excess / 2.6)
+
+    ratio_x = _nozzle_amp_ratio(
+        [(f, ccx, cnx) for f, ccx, cnx, _, _, _ in noz_car_entries], struct_x_car
+    )
+    ratio_y = _nozzle_amp_ratio(
+        [(f, ccy, cny) for f, _, _, ccy, cny, _ in noz_car_entries], struct_y_car
+    )
     struct_x = struct_x_car / math.sqrt(ratio_x)
     struct_y = struct_y_car / math.sqrt(ratio_y)
     if nozzle_twist_freq is None:
-        nozzle_twist_freq = min(struct_x, struct_y)
+        nozzle_twist_freq = (
+            nozzle_twist_fallback_freq
+            if nozzle_twist_fallback_freq is not None
+            else min(struct_x, struct_y)
+        )
 
     belt_x, motor_x, bracket_x, drive_x = _drive_axis_resonances_hz(assembly, "X")
     belt_y, motor_y, bracket_y, drive_y = _drive_axis_resonances_hz(assembly, "Y")
@@ -1075,6 +1732,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     )
 
     limiting = shaper_y if shaper_y.max_accel_mm_s2 <= shaper_x.max_accel_mm_s2 else shaper_x
+    other = shaper_x if limiting.axis == "Y" else shaper_y
     primary_src = limiting.primary_bottleneck
     accel_bottleneck = {
         "limiting_axis": limiting.axis,
@@ -1086,6 +1744,97 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         "y_shares_pct": shaper_y.compliance_share_pct,
         "recommendation": _BOTTLENECK_TIPS.get(primary_src, ""),
     }
+
+    # Per-mode exact root causes (Fox-Kapoor) & axis compliance shares
+    tot_w_x = sum(
+        float(c["rec_x"]) / max(float(c["freq_hz"]) ** 2, 1e-12)
+        for c in candidates
+        if not c["is_isolated_panel_drum"] and float(c["rec_x"]) > 0.0 and float(c["lam"]) > 1.0
+    )
+    tot_w_y = sum(
+        float(c["rec_y"]) / max(float(c["freq_hz"]) ** 2, 1e-12)
+        for c in candidates
+        if not c["is_isolated_panel_drum"] and float(c["rec_y"]) > 0.0 and float(c["lam"]) > 1.0
+    )
+
+    elem_blocks, lumped_blocks = _precompute_modal_element_blocks(assembly, node_idx)
+    mode_energy_data: list[tuple[dict[str, dict], float, dict[str, dict], float, float]] = []
+    for m, c_m in zip(modes, selected_candidates):
+        top_causes, u_groups, u_total, t_groups, t_total = _compute_mode_root_causes(
+            full_vec=c_m["full_vec"],
+            lam=float(c_m["lam"]),
+            freq_hz=m.frequency_hz,
+            elem_blocks=elem_blocks,
+            lumped_blocks=lumped_blocks,
+        )
+        m.top_causes = top_causes
+
+        if c_m["is_isolated_panel_drum"] or float(c_m["lam"]) <= 1.0:
+            raw_x_pct = 0.0
+            raw_y_pct = 0.0
+        else:
+            f2_safe = max(float(c_m["freq_hz"]) ** 2, 1e-12)
+            wx_m = float(c_m["rec_x"]) / f2_safe
+            wy_m = float(c_m["rec_y"]) / f2_safe
+            raw_x_pct = 100.0 * wx_m / tot_w_x if tot_w_x > 1e-24 else 0.0
+            raw_y_pct = 100.0 * wy_m / tot_w_y if tot_w_y > 1e-24 else 0.0
+
+        m.x_axis_share_pct = round(raw_x_pct, 1)
+        m.y_axis_share_pct = round(raw_y_pct, 1)
+        raw_lim_pct = raw_x_pct if limiting.axis == "X" else raw_y_pct
+        m.limiting_axis_share_pct = (
+            m.x_axis_share_pct if limiting.axis == "X" else m.y_axis_share_pct
+        )
+        m.is_limiting_axis_mode = bool(
+            m.limiting_axis_share_pct >= 5.0 or m.excited_axis in (limiting.axis, "XY")
+        )
+        mode_energy_data.append((u_groups, u_total, t_groups, t_total, raw_lim_pct))
+
+    primary_mode: ModeShape | None = None
+    primary_u_groups: dict[str, dict] = {}
+    primary_u_total = 0.0
+    primary_t_groups: dict[str, dict] = {}
+    primary_t_total = 0.0
+    if modes:
+        max_lim_share = max(m.limiting_axis_share_pct for m in modes)
+        if max_lim_share > 0.0:
+            primary_idx = max(
+                range(len(modes)),
+                key=lambda idx: (
+                    modes[idx].limiting_axis_share_pct,
+                    mode_energy_data[idx][4],
+                    -modes[idx].mode_number,
+                ),
+            )
+        else:
+            exact_matches = [
+                idx for idx, m in enumerate(modes) if m.excited_axis == limiting.axis
+            ]
+            xy_matches = [idx for idx, m in enumerate(modes) if m.excited_axis == "XY"]
+            if exact_matches:
+                primary_idx = min(exact_matches, key=lambda idx: modes[idx].mode_number)
+            elif xy_matches:
+                primary_idx = min(xy_matches, key=lambda idx: modes[idx].mode_number)
+            else:
+                primary_idx = 0
+        modes[primary_idx].is_primary_limiting_mode = True
+        primary_mode = modes[primary_idx]
+        primary_u_groups, primary_u_total, primary_t_groups, primary_t_total, _ = mode_energy_data[
+            primary_idx
+        ]
+
+    ratio_lim = ratio_x if limiting.axis == "X" else ratio_y
+    limiting_modal_summary = _build_limiting_modal_summary(
+        assembly=assembly,
+        limiting=limiting,
+        other=other,
+        primary_mode=primary_mode,
+        primary_u_groups=primary_u_groups,
+        primary_u_total=primary_u_total,
+        primary_t_groups=primary_t_groups,
+        primary_t_total=primary_t_total,
+        ratio_lim=ratio_lim,
+    )
 
     return ModalResult(
         fundamental_freq_hz=fundamental,
@@ -1100,4 +1849,5 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         frame_damping_ratio=assembly.frame_damping_ratio,
         accel_bottleneck=accel_bottleneck,
         worst_print_mode_number=worst_print_mode_number,
+        limiting_modal_summary=limiting_modal_summary,
     )
