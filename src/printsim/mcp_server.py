@@ -10,6 +10,11 @@ from typing import Any, Literal
 
 import yaml
 
+from printsim.api.session import (
+    enqueue_command,
+    get_live_session,
+    request_snapshot_capture,
+)
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.bracket_designer import design_and_evaluate_bracket
@@ -497,6 +502,109 @@ TOOLS_SCHEMA = [
             "required": [],
         },
     },
+    {
+        "name": "get_live_studio_state",
+        "description": (
+            "Inspect the user's live PrintSim Web Studio session: active printer YAML/spec, "
+            "UI view mode, selected modal resonance mode detail, static/modal/thermal/sensitivity "
+            "telemetry summary, browser connection status, and latest viewport snapshot metadata."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_yaml": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Include the active PrinterSpec yaml_text in the response (default True)",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "capture_studio_viewport",
+        "description": (
+            "Request live 3D WebGL viewport PNG screenshot capture(s) from the connected "
+            "PrintSim Studio browser (1 frame for static/geometry, 2 frames across modal phase "
+            "for vibrating mode shapes) and wait until saved to disk."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "integer",
+                    "enum": [1, 2],
+                    "default": 2,
+                    "description": "Number of PNG frames to capture (1 or 2; default 2)",
+                },
+                "delay_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5000,
+                    "default": 420,
+                    "description": "Delay in ms between frames when capturing 2 frames (default 420)",
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 30.0,
+                    "default": 5.0,
+                    "description": "Max seconds to wait for the live browser to upload snapshots (default 5.0)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "update_live_studio",
+        "description": (
+            "Push a new YAML spec, dot-path spec overrides applied onto the live session's "
+            "current spec, or UI view/load-case/mode changes directly into the live PrintSim Studio browser."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_text": {
+                    "type": "string",
+                    "description": "Optional replacement PrintSim YAML specification",
+                },
+                "overrides": {
+                    "type": "object",
+                    "description": "Optional dot-path overrides applied to the active live spec (or yaml_text)",
+                },
+                "view_mode": {
+                    "type": "string",
+                    "description": "Optional Studio viewport mode (e.g. 'geometry', 'static', 'modal', 'sensitivity', 'toolpath')",
+                },
+                "selected_mode_idx": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional 0-based modal resonance mode index to inspect",
+                },
+                "fea_load_case": {
+                    "type": "string",
+                    "description": "Optional static FEA load case ('combined', 'x', 'y', 'xy')",
+                },
+                "fea_scale": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "description": "Optional FEA deflection visualization scale multiplier",
+                },
+                "toolhead_rel_pos": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "description": "Optional normalized [rx, ry, rz] toolhead position in 0..1",
+                },
+                "filament_id": {
+                    "type": "string",
+                    "description": "Optional filament material ID (e.g. 'pla', 'abs', 'pa12_cf')",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -940,6 +1048,118 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             material_id=str(args.get("material_id", "ppa_cf_printed")),
         )
         return se.to_dict()
+
+    if name == "get_live_studio_state":
+        include_yaml = bool(args.get("include_yaml", True))
+        session = get_live_session()
+        has_session = bool(
+            session.get("spec")
+            or session.get("simulation_summary")
+            or session.get("last_heartbeat_at")
+            or session.get("updated_at")
+        )
+        if not include_yaml:
+            session.pop("yaml_text", None)
+        session["has_session"] = has_session
+        if not has_session:
+            session["message"] = (
+                "No active or recorded PrintSim Studio session found yet. "
+                "Open the Studio browser UI or run POST /api/simulate first."
+            )
+        return session
+
+    if name == "capture_studio_viewport":
+        frames = int(args.get("frames", 2))
+        delay_ms = int(args.get("delay_ms", 420))
+        timeout_s = float(args.get("timeout_s", 5.0))
+        return request_snapshot_capture(
+            frames=frames,
+            delay_ms=delay_ms,
+            timeout_s=timeout_s,
+        )
+
+    if name == "update_live_studio":
+        validated_spec: PrinterSpec | None = None
+        base_dict: dict[str, Any] | None = None
+
+        raw_yaml = args.get("yaml_text")
+        raw_overrides = args.get("overrides")
+
+        if raw_yaml is not None and str(raw_yaml).strip():
+            parsed = yaml.safe_load(str(raw_yaml))
+            validated_spec = PrinterSpec.model_validate(parsed)
+            base_dict = validated_spec.model_dump(mode="json")
+        elif raw_overrides is not None:
+            live = get_live_session()
+            live_spec = live.get("spec")
+            if isinstance(live_spec, dict):
+                base_dict = live_spec
+            elif live.get("yaml_text"):
+                base_dict = yaml.safe_load(str(live["yaml_text"]))
+            if not isinstance(base_dict, dict):
+                raise ValueError(
+                    "No live Studio spec found to apply overrides to. "
+                    "Provide yaml_text or simulate a printer in Studio first."
+                )
+
+        if raw_overrides is not None:
+            if not isinstance(raw_overrides, dict):
+                raise ValueError("overrides must be a mapping of dot-path keys to values")
+            assert base_dict is not None
+            updated_dict = _apply_dot_overrides(base_dict, raw_overrides)
+            validated_spec = PrinterSpec.model_validate(updated_dict)
+
+        cmd_payload: dict[str, Any] = {}
+        if validated_spec is not None:
+            cmd_payload["spec"] = validated_spec.model_dump(mode="json")
+            cmd_payload["yaml_text"] = validated_spec.to_yaml()
+
+        if args.get("view_mode") is not None:
+            cmd_payload["view_mode"] = str(args["view_mode"])
+        if args.get("selected_mode_idx") is not None:
+            cmd_payload["selected_mode_idx"] = int(args["selected_mode_idx"])
+        if args.get("fea_load_case") is not None:
+            cmd_payload["fea_load_case"] = str(args["fea_load_case"])
+        if args.get("fea_scale") is not None:
+            cmd_payload["fea_scale"] = float(args["fea_scale"])
+        if args.get("filament_id") is not None:
+            cmd_payload["filament_id"] = str(args["filament_id"])
+        if args.get("toolhead_rel_pos") is not None:
+            raw_pos = args["toolhead_rel_pos"]
+            if len(raw_pos) != 3:
+                raise ValueError("toolhead_rel_pos must be a 3-element [rx, ry, rz] list")
+            cmd_payload["toolhead_rel_pos"] = [
+                float(raw_pos[0]),
+                float(raw_pos[1]),
+                float(raw_pos[2]),
+            ]
+
+        if not cmd_payload:
+            raise ValueError(
+                "Provide at least one update field (yaml_text, overrides, view_mode, "
+                "selected_mode_idx, fea_load_case, fea_scale, toolhead_rel_pos, or filament_id)."
+            )
+
+        cmd = enqueue_command("update_state", cmd_payload)
+        live_after = get_live_session()
+        response: dict[str, Any] = {
+            "ok": True,
+            "enqueued": True,
+            "command": cmd,
+            "connected": bool(live_after.get("connected")),
+            "updated_fields": sorted(cmd_payload.keys()),
+        }
+        if validated_spec is not None:
+            response["spec_summary"] = {
+                "name": validated_spec.name,
+                "architecture": validated_spec.architecture,
+                "build_volume_mm": list(validated_spec.kinematics.build_volume_mm),
+                "frame_profile": validated_spec.frame.profile,
+                "x_beam_profile": validated_spec.gantry.x_beam_profile,
+                "bracket_material": validated_spec.gantry.bracket_material,
+                "max_accel_mm_s2": validated_spec.kinematics.max_accel_mm_s2,
+            }
+        return response
 
     raise ValueError(f"Unknown MCP tool: {name}")
 

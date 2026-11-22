@@ -4,11 +4,13 @@ import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
 import {
+  AdjointLens,
   CatalogResponse,
   CompareMode,
   DeepVerifyResponse,
   FeaLoadCase,
   HistorySnapshot,
+  ModalColorMode,
   ParetoOptResponse,
   ParetoPointData,
   PrinterBOMResponse,
@@ -16,11 +18,31 @@ import {
   SimulationResponse,
   SolidFeaEngine,
   SolidFEAResponse,
+  StudioCommand,
+  StudioCommandsResponse,
+  StudioSnapshotPayload,
+  StudioStatePayload,
   TetFEAResponse,
   TopoOptRequestParams,
   TopologyOptResponse,
   ViewMode,
 } from "./types";
+
+function getOrCreateStudioClientId(): string {
+  const storageKey = "printsim_studio_client_id";
+  try {
+    const existing = window.sessionStorage.getItem(storageKey);
+    if (existing && existing.trim().length > 0) return existing;
+    const created =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? `studio-${crypto.randomUUID()}`
+        : `studio-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    window.sessionStorage.setItem(storageKey, created);
+    return created;
+  } catch {
+    return `studio-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
@@ -606,32 +628,53 @@ export default function App() {
   const [selectedModeIdx, setSelectedModeIdx] = useState<number>(0);
   const [feaScale, setFeaScale] = useState<number>(600);
   const [feaLoadCase, setFeaLoadCase] = useState<FeaLoadCase>("xy");
+  const [sensitivityLens, setSensitivityLens] = useState<AdjointLens>("print_impact");
+  const [modalColorMode, setModalColorMode] = useState<ModalColorMode>("relative");
+  const [inspectedPartId, setInspectedPartId] = useState<string | null>(null);
   const [layerLimit, setLayerLimit] = useState<number>(999);
   const [toolheadRelPos, setToolheadRelPos] = useState<[number, number, number]>([0.5, 0.5, 0.5]);
   const [panelMeshN, setPanelMeshN] = useState<number>(2);
   const [showBedWarp, setShowBedWarp] = useState<boolean>(false);
+  const [studioSyncStatus, setStudioSyncStatus] = useState<"connected" | "syncing" | "offline">("syncing");
 
-  // Refs for atomic history capture & stale-request guarding
+  // Refs for atomic history capture, live studio bridge & stale-request guarding
+  const clientIdRef = useRef<string>(getOrCreateStudioClientId());
   const simReqIdRef = useRef<number>(0);
   const paretoReqIdRef = useRef<number>(0);
   const deepVerifyReqIdRef = useRef<number>(0);
   const simRef = useRef<SimulationResponse | null>(null);
   const bomRef = useRef<PrinterBOMResponse | null>(null);
+  const specRef = useRef<PrinterSpecData | null>(null);
+  const gcodeTextRef = useRef<string>("");
+  const viewModeRef = useRef<ViewMode>("assembly");
+  const selectedModeIdxRef = useRef<number>(0);
   const filamentRef = useRef<string>("pla");
   const lastChangeRef = useRef<string | null>(null);
   const catalogRef = useRef<CatalogResponse | null>(null);
   const stockLengthRef = useRef<number>(1000);
   const toolheadRelPosRef = useRef<[number, number, number]>([0.5, 0.5, 0.5]);
   const panelMeshNRef = useRef<number>(2);
+  const viewportCaptureRef = useRef<((frames?: number, delayMs?: number) => Promise<string[]>) | null>(null);
 
   simRef.current = sim;
   bomRef.current = bom;
+  specRef.current = spec;
+  gcodeTextRef.current = gcodeText;
+  viewModeRef.current = viewMode;
+  selectedModeIdxRef.current = selectedModeIdx;
   filamentRef.current = filamentId;
   lastChangeRef.current = lastChangeSummary;
   catalogRef.current = catalog;
   stockLengthRef.current = stockLengthMm;
   toolheadRelPosRef.current = toolheadRelPos;
   panelMeshNRef.current = panelMeshN;
+
+  const handleRegisterCapture = useCallback(
+    (fn: (frames?: number, delayMs?: number) => Promise<string[]>) => {
+      viewportCaptureRef.current = fn;
+    },
+    []
+  );
 
   const prevSnapshot = history.length > 0 ? history[history.length - 1] : null;
   const prevSim = prevSnapshot?.sim ?? null;
@@ -1069,6 +1112,216 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const runSimulateRef = useRef(runSimulate);
+  runSimulateRef.current = runSimulate;
+
+  // Live Studio Session Bridge: debounced state sync -> POST /api/studio/state
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const payload: StudioStatePayload = {
+        client_id: clientIdRef.current,
+        active_preset_id: selectedPreset || null,
+        view_mode: viewMode,
+        selected_mode_idx: selectedModeIdx,
+        fea_load_case: feaLoadCase,
+        fea_scale: feaScale,
+        sensitivity_lens: sensitivityLens,
+        modal_color_mode: modalColorMode,
+        toolhead_rel_pos: toolheadRelPos,
+        filament_id: filamentId,
+        inspected_part_id: inspectedPartId,
+        spec,
+      };
+      setStudioSyncStatus((prev) => (prev === "offline" ? prev : "syncing"));
+      fetch("/api/studio/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then((res) => {
+          if (!cancelled) {
+            setStudioSyncStatus(res.ok ? "connected" : "offline");
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setStudioSyncStatus("offline");
+          }
+        });
+    }, 200);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    selectedPreset,
+    viewMode,
+    selectedModeIdx,
+    feaLoadCase,
+    feaScale,
+    sensitivityLens,
+    modalColorMode,
+    toolheadRelPos,
+    filamentId,
+    inspectedPartId,
+    spec,
+  ]);
+
+  // Live Studio Session Bridge: poll GET /api/studio/commands every 600ms
+  useEffect(() => {
+    let active = true;
+    let inFlight = false;
+
+    const handleStudioCommand = async (cmd: StudioCommand, hasMoreAfter: boolean) => {
+      const clientId = clientIdRef.current;
+      if (cmd.type === "update_state") {
+        if (cmd.view_mode != null) {
+          setViewMode(cmd.view_mode);
+          viewModeRef.current = cmd.view_mode;
+        }
+        if (cmd.selected_mode_idx != null && Number.isFinite(cmd.selected_mode_idx)) {
+          const idx = Math.max(0, Math.round(cmd.selected_mode_idx));
+          setSelectedModeIdx(idx);
+          selectedModeIdxRef.current = idx;
+        }
+        if (cmd.fea_load_case != null) {
+          setFeaLoadCase(cmd.fea_load_case);
+        }
+        if (cmd.fea_scale != null && Number.isFinite(cmd.fea_scale)) {
+          setFeaScale(cmd.fea_scale);
+        }
+        if (cmd.sensitivity_lens != null) {
+          setSensitivityLens(cmd.sensitivity_lens);
+        }
+        if (cmd.modal_color_mode != null) {
+          setModalColorMode(cmd.modal_color_mode);
+        }
+
+        let needsSim = false;
+        let nextSpec = specRef.current;
+        let nextFil = filamentRef.current;
+        let nextPos = toolheadRelPosRef.current;
+
+        if (cmd.filament_id != null) {
+          setFilamentId(cmd.filament_id);
+          filamentRef.current = cmd.filament_id;
+          nextFil = cmd.filament_id;
+          needsSim = true;
+        }
+        if (Array.isArray(cmd.toolhead_rel_pos) && cmd.toolhead_rel_pos.length === 3) {
+          const clamped: [number, number, number] = [
+            Math.max(0.1, Math.min(0.9, Number(cmd.toolhead_rel_pos[0].toFixed(2)))),
+            Math.max(0.1, Math.min(0.9, Number(cmd.toolhead_rel_pos[1].toFixed(2)))),
+            Math.max(0.1, Math.min(0.9, Number(cmd.toolhead_rel_pos[2].toFixed(2)))),
+          ];
+          setToolheadRelPos(clamped);
+          toolheadRelPosRef.current = clamped;
+          nextPos = clamped;
+          needsSim = true;
+        }
+        if (cmd.spec != null) {
+          setSpec(cmd.spec);
+          specRef.current = cmd.spec;
+          setOptMessage(null);
+          nextSpec = cmd.spec;
+          needsSim = true;
+        }
+
+        if (needsSim && nextSpec) {
+          const changeLabel =
+            cmd.spec != null
+              ? `AI Agent: ${describeSpecDiff(simRef.current?.spec ?? null, cmd.spec, catalogRef.current)}`
+              : "AI Agent State Sync";
+          await runSimulateRef.current({ spec: nextSpec }, gcodeTextRef.current, nextFil, {
+            changeLabel,
+            toolheadRelPosOverride: nextPos,
+          });
+        }
+
+        if (active && hasMoreAfter) {
+          // Give React + Three.js a brief tick to commit scene changes before any follow-up capture
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 90));
+        }
+        return;
+      }
+
+      if (cmd.type === "capture_snapshot") {
+        const frames = cmd.frames ?? 2;
+        const delayMs = cmd.delay_ms ?? 420;
+        let dataUrls: string[] = [];
+        try {
+          if (viewportCaptureRef.current) {
+            dataUrls = await viewportCaptureRef.current(frames, delayMs);
+          }
+        } catch {
+          dataUrls = [];
+        }
+        if (!active) return;
+        const snapshotPayload: StudioSnapshotPayload = {
+          command_id: cmd.id,
+          client_id: clientId,
+          view_mode: viewModeRef.current,
+          selected_mode_idx: selectedModeIdxRef.current,
+          frames_base64: dataUrls,
+        };
+        try {
+          await fetch("/api/studio/snapshot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(snapshotPayload),
+          });
+        } catch {
+          // Fail silently on transient network interruption
+        }
+      }
+    };
+
+    const pollCommands = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      try {
+        const clientId = encodeURIComponent(clientIdRef.current);
+        const res = await fetch(`/api/studio/commands?client_id=${clientId}`);
+        if (!active) return;
+        if (!res.ok) {
+          setStudioSyncStatus("offline");
+          return;
+        }
+        const data: StudioCommandsResponse = await res.json();
+        if (!active) return;
+        const commands = Array.isArray(data?.commands) ? data.commands : [];
+        if (commands.length > 0) {
+          setStudioSyncStatus("syncing");
+          for (let i = 0; i < commands.length; i++) {
+            if (!active) break;
+            await handleStudioCommand(commands[i], i < commands.length - 1);
+          }
+        }
+        if (active) {
+          setStudioSyncStatus("connected");
+        }
+      } catch {
+        if (active) {
+          setStudioSyncStatus("offline");
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void pollCommands();
+    }, 600);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   const handleSpecChange = useCallback(
     (next: PrinterSpecData, changeLabel?: string) => {
       const label = changeLabel || describeSpecDiff(spec, next, catalog);
@@ -1375,10 +1628,70 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <style>{`@keyframes studioSyncPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }`}</style>
       <header className="topbar">
         <div className="brand">
           <span className="brand-badge">PrintSim 1.1</span>
           <span>Multiphysics 3D Printer Studio</span>
+          <span
+            title="Live Studio Bridge active — AI agents can inspect & sync this session via PrintSim MCP/API"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 8px",
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+              background:
+                studioSyncStatus === "offline"
+                  ? "rgba(100, 116, 139, 0.16)"
+                  : studioSyncStatus === "syncing"
+                  ? "rgba(56, 189, 248, 0.14)"
+                  : "rgba(34, 197, 94, 0.12)",
+              border:
+                studioSyncStatus === "offline"
+                  ? "1px solid rgba(100, 116, 139, 0.35)"
+                  : studioSyncStatus === "syncing"
+                  ? "1px solid rgba(56, 189, 248, 0.42)"
+                  : "1px solid rgba(34, 197, 94, 0.34)",
+              color:
+                studioSyncStatus === "offline"
+                  ? "var(--muted)"
+                  : studioSyncStatus === "syncing"
+                  ? "var(--accent)"
+                  : "#86efac",
+              userSelect: "none",
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background:
+                  studioSyncStatus === "offline"
+                    ? "#64748b"
+                    : studioSyncStatus === "syncing"
+                    ? "#38bdf8"
+                    : "#22c55e",
+                boxShadow:
+                  studioSyncStatus === "offline"
+                    ? "none"
+                    : studioSyncStatus === "syncing"
+                    ? "0 0 8px rgba(56, 189, 248, 0.9)"
+                    : "0 0 6px rgba(34, 197, 94, 0.75)",
+                animation:
+                  studioSyncStatus === "offline"
+                    ? "none"
+                    : studioSyncStatus === "syncing"
+                    ? "studioSyncPulse 0.85s ease-in-out infinite"
+                    : "studioSyncPulse 2.4s ease-in-out infinite",
+              }}
+            />
+            <span>Agent Sync</span>
+          </span>
           {optMessage && (
             <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
               ✓ {optMessage}
@@ -1489,6 +1802,12 @@ export default function App() {
           onLayerLimitChange={setLayerLimit}
           showBedWarp={showBedWarp}
           onToggleBedWarp={setShowBedWarp}
+          sensitivityLens={sensitivityLens}
+          onSensitivityLensChange={setSensitivityLens}
+          modalColorMode={modalColorMode}
+          onModalColorModeChange={setModalColorMode}
+          onInspectedPartChange={setInspectedPartId}
+          onRegisterCapture={handleRegisterCapture}
         />
 
         <MetricsPanel

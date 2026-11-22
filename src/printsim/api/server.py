@@ -5,14 +5,23 @@ from __future__ import annotations
 import base64
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from printsim.api.session import (
+    enqueue_command,
+    get_live_session,
+    poll_commands,
+    record_simulation,
+    record_ui_state,
+    save_snapshots,
+)
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
@@ -172,6 +181,51 @@ class BracketSuperelementRequest(BaseModel):
     n_modes: int = Field(6, ge=0, le=24)
     fdm_anisotropic: bool = False
     interface_mode: Literal["rbe3", "rbe2"] = "rbe3"
+
+
+class StudioStateUpdate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    client_id: str | None = None
+    active_preset_id: str | None = None
+    view_mode: str | None = None
+    selected_mode_idx: int | None = Field(None, ge=0)
+    fea_load_case: str | None = None
+    fea_scale: float | None = Field(None, ge=0.0)
+    sensitivity_lens: str | None = None
+    modal_color_mode: str | None = None
+    toolhead_rel_pos: tuple[float, float, float] | None = None
+    filament_id: str | None = None
+    inspected_part_id: str | None = None
+    spec: dict[str, Any] | None = None
+    yaml_text: str | None = None
+
+
+class StudioCommandRequest(BaseModel):
+    type: Literal["capture_snapshot", "update_state"]
+    frames: int | None = Field(None, ge=1, le=2)
+    delay_ms: int | None = Field(None, ge=0, le=5000)
+    spec: dict[str, Any] | None = None
+    yaml_text: str | None = None
+    view_mode: str | None = None
+    selected_mode_idx: int | None = Field(None, ge=0)
+    fea_load_case: str | None = None
+    fea_scale: float | None = Field(None, ge=0.0)
+    sensitivity_lens: str | None = None
+    modal_color_mode: str | None = None
+    toolhead_rel_pos: tuple[float, float, float] | None = None
+    filament_id: str | None = None
+    active_preset_id: str | None = None
+    inspected_part_id: str | None = None
+    payload: dict[str, Any] | None = None
+
+
+class StudioSnapshotRequest(BaseModel):
+    command_id: str | None = None
+    client_id: str | None = None
+    view_mode: str | None = None
+    selected_mode_idx: int | None = Field(None, ge=0)
+    frames_base64: list[str] = Field(..., min_length=1)
 
 
 def _resolve_spec(spec: PrinterSpec | None, yaml_text: str | None) -> PrinterSpec:
@@ -356,6 +410,10 @@ def create_app() -> FastAPI:
             payload = report.to_dict(include_toolpath_segments=req.include_toolpath_segments)
             payload["spec"] = spec.model_dump(mode="json")
             payload["yaml_text"] = spec.to_yaml()
+            try:
+                record_simulation(spec, payload, req.toolhead_rel_pos, req.filament_id)
+            except Exception:
+                pass
             return payload
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -612,6 +670,89 @@ def create_app() -> FastAPI:
             media_type="model/stl",
             filename=f"{safe_name or 'printer'}.stl",
         )
+
+    @api.get("/api/studio/state")
+    def get_studio_state() -> dict:
+        return get_live_session()
+
+    @api.post("/api/studio/state")
+    def post_studio_state(req: StudioStateUpdate) -> dict:
+        payload = req.model_dump(exclude_unset=True)
+        updated = record_ui_state(payload)
+        return {"ok": True, "updated_at": updated.get("updated_at")}
+
+    @api.get("/api/studio/commands")
+    def get_studio_commands(client_id: str | None = None) -> dict:
+        commands = poll_commands(client_id=client_id)
+        return {"commands": commands}
+
+    @api.post("/api/studio/command")
+    def post_studio_command(req: StudioCommandRequest) -> dict:
+        cmd_payload: dict[str, Any] = dict(req.payload or {})
+        optional_fields = (
+            "frames",
+            "delay_ms",
+            "spec",
+            "yaml_text",
+            "view_mode",
+            "selected_mode_idx",
+            "fea_load_case",
+            "fea_scale",
+            "sensitivity_lens",
+            "modal_color_mode",
+            "toolhead_rel_pos",
+            "filament_id",
+            "active_preset_id",
+            "inspected_part_id",
+        )
+        for field_name in optional_fields:
+            val = getattr(req, field_name)
+            if val is not None:
+                if field_name == "toolhead_rel_pos":
+                    cmd_payload[field_name] = [float(val[0]), float(val[1]), float(val[2])]
+                else:
+                    cmd_payload[field_name] = val
+
+        if req.type == "capture_snapshot":
+            cmd_payload.setdefault("frames", 2)
+            cmd_payload.setdefault("delay_ms", 420)
+
+        if cmd_payload.get("spec") is not None:
+            try:
+                validated = PrinterSpec.model_validate(cmd_payload["spec"])
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid spec: {exc}") from exc
+            cmd_payload["spec"] = validated.model_dump(mode="json")
+            if not cmd_payload.get("yaml_text"):
+                cmd_payload["yaml_text"] = validated.to_yaml()
+        elif cmd_payload.get("yaml_text"):
+            try:
+                parsed = yaml.safe_load(str(cmd_payload["yaml_text"]))
+                validated = PrinterSpec.model_validate(parsed)
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid yaml_text: {exc}") from exc
+            cmd_payload["spec"] = validated.model_dump(mode="json")
+
+        cmd = enqueue_command(req.type, cmd_payload)
+        return {"ok": True, "command": cmd}
+
+    @api.post("/api/studio/snapshot")
+    def post_studio_snapshot(req: StudioSnapshotRequest) -> dict:
+        try:
+            saved = save_snapshots(
+                frames_base64=req.frames_base64,
+                command_id=req.command_id,
+                client_id=req.client_id,
+                view_mode=req.view_mode,
+                selected_mode_idx=req.selected_mode_idx,
+            )
+            return {
+                "ok": True,
+                "paths": saved["paths"],
+                "latest_snapshots": saved,
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Serve built Vite frontend if present
     web_dist = PROJECT_ROOT / "web" / "dist"

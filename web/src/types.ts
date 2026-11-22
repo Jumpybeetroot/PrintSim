@@ -1127,6 +1127,58 @@ export type FeaLoadCase = "xy" | "x" | "y" | "gravity";
 
 export type CompareMode = "last" | "baseline";
 
+export type ModalColorMode = "relative" | "global";
+
+export interface StudioStatePayload {
+  client_id: string;
+  active_preset_id: string | null;
+  view_mode: ViewMode;
+  selected_mode_idx: number;
+  fea_load_case: FeaLoadCase;
+  fea_scale: number;
+  sensitivity_lens: string;
+  modal_color_mode: string;
+  toolhead_rel_pos: [number, number, number];
+  filament_id: string;
+  inspected_part_id: string | null;
+  spec: PrinterSpecData | null;
+}
+
+export interface StudioCaptureSnapshotCommand {
+  id: string;
+  type: "capture_snapshot";
+  frames?: number;
+  delay_ms?: number;
+}
+
+export interface StudioUpdateStateCommand {
+  id: string;
+  type: "update_state";
+  spec?: PrinterSpecData | null;
+  view_mode?: ViewMode | null;
+  selected_mode_idx?: number | null;
+  fea_load_case?: FeaLoadCase | null;
+  fea_scale?: number | null;
+  toolhead_rel_pos?: [number, number, number] | null;
+  filament_id?: string | null;
+  sensitivity_lens?: AdjointLens | null;
+  modal_color_mode?: ModalColorMode | null;
+}
+
+export type StudioCommand = StudioCaptureSnapshotCommand | StudioUpdateStateCommand;
+
+export interface StudioCommandsResponse {
+  commands: StudioCommand[];
+}
+
+export interface StudioSnapshotPayload {
+  command_id: string;
+  client_id: string;
+  view_mode: ViewMode;
+  selected_mode_idx: number;
+  frames_base64: string[];
+}
+
 export interface HistorySnapshot {
   sim: SimulationResponse;
   bom: PrinterBOMResponse | null;

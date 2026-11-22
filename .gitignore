@@ -25,6 +25,9 @@ web/dist/
 *.vtu
 *.msh
 
+# Live Studio session bridge
+.printsim_session/
+
 # OS / Editor
 .DS_Store
 .vscode/

@@ -7,6 +7,7 @@ import {
   FeaLoadCase,
   FrameFeetType,
   GeometryMember,
+  ModalColorMode,
   ShellPanelGeometryData,
   SimulationResponse,
   SolidFeaEngine,
@@ -161,6 +162,12 @@ interface Props {
   onLayerLimitChange: (l: number) => void;
   showBedWarp?: boolean;
   onToggleBedWarp?: (show: boolean) => void;
+  sensitivityLens?: AdjointLens;
+  onSensitivityLensChange?: (lens: AdjointLens) => void;
+  modalColorMode?: ModalColorMode;
+  onModalColorModeChange?: (mode: ModalColorMode) => void;
+  onInspectedPartChange?: (partId: string | null) => void;
+  onRegisterCapture?: (fn: (frames?: number, delayMs?: number) => Promise<string[]>) => void;
 }
 
 const SCALE = 0.01; // 100 mm = 1 Three.js unit
@@ -1091,14 +1098,38 @@ export const PrinterViewport: React.FC<Props> = ({
   onLayerLimitChange,
   showBedWarp: showBedWarpProp,
   onToggleBedWarp,
+  sensitivityLens: sensitivityLensProp,
+  onSensitivityLensChange,
+  modalColorMode: modalColorModeProp,
+  onModalColorModeChange,
+  onInspectedPartChange,
+  onRegisterCapture,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(true);
-  const [adjointLens, setAdjointLens] = useState<AdjointLens>("print_impact");
-  const [modalColorMode, setModalColorMode] = useState<"relative" | "global">("relative");
+  const [internalAdjointLens, setInternalAdjointLens] = useState<AdjointLens>("print_impact");
+  const [internalModalColorMode, setInternalModalColorMode] = useState<ModalColorMode>("relative");
   const [internalShowBedWarp, setInternalShowBedWarp] = useState<boolean>(false);
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
+
+  const adjointLens = sensitivityLensProp ?? internalAdjointLens;
+  const setAdjointLens = (next: AdjointLens) => {
+    if (onSensitivityLensChange) {
+      onSensitivityLensChange(next);
+    } else {
+      setInternalAdjointLens(next);
+    }
+  };
+
+  const modalColorMode = modalColorModeProp ?? internalModalColorMode;
+  const setModalColorMode = (next: ModalColorMode) => {
+    if (onModalColorModeChange) {
+      onModalColorModeChange(next);
+    } else {
+      setInternalModalColorMode(next);
+    }
+  };
 
   const showBedWarp = showBedWarpProp ?? internalShowBedWarp;
   const setShowBedWarp = (next: boolean) => {
@@ -1108,6 +1139,20 @@ export const PrinterViewport: React.FC<Props> = ({
       setInternalShowBedWarp(next);
     }
   };
+
+  const onRegisterCaptureRef = useRef(onRegisterCapture);
+  onRegisterCaptureRef.current = onRegisterCapture;
+  const captureFnRef = useRef<((frames?: number, delayMs?: number) => Promise<string[]>) | null>(null);
+
+  useEffect(() => {
+    if (onRegisterCapture && captureFnRef.current) {
+      onRegisterCapture(captureFnRef.current);
+    }
+  }, [onRegisterCapture]);
+
+  useEffect(() => {
+    onInspectedPartChange?.(pinnedPart ? pinnedPart.partGroupId || pinnedPart.key : null);
+  }, [pinnedPart, onInspectedPartChange]);
 
   const stateRef = useRef<{
     renderer?: THREE.WebGLRenderer;
@@ -1347,17 +1392,18 @@ export const PrinterViewport: React.FC<Props> = ({
     };
     window.addEventListener("resize", onResize);
 
+    let disposed = false;
     const clock = new THREE.Clock();
+    const captureBgColor = new THREE.Color("#0e1522");
     const tmpPosA = new THREE.Vector3();
     const tmpPosB = new THREE.Vector3();
     const tmpNozV0 = new THREE.Vector3();
     const tmpNozV1 = new THREE.Vector3();
 
-    const animate = () => {
-      stateRef.current.animFrame = requestAnimationFrame(animate);
+    const renderAtTime = (t: number) => {
+      if (disposed) return;
       controls.update();
 
-      const t = clock.getElapsedTime();
       if (stateRef.current.pinnedMesh) {
         const pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
         applyInspectHighlight(stateRef.current.pinnedMesh, "pin", pulse);
@@ -1473,9 +1519,63 @@ export const PrinterViewport: React.FC<Props> = ({
 
       renderer.render(scene, camera);
     };
+
+    const animate = () => {
+      stateRef.current.animFrame = requestAnimationFrame(animate);
+      renderAtTime(clock.getElapsedTime());
+    };
     animate();
 
+    const captureViewport = async (frames = 2, delayMs = 420): Promise<string[]> => {
+      if (disposed) return [];
+      const count = Math.max(1, Math.min(4, Math.round(Number.isFinite(frames) ? frames : 2)));
+      const waitMs = Math.max(0, Math.min(2000, Math.round(Number.isFinite(delayMs) ? delayMs : 420)));
+      const results: string[] = [];
+
+      const isModal = stateRef.current.isModal;
+      let t0 = clock.getElapsedTime();
+      // In modal mode, guarantee crisp peak deformation (avoid zero-crossings) and
+      // deterministic opposite-extreme half-cycle phase stepping even in background tabs.
+      if (isModal && Math.abs(Math.sin(t0 * 7.5)) < 0.65) {
+        const halfCycles = Math.round((t0 * 7.5) / Math.PI - 0.5);
+        t0 = ((halfCycles + 0.5) * Math.PI) / 7.5;
+      }
+      const stepSec = isModal ? Math.PI / 7.5 : waitMs / 1000;
+
+      for (let i = 0; i < count; i++) {
+        if (disposed) break;
+        const tFrame = t0 + i * stepSec;
+        const prevBg = scene.background;
+        scene.background = captureBgColor;
+        renderAtTime(tFrame);
+        try {
+          const dataUrl = renderer.domElement.toDataURL("image/png");
+          if (dataUrl && dataUrl.startsWith("data:image/png")) {
+            results.push(dataUrl);
+          }
+        } catch {
+          // Ignore transient WebGL context errors
+        } finally {
+          scene.background = prevBg;
+        }
+        // Restore live frame immediately so foreground rendering stays seamless
+        renderAtTime(clock.getElapsedTime());
+
+        if (i < count - 1 && waitMs > 0) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, waitMs);
+          });
+        }
+      }
+      return results;
+    };
+
+    captureFnRef.current = captureViewport;
+    onRegisterCaptureRef.current?.(captureViewport);
+
     return () => {
+      disposed = true;
+      captureFnRef.current = null;
       window.removeEventListener("resize", onResize);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);

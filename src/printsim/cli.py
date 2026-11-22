@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from printsim.api.session import get_live_session, request_snapshot_capture
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
 from printsim.geometry import (
@@ -481,6 +482,110 @@ def bom_cmd(
         console.print(f"Saved CSV BOM to [green]{csv_out}[/green]")
     if md_out is not None:
         console.print(f"Saved Markdown BOM to [green]{md_out}[/green]")
+
+
+@app.command("studio-state")
+def studio_state_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON live studio session state"),
+    yaml_out: bool = typer.Option(False, "--yaml", help="Emit only the active live YAML specification"),
+    capture: bool = typer.Option(False, "--capture", help="Request and wait for a live 3D viewport PNG capture"),
+    frames: int = typer.Option(2, "--frames", min=1, max=2, help="Number of snapshot frames to capture (1 or 2)"),
+    delay_ms: int = typer.Option(420, "--delay-ms", min=0, max=5000, help="Delay between 2-frame modal captures (ms)"),
+    timeout: float = typer.Option(5.0, "--timeout", min=0.2, max=30.0, help="Timeout waiting for browser snapshot upload (s)"),
+) -> None:
+    """Inspect the live PrintSim Web Studio session and optionally capture viewport snapshots."""
+    capture_res: dict | None = None
+    if capture:
+        capture_res = request_snapshot_capture(
+            frames=frames,
+            delay_ms=delay_ms,
+            timeout_s=timeout,
+        )
+
+    session = get_live_session()
+
+    if yaml_out:
+        yaml_text = session.get("yaml_text")
+        if not yaml_text:
+            console.print("[yellow]No YAML specification recorded in the live Studio session yet.[/yellow]")
+            raise typer.Exit(code=1)
+        print(str(yaml_text).rstrip())
+        return
+
+    if json_out:
+        out = dict(session)
+        if capture_res is not None:
+            out["capture"] = capture_res
+        print(json.dumps(out, indent=2))
+        return
+
+    conn_badge = "[bold green]CONNECTED[/bold green]" if session.get("connected") else "[bold yellow]OFFLINE[/bold yellow]"
+    printer_name = session.get("printer_name") or "(none)"
+    arch = session.get("architecture") or "-"
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{printer_name}[/bold cyan] ({arch})  |  Browser: {conn_badge}\n"
+            f"View: {session.get('view_mode') or '-'}  |  Mode idx: {session.get('selected_mode_idx')}  |  "
+            f"Load case: {session.get('fea_load_case') or '-'}  |  Filament: {session.get('filament_id') or '-'}\n"
+            f"Preset: {session.get('active_preset_id') or '-'}  |  Session dir: {session.get('session_dir')}",
+            title="PrintSim Live Studio Session",
+        )
+    )
+
+    sim = session.get("simulation_summary")
+    if isinstance(sim, dict):
+        tbl = Table(show_header=True, header_style="bold magenta")
+        tbl.add_column("Subsystem")
+        tbl.add_column("Live Telemetry")
+        scores = sim.get("scores") or {}
+        st = sim.get("static_fea") or {}
+        mod = sim.get("modal_fea") or {}
+        th = sim.get("thermal") or {}
+        sens = sim.get("sensitivity") or {}
+        tbl.add_row(
+            "Scores",
+            f"Composite: {scores.get('composite')} | Struct: {scores.get('structural')} | "
+            f"Dyn: {scores.get('dynamics')} | Therm: {scores.get('thermal')}",
+        )
+        tbl.add_row(
+            "Static FEA",
+            f"Peak defl: {st.get('combined_max_deflection_um')} um | "
+            f"Gravity sag: {st.get('gravity_sag_toolhead_um')} um | "
+            f"Max vM: {st.get('max_von_mises_mpa')} MPa",
+        )
+        tbl.add_row(
+            "Modal & Shaper",
+            f"f1: {mod.get('fundamental_freq_hz')} Hz | "
+            f"Worst mode: #{mod.get('worst_print_mode_number')} | "
+            f"Rec max accel: {mod.get('recommended_max_accel_mm_s2')} mm/s^2",
+        )
+        tbl.add_row(
+            "Thermal",
+            f"Max flow: {th.get('max_volumetric_flow_mm3_s')} mm^3/s ({th.get('limiting_factor')}) | "
+            f"Cold throat: {th.get('cold_throat_temp_c')} C",
+        )
+        tbl.add_row(
+            "Sensitivity",
+            f"Primary hotspot: {sens.get('primary_problem_subsystem')}",
+        )
+        console.print(tbl)
+
+    active_mode = session.get("active_mode_detail")
+    if isinstance(active_mode, dict):
+        console.print(
+            f"\n[bold]Selected Mode #{active_mode.get('mode_number')}[/bold]: "
+            f"{active_mode.get('frequency_hz')} Hz — {active_mode.get('mode_label')} "
+            f"(impact={active_mode.get('print_impact_score')}, area={active_mode.get('dominant_problem_area')})"
+        )
+
+    if capture_res is not None:
+        if capture_res.get("captured"):
+            console.print(f"\n[bold green]Captured viewport PNGs:[/bold green] {capture_res.get('snapshot_paths')}")
+        else:
+            console.print(f"\n[yellow]Capture incomplete:[/yellow] {capture_res.get('message')}")
+    elif isinstance(session.get("latest_snapshots"), dict):
+        snaps = session["latest_snapshots"]
+        console.print(f"\n[bold]Latest Snapshots[/bold] ({snaps.get('captured_at')}): {snaps.get('paths')}")
 
 
 @app.command()
