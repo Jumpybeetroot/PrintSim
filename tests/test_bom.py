@@ -70,11 +70,13 @@ class TestCoreXYBOM:
         assert rail_cuts[0].length_mm == pytest.approx(spec.frame.depth_mm, abs=0.1)
 
         # No virtual panel_shear_* beams leak into cut list:
-        # corner_gussets has only 1 physical brace (b_rl -> g_rr, ~640.0 mm),
-        # whereas panel_shear_* diagonals would be sqrt(460^2 + 500^2) = 679.4 mm
+        # corner_gussets uses corner joint stiffening (0 diagonal rods), while rear_cross adds 2 rear + 1 top diagonal
         brace_cuts = [c for c in bom.cut_list if c.role == "brace"]
-        assert sum(c.quantity for c in brace_cuts) == 1
-        assert all(abs(c.length_mm - 679.4) > 2.0 for c in brace_cuts)
+        assert sum(c.quantity for c in brace_cuts) == 0
+        spec_rc = spec.model_copy(deep=True)
+        spec_rc.frame.bracing = "rear_cross"
+        rc_brace_cuts = [c for c in generate_bom(spec_rc).cut_list if c.role == "brace"]
+        assert sum(c.quantity for c in rc_brace_cuts) == 3
 
     def test_enclosure_panels_toggle(self) -> None:
         spec = _load_example("corexy_voron_style.yaml")

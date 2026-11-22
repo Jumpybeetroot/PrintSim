@@ -864,6 +864,9 @@ def _apply_corner_joint_compliance(
     cj = corner_joint_stiffness(spec.frame.profile, jtype)
     kr_in = cj["k_r_inplane_nm_rad"]
     kr_tor = cj["k_r_torsion_nm_rad"]
+    if spec.frame.bracing == "corner_gussets":
+        kr_in *= 1.50
+        kr_tor *= 1.40
     l_col = max(col_length_m, 0.15)
 
     for member in members:
@@ -1256,7 +1259,7 @@ def _attach_bed_mount_compliance(
             k_normal_n_m=n_pts * k_axial_n_m,
             k_rot_nm_rad=k_rot_nm_rad,
             normal_vec=(0.0, 0.0, 1.0),
-            offset_m=(0.0, 0.0, 0.0),
+            offset_m=(0.0, 0.0, -0.014),
         )
     )
 
@@ -1478,12 +1481,16 @@ def _find_or_split_frame_node(
     members: list[StructuralMember],
     p_target: np.ndarray,
     snap_tol_m: float = 5e-4,
+    allow_gantry: bool = True,
 ) -> str:
     """Locate an existing structural frame/rail node near ``p_target`` or split the spanning beam."""
+    excluded_roles = {"panel", "toolhead", "cog", "nozzle", "bed"}
+    if not allow_gantry:
+        excluded_roles.update(("gantry", "mount"))
     best_id: str | None = None
     best_dist = snap_tol_m
     for n in nodes:
-        if n.role == "panel":
+        if n.role in excluded_roles:
             continue
         dist = float(np.linalg.norm(n.position_m - p_target))
         if dist < best_dist:
@@ -1520,7 +1527,7 @@ def _find_or_split_frame_node(
                 return split_id
 
     # Fallback: closest frame/rail node
-    non_panel = [n for n in nodes if n.role != "panel"]
+    non_panel = [n for n in nodes if n.role not in excluded_roles]
     return min(non_panel, key=lambda n: float(np.linalg.norm(n.position_m - p_target))).id
 
 
@@ -1655,7 +1662,9 @@ def _add_corexy_shell_panels(
                 grid[j, i] = sid
 
                 if i in (0, nx_g) or j in (0, ny_g):
-                    fid = _find_or_split_frame_node(nodes, nmap, members, p_frame)
+                    fid = _find_or_split_frame_node(
+                        nodes, nmap, members, p_frame, allow_gantry=bolted_to_gantry
+                    )
                     ds = 0.0
                     if j in (0, ny_g):
                         ds += (bw / nx_g) * (0.5 if i in (0, nx_g) else 1.0)
@@ -1720,8 +1729,6 @@ def _build_corexy(
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
     u, v, w_rel = np.clip(toolhead_rel_pos, 0.05, 0.95)
 
-    # Gantry plane near top of CoreXY frame
-    z_gantry = h - 0.055
     xy_motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     z_motor_kg = spec.kinematics.z_stepper.motor_mass_g * 1e-3
     bkt_info = GANTRY_BRACKET_CATALOG.get(
@@ -1743,7 +1750,18 @@ def _build_corexy(
     z_drive = spec.bed.z_drive
     if is_flying:
         z_bed = orig_z
+        z_gantry_min = min(z_bed + 0.055, max(h - 0.08, 0.06))
+        z_gantry_max = max(z_gantry_min + 0.02, h - 0.055)
+        z_gantry = float(
+            np.clip(
+                z_bed + 0.055 + w_rel * max(bz - 0.04, 0.05),
+                z_gantry_min,
+                z_gantry_max,
+            )
+        )
     else:
+        # Gantry plane near top of CoreXY frame
+        z_gantry = h - 0.055
         z_min = min(0.08, 0.5 * z_gantry)
         z_max = max(z_min + 0.01, z_gantry - 0.045)
         z_stroke = min(bz, max(z_gantry - 0.14, 0.02))
@@ -1761,22 +1779,66 @@ def _build_corexy(
         StructuralNode("b_fr", np.array([w, 0.0, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="foot"),
         StructuralNode("b_rl", np.array([0.0, d, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="foot"),
         StructuralNode("b_rr", np.array([w, d, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="foot"),
-        # Gantry elevation nodes on the 4 vertical columns
-        StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
-        StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
-        StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
-        StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
-        # Top 4 corners
-        StructuralNode("t_fl", np.array([0.0, 0.0, h]), role="frame"),
-        StructuralNode("t_fr", np.array([w, 0.0, h]), role="frame"),
-        StructuralNode("t_rl", np.array([0.0, d, h]), role="frame"),
-        StructuralNode("t_rr", np.array([w, d, h]), role="frame"),
-        # Moving Y carriages along left/right Y rails
-        StructuralNode("y_car_l", np.array([0.0, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
-        StructuralNode("y_car_r", np.array([w, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
-        # Toolhead node on the X gantry beam
-        StructuralNode("toolhead", np.array([x_tool, y_gantry, z_gantry]), lumped_mass_kg=toolhead_kg, role="toolhead"),
     ]
+    if is_flying:
+        # Voron 2.4 flying gantry: split vertical columns at col_g_* and couple separate
+        # floating gantry corners g_* via 6-DOF Z-belt + MGN rail carriage + GE5C Z-joint springs.
+        y_bed_f = d * 0.14
+        y_bed_r = d * 0.86
+        nodes.extend(
+            [
+                StructuralNode("col_g_fl", np.array([0.0, 0.0, z_gantry]), role="frame"),
+                StructuralNode("col_g_fr", np.array([w, 0.0, z_gantry]), role="frame"),
+                StructuralNode("col_g_rl", np.array([0.0, d, z_gantry]), role="frame"),
+                StructuralNode("col_g_rr", np.array([w, d, z_gantry]), role="frame"),
+                StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role if is_awd else "gantry"),
+                StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role if is_awd else "gantry"),
+                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="gantry"),
+                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="gantry"),
+                StructuralNode("b_bed_fl", np.array([0.0, y_bed_f, 0.0]), role="frame"),
+                StructuralNode("b_bed_rl", np.array([0.0, y_bed_r, 0.0]), role="frame"),
+                StructuralNode("b_bed_fr", np.array([w, y_bed_f, 0.0]), role="frame"),
+                StructuralNode("b_bed_rr", np.array([w, y_bed_r, 0.0]), role="frame"),
+            ]
+        )
+        for tag in ("fl", "fr", "rl", "rr"):
+            fastener_springs.append(
+                FastenerSpring(
+                    id=f"z_joint_{tag}",
+                    bay="z_joint",
+                    shell_node_id=f"col_g_{tag}",
+                    frame_node_id=f"g_{tag}",
+                    k_shear_n_m=1.2e6,
+                    k_normal_n_m=1.8e5,
+                    k_rot_nm_rad=65.0,
+                    normal_vec=(0.0, 0.0, 1.0),
+                    offset_m=(0.0, 0.0, 0.0),
+                )
+            )
+    else:
+        nodes.extend(
+            [
+                # Fixed-gantry elevation nodes directly on the 4 vertical columns
+                StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
+                StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
+                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
+                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
+            ]
+        )
+    nodes.extend(
+        [
+            # Top 4 corners
+            StructuralNode("t_fl", np.array([0.0, 0.0, h]), role="frame"),
+            StructuralNode("t_fr", np.array([w, 0.0, h]), role="frame"),
+            StructuralNode("t_rl", np.array([0.0, d, h]), role="frame"),
+            StructuralNode("t_rr", np.array([w, d, h]), role="frame"),
+            # Moving Y carriages along left/right Y rails
+            StructuralNode("y_car_l", np.array([0.0, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
+            StructuralNode("y_car_r", np.array([w, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
+            # Toolhead node on the X gantry beam
+            StructuralNode("toolhead", np.array([x_tool, y_gantry, z_gantry]), lumped_mass_kg=toolhead_kg, role="toolhead"),
+        ]
+    )
     _attach_bed_mount_compliance(nodes, fastener_springs, spec, bed_center)
 
     y_mid = d * 0.5
@@ -1829,18 +1891,26 @@ def _build_corexy(
         _add_member(members, "base_left_r", "b_left_mid", "b_rl", fp, fm)
         _add_member(members, "base_right_f", "b_fr", "b_right_mid", fp, fm)
         _add_member(members, "base_right_r", "b_right_mid", "b_rr", fp, fm)
+    elif is_flying:
+        _add_member(members, "base_left_f", "b_fl", "b_bed_fl", fp, fm)
+        _add_member(members, "base_left_m", "b_bed_fl", "b_bed_rl", fp, fm)
+        _add_member(members, "base_left_r", "b_bed_rl", "b_rl", fp, fm)
+        _add_member(members, "base_right_f", "b_fr", "b_bed_fr", fp, fm)
+        _add_member(members, "base_right_m", "b_bed_fr", "b_bed_rr", fp, fm)
+        _add_member(members, "base_right_r", "b_bed_rr", "b_rr", fp, fm)
     else:
         _add_member(members, "base_left", "b_fl", "b_rl", fp, fm)
         _add_member(members, "base_right", "b_fr", "b_rr", fp, fm)
 
     # 4 vertical columns split at gantry height (and front columns split at bed height on triple-Z)
     for tag in ("fl", "fr", "rl", "rr"):
+        col_mid = f"col_g_{tag}" if is_flying else f"g_{tag}"
         if z_drive == "leadscrew_triple" and tag in ("fl", "fr"):
             _add_member(members, f"col_{tag}_bot", f"b_{tag}", f"z_bed_{tag}", fp, fm)
-            _add_member(members, f"col_{tag}_mid", f"z_bed_{tag}", f"g_{tag}", fp, fm)
+            _add_member(members, f"col_{tag}_mid", f"z_bed_{tag}", col_mid, fp, fm)
         else:
-            _add_member(members, f"col_{tag}_low", f"b_{tag}", f"g_{tag}", fp, fm)
-        _add_member(members, f"col_{tag}_top", f"g_{tag}", f"t_{tag}", fp, fm)
+            _add_member(members, f"col_{tag}_low", f"b_{tag}", col_mid, fp, fm)
+        _add_member(members, f"col_{tag}_top", col_mid, f"t_{tag}", fp, fm)
 
     # Top perimeter
     _add_member(members, "top_front", "t_fl", "t_fr", fp, fm)
@@ -1935,7 +2005,7 @@ def _build_corexy(
             members.append(
                 StructuralMember(
                     id=f"bed_arm_{tag}",
-                    start_id=f"b_{tag}",
+                    start_id=f"b_bed_{tag}",
                     end_id="bed_frame",
                     profile=bed_arm_prof,
                     material=bed_vmat,
@@ -2089,22 +2159,21 @@ def _build_corexy(
     _add_member(members, "x_gantry_l", "y_car_l", "toolhead", xp, xm, role="gantry")
     _add_member(members, "x_gantry_r", "toolhead", "y_car_r", xp, xm, role="gantry")
 
-    # Bracing strategies
+    # Bracing strategies (corner_gussets stiffens corner joints via _apply_corner_joint_compliance,
+    # reserving full-face diagonal rods strictly for rear_cross and full_truss)
     bracing = spec.frame.bracing
-    if bracing == "corner_gussets":
-        # Small stiffening corner nodes/struts on rear face & top corners
-        _add_member(members, "brace_rear_1", "b_rl", "g_rr", bp, bm, role="brace", is_truss=True)
-    elif bracing == "rear_cross":
+    brace_g = "col_g_" if is_flying else "g_"
+    if bracing == "rear_cross":
         _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
     elif bracing == "full_truss":
         _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_1", "b_fl", "g_rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_2", "b_rl", "g_fl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_1", "b_fr", "g_rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_2", "b_rr", "g_fr", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_left_1", "b_fl", f"{brace_g}rl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_left_2", "b_rl", f"{brace_g}fl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_right_1", "b_fr", f"{brace_g}rr", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_right_2", "b_rr", f"{brace_g}fr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_top_2", "t_fr", "t_rl", bp, bm, role="brace", is_truss=True)
 
@@ -2267,7 +2336,7 @@ def _build_cartesian_bedslinger(
     d = spec.frame.depth_mm * 1e-3
     h = spec.frame.height_mm * 1e-3
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
-    u, _, w_rel = np.clip(toolhead_rel_pos, 0.05, 0.95)
+    u, v_rel, w_rel = np.clip(toolhead_rel_pos, 0.05, 0.95)
 
     y_portal = d * 0.55
     orig_x = (w - bx) * 0.5
@@ -2275,6 +2344,8 @@ def _build_cartesian_bedslinger(
     orig_z = 0.075
     z_gantry = min(h - 0.06, orig_z + w_rel * bz)
     x_tool = orig_x + u * bx
+    # Moving Y-bed slides along base Y rails to position build coord v_rel under stationary nozzle at y_portal
+    y_bed = float(np.clip(y_portal + (0.5 - v_rel) * by, 0.05, max(d - 0.05, 0.06)))
 
     xy_motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     z_motor_kg = spec.kinematics.z_stepper.motor_mass_g * 1e-3
@@ -2291,9 +2362,9 @@ def _build_cartesian_bedslinger(
         StructuralNode("b_fr", np.array([w, 0.0, 0.0]), fixed=True, role="foot"),
         StructuralNode("b_rl", np.array([0.0, d, 0.0]), fixed=True, role="foot"),
         StructuralNode("b_rr", np.array([w, d, 0.0]), fixed=True, role="foot"),
-        # Portal base junctions
-        StructuralNode("p_bl", np.array([0.0, y_portal, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="mount"),
-        StructuralNode("p_br", np.array([w, y_portal, 0.0]), fixed=True, lumped_mass_kg=z_motor_kg, role="mount"),
+        # Portal base junctions (not ground-fixed; transfer portal loads via base rails to feet)
+        StructuralNode("p_bl", np.array([0.0, y_portal, 0.0]), fixed=False, lumped_mass_kg=z_motor_kg, role="mount"),
+        StructuralNode("p_br", np.array([w, y_portal, 0.0]), fixed=False, lumped_mass_kg=z_motor_kg, role="mount"),
         # Z-axis gantry height nodes on vertical uprights
         StructuralNode("z_l", np.array([0.0, y_portal, z_gantry]), lumped_mass_kg=carriage_side_kg + xy_motor_kg, role="gantry"),
         StructuralNode("z_r", np.array([w, y_portal, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
@@ -2332,11 +2403,10 @@ def _build_cartesian_bedslinger(
     _add_member(members, "x_gantry_l", "z_l", "toolhead", xp, xm, role="gantry")
     _add_member(members, "x_gantry_r", "toolhead", "z_r", xp, xm, role="gantry")
 
-    # Portal diagonal braces (huge impact on bedslinger Y-ringing!)
-    if spec.frame.bracing in ("corner_gussets", "rear_cross", "full_truss"):
+    # Portal diagonal braces (corner_gussets only stiffens joints via _apply_corner_joint_compliance)
+    if spec.frame.bracing in ("rear_cross", "full_truss"):
         _add_member(members, "brace_l_rear", "b_rl", "p_tl", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_r_rear", "b_rr", "p_tr", bp, bm, role="brace", is_truss=True)
-    if spec.frame.bracing in ("rear_cross", "full_truss"):
         _add_member(members, "brace_portal_x1", "p_bl", "p_tr", bp, bm, role="brace", is_truss=True)
     if spec.frame.bracing == "full_truss":
         _add_member(members, "brace_l_front", "b_fl", "p_tl", bp, bm, role="brace", is_truss=True)
@@ -2403,13 +2473,13 @@ def _build_cartesian_bedslinger(
     x_moving = toolhead_kg + 0.03
     y_moving = bed_kg + 0.35 + bkt_delta_kg
 
-    # Explicit bedslinger Y-bed node mounted to base frame via Y-rails (stiff X/Z, compliant Y carriage/belt)
-    bed_center = np.array([w * 0.5, d * 0.5, orig_z])
+    # Explicit bedslinger Y-bed node mounted to base frame via Y-rails (split at y_bed)
+    bed_center = np.array([w * 0.5, y_bed, orig_z])
     fastener_springs: list[FastenerSpring] = []
     nodes.extend(
         [
-            StructuralNode("bed_rail_l", np.array([0.0, d * 0.5, orig_z - 0.014]), role="bed"),
-            StructuralNode("bed_rail_r", np.array([w, d * 0.5, orig_z - 0.014]), role="bed"),
+            StructuralNode("bed_rail_l", np.array([0.0, y_bed, orig_z - 0.014]), role="bed"),
+            StructuralNode("bed_rail_r", np.array([w, y_bed, orig_z - 0.014]), role="bed"),
         ]
     )
     _attach_bed_mount_compliance(nodes, fastener_springs, spec, bed_center)
@@ -2508,17 +2578,28 @@ def _build_cartesian_bedslinger(
 def _build_delta(
     spec: PrinterSpec, toolhead_rel_pos: tuple[float, float, float]
 ) -> AssemblyModel:
-    radius = max(spec.frame.width_mm, spec.frame.depth_mm) * 0.5 * 1e-3
+    w = spec.frame.width_mm * 1e-3
+    d = spec.frame.depth_mm * 1e-3
     h = spec.frame.height_mm * 1e-3
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
     _, _, w_rel = np.clip(toolhead_rel_pos, 0.1, 0.8)
 
-    # Center the delta prism around (radius, radius) so coordinates are positive
-    cx, cy = radius, radius
+    r_eff = 0.030  # 30 mm effector rod pivot radius
+    r_car = 0.015  # 15 mm inward carriage rod pivot offset from tower axis
+    r_delta = max(spec.kinematics.delta_radius_mm * 1e-3, 0.04)
+    r_tower = r_delta + r_eff + r_car
+    arm_len = max(spec.kinematics.delta_arm_length_mm * 1e-3, r_delta + 0.03)
+    pair_half_spacing = 0.022  # 44 mm tangential parallel-pair rod spacing
+
+    # Center delta prism around (cx, cy) so coordinates stay positive & honor delta_radius_mm
+    cx = max(r_tower, 0.5 * w)
+    cy = max(r_tower, 0.5 * d)
     angles = [math.radians(90.0), math.radians(210.0), math.radians(330.0)]
-    z_effector = 0.08 + w_rel * min(bz, h * 0.55)
-    arm_len = spec.kinematics.delta_arm_length_mm * 1e-3
-    z_car = min(h - 0.08, z_effector + math.sqrt(max(arm_len**2 - (radius * 0.75) ** 2, 0.01)))
+    dz_car = math.sqrt(max(arm_len**2 - r_delta**2, 1e-4))
+    z_eff_min = 0.06
+    z_eff_max = max(z_eff_min + 0.01, h - 0.05 - dz_car)
+    z_effector = float(np.clip(0.08 + w_rel * min(bz, h * 0.55), z_eff_min, z_eff_max))
+    z_car = min(h - 0.04, z_effector + dz_car)
 
     motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     toolhead_kg = _effective_toolhead_mass_kg(spec)
@@ -2530,11 +2611,21 @@ def _build_delta(
 
     nodes: list[StructuralNode] = []
     for i, ang in enumerate(angles):
-        px = cx + radius * math.cos(ang)
-        py = cy + radius * math.sin(ang)
+        er_x, er_y = math.cos(ang), math.sin(ang)
+        et_x, et_y = -er_y, er_x
+        px = cx + r_tower * er_x
+        py = cy + r_tower * er_y
         nodes.append(StructuralNode(f"b_{i}", np.array([px, py, 0.0]), fixed=True, lumped_mass_kg=motor_kg, role="foot"))
         nodes.append(StructuralNode(f"c_{i}", np.array([px, py, z_car]), lumped_mass_kg=car_kg, role="gantry"))
         nodes.append(StructuralNode(f"t_{i}", np.array([px, py, h]), role="frame"))
+        for side, s_sign in (("a", -1.0), ("b", 1.0)):
+            lat = s_sign * pair_half_spacing
+            cx_p = cx + (r_tower - r_car) * er_x + lat * et_x
+            cy_p = cy + (r_tower - r_car) * er_y + lat * et_y
+            ex_p = cx + r_eff * er_x + lat * et_x
+            ey_p = cy + r_eff * er_y + lat * et_y
+            nodes.append(StructuralNode(f"c_{i}_{side}", np.array([cx_p, cy_p, z_car]), role="gantry"))
+            nodes.append(StructuralNode(f"eff_{i}_{side}", np.array([ex_p, ey_p, z_effector]), role="toolhead"))
 
     nodes.append(StructuralNode("toolhead", np.array([cx, cy, z_effector]), lumped_mass_kg=toolhead_kg, role="toolhead"))
 
@@ -2544,14 +2635,59 @@ def _build_delta(
     bm = spec.frame.brace_material
     members: list[StructuralMember] = []
 
+    eff_link_vmat = _make_bed_virtual_material(get_material("carbon_fiber_tube")).model_copy(
+        update={"youngs_modulus_pa": 120.0e9}
+    )
+    eff_link_prof = ProfileSpec.model_construct(
+        id="delta_rigid_link_profile",
+        name="Delta Rigid Carriage/Effector Link",
+        shape="solid_bar",
+        width_m=0.014,
+        height_m=0.014,
+        area_m2=2.0e-4,
+        iy_m4=3.0e-8,
+        iz_m4=3.0e-8,
+        j_m4=3.0e-8,
+    )
+
     for i in range(3):
         j = (i + 1) % 3
         _add_member(members, f"base_{i}", f"b_{i}", f"b_{j}", fp, fm)
         _add_member(members, f"top_{i}", f"t_{i}", f"t_{j}", fp, fm)
         _add_member(members, f"tower_{i}_low", f"b_{i}", f"c_{i}", fp, fm, role="tower")
         _add_member(members, f"tower_{i}_top", f"c_{i}", f"t_{i}", fp, fm, role="tower")
-        # Carbon delta rods connecting tower carriages to effector
-        _add_member(members, f"arm_{i}", f"c_{i}", "toolhead", "brace_rod_10mm", "carbon_fiber_tube", role="gantry", is_truss=True)
+        for side in ("a", "b"):
+            members.append(
+                StructuralMember(
+                    id=f"car_link_{i}_{side}",
+                    start_id=f"c_{i}",
+                    end_id=f"c_{i}_{side}",
+                    profile=eff_link_prof,
+                    material=eff_link_vmat,
+                    role="toolhead",
+                )
+            )
+            members.append(
+                StructuralMember(
+                    id=f"eff_link_{i}_{side}",
+                    start_id="toolhead",
+                    end_id=f"eff_{i}_{side}",
+                    profile=eff_link_prof,
+                    material=eff_link_vmat,
+                    role="toolhead",
+                )
+            )
+            # Twin parallel carbon delta rods constraining effector X/Y/Z and pitch/roll/yaw
+            _add_member(
+                members,
+                f"arm_{i}_{side}",
+                f"c_{i}_{side}",
+                f"eff_{i}_{side}",
+                "brace_rod_10mm",
+                "carbon_fiber_tube",
+                role="gantry",
+                is_truss=True,
+            )
 
         if spec.frame.bracing in ("rear_cross", "full_truss"):
             _add_member(members, f"brace_{i}_a", f"b_{i}", f"t_{j}", bp, bm, role="brace", is_truss=True)

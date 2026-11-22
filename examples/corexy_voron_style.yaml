@@ -11,12 +11,14 @@ frame:
   brace_profile: brace_rod_10mm
   brace_material: aluminum_6063_t5
   enclosed_panels: true
+  panel_mounting: clip_enclosure
+  panel_material: acrylic_pmma
   panel_thickness_mm: 3.0
 gantry:
   x_beam_profile: extrusion_2020
   x_beam_material: aluminum_6063_t5
   x_rail_profile: mgn12_rail
-  y_rail_profile: mgn12_rail
+  y_rail_profile: mgn9_rail
   rail_material: steel_4140
   dual_x_rails: false
   carriage_mass_g: 145
@@ -35,17 +37,37 @@ kinematics:
   square_corner_velocity_mm_s: 5.0
   input_shaper: auto
   xy_stepper:
+    preset_id: ldo_2504ac
     name: NEMA17-48mm (LDO 2504AC)
     holding_torque_nm: 0.55
     rated_current_a: 2.0
+    run_current_a: 1.2
+    phase_resistance_ohm: 1.2
     inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+  z_stepper:
+    preset_id: ldo_2504ac
+    name: NEMA17-48mm (LDO 2504AC Z-Drive)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.0
+    run_current_a: 1.0
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
     supply_voltage_v: 24.0
     rotor_inertia_kg_m2: 6.8e-6
     motor_mass_g: 340
 toolhead:
+  preset_id: stealthburner
   name: Stealth-Style Direct Drive
   total_mass_g: 380
-  cog_offset_mm: [0, -18, -25]
+  cog_offset_mm: [0, -22, -28]
+  nozzle_offset_mm: [0, -26, -66]
+  mount_material: abs_printed
+  internal_stiffness_n_per_mm: 350.0
   envelope_mm: [68, 74, 95]
   hotend:
     name: Rapido-Class Bi-Metal
@@ -73,5 +95,5 @@ bed:
   plate_material: mic6_aluminum
   plate_thickness_mm: 8.0
   heater_power_w: 650
-  mass_g: 2500
+  mass_g: 2800
   z_drive: belted_quad_z

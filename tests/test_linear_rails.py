@@ -243,12 +243,17 @@ def test_x_rail_mount_orientations_stiffness_sag_twist_and_lever_arm() -> None:
     assert st_bottom.nozzle_twist_angle_mrad < st_front.nozzle_twist_angle_mrad
     assert st_bottom.nozzle_twist_angle_mrad < st_top.nozzle_twist_angle_mrad
 
-    # dual_top_bottom gives highest X-beam Z-bending iy and lowest gravity sag
+    # dual_top_bottom gives highest X-beam Z-bending iy & Z stiffness; on a fixed-gantry (Trident) frame
+    # it also gives lowest gravity sag (on a belted flying gantry the 2nd steel rail's mass stretches Z-belts)
     assert xg_dual.profile.iy_m4 > xg_top.profile.iy_m4
     assert xg_dual.profile.iy_m4 > xg_front.profile.iy_m4
     assert st_dual.toolhead_stiffness_z_n_per_mm > st_top.toolhead_stiffness_z_n_per_mm
     assert st_dual.toolhead_stiffness_z_n_per_mm > st_front.toolhead_stiffness_z_n_per_mm
-    assert st_dual.gravity_sag_toolhead_um < st_top.gravity_sag_toolhead_um
+    s_top_fix = _corexy_spec(x_rail_mount="top")
+    s_top_fix.bed.z_drive = "leadscrew_triple"
+    s_dual_fix = _corexy_spec(x_rail_mount="dual_top_bottom")
+    s_dual_fix.bed.z_drive = "leadscrew_triple"
+    assert solve_static_fea(build_assembly(s_dual_fix)).gravity_sag_toolhead_um < solve_static_fea(build_assembly(s_top_fix)).gravity_sag_toolhead_um
 
     # Clamping edge cases: small Y offset doesn't flip sign on top; small Z drop clamps to >= 10 mm on bottom
     s_clamp = _corexy_spec(x_rail_mount="top")

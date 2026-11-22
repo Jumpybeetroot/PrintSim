@@ -34,17 +34,25 @@ kinematics:
   square_corner_velocity_mm_s: 5.0
   input_shaper: auto
   xy_stepper:
+    preset_id: custom
     name: NEMA17-40mm Standard
     holding_torque_nm: 0.42
     rated_current_a: 1.5
+    run_current_a: 1.0
+    phase_resistance_ohm: 1.6
     inductance_mh: 2.8
+    steps_per_rev: 200
     supply_voltage_v: 24.0
     rotor_inertia_kg_m2: 5.4e-6
     motor_mass_g: 280
 toolhead:
+  preset_id: custom
   name: Standard V6 Direct Drive
   total_mass_g: 460
   cog_offset_mm: [0, -22, -28]
+  nozzle_offset_mm: [0, -24, -68]
+  mount_material: abs_printed
+  internal_stiffness_n_per_mm: 400.0
   envelope_mm: [70, 76, 98]
   hotend:
     name: Classic V6 Aluminum/Stainless
@@ -72,5 +80,5 @@ bed:
   plate_material: aluminum_6061_t6
   plate_thickness_mm: 4.0
   heater_power_w: 240
-  mass_g: 1350
+  mass_g: 1050
   z_drive: leadscrew_dual

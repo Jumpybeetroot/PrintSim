@@ -35,17 +35,25 @@ kinematics:
   square_corner_velocity_mm_s: 8.0
   input_shaper: auto
   xy_stepper:
+    preset_id: custom
     name: NEMA17-60mm 48V High-Speed
     holding_torque_nm: 0.72
     rated_current_a: 2.5
+    run_current_a: 2.0
+    phase_resistance_ohm: 0.75
     inductance_mh: 1.1
+    steps_per_rev: 200
     supply_voltage_v: 48.0
     rotor_inertia_kg_m2: 8.2e-6
     motor_mass_g: 450
 toolhead:
+  preset_id: custom
   name: Ultra-Light CNC/PA12-CF Toolhead
   total_mass_g: 225
   cog_offset_mm: [0, -12, -18]
+  nozzle_offset_mm: [0, -15, -50]
+  mount_material: pa12_cf_printed
+  internal_stiffness_n_per_mm: 800.0
   envelope_mm: [58, 62, 82]
   hotend:
     name: UHF 24mm Plated Copper
@@ -73,5 +81,5 @@ bed:
   plate_material: mic6_aluminum
   plate_thickness_mm: 8.0
   heater_power_w: 750
-  mass_g: 2400
+  mass_g: 2800
   z_drive: leadscrew_triple

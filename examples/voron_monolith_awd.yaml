@@ -16,6 +16,7 @@ frame:
   panel_thickness_mm: 4.0
 gantry:
   drive_mode: awd
+  belt_routing: monolith_short
   double_shear_pulleys: true
   bracket_material: aluminum_6061_t6
   x_beam_profile: cf_tube_20x20x2
@@ -41,12 +42,13 @@ kinematics:
   input_shaper: auto
   xy_stepper:
     preset_id: ldo_2804ah
-    name: LDO 2804AC 48V
+    name: LDO 42STH48-2804AH 48V
     holding_torque_nm: 0.65
-    rated_current_a: 2.5
+    rated_current_a: 2.8
     run_current_a: 2.2
     phase_resistance_ohm: 0.7
     inductance_mh: 0.6
+    steps_per_rev: 200
     supply_voltage_v: 48.0
     rotor_inertia_kg_m2: 6.8e-6
     motor_mass_g: 360
@@ -59,11 +61,13 @@ kinematics:
     rotor_inertia_kg_m2: 5.4e-6
     motor_mass_g: 290
 toolhead:
+  preset_id: archetype_cpap
   name: Monolith / XOL Carbon Direct + CPAP
   total_mass_g: 290
   cog_offset_mm: [0, -12, -14]
   nozzle_offset_mm: [0, -16, -50]
   mount_material: aluminum_6061_t6
+  internal_stiffness_n_per_mm: 1800.0
   envelope_mm: [58, 62, 85]
   hotend:
     name: Rapido 2 UHF / Goliath-Class
@@ -91,5 +95,5 @@ bed:
   plate_material: mic6_aluminum
   plate_thickness_mm: 8.0
   heater_power_w: 650
-  mass_g: 2500
+  mass_g: 2800
   z_drive: leadscrew_triple

@@ -53,6 +53,7 @@ kinematics:
     run_current_a: 2.0
     phase_resistance_ohm: 0.7
     inductance_mh: 0.6
+    steps_per_rev: 200
     supply_voltage_v: 48.0
     rotor_inertia_kg_m2: 6.2e-6
     motor_mass_g: 350
@@ -100,6 +101,6 @@ bed:
   plate_material: atp5_aluminum
   plate_thickness_mm: 10.0
   heater_power_w: 750
-  mass_g: 3100
+  mass_g: 3150
   z_drive: leadscrew_triple
   mount_type: whopping_pochard_kinematic

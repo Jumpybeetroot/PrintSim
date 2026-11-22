@@ -36,17 +36,25 @@ kinematics:
   delta_arm_length_mm: 310
   delta_radius_mm: 165
   xy_stepper:
+    preset_id: ldo_09deg_2504
     name: NEMA17-48mm 0.9deg High-Speed
     holding_torque_nm: 0.58
     rated_current_a: 2.2
+    run_current_a: 1.6
+    phase_resistance_ohm: 1.2
     inductance_mh: 1.4
+    steps_per_rev: 400
     supply_voltage_v: 36.0
     rotor_inertia_kg_m2: 6.8e-6
     motor_mass_g: 360
 toolhead:
+  preset_id: custom
   name: Flying-Extruder Lightweight Effector
   total_mass_g: 195
-  cog_offset_mm: [0, 0, -22]
+  cog_offset_mm: [0, 0, -18]
+  nozzle_offset_mm: [0, 0, -45]
+  mount_material: pa12_cf_printed
+  internal_stiffness_n_per_mm: 800.0
   envelope_mm: [60, 60, 80]
   hotend:
     name: High-Flow Copper Bi-Metal

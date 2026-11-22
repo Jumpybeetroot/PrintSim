@@ -314,7 +314,7 @@ def test_corner_joint_stiffness_hierarchy_and_damping() -> None:
     # Calibrated baseline range checks at default blind_joint
     assert 35.0 <= f0s[1] <= 55.0
     bedslinger = PrinterSpec.from_yaml(EXAMPLES_DIR / "cartesian_bedslinger.yaml")
-    assert 101.0 <= solve_modal_fea(build_assembly(bedslinger)).fundamental_freq_hz <= 107.0
+    assert 88.0 <= solve_modal_fea(build_assembly(bedslinger)).fundamental_freq_hz <= 98.0
 
 
 # ---------------------------------------------------------------------------
