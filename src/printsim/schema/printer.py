@@ -9,7 +9,15 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 Architecture = Literal["corexy", "cartesian_bedslinger", "delta"]
-BracingType = Literal["none", "corner_gussets", "rear_cross", "full_truss"]
+BracingType = Literal[
+    "none",
+    "corner_gussets",
+    "top_cross",
+    "rear_cross",
+    "side_cross",
+    "rear_and_sides",
+    "full_truss",
+]
 PanelMountingType = Literal["none", "clip_enclosure", "bolted_structural"]
 ExtrusionFillingType = Literal[
     "none",
@@ -963,6 +971,10 @@ class FrameSpec(BaseModel):
     enclosed_panels: bool = Field(
         False, description="Whether side/rear/top panels are installed on the frame"
     )
+    top_panel: bool = Field(
+        True,
+        description="Include top enclosure/structural panel on CoreXY frames; disable for open-top or braced-top builds",
+    )
     panel_mounting: PanelMountingType = Field(
         "bolted_structural",
         description="Panel attachment stiffness: none, clip_enclosure (loose), or bolted_structural (shear diaphragm)",
@@ -975,6 +987,16 @@ class FrameSpec(BaseModel):
     bolt_panels_to_gantry: bool = Field(
         True,
         description="On non-flying-gantry CoreXY machines, bolt structural panels directly to fixed Y-rail & rear gantry beams",
+    )
+    gantry_top_clearance_mm: float = Field(
+        55.0,
+        ge=25.0,
+        le=300.0,
+        description="Vertical distance from top frame extrusion down to the XY gantry plane (mm); 55 mm stock Voron, 80-200 mm for tall toolheads or integrated tophat",
+    )
+    trident_backbone: bool = Field(
+        False,
+        description="Clee Trident Backbone (West3D/KB-3D): 3 mm powder-coated mild steel lower-frame plate unifying all 3 Z-motor mounts & stiffening the bottom perimeter (fixed-gantry CoreXY / Voron Trident)",
     )
     extrusion_filling: ExtrusionFillingType = Field(
         "none",

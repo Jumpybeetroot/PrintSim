@@ -72,6 +72,13 @@ function classifyPartGroup(memberId: string, role = ""): PartGroupClassification
   if (mid.startsWith("bed_") || mid.startsWith("z_bed")) {
     return { id: "bed_support", label: "Bed Support & Z Arms", subsystem: "bed" };
   }
+  if (mid.includes("backbone") || mid === "bay_backbone" || mid === "trident_backbone") {
+    return {
+      id: "trident_backbone",
+      label: "Trident Backbone (Clee 3mm Steel)",
+      subsystem: "frame",
+    };
+  }
   if (mid.startsWith("panel_shear_") || mid.startsWith("bay_") || role === "panel") {
     if (mid.includes("left") || mid.includes("right")) {
       return { id: "side_panels", label: "Left & Right Enclosure Panels", subsystem: "frame" };
@@ -3991,13 +3998,14 @@ export const PrinterViewport: React.FC<Props> = ({
           shellGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
           shellGeo.computeVertexNormals();
 
+          const isBackboneBay = bayName === "backbone";
           const shellMat = new THREE.MeshStandardMaterial({
             vertexColors: true,
             transparent: true,
             opacity,
             depthWrite: false,
-            roughness: 0.36,
-            metalness: 0.14,
+            roughness: isBackboneBay ? 0.34 : 0.36,
+            metalness: isBackboneBay ? 0.42 : 0.14,
             side: THREE.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: 1,
@@ -4009,15 +4017,21 @@ export const PrinterViewport: React.FC<Props> = ({
           const bayGrp = classifyPartGroup(`bay_${bayName}`, "panel");
           const baySens = sim.sensitivity?.panel_bay_sensitivities?.[bayName];
           const bayStiff = stiffenById[bayGrp.id] ?? stiffenById[`bay_${bayName}`];
-          const bayLabel = `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
+          const bayLabel = isBackboneBay
+            ? "Trident Backbone (Clee 3mm Steel, MITC4)"
+            : `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
           tagInspectable(shellMesh, {
-            key: `panel:${bayName}`,
+            key: isBackboneBay ? "frame:trident_backbone" : `panel:${bayName}`,
             name: bayLabel,
             subsystem: "frame",
             partGroupId: bayGrp.id,
             role: "panel",
-            material: geom.panels?.material_name ?? sim.spec.frame.panel_material,
-            profile: `${panels[0]?.thickness_mm ?? sim.spec.frame.panel_thickness_mm}mm MITC4 shell`,
+            material: isBackboneBay
+              ? (geom.trident_backbone?.material_name ?? "Powder-Coated Mild Steel")
+              : (geom.panels?.material_name ?? sim.spec.frame.panel_material),
+            profile: isBackboneBay
+              ? `${panels[0]?.thickness_mm ?? geom.trident_backbone?.thickness_mm ?? 3}mm steel plate (MITC4)`
+              : `${panels[0]?.thickness_mm ?? sim.spec.frame.panel_thickness_mm}mm MITC4 shell`,
             complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
             heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
             stressMpa: bayMaxVmMap[bayName] > 0 ? bayMaxVmMap[bayName] : undefined,
@@ -4062,7 +4076,16 @@ export const PrinterViewport: React.FC<Props> = ({
           else panelsByBay.set(p.bay, [p]);
         }
         panelsByBay.forEach((bayPanels, bayName) => {
-          const baseBayOpacity = bayName === "top" ? 0.28 : viewMode === "sensitivity" ? 0.65 : 0.72;
+          const baseBayOpacity =
+            bayName === "top"
+              ? 0.28
+              : bayName === "backbone"
+                ? viewMode === "sensitivity"
+                  ? 0.85
+                  : 0.88
+                : viewMode === "sensitivity"
+                  ? 0.65
+                  : 0.72;
           const bayOpacity = toolheadPunchIn ? baseBayOpacity * 0.14 : baseBayOpacity;
           addShellLayer(bayPanels, bayOpacity, bayName);
         });
@@ -4871,12 +4894,13 @@ export const PrinterViewport: React.FC<Props> = ({
           opacity: (isBoltedStructural ? 0.65 : 0.26) * punchPanelScale,
         });
 
+        const topPanelInstalled =
+          panels.top_panel !== false && sim.spec.frame.top_panel !== false;
+
         const sidePanelGeo = new THREE.BoxGeometry(tScene, spanZ, spanY);
         const rearPanelGeo = new THREE.BoxGeometry(spanX, spanZ, tScene);
-        const topPanelGeo = new THREE.BoxGeometry(spanX, tScene, spanY);
         const sideEdgesGeo = new THREE.EdgesGeometry(sidePanelGeo);
         const rearEdgesGeo = new THREE.EdgesGeometry(rearPanelGeo);
-        const topEdgesGeo = new THREE.EdgesGeometry(topPanelGeo);
 
         // Mount flush on the OUTSIDE face of Left (-X), Right (+X), Rear (+Y CAD = -Z Three.js), and Top (+Z CAD = +Y Three.js) extrusions
         const leftCenter = toThree([0, fd * 0.5, fh * 0.5], cx, cy);
@@ -4905,8 +4929,19 @@ export const PrinterViewport: React.FC<Props> = ({
           { bay: "left", label: "Left Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: leftPos },
           { bay: "right", label: "Right Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: rightPos },
           { bay: "rear", label: "Rear Enclosure Panel", geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos },
-          { bay: "top", label: "Top Enclosure Panel", geo: topPanelGeo, edges: topEdgesGeo, pos: topPos, opacityMul: 0.78 },
         ];
+        if (topPanelInstalled) {
+          const topPanelGeo = new THREE.BoxGeometry(spanX, tScene, spanY);
+          const topEdgesGeo = new THREE.EdgesGeometry(topPanelGeo);
+          panelSpecs.push({
+            bay: "top",
+            label: "Top Enclosure Panel",
+            geo: topPanelGeo,
+            edges: topEdgesGeo,
+            pos: topPos,
+            opacityMul: 0.78,
+          });
+        }
 
         for (const ps of panelSpecs) {
           const wallMat = panelMat.clone();
@@ -5006,7 +5041,9 @@ export const PrinterViewport: React.FC<Props> = ({
           addSideBolts(leftBoltX);
           addSideBolts(rightBoltX);
           addRearBolts(rearBoltZ);
-          addTopBolts(topBoltY);
+          if (topPanelInstalled) {
+            addTopBolts(topBoltY);
+          }
 
           const boltGeo = new THREE.SphereGeometry(0.036, 8, 8);
           const boltMat = new THREE.MeshStandardMaterial({
@@ -5076,6 +5113,185 @@ export const PrinterViewport: React.FC<Props> = ({
             gantryBoltInst.instanceMatrix.needsUpdate = true;
             group.add(gantryBoltInst);
           }
+        }
+      }
+
+      // Trident Backbone by Clee: 3mm laser-cut powder-coated mild steel U/T plate unifying all 3 bottom Z-motor mounts
+      const showTridentBackbone =
+        geom.architecture === "corexy" &&
+        (Boolean(geom.trident_backbone?.active) ||
+          (Boolean(sim.spec.frame.trident_backbone) &&
+            !geom.panels?.is_flying_gantry &&
+            sim.spec.bed.z_drive !== "belted_quad_z"));
+      if (showTridentBackbone) {
+        const [fw, fd] = geom.frame_dims_mm;
+        const frameMember = geom.members.find((m) => m.role === "frame");
+        const extHalfMm = (frameMember?.width_mm ?? 20) * 0.5;
+        const plateThickMm = geom.trident_backbone?.thickness_mm ?? 3.0;
+        const plateThickScene = Math.max(plateThickMm * SCALE, 0.026);
+
+        const xL = -extHalfMm;
+        const xR = fw + extHalfMm;
+        const yF = -extHalfMm;
+        const yB = fd + extHalfMm;
+
+        const spineD = Math.min(Math.max(fd * 0.13, 44), Math.min(68, fd * 0.3));
+        const wingW = Math.min(Math.max(fw * 0.11, 42), Math.min(64, fw * 0.22));
+        const z1PadHalfW = Math.min(
+          Math.max(fw * 0.09, 32),
+          Math.min(46, Math.max(18, fw * 0.5 - wingW - 22))
+        );
+        const z1PadDepth = Math.min(Math.max(fd * 0.065, 20), Math.min(34, fd * 0.16));
+        const frontPadW = Math.min(
+          Math.max(fw * 0.055, 18),
+          Math.min(30, Math.max(8, fw * 0.15))
+        );
+        const frontPadD = Math.min(Math.max(fd * 0.13, 48), Math.min(72, fd * 0.3));
+        const chamfer = Math.min(16, Math.max(6, Math.min(fw, fd) * 0.04));
+
+        // 2D shape in (sx, sy) mapped via rotateX(-PI/2) -> (sx, sz, -sy) matching toThree
+        const sx = (cadX: number) => (cadX - cx) * SCALE;
+        const sy = (cadY: number) => (cadY - cy) * SCALE;
+
+        const bbShape = new THREE.Shape();
+        bbShape.moveTo(sx(xL), sy(yF));
+        bbShape.lineTo(sx(xL + wingW + frontPadW), sy(yF));
+        bbShape.lineTo(sx(xL + wingW + frontPadW), sy(yF + frontPadD - 10));
+        bbShape.lineTo(sx(xL + wingW), sy(yF + frontPadD));
+        bbShape.lineTo(sx(xL + wingW), sy(yB - spineD - chamfer));
+        bbShape.lineTo(sx(xL + wingW + chamfer), sy(yB - spineD));
+        bbShape.lineTo(sx(fw * 0.5 - z1PadHalfW - 8), sy(yB - spineD));
+        bbShape.lineTo(sx(fw * 0.5 - z1PadHalfW), sy(yB - spineD - z1PadDepth));
+        bbShape.lineTo(sx(fw * 0.5 + z1PadHalfW), sy(yB - spineD - z1PadDepth));
+        bbShape.lineTo(sx(fw * 0.5 + z1PadHalfW + 8), sy(yB - spineD));
+        bbShape.lineTo(sx(xR - wingW - chamfer), sy(yB - spineD));
+        bbShape.lineTo(sx(xR - wingW), sy(yB - spineD - chamfer));
+        bbShape.lineTo(sx(xR - wingW), sy(yF + frontPadD));
+        bbShape.lineTo(sx(xR - wingW - frontPadW), sy(yF + frontPadD - 10));
+        bbShape.lineTo(sx(xR - wingW - frontPadW), sy(yF));
+        bbShape.lineTo(sx(xR), sy(yF));
+        bbShape.lineTo(sx(xR), sy(yB));
+        bbShape.lineTo(sx(xL), sy(yB));
+        bbShape.closePath();
+
+        const backboneGeo = new THREE.ExtrudeGeometry(bbShape, {
+          depth: plateThickScene,
+          bevelEnabled: false,
+          curveSegments: 1,
+        });
+        backboneGeo.rotateX(-Math.PI / 2);
+        backboneGeo.computeVertexNormals();
+
+        const plateBaseY = toThree([0, 0, extHalfMm], cx, cy).y;
+        const plateTopY = plateBaseY + plateThickScene;
+
+        const backboneMat = new THREE.MeshStandardMaterial({
+          color: 0x1e2530,
+          metalness: 0.62,
+          roughness: 0.36,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.22 : 1.0,
+        });
+        const backboneMesh = new THREE.Mesh(backboneGeo, backboneMat);
+        backboneMesh.position.y = plateBaseY;
+
+        const bbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["backbone"];
+        const bbStiff = stiffenById["trident_backbone"] ?? stiffenById["bay_backbone"];
+        if (!toolheadPunchIn) {
+          tagInspectable(backboneMesh, {
+            key: "frame:trident_backbone",
+            name: "Trident Backbone (Clee, 3mm Mild Steel)",
+            subsystem: "frame",
+            partGroupId: "trident_backbone",
+            role: "panel",
+            material: geom.trident_backbone?.material_name ?? "Powder-Coated Mild Steel",
+            profile: `${plateThickMm.toFixed(1)}mm laser-cut plate`,
+            complianceSharePct: bbBaySens?.compliance_share_pct ?? bbStiff?.compliance_share_pct,
+            heatScore: bbBaySens ? getLensScore(bbBaySens, adjointLens) : undefined,
+            estHzGain: bbStiff?.est_hz_gain,
+            hzPer100g: bbBaySens?.hz_per_100g,
+            whyItHurts: bbStiff?.why_it_hurts,
+            actionHint: bbStiff?.action_hint,
+          });
+        }
+        group.add(backboneMesh);
+
+        // Crisp metallic edge highlight around the laser-cut steel silhouette
+        const backboneEdgesGeo = new THREE.EdgesGeometry(backboneGeo, 28);
+        const backboneEdgesMat = new THREE.LineBasicMaterial({
+          color: 0x475569,
+          transparent: true,
+          opacity: toolheadPunchIn ? 0.2 : 0.85,
+        });
+        const backboneEdges = new THREE.LineSegments(backboneEdgesGeo, backboneEdgesMat);
+        backboneEdges.position.y = plateBaseY;
+        group.add(backboneEdges);
+
+        // 3 Z-motor mounting pads (Z0 front-left, Z1 rear-center, Z2 front-right) + M5 perimeter bolt heads
+        if (!toolheadPunchIn) {
+          const padCentersMm: Array<[number, number]> =
+            geom.z_leadscrews && geom.z_leadscrews.length > 0
+              ? geom.z_leadscrews.map((zl) => [zl.motor_pos_mm[0], zl.motor_pos_mm[1]])
+              : [
+                  [extHalfMm + 22, extHalfMm + 22],
+                  [fw * 0.5, fd - extHalfMm - 22],
+                  [fw - extHalfMm - 22, extHalfMm + 22],
+                ];
+          const padGeo = new THREE.BoxGeometry(0.46, 0.012, 0.46);
+          const padMat = new THREE.MeshStandardMaterial({
+            color: 0x2b3544,
+            metalness: 0.72,
+            roughness: 0.3,
+          });
+          const padEdgeGeo = new THREE.EdgesGeometry(padGeo);
+          const padEdgeMat = new THREE.LineBasicMaterial({
+            color: 0x64748b,
+            transparent: true,
+            opacity: 0.75,
+          });
+          for (const [pxMm, pyMm] of padCentersMm) {
+            const pPos = toThree([pxMm, pyMm, extHalfMm + plateThickMm], cx, cy);
+            const padMesh = new THREE.Mesh(padGeo, padMat);
+            padMesh.position.set(pPos.x, plateTopY + 0.006, pPos.z);
+            group.add(padMesh);
+            const padEdge = new THREE.LineSegments(padEdgeGeo, padEdgeMat);
+            padEdge.position.copy(padMesh.position);
+            group.add(padEdge);
+          }
+
+          // M5 perimeter bolts along bottom left, right, and rear 2020 extrusion centerlines
+          const bbBoltCoords: THREE.Vector3[] = [];
+          const boltY = plateTopY + 0.014;
+          const p00 = toThree([0, 0, 0], cx, cy);
+          const p11 = toThree([fw, fd, 0], cx, cy);
+          const sideSteps = 5;
+          for (let i = 0; i <= sideSteps; i++) {
+            const t = i / sideSteps;
+            const zAlong = p00.z + t * (p11.z - p00.z);
+            bbBoltCoords.push(new THREE.Vector3(p00.x, boltY, zAlong));
+            bbBoltCoords.push(new THREE.Vector3(p11.x, boltY, zAlong));
+          }
+          const rearSteps = 6;
+          for (let i = 1; i < rearSteps; i++) {
+            const t = i / rearSteps;
+            const xAlong = p00.x + t * (p11.x - p00.x);
+            bbBoltCoords.push(new THREE.Vector3(xAlong, boltY, p11.z));
+          }
+          const bbBoltGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.022, 8);
+          const bbBoltMat = new THREE.MeshStandardMaterial({
+            color: 0xdbe4ee,
+            metalness: 0.86,
+            roughness: 0.24,
+          });
+          const bbBoltInst = new THREE.InstancedMesh(bbBoltGeo, bbBoltMat, bbBoltCoords.length);
+          const bbDummy = new THREE.Object3D();
+          for (let i = 0; i < bbBoltCoords.length; i++) {
+            bbDummy.position.copy(bbBoltCoords[i]);
+            bbDummy.updateMatrix();
+            bbBoltInst.setMatrixAt(i, bbDummy.matrix);
+          }
+          bbBoltInst.instanceMatrix.needsUpdate = true;
+          group.add(bbBoltInst);
         }
       }
     }

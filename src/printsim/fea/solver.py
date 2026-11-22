@@ -56,6 +56,8 @@ def classify_part_group(member_id: str, role: str = "") -> tuple[str, str]:
         return "rear_panel", "Rear Enclosure Panel"
     if mid.startswith("bay_top"):
         return "top_panel", "Top Enclosure Panel"
+    if mid.startswith(("bay_backbone", "backbone")):
+        return "trident_backbone", "Clee Trident Backbone Plate"
     if mid.startswith(
         ("top_", "bot_", "base_", "g_front", "g_rear", "g_left", "g_right", "gantry_rear_bar", "portal_top")
     ):

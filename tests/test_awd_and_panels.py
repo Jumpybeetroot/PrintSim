@@ -60,6 +60,7 @@ def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
     assert len(gdict["shell_panels"]) == 16
     assert gdict["panels"] == {
         "enabled": True,
+        "top_panel": True,
         "mounting": "bolted_structural",
         "material_id": "aluminum_5052_sheet",
         "material_name": pmat.name,

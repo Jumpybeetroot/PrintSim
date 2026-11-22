@@ -505,14 +505,24 @@ export interface PrinterSpecData {
     height_mm: number;
     profile: string;
     material: string;
-    bracing: "none" | "corner_gussets" | "rear_cross" | "full_truss";
+    bracing:
+      | "none"
+      | "corner_gussets"
+      | "top_cross"
+      | "rear_cross"
+      | "side_cross"
+      | "rear_and_sides"
+      | "full_truss";
     brace_profile: string;
     brace_material: string;
     enclosed_panels: boolean;
     panel_mounting: "none" | "clip_enclosure" | "bolted_structural";
     panel_material: string;
     panel_thickness_mm: number;
+    top_panel?: boolean;
     bolt_panels_to_gantry?: boolean;
+    gantry_top_clearance_mm?: number;
+    trident_backbone?: boolean;
     extrusion_filling?: ExtrusionFillingType;
     corner_joint_type?: CornerJointType;
     feet_type?: FrameFeetType;
@@ -1027,12 +1037,24 @@ export interface GeometryData {
     material_name: string;
     thickness_mm: number;
     color_hex: string;
+    top_panel?: boolean;
     bolted_to_gantry?: boolean;
     is_flying_gantry?: boolean;
     effective_shear_gt_kn_mm?: number;
     buckling_factor?: number;
     areal_mass_kg_m2?: number;
     total_panel_mass_kg?: number;
+  };
+  gantry_top_clearance_mm?: number;
+  trident_backbone?: {
+    enabled: boolean;
+    active: boolean;
+    material_name: string;
+    thickness_mm: number;
+    mass_kg: number;
+    cost_usd: number;
+    z_thrust_boost_factor: number;
+    notes: string;
   };
   frame_dims_mm: [number, number, number];
   build_volume_mm: [number, number, number];

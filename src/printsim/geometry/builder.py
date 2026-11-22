@@ -120,6 +120,8 @@ class AssemblyModel:
     toolhead_moving_mass_kg: float = 0.0
     frame_mass_kg: float = 0.0
     panel_mass_kg: float = 0.0
+    backbone_mass_kg: float = 0.0
+    trident_backbone_active: bool = False
     extrusion_fill_mass_kg: float = 0.0
     x_rail_ei_y_boost_pct: float = 0.0
     x_rail_ei_z_boost_pct: float = 0.0
@@ -330,7 +332,11 @@ class AssemblyModel:
         rep_props = self.panel_rep_props
         if panels_active and rep_props is None:
             rep_h_m = (
-                max(self.spec.frame.height_mm * 1e-3 - 0.055, 0.04)
+                max(
+                    self.spec.frame.height_mm * 1e-3
+                    - self.spec.frame.gantry_top_clearance_mm * 1e-3,
+                    0.04,
+                )
                 if self.spec.panels_bolted_to_gantry_effective
                 else self.spec.frame.height_mm * 1e-3
             )
@@ -389,6 +395,7 @@ class AssemblyModel:
             },
             "panels": {
                 "enabled": panels_active,
+                "top_panel": bool(self.spec.frame.top_panel),
                 "mounting": self.spec.frame.panel_mounting if panels_active else "none",
                 "material_id": self.spec.frame.panel_material,
                 "material_name": pmat.name,
@@ -428,6 +435,20 @@ class AssemblyModel:
                 self.spec.frame.depth_mm,
                 self.spec.frame.height_mm,
             ],
+            "gantry_top_clearance_mm": round(float(self.spec.frame.gantry_top_clearance_mm), 1),
+            "trident_backbone": {
+                "enabled": bool(self.spec.frame.trident_backbone),
+                "active": bool(self.trident_backbone_active),
+                "material_name": "3mm Powder-Coated Mild Steel (Clee)",
+                "thickness_mm": 3.0,
+                "mass_kg": round(self.backbone_mass_kg, 3),
+                "cost_usd": 65.0 if self.trident_backbone_active else 0.0,
+                "z_thrust_boost_factor": 2.4 if self.trident_backbone_active else 1.0,
+                "notes": (
+                    "Unified 3mm mild-steel lower plate replacing 3 printed Z-motor mounts; "
+                    "keeps Z0/Z1/Z2 coplanar, eliminates rear-Z sag, and lowers CoG."
+                ),
+            },
             "build_volume_mm": list(self.spec.kinematics.build_volume_mm),
             "build_origin_mm": (self.build_origin_m * 1000.0).tolist(),
             "bed_size_mm": list(self.spec.bed.size_mm),
@@ -1862,7 +1883,7 @@ def _find_or_split_frame_node(
     allow_gantry: bool = True,
 ) -> str:
     """Locate an existing structural frame/rail node near ``p_target`` or split the spanning beam."""
-    excluded_roles = {"panel", "toolhead", "cog", "nozzle", "bed"}
+    excluded_roles = {"panel", "backbone", "toolhead", "cog", "nozzle", "bed"}
     if not allow_gantry:
         excluded_roles.add("gantry")
     best_id: str | None = None
@@ -1946,22 +1967,23 @@ def _add_corexy_shell_panels(
         panel_mat_shell = pmat
 
     if bolted_to_gantry:
-        bays: tuple[tuple[str, str, str, str, str, tuple[float, float, float], float | None], ...] = (
+        bay_list: list[tuple[str, str, str, str, str, tuple[float, float, float], float | None]] = [
             ("rear_low", "b_rl", "b_rr", "g_rl", "g_rr", (0.0, 1.0, 0.0), h),
             ("rear_top", "g_rl", "g_rr", "t_rl", "t_rr", (0.0, 1.0, 0.0), h),
             ("left_low", "b_fl", "b_rl", "g_fl", "g_rl", (-1.0, 0.0, 0.0), h),
             ("left_top", "g_fl", "g_rl", "t_fl", "t_rl", (-1.0, 0.0, 0.0), h),
             ("right_low", "b_fr", "b_rr", "g_fr", "g_rr", (1.0, 0.0, 0.0), h),
             ("right_top", "g_fr", "g_rr", "t_fr", "t_rr", (1.0, 0.0, 0.0), h),
-            ("top", "t_fl", "t_fr", "t_rl", "t_rr", (0.0, 0.0, 1.0), None),
-        )
+        ]
     else:
-        bays = (
+        bay_list = [
             ("rear", "b_rl", "b_rr", "t_rl", "t_rr", (0.0, 1.0, 0.0), None),
             ("left", "b_fl", "b_rl", "t_fl", "t_rl", (-1.0, 0.0, 0.0), None),
             ("right", "b_fr", "b_rr", "t_fr", "t_rr", (1.0, 0.0, 0.0), None),
-            ("top", "t_fl", "t_fr", "t_rl", "t_rr", (0.0, 0.0, 1.0), None),
-        )
+        ]
+    if spec.frame.top_panel:
+        bay_list.append(("top", "t_fl", "t_fr", "t_rl", "t_rr", (0.0, 0.0, 1.0), None))
+    bays = tuple(bay_list)
 
     clamp_eff = (
         0.22
@@ -2119,6 +2141,184 @@ def _add_corexy_shell_panels(
     return shell_elements, fastener_springs, total_panel_mass_kg, rep_panel_props
 
 
+def _add_trident_backbone(
+    spec: PrinterSpec,
+    nodes: list[StructuralNode],
+    nmap: dict[str, StructuralNode],
+    members: list[StructuralMember],
+) -> tuple[list[ShellPanelElement], list[FastenerSpring], float]:
+    """Add Clee Trident Backbone: 3 mm mild-steel lower-frame MITC4 shell & rear Z-wing stiffener."""
+    w = spec.frame.width_mm * 1e-3
+    d = spec.frame.depth_mm * 1e-3
+    t_bb = 0.003
+    e_steel = 205.0e9
+    nu_steel = 0.29
+    rho_steel = 7850.0
+    fill_factor = 0.42
+    membrane_eff = 0.55
+
+    areal_mass = fill_factor * rho_steel * t_bb
+    e_mem_eff = membrane_eff * e_steel * t_bb
+    backbone_mass_kg = w * d * areal_mass
+
+    bb_mat = MaterialSpec(
+        id="mild_steel_powdercoated",
+        name="3mm Powder-Coated Mild Steel (Clee)",
+        youngs_modulus_pa=e_steel,
+        poisson_ratio=nu_steel,
+        density_kg_m3=rho_steel,
+        yield_strength_pa=250.0e6,
+        thermal_conductivity_w_mk=50.0,
+        specific_heat_j_kgk=490.0,
+        thermal_expansion_1_k=12.0e-6,
+        damping_ratio=0.012,
+        cost_per_kg_usd=65.0 / max(backbone_mass_kg, 0.5),
+        color_hex="#232830",
+    )
+
+    frame_prof = get_profile(spec.frame.profile)
+    d_c = 0.5 * frame_prof.height_m + 0.5 * t_bb
+    n_tup = (0.0, 0.0, -1.0)
+    nvec = np.asarray(n_tup, dtype=float)
+    off_nominal = d_c * nvec
+
+    # Stiffen lower perimeter extrusions (especially rear Z-motor wing) via Newmark partial-composite
+    # 3 mm mild-steel bottom flange without adding duplicate mass (mass lives on MITC4 shell).
+    from printsim.fea.components import newmark_rail_composite_gamma
+
+    g_steel = bb_mat.effective_shear_modulus_pa
+    for m in members:
+        if not m.id.startswith("base_"):
+            continue
+        is_rear = m.id.startswith("base_rear")
+        is_x_span = is_rear or m.id.startswith("base_front")
+        span_m = max(w if is_x_span else d, 0.10)
+        w_flange = 0.085 if is_rear else 0.030
+        pitch_m = 0.045 if is_rear else 0.055
+        a_flange = t_bb * w_flange
+        eta_bb = newmark_rail_composite_gamma(
+            e_rail_pa=e_steel,
+            a_rail_m2=a_flange,
+            e_beam_pa=m.material.youngs_modulus_pa,
+            a_beam_m2=m.profile.area_m2,
+            bolt_pitch_m=pitch_m,
+            l_eff_m=span_m,
+            substrate_kind="extrusion",
+        )
+        n_e = e_steel / max(m.material.youngs_modulus_pa, 1e6)
+        n_g_ratio = g_steel / max(m.material.effective_shear_modulus_pa, 1e6)
+        a_ext = m.profile.area_m2
+        n_a = n_e * a_flange
+        i_par = eta_bb * ((a_ext * n_a) / max(a_ext + n_a, 1e-12)) * (d_c**2)
+        i_loc = n_e * (w_flange * (t_bb**3) / 12.0)
+        j_flange = n_g_ratio * (w_flange * (t_bb**3) / 3.0) + (
+            0.50 * i_par if is_rear else 0.20 * i_par
+        )
+        ey, ez = _member_local_axes(nmap[m.start_id].position_m, nmap[m.end_id].position_m)
+        cy = float(np.dot(nvec, ey)) ** 2
+        cz = float(np.dot(nvec, ez)) ** 2
+        d_iy = cz * (i_loc + i_par)
+        d_iz = cy * (i_loc + i_par)
+        m.profile = m.profile.model_copy(
+            update={
+                "iy_m4": m.profile.iy_m4 + d_iy,
+                "iz_m4": m.profile.iz_m4 + d_iz,
+                "j_m4": m.profile.j_m4 + j_flange,
+            }
+        )
+
+    # Bolted M5 steel-to-extrusion Huth CBUSH fastener springs around bottom perimeter (nx=2, ny=2)
+    props = panel_mechanical_properties(bb_mat, t_bb, w, d, "bolted_structural")
+    n_edge_w = max(3.0, round(w / 0.085) + 1.0)
+    k_mount_edge = n_edge_w * (props["k_mount_n_m"] / (0.5 * n_edge_w))
+    k_shear_per_m = k_mount_edge / max(w, 0.04)
+    k_normal_per_m = max(1.0e6, 2.0 * k_shear_per_m)
+    k_rot_per_m = 450.0
+
+    p00 = nmap["b_fl"].position_m
+    p10 = nmap["b_fr"].position_m
+    p01 = nmap["b_rl"].position_m
+    p11 = nmap["b_rr"].position_m
+    bw = float(np.linalg.norm(p10 - p00))
+    bh = float(np.linalg.norm(p01 - p00))
+    nx_g = 2
+    ny_g = 2
+
+    grid = np.empty((ny_g + 1, nx_g + 1), dtype=object)
+    shell_elements: list[ShellPanelElement] = []
+    fastener_springs: list[FastenerSpring] = []
+    for j in range(ny_g + 1):
+        eta = j / ny_g
+        for i in range(nx_g + 1):
+            xi = i / nx_g
+            p_frame = (
+                (1.0 - xi) * (1.0 - eta) * p00
+                + xi * (1.0 - eta) * p10
+                + xi * eta * p11
+                + (1.0 - xi) * eta * p01
+            )
+            p_shell = p_frame + off_nominal
+            sid = f"pan_backbone_{j}_{i}"
+            node = StructuralNode(id=sid, position_m=p_shell, role="backbone")
+            nodes.append(node)
+            nmap[sid] = node
+            grid[j, i] = sid
+
+            if i in (0, nx_g) or j in (0, ny_g):
+                fid = _find_or_split_frame_node(
+                    nodes, nmap, members, p_frame, allow_gantry=False
+                )
+                ds = 0.0
+                if j in (0, ny_g):
+                    ds += (bw / nx_g) * (0.5 if i in (0, nx_g) else 1.0)
+                if i in (0, nx_g):
+                    ds += (bh / ny_g) * (0.5 if j in (0, ny_g) else 1.0)
+                actual_off = p_shell - nmap[fid].position_m
+                fastener_springs.append(
+                    FastenerSpring(
+                        id=f"cbush_backbone_{j}_{i}",
+                        bay="backbone",
+                        shell_node_id=sid,
+                        frame_node_id=fid,
+                        k_shear_n_m=k_shear_per_m * ds,
+                        k_normal_n_m=k_normal_per_m * ds,
+                        k_rot_nm_rad=k_rot_per_m * ds,
+                        normal_vec=n_tup,
+                        offset_m=(
+                            float(actual_off[0]),
+                            float(actual_off[1]),
+                            float(actual_off[2]),
+                        ),
+                    )
+                )
+
+    for j in range(ny_g):
+        for i in range(nx_g):
+            n0 = str(grid[j, i])
+            n1 = str(grid[j, i + 1])
+            n2 = str(grid[j + 1, i + 1])
+            n3 = str(grid[j + 1, i])
+            c3 = np.array([nmap[nid].position_m for nid in (n0, n1, n2, n3)])
+            if float(np.dot(np.cross(c3[2] - c3[0], c3[3] - c3[1]), nvec)) < 0.0:
+                nids = (n0, n3, n2, n1)
+            else:
+                nids = (n0, n1, n2, n3)
+            shell_elements.append(
+                ShellPanelElement(
+                    id=f"shell_backbone_{j}_{i}",
+                    bay="backbone",
+                    node_ids=nids,
+                    material=bb_mat,
+                    thickness_m=t_bb,
+                    areal_mass_kg_m2=areal_mass,
+                    e_mem_h_n_m=e_mem_eff,
+                    normal_vec=n_tup,
+                )
+            )
+
+    return shell_elements, fastener_springs, backbone_mass_kg
+
+
 def _build_corexy(
     spec: PrinterSpec,
     toolhead_rel_pos: tuple[float, float, float],
@@ -2148,11 +2348,13 @@ def _build_corexy(
     x_tool = orig_x + u * bx
 
     is_flying = spec.is_flying_gantry
+    trident_backbone_active = bool(spec.frame.trident_backbone and not is_flying)
     z_drive = spec.bed.z_drive
+    top_clear_m = min(float(spec.frame.gantry_top_clearance_mm) * 1e-3, max(h - 0.16, 0.025))
     if is_flying:
         z_bed = orig_z
         z_gantry_min = min(z_bed + 0.055, max(h - 0.08, 0.06))
-        z_gantry_max = max(z_gantry_min + 0.02, h - 0.055)
+        z_gantry_max = max(z_gantry_min + 0.02, h - top_clear_m)
         z_gantry = float(
             np.clip(
                 z_bed + 0.055 + w_rel * max(bz - 0.04, 0.05),
@@ -2162,7 +2364,7 @@ def _build_corexy(
         )
     else:
         # Gantry plane near top of CoreXY frame
-        z_gantry = h - 0.055
+        z_gantry = h - top_clear_m
         z_min = min(0.08, 0.5 * z_gantry)
         z_max = max(z_min + 0.01, z_gantry - 0.045)
         z_stroke = min(bz, max(z_gantry - 0.14, 0.02))
@@ -2184,6 +2386,8 @@ def _build_corexy(
         k_shaft = e_steel_z * float(z_mech["root_area_m2"]) / l_screw_m
         k_nut = max(float(z_mech["k_nut_n_per_um"]) * 1.0e6, 1.0e5)
         k_thrust = max(float(z_mech["k_thrust_n_per_um"]) * 1.0e6, 1.0e5)
+        if trident_backbone_active:
+            k_thrust *= 2.4
         k_z_drive_col_n_m = 1.0 / (1.0 / k_shaft + 1.0 / k_nut + 1.0 / k_thrust)
 
     # Place Z stepper motor masses on their physical drive nodes per Z architecture
@@ -2586,13 +2790,28 @@ def _build_corexy(
     _add_member(members, "x_gantry_r", "toolhead", "y_car_r", xp, xm, role="gantry")
 
     # Bracing strategies (corner_gussets stiffens corner joints via _apply_corner_joint_compliance,
-    # reserving full-face diagonal rods strictly for rear_cross and full_truss)
+    # reserving full-face diagonal rods for explicit truss/cross modes)
     bracing = spec.frame.bracing
     brace_g = "col_g_" if is_flying else "g_"
-    if bracing == "rear_cross":
+    if bracing == "top_cross":
+        _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_top_2", "t_fr", "t_rl", bp, bm, role="brace", is_truss=True)
+    elif bracing == "rear_cross":
         _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
+    elif bracing == "side_cross":
+        _add_member(members, "brace_left_1", "b_fl", f"{brace_g}rl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_left_2", "b_rl", f"{brace_g}fl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_right_1", "b_fr", f"{brace_g}rr", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_right_2", "b_rr", f"{brace_g}fr", bp, bm, role="brace", is_truss=True)
+    elif bracing == "rear_and_sides":
+        _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_left_1", "b_fl", f"{brace_g}rl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_left_2", "b_rl", f"{brace_g}fl", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_right_1", "b_fr", f"{brace_g}rr", bp, bm, role="brace", is_truss=True)
+        _add_member(members, "brace_right_2", "b_rr", f"{brace_g}fr", bp, bm, role="brace", is_truss=True)
     elif bracing == "full_truss":
         _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
         _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
@@ -2765,13 +2984,24 @@ def _build_corexy(
     _apply_corner_joint_compliance(members, spec, col_length_m=h)
 
     # Enclosure / structural MITC4 shell panels + Huth CBUSH fastener springs across rear, side, and top bays
-    panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
     shell_elements: list[ShellPanelElement] = []
+    backbone_mass_kg = 0.0
+    if trident_backbone_active:
+        bb_shells, bb_springs, backbone_mass_kg = _add_trident_backbone(
+            spec=spec,
+            nodes=nodes,
+            nmap=nmap,
+            members=members,
+        )
+        shell_elements.extend(bb_shells)
+        fastener_springs.extend(bb_springs)
+
+    panels_active, panel_mounting, pmat, panel_t_m = _panel_shear_params(spec)
     total_panel_mass_kg = 0.0
     rep_panel_props: dict[str, float] | None = None
     if panels_active:
         bolted_to_gantry = spec.panels_bolted_to_gantry_effective
-        shell_elements, panel_springs, total_panel_mass_kg, rep_panel_props = (
+        pan_shells, panel_springs, total_panel_mass_kg, rep_panel_props = (
             _add_corexy_shell_panels(
                 spec=spec,
                 nodes=nodes,
@@ -2784,6 +3014,7 @@ def _build_corexy(
                 panel_mesh_n=panel_mesh_n,
             )
         )
+        shell_elements.extend(pan_shells)
         fastener_springs.extend(panel_springs)
 
     # Calculate moving masses (strip composite rail & backer mass from gantry beam before adding x_rail_mass)
@@ -2834,6 +3065,8 @@ def _build_corexy(
         y_carriage_joints_mass_kg=spec.gantry.carriage_mass_g * 1e-3 + bkt_delta_kg,
         toolhead_moving_mass_kg=toolhead_kg,
         panel_mass_kg=total_panel_mass_kg,
+        backbone_mass_kg=backbone_mass_kg,
+        trident_backbone_active=trident_backbone_active,
         x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
         x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,
         y_rail_ei_x_boost_pct=y_rail_ei_x_boost_pct,
@@ -3373,14 +3606,18 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     bed_frame_mass = nmap["bed_frame"].lumped_mass_kg if "bed_frame" in nmap else 0.0
     bed_node_mass = (nmap[model.bed_node_id].lumped_mass_kg if has_bed_node else 0.0) + bed_frame_mass
     model.frame_mass_kg = frame_mass
-    # Shell elements carry their physical panel mass via MITC4 element mass matrices (not node lumps)
-    shell_panel_mass = model.panel_mass_kg if model.shell_elements else 0.0
+    # Shell elements carry their physical panel/backbone mass via MITC4 element mass matrices (not node lumps)
+    shell_panel_mass = (
+        (model.panel_mass_kg + model.backbone_mass_kg) if model.shell_elements else 0.0
+    )
     model.total_mass_kg = (
         frame_mass + lumped_mass + shell_panel_mass + max(bed_mass - bed_node_mass, 0.0)
     )
     if model.panel_mass_kg > 0.0:
         pmat = get_material(model.spec.frame.panel_material)
         cost += model.panel_mass_kg * pmat.cost_per_kg_usd
+    if model.trident_backbone_active:
+        cost += 65.0
     # Add baseline estimate for motors, bed plate, rails, and hotend hardware
     bed_mat = get_material(model.spec.bed.plate_material)
     cost += bed_mass * bed_mat.cost_per_kg_usd + 140.0  # steppers/electronics/hotend baseline

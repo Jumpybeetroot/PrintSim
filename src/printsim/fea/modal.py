@@ -567,6 +567,7 @@ def _precompute_modal_element_blocks(
             "right",
             "rear",
             "top",
+            "backbone",
         ):
             gid, label = _classify_modal_group(f"bay_{bay_prefix}", "panel")
             subsys = "frame"
@@ -654,7 +655,7 @@ def _compute_mode_root_causes(
         share_pct = round(100.0 * u_val / u_norm_denom, 1)
         est_hz = round(0.5 * u_val / denom_fk, 2)
         hz_s = _fmt_hz_gain(est_hz)
-        if gid in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
+        if gid in ("side_panels", "rear_panel", "top_panel", "enclosure_panels", "trident_backbone"):
             detail = f"{share_pct:.0f}% of mode shear/panel flex (+{hz_s} Hz if +50% stiffer)"
         elif gid == "frame_feet":
             detail = f"{share_pct:.0f}% of mode anchor flex (+{hz_s} Hz if +50% stiffer)"
@@ -1146,7 +1147,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
     frame_node_indices = [
         i
         for i, n in enumerate(assembly.nodes)
-        if n.role in ("frame", "mount", "foot", "tower", "brace")
+        if n.role in ("frame", "mount", "foot", "tower", "brace", "backbone")
     ]
     active_frame_indices = [
         i

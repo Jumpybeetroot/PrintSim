@@ -76,10 +76,13 @@ interface Props {
 }
 
 const BRACING_LABELS: Record<PrinterSpecData["frame"]["bracing"], string> = {
-  none: "None",
+  none: "None (Open Frame)",
   corner_gussets: "Corner Gussets",
-  rear_cross: "Rear Cross + Top",
-  full_truss: "Full 3D Truss",
+  top_cross: "Top Frame X-Brace",
+  rear_cross: "Rear X-Brace + Top",
+  side_cross: "Side X-Braces (Left/Right)",
+  rear_and_sides: "Rear + Side X-Braces (Open Top)",
+  full_truss: "Full 3D Truss (All Faces)",
 };
 
 const ARCH_LABELS: Record<PrinterSpecData["architecture"], string> = {
@@ -734,7 +737,8 @@ function formatPanelSummary(frame: PrinterSpecData["frame"]): string {
   if (!frame.enclosed_panels || mounting === "none") return "Open";
   const mat = panelMaterialShort(frame.panel_material || "acrylic_pmma");
   const mnt = PANEL_MOUNTING_SHORT[mounting] ?? mounting;
-  return `${frame.panel_thickness_mm}mm ${mat} (${mnt})`;
+  const topSuffix = frame.top_panel === false ? ", No Top" : "";
+  return `${frame.panel_thickness_mm}mm ${mat} (${mnt}${topSuffix})`;
 }
 
 const CORNER_JOINT_OPTIONS: Array<{ id: CornerJointType; label: string; shortLabel: string }> = [
@@ -1110,6 +1114,11 @@ export const DesignPanel: React.FC<Props> = ({
   );
   const chamberTempTimerRef = useRef<number | null>(null);
 
+  const [gantryClearanceDraft, setGantryClearanceDraft] = useState<number>(
+    Math.round(spec?.frame.gantry_top_clearance_mm ?? 55)
+  );
+  const gantryClearanceTimerRef = useRef<number | null>(null);
+
   const [bedTempDraft, setBedTempDraft] = useState<number>(
     Math.round(spec?.bed.target_temp_c ?? 60)
   );
@@ -1206,6 +1215,12 @@ export const DesignPanel: React.FC<Props> = ({
 
   useEffect(() => {
     if (spec) {
+      setGantryClearanceDraft(Math.round(spec.frame.gantry_top_clearance_mm ?? 55));
+    }
+  }, [spec?.frame.gantry_top_clearance_mm]);
+
+  useEffect(() => {
+    if (spec) {
       setBedTempDraft(Math.round(spec.bed.target_temp_c ?? 60));
     }
   }, [spec?.bed.target_temp_c]);
@@ -1233,6 +1248,8 @@ export const DesignPanel: React.FC<Props> = ({
       if (hotendMountThickTimerRef.current != null)
         window.clearTimeout(hotendMountThickTimerRef.current);
       if (chamberTempTimerRef.current != null) window.clearTimeout(chamberTempTimerRef.current);
+      if (gantryClearanceTimerRef.current != null)
+        window.clearTimeout(gantryClearanceTimerRef.current);
       if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
       if (posTimerRef.current != null) window.clearTimeout(posTimerRef.current);
     };
@@ -1572,6 +1589,32 @@ export const DesignPanel: React.FC<Props> = ({
     chamberTempTimerRef.current = window.setTimeout(() => commitChamberTemp(nextVal), 220);
   };
 
+  const specGantryClearanceMm = Math.round(spec.frame.gantry_top_clearance_mm ?? 55);
+  const commitGantryClearance = (rawVal: number) => {
+    const val = Math.max(25, Math.min(300, Math.round(rawVal)));
+    if (gantryClearanceTimerRef.current != null) {
+      window.clearTimeout(gantryClearanceTimerRef.current);
+      gantryClearanceTimerRef.current = null;
+    }
+    if (val === specGantryClearanceMm) return;
+    update(
+      (d) => {
+        d.frame.gantry_top_clearance_mm = val;
+      },
+      `Top-to-Gantry Clearance: ${specGantryClearanceMm} mm → ${val} mm`
+    );
+  };
+
+  const handleGantryClearanceSliderChange = (nextVal: number) => {
+    setGantryClearanceDraft(nextVal);
+    if (gantryClearanceTimerRef.current != null)
+      window.clearTimeout(gantryClearanceTimerRef.current);
+    gantryClearanceTimerRef.current = window.setTimeout(
+      () => commitGantryClearance(nextVal),
+      220
+    );
+  };
+
   const specBedTempC = Math.round(spec.bed.target_temp_c ?? 60);
   const commitBedTemp = (rawVal: number) => {
     const val = Math.max(25, Math.min(130, Math.round(rawVal)));
@@ -1706,6 +1749,9 @@ export const DesignPanel: React.FC<Props> = ({
   const currentPanelThickness = spec.frame.panel_thickness_mm || 3;
   const isFlyingGantry = spec.bed.z_drive === "belted_quad_z";
   const boltPanelsToGantry = spec.frame.bolt_panels_to_gantry ?? true;
+  const topPanelInstalled = spec.frame.top_panel ?? true;
+  const tridentBackboneEnabled = Boolean(spec.frame.trident_backbone);
+  const simBackbone = sim?.geometry.trident_backbone ?? null;
   const thicknessChoices = PANEL_THICKNESS_OPTIONS.includes(currentPanelThickness)
     ? PANEL_THICKNESS_OPTIONS
     : [...PANEL_THICKNESS_OPTIONS, currentPanelThickness].sort((a, b) => a - b);
@@ -2088,6 +2134,57 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               </div>
 
+              {spec.architecture === "corexy" && (
+                <div className="slider-row">
+                  <label>
+                    <span>Top-to-Gantry Clearance (mm)</span>
+                    <span className="tension-readout">
+                      <strong>{gantryClearanceDraft} mm</strong>
+                      <span className="kpi-sub">
+                        {gantryClearanceDraft < 50
+                          ? "compact"
+                          : gantryClearanceDraft <= 60
+                            ? "stock"
+                            : `+${gantryClearanceDraft - 55} mm tophat`}
+                      </span>
+                    </span>
+                  </label>
+                  <div className="tension-control-row">
+                    <input
+                      type="range"
+                      min={25}
+                      max={250}
+                      step={5}
+                      value={Math.max(25, Math.min(250, gantryClearanceDraft))}
+                      onChange={(e) => handleGantryClearanceSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitGantryClearance(gantryClearanceDraft)}
+                      onKeyUp={() => commitGantryClearance(gantryClearanceDraft)}
+                    />
+                    <input
+                      type="number"
+                      className="tension-num-input"
+                      min={25}
+                      max={300}
+                      step={5}
+                      value={gantryClearanceDraft}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        setGantryClearanceDraft(v);
+                        if (v >= 25 && v <= 300) commitGantryClearance(v);
+                      }}
+                      onBlur={() => commitGantryClearance(gantryClearanceDraft)}
+                    />
+                  </div>
+                  {showHints && (
+                    <div className="hint-line">
+                      Adds headroom above the gantry for tall toolheads, umbilicals, or a tophat
+                      while lengthening the upper frame columns.
+                    </div>
+                  )}
+                </div>
+              )}
+
               {showHints && (
                 <div className="hint-line">Cuts frame wobble &amp; ghosting dramatically for low cost</div>
               )}
@@ -2108,10 +2205,72 @@ export const DesignPanel: React.FC<Props> = ({
                 >
                   <option value="none">None (Open Frame)</option>
                   <option value="corner_gussets">Corner Gussets</option>
-                  <option value="rear_cross">Rear Cross + Top</option>
-                  <option value="full_truss">Full 3D Truss</option>
+                  <option value="top_cross">Top Frame X-Brace</option>
+                  <option value="rear_cross">Rear X-Brace + Top</option>
+                  <option value="side_cross">Side X-Braces (Left/Right)</option>
+                  <option value="rear_and_sides">Rear + Side X-Braces (Open Top)</option>
+                  <option value="full_truss">Full 3D Truss (All Faces)</option>
                 </select>
               </div>
+
+              {spec.architecture === "corexy" && (
+                <div className="gantry-bolt-block">
+                  {isFlyingGantry ? (
+                    <>
+                      <label className="checkbox-row disabled">
+                        <input type="checkbox" checked={false} disabled />
+                        <span>Trident Backbone (Clee — 3mm Steel)</span>
+                      </label>
+                      <div className="hint-line warn">
+                        Designed for fixed-gantry Voron Trident (replaces 3 bottom Z-motor mounts);
+                        unavailable on flying gantry.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={tridentBackboneEnabled}
+                          onChange={(e) => {
+                            const nextVal = e.target.checked;
+                            update(
+                              (d) => {
+                                d.frame.trident_backbone = nextVal;
+                              },
+                              nextVal
+                                ? "Trident Backbone (Clee): Off → Installed (3mm Steel)"
+                                : "Trident Backbone (Clee): Installed → Off"
+                            );
+                          }}
+                        />
+                        <span>Trident Backbone (Clee — 3mm Mild Steel)</span>
+                      </label>
+                      {tridentBackboneEnabled && (
+                        <div className="inline-readout-strip">
+                          <strong>
+                            +{(simBackbone?.mass_kg ?? 1.9).toFixed(2)} kg steel
+                          </strong>
+                          <span>·</span>
+                          <span>{(simBackbone?.thickness_mm ?? 3).toFixed(0)}mm plate</span>
+                          <span>·</span>
+                          <span style={{ color: "var(--accent)" }}>
+                            {(simBackbone?.z_thrust_boost_factor ?? 2.4).toFixed(1)}× Z-mount stiffness
+                          </span>
+                          <span>·</span>
+                          <span>+${Math.round(simBackbone?.cost_usd ?? 65)}</span>
+                        </div>
+                      )}
+                      {showHints && (
+                        <div className="hint-line">
+                          West3D / Clee 3mm laser-cut powder-coated mild steel plate unifying all 3
+                          bottom Z-motor mounts across the lower frame perimeter.
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               <details className="sub-accordion">
                 <summary>
@@ -2231,6 +2390,7 @@ export const DesignPanel: React.FC<Props> = ({
                   {panelsEnabled && (
                     <span className="sub-block-tag">
                       {currentPanelThickness}mm {panelMaterialShort(currentPanelMaterial)}
+                      {spec.architecture === "corexy" && !topPanelInstalled ? " · No Top" : ""}
                     </span>
                   )}
                 </div>
@@ -2330,6 +2490,27 @@ export const DesignPanel: React.FC<Props> = ({
                       </select>
                     </div>
                   </div>
+                )}
+
+                {spec.architecture === "corexy" && panelsEnabled && (
+                  <label className="checkbox-row" style={{ marginTop: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={topPanelInstalled}
+                      onChange={(e) => {
+                        const nextVal = e.target.checked;
+                        update(
+                          (d) => {
+                            d.frame.top_panel = nextVal;
+                          },
+                          nextVal
+                            ? "Top Panel: Open Top → Installed"
+                            : "Top Panel: Installed → Open Top"
+                        );
+                      }}
+                    />
+                    <span>Include Top Panel</span>
+                  </label>
                 )}
 
                 {spec.architecture === "corexy" &&

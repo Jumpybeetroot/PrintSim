@@ -217,6 +217,8 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
             return "Main limit: toolhead mount stiffness, carriage pitch compliance, and CoG/nozzle lever arm."
         if role == "rail" or group_id == "y_axis_rail_beams":
             return "Main limit: Y-rail beam & carriage lateral/torsional stiffness along the gantry load path."
+        if group_id == "trident_backbone":
+            return "Main limit: lower-frame mild-steel backbone plate shear/bending stiffness and perimeter M5 bolting."
         if role == "panel" or group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
             return "Main limit: outer frame shear-panel in-plane stiffness and panel-to-frame coupling."
         if role == "brace" or group_id == "frame_bracing":
@@ -267,6 +269,12 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
 
     if group_id == "delta_arms":
         return "Main limit: diagonal delta arm axial/buckling stiffness and effector inertia."
+
+    if group_id == "trident_backbone":
+        return (
+            "Main limit: 3 mm mild-steel lower-frame backbone plate shear/flexural continuity "
+            "and M5 perimeter bolting into the Z-motor mounts."
+        )
 
     if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels") or role == "panel":
         if not spec.frame.enclosed_panels or spec.frame.panel_mounting != "bolted_structural":
@@ -335,6 +343,8 @@ def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
                 f"Carries {comp_pct:.0f}% of nozzle-to-bed flex via carriage pitch & nozzle overhang "
                 f"(+{est_hz_gain:.1f} Hz potential)"
             )
+        if group_id == "trident_backbone":
+            return f"Acts as a 3 mm mild-steel lower-frame diaphragm carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
         if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
             return f"Acts as a structural shear diaphragm carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
         return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex & boosts structural resonance (+{est_hz_gain:.1f} Hz potential)"
