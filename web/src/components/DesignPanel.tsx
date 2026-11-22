@@ -1035,7 +1035,7 @@ export const DesignPanel: React.FC<Props> = ({
   loading,
 }) => {
   const [tab, setTab] = useState<"params" | "part_fea" | "yaml" | "gcode">("params");
-  const [showHints, setShowHints] = useState<boolean>(true);
+  const [showHints, setShowHints] = useState<boolean>(false);
   const [feaEngine, setFeaEngine] = useState<SolidFeaEngine>("tet10");
   const [partPreset, setPartPreset] = useState<string>("corner_gusset");
   const [partMat, setPartMat] = useState<string>("pa12_cf_printed");
@@ -1783,7 +1783,6 @@ export const DesignPanel: React.FC<Props> = ({
         ...LINEAR_RAIL_PROFILES,
         { id: currentYRailProfile, label: profileLabel(currentYRailProfile), shortLabel: railProfileShort(currentYRailProfile) },
       ];
-  const simLinearRails = sim?.geometry.linear_rails;
 
   const partFeaMaterials = (() => {
     const existingIds = new Set(catalog.materials.map((m) => m.id));
@@ -2093,115 +2092,138 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="hint-line">Cuts frame wobble &amp; ghosting dramatically for low cost</div>
               )}
 
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Bracing</label>
-                  <select
-                    value={spec.frame.bracing}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as PrinterSpecData["frame"]["bracing"];
-                      update(
-                        (d) => {
-                          d.frame.bracing = nextVal;
-                        },
-                        `Bracing: ${BRACING_LABELS[spec.frame.bracing]} → ${BRACING_LABELS[nextVal]}`
-                      );
-                    }}
-                  >
-                    <option value="none">None (Open Frame)</option>
-                    <option value="corner_gussets">Corner Gussets</option>
-                    <option value="rear_cross">Rear Cross + Top</option>
-                    <option value="full_truss">Full 3D Truss</option>
-                  </select>
-                </div>
-                <div className="field-row">
-                  <label>Corner Joint Type</label>
-                  <select
-                    value={currentCornerJoint}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as CornerJointType;
-                      const prevLbl =
-                        CORNER_JOINT_OPTIONS.find((o) => o.id === currentCornerJoint)?.shortLabel ??
-                        currentCornerJoint;
-                      const nextLbl =
-                        CORNER_JOINT_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                      update(
-                        (d) => {
-                          d.frame.corner_joint_type = nextVal;
-                        },
-                        `Corner Joint: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {CORNER_JOINT_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
               <div className="field-row">
-                <label>
-                  <span>Extrusion Cavity Filling</span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: currentFillingId !== "none" ? "var(--accent)" : "var(--muted)", fontWeight: 600 }}>
-                    <span
-                      className="swatch-dot"
-                      style={{ background: selectedFilling.color_hex }}
-                    />
-                    {selectedFilling.short_name}
-                  </span>
-                </label>
+                <label>Bracing</label>
                 <select
-                  value={currentFillingId}
+                  value={spec.frame.bracing}
                   onChange={(e) => {
-                    const nextId = e.target.value as ExtrusionFillingType;
-                    const nextItem =
-                      extrusionFillings.find((f) => f.id === nextId) ?? extrusionFillings[0];
+                    const nextVal = e.target.value as PrinterSpecData["frame"]["bracing"];
                     update(
                       (d) => {
-                        d.frame.extrusion_filling = nextId;
+                        d.frame.bracing = nextVal;
                       },
-                      `Extrusion Fill: ${selectedFilling.short_name} → ${nextItem.short_name}`
+                      `Bracing: ${BRACING_LABELS[spec.frame.bracing]} → ${BRACING_LABELS[nextVal]}`
                     );
                   }}
                 >
-                  {extrusionFillings.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
+                  <option value="none">None (Open Frame)</option>
+                  <option value="corner_gussets">Corner Gussets</option>
+                  <option value="rear_cross">Rear Cross + Top</option>
+                  <option value="full_truss">Full 3D Truss</option>
                 </select>
-                <div className="inline-readout-strip">
-                  {currentFillingId === "none" ? (
-                    <>
-                      <span>Hollow extrusion</span>
-                      <span>·</span>
-                      <span>ζ = {fillingDampingRatio.toFixed(3)}</span>
-                      <span>·</span>
-                      <span>Base stiffness</span>
-                    </>
-                  ) : (
-                    <>
-                      <strong>+{fillingAddedMassKg.toFixed(2)} kg fill</strong>
-                      <span>·</span>
-                      <span>ζ = {fillingDampingRatio.toFixed(3)}</span>
-                      <span>·</span>
-                      <span style={{ color: selectedFilling.bonded ? "var(--accent)" : "var(--green)" }}>
-                        {selectedFilling.bonded ? "Bonded +EI" : "Granular Damping"}
-                      </span>
-                    </>
-                  )}
-                </div>
-                {showHints && (
-                  <div className="hint-line">
-                    Fillings apply to stationary frame extrusions only (never the moving X-beam).
-                    Epoxy granite &amp; UHPC bond to cavity walls (+EI + damping); sand &amp; lead shot
-                    damp resonance without raising moving mass.
-                  </div>
-                )}
               </div>
+
+              <details className="sub-accordion">
+                <summary>
+                  <span>Advanced Frame (Joints &amp; Cavity Fill)</span>
+                  <span className="sub-accordion-tag">
+                    {CORNER_JOINT_OPTIONS.find((o) => o.id === currentCornerJoint)?.shortLabel ??
+                      currentCornerJoint}{" "}
+                    · {selectedFilling.short_name}
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  <div className="field-row">
+                    <label>Corner Joint Type</label>
+                    <select
+                      value={currentCornerJoint}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as CornerJointType;
+                        const prevLbl =
+                          CORNER_JOINT_OPTIONS.find((o) => o.id === currentCornerJoint)?.shortLabel ??
+                          currentCornerJoint;
+                        const nextLbl =
+                          CORNER_JOINT_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                        update(
+                          (d) => {
+                            d.frame.corner_joint_type = nextVal;
+                          },
+                          `Corner Joint: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {CORNER_JOINT_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="field-row">
+                    <label>
+                      <span>Extrusion Cavity Filling</span>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          color: currentFillingId !== "none" ? "var(--accent)" : "var(--muted)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        <span
+                          className="swatch-dot"
+                          style={{ background: selectedFilling.color_hex }}
+                        />
+                        {selectedFilling.short_name}
+                      </span>
+                    </label>
+                    <select
+                      value={currentFillingId}
+                      onChange={(e) => {
+                        const nextId = e.target.value as ExtrusionFillingType;
+                        const nextItem =
+                          extrusionFillings.find((f) => f.id === nextId) ?? extrusionFillings[0];
+                        update(
+                          (d) => {
+                            d.frame.extrusion_filling = nextId;
+                          },
+                          `Extrusion Fill: ${selectedFilling.short_name} → ${nextItem.short_name}`
+                        );
+                      }}
+                    >
+                      {extrusionFillings.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="inline-readout-strip">
+                      {currentFillingId === "none" ? (
+                        <>
+                          <span>Hollow extrusion</span>
+                          <span>·</span>
+                          <span>ζ = {fillingDampingRatio.toFixed(3)}</span>
+                          <span>·</span>
+                          <span>Base stiffness</span>
+                        </>
+                      ) : (
+                        <>
+                          <strong>+{fillingAddedMassKg.toFixed(2)} kg fill</strong>
+                          <span>·</span>
+                          <span>ζ = {fillingDampingRatio.toFixed(3)}</span>
+                          <span>·</span>
+                          <span
+                            style={{
+                              color: selectedFilling.bonded ? "var(--accent)" : "var(--green)",
+                            }}
+                          >
+                            {selectedFilling.bonded ? "Bonded +EI" : "Granular Damping"}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {showHints && (
+                      <div className="hint-line">
+                        Fillings apply to stationary frame extrusions only (never the moving X-beam).
+                        Epoxy granite &amp; UHPC bond to cavity walls (+EI + damping); sand &amp;
+                        lead shot damp resonance without raising moving mass.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </details>
 
               <div className="sub-block">
                 <div className="sub-block-title">
@@ -2406,178 +2428,66 @@ export const DesignPanel: React.FC<Props> = ({
             </div>
 
             <div className="section-card">
-              <div className="section-title">Gantry, Belts &amp; Kinematics</div>
+              <div className="section-title">
+                <span>Gantry, Belts &amp; Kinematics</span>
+                {simMassSummary && (
+                  <span className="sub-block-tag" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    X {Math.round(simMassSummary.x_moving_mass_g)}g / Y{" "}
+                    {Math.round(simMassSummary.y_moving_mass_g)}g
+                  </span>
+                )}
+              </div>
 
               {spec.architecture === "corexy" && (
-                <div className="sub-block">
-                  <div className="sub-block-title">
-                    <span>XY Drive System</span>
-                    <span className="sub-block-tag">
+                <div className="field-row">
+                  <label>
+                    <span>XY Drive Mode</span>
+                    <span style={{ color: "var(--accent)", fontWeight: 600 }}>
                       {driveMode === "awd" ? "4 Motors (AWD)" : "2 Motors (2WD)"}
                     </span>
+                  </label>
+                  <div className="engine-toggle">
+                    <button
+                      type="button"
+                      className={`engine-toggle-btn ${driveMode === "2wd" ? "active" : ""}`}
+                      onClick={() => {
+                        if (driveMode === "2wd") return;
+                        update(
+                          (d) => {
+                            d.gantry.drive_mode = "2wd";
+                          },
+                          "Drive Mode: AWD (4-Motor) → 2WD (2-Motor)"
+                        );
+                      }}
+                    >
+                      2WD CoreXY
+                      <span className="engine-toggle-sub">2 Motors</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`engine-toggle-btn ${driveMode === "awd" ? "active" : ""}`}
+                      onClick={() => {
+                        if (driveMode === "awd") return;
+                        update(
+                          (d) => {
+                            d.gantry.drive_mode = "awd";
+                          },
+                          "Drive Mode: 2WD → AWD (4-Motor)"
+                        );
+                      }}
+                    >
+                      AWD CoreXY
+                      <span className="engine-toggle-sub">4 Motors</span>
+                    </button>
                   </div>
-
                   {showHints && (
                     <div className="hint-line">
-                      AWD adds 2 front XY motors for 2× torque &amp; half belt span; double-shear bearings
-                      prevent pulley shaft bending under high tension.
+                      AWD adds 2 front XY motors for 2× torque &amp; half belt span; double-shear
+                      bearings prevent pulley shaft bending under high tension.
                     </div>
                   )}
-
-                  <div className="field-row">
-                    <label>Drive Mode</label>
-                    <div className="engine-toggle">
-                      <button
-                        type="button"
-                        className={`engine-toggle-btn ${driveMode === "2wd" ? "active" : ""}`}
-                        onClick={() => {
-                          if (driveMode === "2wd") return;
-                          update(
-                            (d) => {
-                              d.gantry.drive_mode = "2wd";
-                            },
-                            "Drive Mode: AWD (4-Motor) → 2WD (2-Motor)"
-                          );
-                        }}
-                      >
-                        2WD CoreXY
-                        <span className="engine-toggle-sub">2 Motors</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`engine-toggle-btn ${driveMode === "awd" ? "active" : ""}`}
-                        onClick={() => {
-                          if (driveMode === "awd") return;
-                          update(
-                            (d) => {
-                              d.gantry.drive_mode = "awd";
-                            },
-                            "Drive Mode: 2WD → AWD (4-Motor)"
-                          );
-                        }}
-                      >
-                        AWD CoreXY
-                        <span className="engine-toggle-sub">4 Motors</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="field-row">
-                    <label>Pulley Mounts</label>
-                    <div className="engine-toggle">
-                      <button
-                        type="button"
-                        className={`engine-toggle-btn ${!doubleShearPulleys ? "active" : ""}`}
-                        onClick={() => {
-                          if (!doubleShearPulleys) return;
-                          update(
-                            (d) => {
-                              d.gantry.double_shear_pulleys = false;
-                            },
-                            "Pulley Mounts: Double-Shear → Single-Shear"
-                          );
-                        }}
-                      >
-                        Single-Shear
-                        <span className="engine-toggle-sub">Standard</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`engine-toggle-btn ${doubleShearPulleys ? "active" : ""}`}
-                        onClick={() => {
-                          if (doubleShearPulleys) return;
-                          update(
-                            (d) => {
-                              d.gantry.double_shear_pulleys = true;
-                            },
-                            "Pulley Mounts: Single-Shear → Double-Shear"
-                          );
-                        }}
-                      >
-                        Double-Shear
-                        <span className="engine-toggle-sub">Bearings</span>
-                      </button>
-                    </div>
-                  </div>
                 </div>
               )}
-
-              <div className="sub-block">
-                <div className="sub-block-title">
-                  <span>Gantry Brackets &amp; Motor Mounts</span>
-                  <span
-                    className={`sub-block-tag ${
-                      bracketCreepRisk ? "danger" : selectedBracket.cnc_machined ? "ok" : ""
-                    }`}
-                  >
-                    <span
-                      className="swatch-dot"
-                      style={{ background: selectedBracket.color_hex, marginRight: 4 }}
-                    />
-                    {selectedBracket.short_name}
-                  </span>
-                </div>
-
-                {showHints && (
-                  <div className="hint-line">
-                    Motor mounts &amp; XY joints flex in series with belts. Printed ABS creeps above
-                    ~45 N belt tension in heated chambers; annealed PPA-CF/PPS-CF or CNC aluminum
-                    prevent creep &amp; sharpen resonance.
-                  </div>
-                )}
-
-                <div className="field-row">
-                  <label>Bracket Material</label>
-                  <select
-                    value={currentBracketId}
-                    onChange={(e) => {
-                      const nextId = e.target.value as BracketMaterialType;
-                      const nextItem =
-                        gantryBrackets.find((b) => b.id === nextId) ?? gantryBrackets[0];
-                      update(
-                        (d) => {
-                          d.gantry.bracket_material = nextId;
-                        },
-                        `Gantry Brackets: ${selectedBracket.short_name} → ${nextItem.short_name}`
-                      );
-                    }}
-                  >
-                    {gantryBrackets.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="bracket-readout-row">
-                  <div className="inline-readout-strip">
-                    {simBracketStiffness != null && (
-                      <>
-                        <strong>{Math.round(simBracketStiffness)} N/mm</strong>
-                        <span>·</span>
-                      </>
-                    )}
-                    <span>{Math.round(selectedBracket.hdt_c)}°C HDT</span>
-                    <span>·</span>
-                    <span>{Math.round(selectedBracket.creep_tension_limit_n)} N limit</span>
-                  </div>
-                  <div className="bracket-pill-row">
-                    {bracketCreepRisk ? (
-                      <span className="badge-pill bad">Creep Risk</span>
-                    ) : selectedBracket.cnc_machined ? (
-                      <span className="badge-pill ok">CNC Rigid</span>
-                    ) : (
-                      <span className="badge-pill ok">No Creep</span>
-                    )}
-                    <span className="bracket-mass-note">
-                      {selectedBracket.carriage_mass_delta_g > 0
-                        ? `+${Math.round(selectedBracket.carriage_mass_delta_g)}g moving`
-                        : "Base Y-carriage mass"}
-                    </span>
-                  </div>
-                </div>
-              </div>
 
               {showHints && (
                 <div className="hint-line">Lighter X-beam = faster Y acceleration &amp; less ringing</div>
@@ -2636,516 +2546,8 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="sub-block">
-                <div className="sub-block-title">
-                  <span>Y-Gantry Moving Hardware &amp; Weight Class</span>
-                  <span className="sub-block-tag">
-                    {matchedWeightClass ? matchedWeightClass.short_name : "Custom"} ·{" "}
-                    {Math.round(carriageMassDraft)}g
-                  </span>
-                </div>
-
-                {showHints && (
-                  <div className="hint-line">
-                    {matchedWeightClass?.notes ??
-                      "Combined mass of XY-joint blocks, idler hardware & Y-rail carriages moving on Y."}
-                  </div>
-                )}
-
-                <div className="field-row">
-                  <label>Weight Class Preset</label>
-                  <select
-                    value={matchedWeightClass ? matchedWeightClass.id : "__custom__"}
-                    onChange={(e) => {
-                      const nextId = e.target.value;
-                      if (nextId === "__custom__") return;
-                      const cls = gantryWeightClasses.find((c) => c.id === nextId);
-                      if (!cls) return;
-                      if (carriageMassTimerRef.current != null) {
-                        window.clearTimeout(carriageMassTimerRef.current);
-                        carriageMassTimerRef.current = null;
-                      }
-                      setCarriageMassDraft(Math.round(cls.carriage_mass_g));
-                      const nextBracketValid = gantryBrackets.some(
-                        (b) => b.id === cls.suggested_bracket_material
-                      );
-                      update(
-                        (d) => {
-                          d.gantry.carriage_mass_g = cls.carriage_mass_g;
-                          if (nextBracketValid) {
-                            d.gantry.bracket_material =
-                              cls.suggested_bracket_material as BracketMaterialType;
-                          }
-                        },
-                        `Y-Gantry Weight Class: ${matchedWeightClass ? matchedWeightClass.short_name : `Custom (${Math.round(spec.gantry.carriage_mass_g)}g)`} → ${cls.short_name} (${Math.round(cls.carriage_mass_g)}g)`
-                      );
-                    }}
-                  >
-                    {gantryWeightClasses.map((cls) => (
-                      <option key={cls.id} value={cls.id}>
-                        {cls.name}
-                      </option>
-                    ))}
-                    {!matchedWeightClass && (
-                      <option value="__custom__">
-                        Custom Weight ({Math.round(spec.gantry.carriage_mass_g)}g)
-                      </option>
-                    )}
-                  </select>
-                </div>
-
-                <div className="slider-row">
-                  <label>
-                    <span>XY-Joints &amp; Y-Carriages Mass (g)</span>
-                    <span className="tension-readout">
-                      <strong>{Math.round(carriageMassDraft)} g</strong>
-                    </span>
-                  </label>
-                  <div className="tension-control-row">
-                    <input
-                      type="range"
-                      min={20}
-                      max={600}
-                      step={5}
-                      value={Math.max(20, Math.min(600, Math.round(carriageMassDraft)))}
-                      onChange={(e) => handleCarriageMassSliderChange(Number(e.target.value))}
-                      onPointerUp={() => commitCarriageMass(carriageMassDraft)}
-                      onKeyUp={() => commitCarriageMass(carriageMassDraft)}
-                    />
-                    <input
-                      type="number"
-                      className="tension-num-input"
-                      min={20}
-                      max={600}
-                      step={5}
-                      value={carriageMassDraft}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        if (!Number.isFinite(v)) return;
-                        setCarriageMassDraft(v);
-                        if (v >= 20 && v <= 600) {
-                          commitCarriageMass(v);
-                        }
-                      }}
-                      onBlur={() => commitCarriageMass(carriageMassDraft)}
-                    />
-                  </div>
-                </div>
-
-                {simMassSummary && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      gap: "4px 6px",
-                      padding: "6px 8px",
-                      borderRadius: 6,
-                      background: "rgba(13, 19, 29, 0.78)",
-                      border: "1px solid rgba(56, 189, 248, 0.22)",
-                      fontSize: 10.5,
-                      lineHeight: 1.4,
-                      color: "var(--muted)",
-                      fontVariantNumeric: "tabular-nums",
-                    }}
-                  >
-                    {simMassSummary.x_beam_mass_g != null && (
-                      <>
-                        <span>
-                          X-Beam:{" "}
-                          <strong style={{ color: "var(--text)" }}>
-                            {Math.round(simMassSummary.x_beam_mass_g)}g
-                          </strong>
-                        </span>
-                        <span style={{ opacity: 0.45 }}>·</span>
-                      </>
-                    )}
-                    {simMassSummary.x_rail_mass_g != null && (
-                      <>
-                        <span>
-                          X-Rail:{" "}
-                          <strong style={{ color: "var(--text)" }}>
-                            {Math.round(simMassSummary.x_rail_mass_g)}g
-                          </strong>
-                        </span>
-                        <span style={{ opacity: 0.45 }}>·</span>
-                      </>
-                    )}
-                    {(simMassSummary.x_backer_mass_g ?? 0) > 0 && (
-                      <>
-                        <span>
-                          Backer:{" "}
-                          <strong style={{ color: "var(--text)" }}>
-                            {Math.round(simMassSummary.x_backer_mass_g!)}g
-                          </strong>
-                        </span>
-                        <span style={{ opacity: 0.45 }}>·</span>
-                      </>
-                    )}
-                    <span>
-                      XY-Joints:{" "}
-                      <strong style={{ color: "var(--text)" }}>
-                        {Math.round(
-                          simMassSummary.y_carriage_joints_mass_g ?? spec.gantry.carriage_mass_g
-                        )}
-                        g
-                      </strong>
-                    </span>
-                    <span style={{ opacity: 0.45 }}>·</span>
-                    <span>
-                      Toolhead:{" "}
-                      <strong style={{ color: "var(--text)" }}>
-                        {Math.round(simMassSummary.x_moving_mass_g)}g
-                      </strong>
-                    </span>
-                    <span style={{ color: "var(--accent)", fontWeight: 700, marginLeft: 2 }}>
-                      → Total Y: {Math.round(simMassSummary.y_moving_mass_g)}g
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div className="sub-block">
-                <div className="sub-block-title">
-                  <span>Linear Rails &amp; Mounting</span>
-                  <span className="sub-block-tag">
-                    X: {selectedXRailMount.short_name}
-                    {spec.architecture === "corexy" ? ` · Y: ${selectedYRailMount.short_name}` : ""}
-                  </span>
-                </div>
-
-                {showHints && (
-                  <div className="hint-line">
-                    Front = max Y stiffness; Top = max Z stiffness; Bottom = shorter nozzle drop &amp; less
-                    pitch twist; Inner Y = max X stiffness.
-                  </div>
-                )}
-
-                <div className={spec.architecture === "corexy" ? "field-grid-2" : "field-row"}>
-                  <div className="field-row">
-                    <label>X Rail Profile</label>
-                    <select
-                      value={currentXRailProfile}
-                      onChange={(e) => {
-                        const nextId = e.target.value;
-                        update(
-                          (d) => {
-                            d.gantry.x_rail_profile = nextId;
-                          },
-                          `X Rail: ${railProfileShort(currentXRailProfile)} → ${railProfileShort(nextId)}`
-                        );
-                      }}
-                    >
-                      {xRailProfileOptions.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {spec.architecture === "corexy" && (
-                    <div className="field-row">
-                      <label>Y Rail Profile</label>
-                      <select
-                        value={currentYRailProfile}
-                        onChange={(e) => {
-                          const nextId = e.target.value;
-                          update(
-                            (d) => {
-                              d.gantry.y_rail_profile = nextId;
-                            },
-                            `Y Rail: ${railProfileShort(currentYRailProfile)} → ${railProfileShort(nextId)}`
-                          );
-                        }}
-                      >
-                        {yRailProfileOptions.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </div>
-
-                <div className="field-row">
-                  <label>
-                    <span>X Rail Mount</span>
-                    <span style={{ color: "var(--text)", fontWeight: 600 }}>
-                      {selectedXRailMount.name}
-                    </span>
-                  </label>
-                  <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-                    {xRailMounts.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        className={`voltage-pill-btn ${currentXRailMount === opt.id ? "active" : ""}`}
-                        style={{ fontSize: 10 }}
-                        title={opt.notes}
-                        onClick={() => {
-                          if (currentXRailMount === opt.id) return;
-                          update(
-                            (d) => {
-                              d.gantry.x_rail_mount = opt.id;
-                              d.gantry.dual_x_rails = opt.id === "dual_top_bottom";
-                            },
-                            `X Rail Mount: ${selectedXRailMount.short_name} → ${opt.short_name}`
-                          );
-                        }}
-                      >
-                        {opt.short_name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {spec.architecture === "corexy" && (
-                  <div className="field-row">
-                    <label>
-                      <span>Y Rail Mount</span>
-                      <span style={{ color: "var(--text)", fontWeight: 600 }}>
-                        {selectedYRailMount.name}
-                      </span>
-                    </label>
-                    <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-                      {yRailMounts.map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className={`voltage-pill-btn ${currentYRailMount === opt.id ? "active" : ""}`}
-                          style={{ fontSize: 10.5 }}
-                          title={opt.notes}
-                          onClick={() => {
-                            if (currentYRailMount === opt.id) return;
-                            update(
-                              (d) => {
-                                d.gantry.y_rail_mount = opt.id;
-                              },
-                              `Y Rail Mount: ${selectedYRailMount.short_name} → ${opt.short_name}`
-                            );
-                          }}
-                        >
-                          {opt.short_name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="field-grid-2">
-                  <div className="field-row">
-                    <label>Rail Preload</label>
-                    <select
-                      value={currentRailPreload}
-                      onChange={(e) => {
-                        const nextVal = e.target.value as RailPreloadType;
-                        update(
-                          (d) => {
-                            d.gantry.rail_preload = nextVal;
-                          },
-                          `Rail Preload: ${currentRailPreload} → ${nextVal}`
-                        );
-                      }}
-                    >
-                      {RAIL_PRELOAD_OPTIONS.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field-row">
-                    <label>Rail Quality / Grade</label>
-                    <select
-                      value={currentRailQuality}
-                      onChange={(e) => {
-                        const nextVal = e.target.value as RailQualityType;
-                        const prevLbl = selectedRailQuality.short_name;
-                        const nextLbl =
-                          railQualityOptions.find((q) => q.id === nextVal)?.short_name ?? nextVal;
-                        update(
-                          (d) => {
-                            d.gantry.rail_quality = nextVal;
-                          },
-                          `Rail Quality: ${prevLbl} → ${nextLbl}`
-                        );
-                      }}
-                    >
-                      {railQualityOptions.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                {selectedRailQuality.notes && (
-                  <div
-                    style={{
-                      fontSize: 10.5,
-                      color: "var(--muted)",
-                      marginTop: -2,
-                      marginBottom: 6,
-                      lineHeight: 1.35,
-                    }}
-                  >
-                    {selectedRailQuality.notes}
-                  </div>
-                )}
-
-                <div className="field-grid-2">
-                  <div className="field-row">
-                    <label>Carriage Block</label>
-                    <select
-                      value={currentRailBlock}
-                      onChange={(e) => {
-                        const nextVal = e.target.value as RailBlockType;
-                        const prevLbl =
-                          RAIL_BLOCK_OPTIONS.find((o) => o.id === currentRailBlock)?.label ?? currentRailBlock;
-                        const nextLbl =
-                          RAIL_BLOCK_OPTIONS.find((o) => o.id === nextVal)?.label ?? nextVal;
-                        update(
-                          (d) => {
-                            d.gantry.rail_block_type = nextVal;
-                          },
-                          `Carriage Block: ${prevLbl} → ${nextLbl}`
-                        );
-                      }}
-                    >
-                      {RAIL_BLOCK_OPTIONS.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field-row">
-                    <label>Rail Bolt Pitch</label>
-                    <select
-                      value={currentRailBoltPitch}
-                      onChange={(e) => {
-                        const nextVal = Number(e.target.value);
-                        if (!Number.isFinite(nextVal) || nextVal <= 0) return;
-                        update(
-                          (d) => {
-                            d.gantry.rail_bolt_pitch_mm = nextVal;
-                          },
-                          `Rail Bolt Pitch: ${currentRailBoltPitch}mm → ${nextVal}mm`
-                        );
-                      }}
-                    >
-                      <option value={25}>25 mm (Every Hole)</option>
-                      <option value={50}>50 mm (Every Other)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="field-row">
-                  <label>Thermal Rail Backer</label>
-                  <select
-                    value={currentRailBacker}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as RailBackerMaterialType;
-                      const prevLbl =
-                        RAIL_BACKER_OPTIONS.find((o) => o.id === currentRailBacker)?.shortLabel ??
-                        currentRailBacker;
-                      const nextLbl =
-                        RAIL_BACKER_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                      update(
-                        (d) => {
-                          d.gantry.rail_backer_material = nextVal;
-                        },
-                        `Rail Backer: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {RAIL_BACKER_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {simLinearRails && (
-                  <div className="inline-readout-strip">
-                    <span>
-                      X-Beam Composite Boost:{" "}
-                      <strong style={{ color: "var(--accent)" }}>
-                        +{Math.round(simLinearRails.x_beam_ei_y_boost_pct)}% Y
-                      </strong>{" "}
-                      ·{" "}
-                      <strong style={{ color: "var(--accent)" }}>
-                        +{Math.round(simLinearRails.x_beam_ei_z_boost_pct)}% Z
-                      </strong>
-                    </span>
-                    {spec.architecture === "corexy" && (
-                      <>
-                        <span>·</span>
-                        <span>
-                          Y-Rail{" "}
-                          <strong style={{ color: "var(--green)" }}>
-                            +{Math.round(simLinearRails.y_rail_ei_x_boost_pct)}% X
-                          </strong>
-                        </span>
-                      </>
-                    )}
-                    <span>·</span>
-                    <span>{Math.round(simLinearRails.total_rail_mass_g)} g steel</span>
-                  </div>
-                )}
-              </div>
-
               {showHints && (
                 <div className="hint-line">Wider/stiffer belts reduce stretch and sharpen corners</div>
-              )}
-
-              {spec.architecture === "corexy" && (
-                <div className="field-row">
-                  <label>
-                    <span>Belt Path &amp; Idlers</span>
-                    <span
-                      style={{
-                        color: currentBeltRouting === "monolith_short" ? "var(--accent)" : "var(--muted)",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {beltRoutingOptionMeta.shortLabel}
-                    </span>
-                  </label>
-                  <select
-                    value={currentBeltRouting}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as BeltRoutingType;
-                      const prevLbl =
-                        BELT_ROUTING_OPTIONS.find((o) => o.id === currentBeltRouting)?.shortLabel ??
-                        currentBeltRouting;
-                      const nextLbl =
-                        BELT_ROUTING_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                      update(
-                        (d) => {
-                          d.gantry.belt_routing = nextVal;
-                        },
-                        `Belt Path: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {BELT_ROUTING_OPTIONS.map((opt) => {
-                      const catItem = catalog.belt_routings?.find((r) => r.id === opt.id);
-                      return (
-                        <option key={opt.id} value={opt.id}>
-                          {catItem?.name ?? opt.label}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  {showHints && (
-                    <div className="hint-line">
-                      {beltRoutingCatalogEntry?.notes || beltRoutingOptionMeta.hint}
-                    </div>
-                  )}
-                </div>
               )}
 
               <div className="field-grid-2">
@@ -3189,54 +2591,6 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Idler Shaft</label>
-                  <select
-                    value={currentIdlerShaftMm}
-                    onChange={(e) => {
-                      const nextVal = Number(e.target.value);
-                      if (!Number.isFinite(nextVal) || nextVal <= 0) return;
-                      update(
-                        (d) => {
-                          d.gantry.belt.idler_shaft_diameter_mm = nextVal;
-                        },
-                        `Idler Shaft: ${currentIdlerShaftMm}mm → ${nextVal}mm Pin`
-                      );
-                    }}
-                  >
-                    <option value={5}>5 mm Pin</option>
-                    <option value={6}>6 mm Pin</option>
-                  </select>
-                </div>
-                <div className="field-row">
-                  <label>Bearing Play</label>
-                  <select
-                    value={currentBearingClass}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as BearingClearanceClass;
-                      const prevLbl =
-                        BEARING_CLEARANCE_OPTIONS.find((o) => o.id === currentBearingClass)?.shortLabel ??
-                        currentBearingClass;
-                      const nextLbl =
-                        BEARING_CLEARANCE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                      update(
-                        (d) => {
-                          d.gantry.belt.bearing_clearance_class = nextVal;
-                        },
-                        `Bearing Play: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {BEARING_CLEARANCE_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
               <div className="slider-row">
                 <label>
                   <span>Belt Tension (N)</span>
@@ -3276,16 +2630,12 @@ export const DesignPanel: React.FC<Props> = ({
                     onBlur={() => commitBeltTension(tensionDraft)}
                   />
                 </div>
-                {(showHints || beltOvertension || shaftBendingRisk) && (
+                {(beltOvertension || shaftBendingRisk || showHints) && (
                   <div className={`hint-line ${beltOvertension ? "danger" : shaftBendingRisk ? "warn" : ""}`}>
-                    {beltPluckHz != null && (
-                      <span>
-                        Pluck tune: <strong>~{Math.round(beltPluckHz)} Hz @ 150 mm</strong>
-                        {beltMaxWorkingN != null ? ` (max ${Math.round(beltMaxWorkingN)} N)` : ""}.{" "}
-                      </span>
-                    )}
                     {beltOvertension
-                      ? "Belt overtensioned — exceeds working tension rating"
+                      ? `Belt overtensioned — exceeds ${
+                          beltMaxWorkingN != null ? `${Math.round(beltMaxWorkingN)} N ` : ""
+                        }working tension rating.`
                       : shaftBendingRisk
                         ? "High tension (>45 N) without double-shear bearings risks shaft bending."
                         : "High tension >45 N needs 9mm+ belts & double-shear bearings."}
@@ -3458,93 +2808,6 @@ export const DesignPanel: React.FC<Props> = ({
                     />
                   </div>
                 </div>
-                <div className="field-row">
-                  <label>
-                    <span>Drive Control</span>
-                    <span style={{ color: "var(--accent)", fontWeight: 600 }}>
-                      {DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
-                        currentDriveType}
-                    </span>
-                  </label>
-                  <select
-                    value={currentDriveType}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as DriveType;
-                      if (nextVal === currentDriveType) return;
-                      const prevLbl =
-                        DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
-                        currentDriveType;
-                      const nextLbl =
-                        DRIVE_TYPE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                      update(
-                        (d) => {
-                          d.kinematics.drive_type = nextVal;
-                          if (nextVal !== "open_loop_stepper" && d.kinematics.servo_vel_bw_hz == null) {
-                            d.kinematics.servo_vel_bw_hz = nextVal === "foc_servo" ? 180 : 120;
-                          }
-                        },
-                        `Drive Control: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {DRIVE_TYPE_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {currentDriveType !== "open_loop_stepper" && (
-                  <div className="field-grid-2">
-                    <div className="field-row">
-                      <label>
-                        <span>Notch Filter (Hz)</span>
-                        <span style={{ fontSize: 10, color: "var(--muted)" }}>blank = Off</span>
-                      </label>
-                      <input
-                        type="number"
-                        min={20}
-                        max={500}
-                        step={5}
-                        placeholder="Off (e.g. 120)"
-                        value={notchDraft}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          setNotchDraft(raw);
-                          if (raw.trim() === "") {
-                            commitNotchFilter("");
-                          }
-                        }}
-                        onBlur={() => commitNotchFilter(notchDraft)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            commitNotchFilter(notchDraft);
-                          }
-                        }}
-                      />
-                    </div>
-                    <div className="field-row">
-                      <label>Vel BW (Hz)</label>
-                      <input
-                        type="number"
-                        min={20}
-                        max={1000}
-                        step={10}
-                        value={currentServoVelBw}
-                        onChange={(e) =>
-                          updatePositiveNum(
-                            e.target.value,
-                            (d, v) => {
-                              d.kinematics.servo_vel_bw_hz = Math.max(20, Math.min(1000, v));
-                            },
-                            (v) => `Servo Vel BW: ${Math.round(currentServoVelBw)} Hz → ${Math.round(v)} Hz`
-                          )
-                        }
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div className="field-grid-2">
@@ -3609,6 +2872,759 @@ export const DesignPanel: React.FC<Props> = ({
                   <option value="smooth_ei">SMOOTH_EI (Kalico)</option>
                 </select>
               </div>
+
+              <details className="sub-accordion">
+                <summary>
+                  <span>Gantry Hardware &amp; Brackets</span>
+                  <span className="sub-accordion-tag">
+                    {selectedBracket.short_name} · {Math.round(carriageMassDraft)}g
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  {spec.architecture === "corexy" && (
+                    <div className="field-row">
+                      <label>Pulley Mounts</label>
+                      <div className="engine-toggle">
+                        <button
+                          type="button"
+                          className={`engine-toggle-btn ${!doubleShearPulleys ? "active" : ""}`}
+                          onClick={() => {
+                            if (!doubleShearPulleys) return;
+                            update(
+                              (d) => {
+                                d.gantry.double_shear_pulleys = false;
+                              },
+                              "Pulley Mounts: Double-Shear → Single-Shear"
+                            );
+                          }}
+                        >
+                          Single-Shear
+                          <span className="engine-toggle-sub">Standard</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`engine-toggle-btn ${doubleShearPulleys ? "active" : ""}`}
+                          onClick={() => {
+                            if (doubleShearPulleys) return;
+                            update(
+                              (d) => {
+                                d.gantry.double_shear_pulleys = true;
+                              },
+                              "Pulley Mounts: Single-Shear → Double-Shear"
+                            );
+                          }}
+                        >
+                          Double-Shear
+                          <span className="engine-toggle-sub">Bearings</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="field-row">
+                    <label>
+                      <span>Gantry Brackets &amp; Motor Mounts</span>
+                      <span
+                        className={`sub-block-tag ${
+                          bracketCreepRisk ? "danger" : selectedBracket.cnc_machined ? "ok" : ""
+                        }`}
+                      >
+                        <span
+                          className="swatch-dot"
+                          style={{ background: selectedBracket.color_hex, marginRight: 4 }}
+                        />
+                        {selectedBracket.short_name}
+                      </span>
+                    </label>
+                    <select
+                      value={currentBracketId}
+                      onChange={(e) => {
+                        const nextId = e.target.value as BracketMaterialType;
+                        const nextItem =
+                          gantryBrackets.find((b) => b.id === nextId) ?? gantryBrackets[0];
+                        update(
+                          (d) => {
+                            d.gantry.bracket_material = nextId;
+                          },
+                          `Gantry Brackets: ${selectedBracket.short_name} → ${nextItem.short_name}`
+                        );
+                      }}
+                    >
+                      {gantryBrackets.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                    {showHints && (
+                      <div className="hint-line">
+                        Motor mounts &amp; XY joints flex in series with belts. Printed ABS creeps
+                        above ~45 N belt tension in heated chambers; annealed PPA-CF/PPS-CF or CNC
+                        aluminum prevent creep &amp; sharpen resonance.
+                      </div>
+                    )}
+                    <div className="bracket-readout-row">
+                      <div className="inline-readout-strip">
+                        {simBracketStiffness != null && (
+                          <>
+                            <strong>{Math.round(simBracketStiffness)} N/mm</strong>
+                            <span>·</span>
+                          </>
+                        )}
+                        <span>{Math.round(selectedBracket.hdt_c)}°C HDT</span>
+                        <span>·</span>
+                        <span>{Math.round(selectedBracket.creep_tension_limit_n)} N limit</span>
+                      </div>
+                      <div className="bracket-pill-row">
+                        {bracketCreepRisk ? (
+                          <span className="badge-pill bad">Creep Risk</span>
+                        ) : selectedBracket.cnc_machined ? (
+                          <span className="badge-pill ok">CNC Rigid</span>
+                        ) : (
+                          <span className="badge-pill ok">No Creep</span>
+                        )}
+                        <span className="bracket-mass-note">
+                          {selectedBracket.carriage_mass_delta_g > 0
+                            ? `+${Math.round(selectedBracket.carriage_mass_delta_g)}g moving`
+                            : "Base Y-carriage mass"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label>
+                      <span>Y-Gantry Weight Class Preset</span>
+                      <span className="sub-block-tag">
+                        {matchedWeightClass ? matchedWeightClass.short_name : "Custom"}
+                      </span>
+                    </label>
+                    <select
+                      value={matchedWeightClass ? matchedWeightClass.id : "__custom__"}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        if (nextId === "__custom__") return;
+                        const cls = gantryWeightClasses.find((c) => c.id === nextId);
+                        if (!cls) return;
+                        if (carriageMassTimerRef.current != null) {
+                          window.clearTimeout(carriageMassTimerRef.current);
+                          carriageMassTimerRef.current = null;
+                        }
+                        setCarriageMassDraft(Math.round(cls.carriage_mass_g));
+                        const nextBracketValid = gantryBrackets.some(
+                          (b) => b.id === cls.suggested_bracket_material
+                        );
+                        update(
+                          (d) => {
+                            d.gantry.carriage_mass_g = cls.carriage_mass_g;
+                            if (nextBracketValid) {
+                              d.gantry.bracket_material =
+                                cls.suggested_bracket_material as BracketMaterialType;
+                            }
+                          },
+                          `Y-Gantry Weight Class: ${matchedWeightClass ? matchedWeightClass.short_name : `Custom (${Math.round(spec.gantry.carriage_mass_g)}g)`} → ${cls.short_name} (${Math.round(cls.carriage_mass_g)}g)`
+                        );
+                      }}
+                    >
+                      {gantryWeightClasses.map((cls) => (
+                        <option key={cls.id} value={cls.id}>
+                          {cls.name}
+                        </option>
+                      ))}
+                      {!matchedWeightClass && (
+                        <option value="__custom__">
+                          Custom Weight ({Math.round(spec.gantry.carriage_mass_g)}g)
+                        </option>
+                      )}
+                    </select>
+                    {showHints && (
+                      <div className="hint-line">
+                        {matchedWeightClass?.notes ??
+                          "Combined mass of XY-joint blocks, idler hardware & Y-rail carriages moving on Y."}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="slider-row">
+                    <label>
+                      <span>XY-Joints &amp; Y-Carriages Mass (g)</span>
+                      <span className="tension-readout">
+                        <strong>{Math.round(carriageMassDraft)} g</strong>
+                      </span>
+                    </label>
+                    <div className="tension-control-row">
+                      <input
+                        type="range"
+                        min={20}
+                        max={600}
+                        step={5}
+                        value={Math.max(20, Math.min(600, Math.round(carriageMassDraft)))}
+                        onChange={(e) => handleCarriageMassSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitCarriageMass(carriageMassDraft)}
+                        onKeyUp={() => commitCarriageMass(carriageMassDraft)}
+                      />
+                      <input
+                        type="number"
+                        className="tension-num-input"
+                        min={20}
+                        max={600}
+                        step={5}
+                        value={carriageMassDraft}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isFinite(v)) return;
+                          setCarriageMassDraft(v);
+                          if (v >= 20 && v <= 600) {
+                            commitCarriageMass(v);
+                          }
+                        }}
+                        onBlur={() => commitCarriageMass(carriageMassDraft)}
+                      />
+                    </div>
+                  </div>
+
+                  {simMassSummary && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        gap: "4px 6px",
+                        padding: "6px 8px",
+                        borderRadius: 6,
+                        background: "rgba(13, 19, 29, 0.78)",
+                        border: "1px solid rgba(56, 189, 248, 0.22)",
+                        fontSize: 10.5,
+                        lineHeight: 1.4,
+                        color: "var(--muted)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {simMassSummary.x_beam_mass_g != null && (
+                        <>
+                          <span>
+                            X-Beam:{" "}
+                            <strong style={{ color: "var(--text)" }}>
+                              {Math.round(simMassSummary.x_beam_mass_g)}g
+                            </strong>
+                          </span>
+                          <span style={{ opacity: 0.45 }}>·</span>
+                        </>
+                      )}
+                      {simMassSummary.x_rail_mass_g != null && (
+                        <>
+                          <span>
+                            X-Rail:{" "}
+                            <strong style={{ color: "var(--text)" }}>
+                              {Math.round(simMassSummary.x_rail_mass_g)}g
+                            </strong>
+                          </span>
+                          <span style={{ opacity: 0.45 }}>·</span>
+                        </>
+                      )}
+                      {(simMassSummary.x_backer_mass_g ?? 0) > 0 && (
+                        <>
+                          <span>
+                            Backer:{" "}
+                            <strong style={{ color: "var(--text)" }}>
+                              {Math.round(simMassSummary.x_backer_mass_g!)}g
+                            </strong>
+                          </span>
+                          <span style={{ opacity: 0.45 }}>·</span>
+                        </>
+                      )}
+                      <span>
+                        XY-Joints:{" "}
+                        <strong style={{ color: "var(--text)" }}>
+                          {Math.round(
+                            simMassSummary.y_carriage_joints_mass_g ?? spec.gantry.carriage_mass_g
+                          )}
+                          g
+                        </strong>
+                      </span>
+                      <span style={{ opacity: 0.45 }}>·</span>
+                      <span>
+                        Toolhead:{" "}
+                        <strong style={{ color: "var(--text)" }}>
+                          {Math.round(simMassSummary.x_moving_mass_g)}g
+                        </strong>
+                      </span>
+                      <span style={{ color: "var(--accent)", fontWeight: 700, marginLeft: 2 }}>
+                        → Total Y: {Math.round(simMassSummary.y_moving_mass_g)}g
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </details>
+
+              <details className="sub-accordion">
+                <summary>
+                  <span>Linear Rails &amp; Mounting</span>
+                  <span className="sub-accordion-tag">
+                    X: {selectedXRailMount.short_name}
+                    {spec.architecture === "corexy" ? ` · Y: ${selectedYRailMount.short_name}` : ""}
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  {showHints && (
+                    <div className="hint-line">
+                      Front = max Y stiffness; Top = max Z stiffness; Bottom = shorter nozzle drop
+                      &amp; less pitch twist; Inner Y = max X stiffness.
+                    </div>
+                  )}
+
+                  <div className={spec.architecture === "corexy" ? "field-grid-2" : "field-row"}>
+                    <div className="field-row">
+                      <label>X Rail Profile</label>
+                      <select
+                        value={currentXRailProfile}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          update(
+                            (d) => {
+                              d.gantry.x_rail_profile = nextId;
+                            },
+                            `X Rail: ${railProfileShort(currentXRailProfile)} → ${railProfileShort(nextId)}`
+                          );
+                        }}
+                      >
+                        {xRailProfileOptions.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {spec.architecture === "corexy" && (
+                      <div className="field-row">
+                        <label>Y Rail Profile</label>
+                        <select
+                          value={currentYRailProfile}
+                          onChange={(e) => {
+                            const nextId = e.target.value;
+                            update(
+                              (d) => {
+                                d.gantry.y_rail_profile = nextId;
+                              },
+                              `Y Rail: ${railProfileShort(currentYRailProfile)} → ${railProfileShort(nextId)}`
+                            );
+                          }}
+                        >
+                          {yRailProfileOptions.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="field-row">
+                    <label>
+                      <span>X Rail Mount</span>
+                      <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                        {selectedXRailMount.name}
+                      </span>
+                    </label>
+                    <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+                      {xRailMounts.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={`voltage-pill-btn ${currentXRailMount === opt.id ? "active" : ""}`}
+                          style={{ fontSize: 10 }}
+                          title={opt.notes}
+                          onClick={() => {
+                            if (currentXRailMount === opt.id) return;
+                            update(
+                              (d) => {
+                                d.gantry.x_rail_mount = opt.id;
+                                d.gantry.dual_x_rails = opt.id === "dual_top_bottom";
+                              },
+                              `X Rail Mount: ${selectedXRailMount.short_name} → ${opt.short_name}`
+                            );
+                          }}
+                        >
+                          {opt.short_name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {spec.architecture === "corexy" && (
+                    <div className="field-row">
+                      <label>
+                        <span>Y Rail Mount</span>
+                        <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                          {selectedYRailMount.name}
+                        </span>
+                      </label>
+                      <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+                        {yRailMounts.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`voltage-pill-btn ${currentYRailMount === opt.id ? "active" : ""}`}
+                            style={{ fontSize: 10.5 }}
+                            title={opt.notes}
+                            onClick={() => {
+                              if (currentYRailMount === opt.id) return;
+                              update(
+                                (d) => {
+                                  d.gantry.y_rail_mount = opt.id;
+                                },
+                                `Y Rail Mount: ${selectedYRailMount.short_name} → ${opt.short_name}`
+                              );
+                            }}
+                          >
+                            {opt.short_name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="field-grid-2">
+                    <div className="field-row">
+                      <label>Rail Preload</label>
+                      <select
+                        value={currentRailPreload}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as RailPreloadType;
+                          update(
+                            (d) => {
+                              d.gantry.rail_preload = nextVal;
+                            },
+                            `Rail Preload: ${currentRailPreload} → ${nextVal}`
+                          );
+                        }}
+                      >
+                        {RAIL_PRELOAD_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field-row">
+                      <label>Rail Quality / Grade</label>
+                      <select
+                        value={currentRailQuality}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as RailQualityType;
+                          const prevLbl = selectedRailQuality.short_name;
+                          const nextLbl =
+                            railQualityOptions.find((q) => q.id === nextVal)?.short_name ?? nextVal;
+                          update(
+                            (d) => {
+                              d.gantry.rail_quality = nextVal;
+                            },
+                            `Rail Quality: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        {railQualityOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {showHints && selectedRailQuality.notes && (
+                    <div
+                      style={{
+                        fontSize: 10.5,
+                        color: "var(--muted)",
+                        marginTop: -2,
+                        marginBottom: 6,
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {selectedRailQuality.notes}
+                    </div>
+                  )}
+
+                  <div className="field-grid-2">
+                    <div className="field-row">
+                      <label>Carriage Block</label>
+                      <select
+                        value={currentRailBlock}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as RailBlockType;
+                          const prevLbl =
+                            RAIL_BLOCK_OPTIONS.find((o) => o.id === currentRailBlock)?.label ?? currentRailBlock;
+                          const nextLbl =
+                            RAIL_BLOCK_OPTIONS.find((o) => o.id === nextVal)?.label ?? nextVal;
+                          update(
+                            (d) => {
+                              d.gantry.rail_block_type = nextVal;
+                            },
+                            `Carriage Block: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        {RAIL_BLOCK_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field-row">
+                      <label>Rail Bolt Pitch</label>
+                      <select
+                        value={currentRailBoltPitch}
+                        onChange={(e) => {
+                          const nextVal = Number(e.target.value);
+                          if (!Number.isFinite(nextVal) || nextVal <= 0) return;
+                          update(
+                            (d) => {
+                              d.gantry.rail_bolt_pitch_mm = nextVal;
+                            },
+                            `Rail Bolt Pitch: ${currentRailBoltPitch}mm → ${nextVal}mm`
+                          );
+                        }}
+                      >
+                        <option value={25}>25 mm (Every Hole)</option>
+                        <option value={50}>50 mm (Every Other)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label>Thermal Rail Backer</label>
+                    <select
+                      value={currentRailBacker}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as RailBackerMaterialType;
+                        const prevLbl =
+                          RAIL_BACKER_OPTIONS.find((o) => o.id === currentRailBacker)?.shortLabel ??
+                          currentRailBacker;
+                        const nextLbl =
+                          RAIL_BACKER_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                        update(
+                          (d) => {
+                            d.gantry.rail_backer_material = nextVal;
+                          },
+                          `Rail Backer: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {RAIL_BACKER_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </details>
+
+              <details className="sub-accordion">
+                <summary>
+                  <span>Belt Routing &amp; Servo Control</span>
+                  <span className="sub-accordion-tag">
+                    {spec.architecture === "corexy" ? `${beltRoutingOptionMeta.shortLabel} · ` : ""}
+                    {DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
+                      currentDriveType}
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  {spec.architecture === "corexy" && (
+                    <div className="field-row">
+                      <label>
+                        <span>Belt Path &amp; Idlers</span>
+                        <span
+                          style={{
+                            color:
+                              currentBeltRouting === "monolith_short"
+                                ? "var(--accent)"
+                                : "var(--muted)",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {beltRoutingOptionMeta.shortLabel}
+                        </span>
+                      </label>
+                      <select
+                        value={currentBeltRouting}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as BeltRoutingType;
+                          const prevLbl =
+                            BELT_ROUTING_OPTIONS.find((o) => o.id === currentBeltRouting)
+                              ?.shortLabel ?? currentBeltRouting;
+                          const nextLbl =
+                            BELT_ROUTING_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ??
+                            nextVal;
+                          update(
+                            (d) => {
+                              d.gantry.belt_routing = nextVal;
+                            },
+                            `Belt Path: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        {BELT_ROUTING_OPTIONS.map((opt) => {
+                          const catItem = catalog.belt_routings?.find((r) => r.id === opt.id);
+                          return (
+                            <option key={opt.id} value={opt.id}>
+                              {catItem?.name ?? opt.label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {showHints && (
+                        <div className="hint-line">
+                          {beltRoutingCatalogEntry?.notes || beltRoutingOptionMeta.hint}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="field-grid-2">
+                    <div className="field-row">
+                      <label>Idler Shaft</label>
+                      <select
+                        value={currentIdlerShaftMm}
+                        onChange={(e) => {
+                          const nextVal = Number(e.target.value);
+                          if (!Number.isFinite(nextVal) || nextVal <= 0) return;
+                          update(
+                            (d) => {
+                              d.gantry.belt.idler_shaft_diameter_mm = nextVal;
+                            },
+                            `Idler Shaft: ${currentIdlerShaftMm}mm → ${nextVal}mm Pin`
+                          );
+                        }}
+                      >
+                        <option value={5}>5 mm Pin</option>
+                        <option value={6}>6 mm Pin</option>
+                      </select>
+                    </div>
+                    <div className="field-row">
+                      <label>Bearing Play</label>
+                      <select
+                        value={currentBearingClass}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as BearingClearanceClass;
+                          const prevLbl =
+                            BEARING_CLEARANCE_OPTIONS.find((o) => o.id === currentBearingClass)
+                              ?.shortLabel ?? currentBearingClass;
+                          const nextLbl =
+                            BEARING_CLEARANCE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ??
+                            nextVal;
+                          update(
+                            (d) => {
+                              d.gantry.belt.bearing_clearance_class = nextVal;
+                            },
+                            `Bearing Play: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        {BEARING_CLEARANCE_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label>
+                      <span>Drive Control</span>
+                      <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                        {DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
+                          currentDriveType}
+                      </span>
+                    </label>
+                    <select
+                      value={currentDriveType}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as DriveType;
+                        if (nextVal === currentDriveType) return;
+                        const prevLbl =
+                          DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
+                          currentDriveType;
+                        const nextLbl =
+                          DRIVE_TYPE_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                        update(
+                          (d) => {
+                            d.kinematics.drive_type = nextVal;
+                            if (
+                              nextVal !== "open_loop_stepper" &&
+                              d.kinematics.servo_vel_bw_hz == null
+                            ) {
+                              d.kinematics.servo_vel_bw_hz = nextVal === "foc_servo" ? 180 : 120;
+                            }
+                          },
+                          `Drive Control: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {DRIVE_TYPE_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {currentDriveType !== "open_loop_stepper" && (
+                    <div className="field-grid-2">
+                      <div className="field-row">
+                        <label>
+                          <span>Notch Filter (Hz)</span>
+                          <span style={{ fontSize: 10, color: "var(--muted)" }}>blank = Off</span>
+                        </label>
+                        <input
+                          type="number"
+                          min={20}
+                          max={500}
+                          step={5}
+                          placeholder="Off (e.g. 120)"
+                          value={notchDraft}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            setNotchDraft(raw);
+                            if (raw.trim() === "") {
+                              commitNotchFilter("");
+                            }
+                          }}
+                          onBlur={() => commitNotchFilter(notchDraft)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              commitNotchFilter(notchDraft);
+                            }
+                          }}
+                        />
+                      </div>
+                      <div className="field-row">
+                        <label>Vel BW (Hz)</label>
+                        <input
+                          type="number"
+                          min={20}
+                          max={1000}
+                          step={10}
+                          value={currentServoVelBw}
+                          onChange={(e) =>
+                            updatePositiveNum(
+                              e.target.value,
+                              (d, v) => {
+                                d.kinematics.servo_vel_bw_hz = Math.max(20, Math.min(1000, v));
+                              },
+                              (v) =>
+                                `Servo Vel BW: ${Math.round(currentServoVelBw)} Hz → ${Math.round(v)} Hz`
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </details>
             </div>
 
             <div className="section-card">
@@ -3728,291 +3744,6 @@ export const DesignPanel: React.FC<Props> = ({
                 )}
               </div>
 
-              <div className="sub-block">
-                <div className="sub-block-title">
-                  <span>Toolhead Construction &amp; Parts</span>
-                  <span className="sub-block-tag">
-                    {toolheadPartMatShort(currentCarriageMountMat)} /{" "}
-                    {toolheadPartMatShort(currentBodyMat)} /{" "}
-                    {toolheadPartMatShort(currentHotendMountMat)}
-                  </span>
-                </div>
-                {showHints && (
-                  <div className="hint-line">
-                    Choose the structural architecture and tune material &amp; section thickness per
-                    stage — stiffness updates directly while weight stays strictly what you enter
-                    below.
-                  </div>
-                )}
-
-                {/* 0. Body Construction / Architecture */}
-                <div
-                  className="field-row"
-                  style={{
-                    marginBottom: 10,
-                    paddingBottom: 8,
-                    borderBottom: "1px dashed rgba(255, 255, 255, 0.08)",
-                  }}
-                >
-                  <label>
-                    <span>Body Construction / Architecture</span>
-                    <span className="sub-block-tag" style={{ color: "var(--accent)" }}>
-                      {selectedBodyConstruction.short_name}
-                    </span>
-                  </label>
-                  <select
-                    value={currentBodyConstruction}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as ToolheadConstructionType;
-                      const prevShort = selectedBodyConstruction.short_name;
-                      const nextItem =
-                        toolheadConstructions.find((c) => c.id === nextVal) ??
-                        selectedBodyConstruction;
-                      update(
-                        (d) => {
-                          d.toolhead.body_construction = nextVal;
-                          d.toolhead.preset_id = "custom";
-                        },
-                        `Toolhead Construction: ${prevShort} → ${nextItem.short_name}`
-                      );
-                    }}
-                  >
-                    {toolheadConstructions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div
-                    style={{
-                      marginTop: 5,
-                      fontSize: 10.5,
-                      lineHeight: 1.35,
-                      color: "var(--muted)",
-                    }}
-                  >
-                    {selectedBodyConstruction.notes}
-                  </div>
-                </div>
-
-                {/* 1. X-Carriage Backplate */}
-                <div className="field-row" style={{ marginBottom: 8 }}>
-                  <label>
-                    <span>X-Carriage Backplate</span>
-                    <span
-                      className="sub-block-tag"
-                      style={{ fontVariantNumeric: "tabular-nums" }}
-                    >
-                      {carriagePlateThickDraft.toFixed(1)} mm
-                    </span>
-                  </label>
-                  <select
-                    value={currentCarriageMountMat}
-                    onChange={(e) => {
-                      const nextMat = e.target.value;
-                      update(
-                        (d) => {
-                          d.toolhead.carriage_mount_material = nextMat;
-                          if (MOUNT_MATERIAL_OPTIONS.some((o) => o.id === nextMat)) {
-                            d.toolhead.mount_material = nextMat as ToolheadMountMaterial;
-                          }
-                          d.toolhead.preset_id = "custom";
-                        },
-                        `X-Carriage Backplate: ${toolheadPartMatShort(currentCarriageMountMat)} → ${toolheadPartMatShort(nextMat)}`
-                      );
-                    }}
-                  >
-                    {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <div
-                    className="tension-control-row"
-                    style={{ marginTop: 4, alignItems: "center", gap: 6 }}
-                  >
-                    <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
-                      Plate
-                    </span>
-                    <input
-                      type="range"
-                      min={2.0}
-                      max={15.0}
-                      step={0.5}
-                      value={carriagePlateThickDraft}
-                      onChange={(e) => handleCarriagePlateThickSliderChange(Number(e.target.value))}
-                      onPointerUp={() => commitCarriagePlateThick(carriagePlateThickDraft)}
-                      onKeyUp={() => commitCarriagePlateThick(carriagePlateThickDraft)}
-                    />
-                  </div>
-                </div>
-
-                {/* 2. Toolhead / Extruder Body */}
-                <div className="field-row" style={{ marginBottom: 8 }}>
-                  <label>
-                    <span>Toolhead / Extruder Body</span>
-                    <span
-                      className="sub-block-tag"
-                      style={{ fontVariantNumeric: "tabular-nums" }}
-                    >
-                      {bodyWallThickDraft.toFixed(1)} mm
-                    </span>
-                  </label>
-                  <select
-                    value={currentBodyMat}
-                    onChange={(e) => {
-                      const nextMat = e.target.value;
-                      update(
-                        (d) => {
-                          d.toolhead.body_material = nextMat;
-                          d.toolhead.preset_id = "custom";
-                        },
-                        `Toolhead Body: ${toolheadPartMatShort(currentBodyMat)} → ${toolheadPartMatShort(nextMat)}`
-                      );
-                    }}
-                  >
-                    {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <div
-                    className="tension-control-row"
-                    style={{ marginTop: 4, alignItems: "center", gap: 6 }}
-                  >
-                    <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
-                      Wall
-                    </span>
-                    <input
-                      type="range"
-                      min={2.0}
-                      max={12.0}
-                      step={0.5}
-                      value={bodyWallThickDraft}
-                      onChange={(e) => handleBodyWallThickSliderChange(Number(e.target.value))}
-                      onPointerUp={() => commitBodyWallThick(bodyWallThickDraft)}
-                      onKeyUp={() => commitBodyWallThick(bodyWallThickDraft)}
-                    />
-                  </div>
-                </div>
-
-                {/* 3. Hotend Mount / Clamp */}
-                <div className="field-row" style={{ marginBottom: 4 }}>
-                  <label>
-                    <span>Hotend Mount / Clamp</span>
-                    <span
-                      className="sub-block-tag"
-                      style={{ fontVariantNumeric: "tabular-nums" }}
-                    >
-                      {hotendMountThickDraft.toFixed(1)} mm
-                    </span>
-                  </label>
-                  <select
-                    value={currentHotendMountMat}
-                    onChange={(e) => {
-                      const nextMat = e.target.value;
-                      update(
-                        (d) => {
-                          d.toolhead.hotend_mount_material = nextMat;
-                          d.toolhead.preset_id = "custom";
-                        },
-                        `Hotend Clamp: ${toolheadPartMatShort(currentHotendMountMat)} → ${toolheadPartMatShort(nextMat)}`
-                      );
-                    }}
-                  >
-                    {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <div
-                    className="tension-control-row"
-                    style={{ marginTop: 4, alignItems: "center", gap: 6 }}
-                  >
-                    <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
-                      Clamp
-                    </span>
-                    <input
-                      type="range"
-                      min={3.0}
-                      max={20.0}
-                      step={0.5}
-                      value={hotendMountThickDraft}
-                      onChange={(e) => handleHotendMountThickSliderChange(Number(e.target.value))}
-                      onPointerUp={() => commitHotendMountThick(hotendMountThickDraft)}
-                      onKeyUp={() => commitHotendMountThick(hotendMountThickDraft)}
-                    />
-                  </div>
-                </div>
-
-                {(() => {
-                  const stageStiff = sim?.geometry?.toolhead_structure?.stage_stiffnesses_n_per_mm;
-                  const flexBreakdown = sim?.static_fea?.toolhead_flex_breakdown;
-                  if (!stageStiff && !flexBreakdown) return null;
-                  const kRailBlock = stageStiff?.rail_carriage_n_per_mm;
-                  const kBackplate =
-                    stageStiff?.backplate_only_n_per_mm ??
-                    stageStiff?.carriage_mount_n_per_mm ??
-                    flexBreakdown?.carriage_mount_stiffness_n_per_mm;
-                  const kBody = stageStiff?.body_n_per_mm;
-                  const kHotend =
-                    stageStiff?.hotend_total_n_per_mm ?? flexBreakdown?.hotend_stiffness_n_per_mm;
-                  const kCombined =
-                    stageStiff?.combined_toolhead_n_per_mm ??
-                    flexBreakdown?.effective_tip_stiffness_n_per_mm;
-                  const fmtK = (v?: number) =>
-                    v != null && Number.isFinite(v) && v > 0
-                      ? `${Math.round(v).toLocaleString()} N/mm`
-                      : "—";
-                  return (
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 1fr",
-                        gap: "3px 10px",
-                        fontSize: 10.5,
-                        color: "var(--muted)",
-                        marginTop: 6,
-                        paddingTop: 6,
-                        borderTop: "1px dashed rgba(255, 255, 255, 0.08)",
-                        fontVariantNumeric: "tabular-nums",
-                      }}
-                    >
-                      <span>
-                        Backplate:{" "}
-                        <strong style={{ color: "var(--text)" }}>{fmtK(kBackplate)}</strong>
-                      </span>
-                      <span>
-                        Body: <strong style={{ color: "var(--text)" }}>{fmtK(kBody)}</strong>
-                      </span>
-                      <span>
-                        Hotend: <strong style={{ color: "var(--text)" }}>{fmtK(kHotend)}</strong>
-                      </span>
-                      <span>
-                        Combined Tip:{" "}
-                        <strong style={{ color: "var(--accent)" }}>{fmtK(kCombined)}</strong>
-                      </span>
-                      {kRailBlock != null && Number.isFinite(kRailBlock) && kRailBlock > 0 && (
-                        <span
-                          style={{
-                            gridColumn: "1 / -1",
-                            fontSize: 10,
-                            opacity: 0.85,
-                            marginTop: 1,
-                          }}
-                        >
-                          MGN Rail ({selectedRailQuality.short_name} · {currentRailPreload}):{" "}
-                          <strong style={{ color: "var(--text)" }}>{fmtK(kRailBlock)}</strong>
-                        </span>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-
               <div className="field-row">
                 <label>
                   <span>Toolhead Mass (excl. Hotend, g)</span>
@@ -4041,96 +3772,12 @@ export const DesignPanel: React.FC<Props> = ({
                     )
                   }
                 />
-                <div className="hint-line">
-                  Weight of body, extruder, fans &amp; probe WITHOUT hotend — Hotend Weight (
-                  {specHotendMassG}g) is added separately below.
-                </div>
-              </div>
-
-              <div className="slider-row">
-                <label>
-                  <span>CoG Forward Y (mm)</span>
-                  <span className="tension-readout">
-                    <strong>{cogYDraft} mm</strong>
-                    <span className="kpi-sub">
-                      {cogYDraft === 0 ? "· centered on X-beam" : "in front of X-beam"}
-                    </span>
-                  </span>
-                </label>
-                <div className="tension-control-row">
-                  <input
-                    type="range"
-                    min={0}
-                    max={80}
-                    step={1}
-                    value={Math.max(0, Math.min(80, cogYDraft))}
-                    onChange={(e) => handleCogYSliderChange(Number(e.target.value))}
-                    onPointerUp={() => commitCogY(cogYDraft)}
-                    onKeyUp={() => commitCogY(cogYDraft)}
-                  />
-                  <input
-                    type="number"
-                    className="tension-num-input"
-                    min={0}
-                    max={250}
-                    step={1}
-                    value={cogYDraft}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (!Number.isFinite(v)) return;
-                      setCogYDraft(v);
-                      if (v >= 0 && v <= 250) commitCogY(v);
-                    }}
-                    onBlur={() => {
-                      const clamped = Math.max(0, Math.min(250, Math.round(cogYDraft)));
-                      setCogYDraft(clamped);
-                      commitCogY(clamped);
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="slider-row">
-                <label>
-                  <span>CoG Drop Z (mm)</span>
-                  <span className="tension-readout">
-                    <strong>{cogZDraft} mm</strong>
-                    <span className="kpi-sub">
-                      {cogZDraft === 0 ? "· centered on X-beam" : "below X-beam"}
-                    </span>
-                  </span>
-                </label>
-                <div className="tension-control-row">
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={Math.max(0, Math.min(100, cogZDraft))}
-                    onChange={(e) => handleCogZSliderChange(Number(e.target.value))}
-                    onPointerUp={() => commitCogZ(cogZDraft)}
-                    onKeyUp={() => commitCogZ(cogZDraft)}
-                  />
-                  <input
-                    type="number"
-                    className="tension-num-input"
-                    min={0}
-                    max={250}
-                    step={1}
-                    value={cogZDraft}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (!Number.isFinite(v)) return;
-                      setCogZDraft(v);
-                      if (v >= 0 && v <= 250) commitCogZ(v);
-                    }}
-                    onBlur={() => {
-                      const clamped = Math.max(0, Math.min(250, Math.round(cogZDraft)));
-                      setCogZDraft(clamped);
-                      commitCogZ(clamped);
-                    }}
-                  />
-                </div>
+                {showHints && (
+                  <div className="hint-line">
+                    Weight of body, extruder, fans &amp; probe WITHOUT hotend — Hotend Weight (
+                    {specHotendMassG}g) is added separately below.
+                  </div>
+                )}
               </div>
 
               <div className="slider-row">
@@ -4175,6 +3822,315 @@ export const DesignPanel: React.FC<Props> = ({
                   />
                 </div>
               </div>
+
+              <details className="sub-accordion">
+                <summary>
+                  <span>Toolhead Structure &amp; CoG Offsets</span>
+                  <span className="sub-accordion-tag">
+                    {selectedBodyConstruction.short_name} · {toolheadPartMatShort(currentBodyMat)}
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  {showHints && (
+                    <div className="hint-line">
+                      Choose the structural architecture and tune material &amp; section thickness per
+                      stage — stiffness updates directly while weight stays strictly what you enter
+                      above.
+                    </div>
+                  )}
+
+                  {/* 0. Body Construction / Architecture */}
+                  <div
+                    className="field-row"
+                    style={{
+                      marginBottom: 8,
+                      paddingBottom: 8,
+                      borderBottom: "1px dashed rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    <label>
+                      <span>Body Construction / Architecture</span>
+                      <span className="sub-block-tag" style={{ color: "var(--accent)" }}>
+                        {selectedBodyConstruction.short_name}
+                      </span>
+                    </label>
+                    <select
+                      value={currentBodyConstruction}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as ToolheadConstructionType;
+                        const prevShort = selectedBodyConstruction.short_name;
+                        const nextItem =
+                          toolheadConstructions.find((c) => c.id === nextVal) ??
+                          selectedBodyConstruction;
+                        update(
+                          (d) => {
+                            d.toolhead.body_construction = nextVal;
+                            d.toolhead.preset_id = "custom";
+                          },
+                          `Toolhead Construction: ${prevShort} → ${nextItem.short_name}`
+                        );
+                      }}
+                    >
+                      {toolheadConstructions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.name}
+                        </option>
+                      ))}
+                    </select>
+                    {showHints && selectedBodyConstruction.notes && (
+                      <div
+                        style={{
+                          marginTop: 5,
+                          fontSize: 10.5,
+                          lineHeight: 1.35,
+                          color: "var(--muted)",
+                        }}
+                      >
+                        {selectedBodyConstruction.notes}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 1. X-Carriage Backplate */}
+                  <div className="field-row" style={{ marginBottom: 6 }}>
+                    <label>
+                      <span>X-Carriage Backplate</span>
+                      <span
+                        className="sub-block-tag"
+                        style={{ fontVariantNumeric: "tabular-nums" }}
+                      >
+                        {carriagePlateThickDraft.toFixed(1)} mm
+                      </span>
+                    </label>
+                    <select
+                      value={currentCarriageMountMat}
+                      onChange={(e) => {
+                        const nextMat = e.target.value;
+                        update(
+                          (d) => {
+                            d.toolhead.carriage_mount_material = nextMat;
+                            if (MOUNT_MATERIAL_OPTIONS.some((o) => o.id === nextMat)) {
+                              d.toolhead.mount_material = nextMat as ToolheadMountMaterial;
+                            }
+                            d.toolhead.preset_id = "custom";
+                          },
+                          `X-Carriage Backplate: ${toolheadPartMatShort(currentCarriageMountMat)} → ${toolheadPartMatShort(nextMat)}`
+                        );
+                      }}
+                    >
+                      {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div
+                      className="tension-control-row"
+                      style={{ marginTop: 4, alignItems: "center", gap: 6 }}
+                    >
+                      <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                        Plate
+                      </span>
+                      <input
+                        type="range"
+                        min={2.0}
+                        max={15.0}
+                        step={0.5}
+                        value={carriagePlateThickDraft}
+                        onChange={(e) => handleCarriagePlateThickSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitCarriagePlateThick(carriagePlateThickDraft)}
+                        onKeyUp={() => commitCarriagePlateThick(carriagePlateThickDraft)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 2. Toolhead / Extruder Body */}
+                  <div className="field-row" style={{ marginBottom: 6 }}>
+                    <label>
+                      <span>Toolhead / Extruder Body</span>
+                      <span
+                        className="sub-block-tag"
+                        style={{ fontVariantNumeric: "tabular-nums" }}
+                      >
+                        {bodyWallThickDraft.toFixed(1)} mm
+                      </span>
+                    </label>
+                    <select
+                      value={currentBodyMat}
+                      onChange={(e) => {
+                        const nextMat = e.target.value;
+                        update(
+                          (d) => {
+                            d.toolhead.body_material = nextMat;
+                            d.toolhead.preset_id = "custom";
+                          },
+                          `Toolhead Body: ${toolheadPartMatShort(currentBodyMat)} → ${toolheadPartMatShort(nextMat)}`
+                        );
+                      }}
+                    >
+                      {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div
+                      className="tension-control-row"
+                      style={{ marginTop: 4, alignItems: "center", gap: 6 }}
+                    >
+                      <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                        Wall
+                      </span>
+                      <input
+                        type="range"
+                        min={2.0}
+                        max={12.0}
+                        step={0.5}
+                        value={bodyWallThickDraft}
+                        onChange={(e) => handleBodyWallThickSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitBodyWallThick(bodyWallThickDraft)}
+                        onKeyUp={() => commitBodyWallThick(bodyWallThickDraft)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 3. Hotend Mount / Clamp */}
+                  <div className="field-row" style={{ marginBottom: 6 }}>
+                    <label>
+                      <span>Hotend Mount / Clamp</span>
+                      <span
+                        className="sub-block-tag"
+                        style={{ fontVariantNumeric: "tabular-nums" }}
+                      >
+                        {hotendMountThickDraft.toFixed(1)} mm
+                      </span>
+                    </label>
+                    <select
+                      value={currentHotendMountMat}
+                      onChange={(e) => {
+                        const nextMat = e.target.value;
+                        update(
+                          (d) => {
+                            d.toolhead.hotend_mount_material = nextMat;
+                            d.toolhead.preset_id = "custom";
+                          },
+                          `Hotend Clamp: ${toolheadPartMatShort(currentHotendMountMat)} → ${toolheadPartMatShort(nextMat)}`
+                        );
+                      }}
+                    >
+                      {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div
+                      className="tension-control-row"
+                      style={{ marginTop: 4, alignItems: "center", gap: 6 }}
+                    >
+                      <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                        Clamp
+                      </span>
+                      <input
+                        type="range"
+                        min={3.0}
+                        max={20.0}
+                        step={0.5}
+                        value={hotendMountThickDraft}
+                        onChange={(e) => handleHotendMountThickSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitHotendMountThick(hotendMountThickDraft)}
+                        onKeyUp={() => commitHotendMountThick(hotendMountThickDraft)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="slider-row">
+                    <label>
+                      <span>CoG Forward Y (mm)</span>
+                      <span className="tension-readout">
+                        <strong>{cogYDraft} mm</strong>
+                        <span className="kpi-sub">
+                          {cogYDraft === 0 ? "· centered on X-beam" : "in front of X-beam"}
+                        </span>
+                      </span>
+                    </label>
+                    <div className="tension-control-row">
+                      <input
+                        type="range"
+                        min={0}
+                        max={80}
+                        step={1}
+                        value={Math.max(0, Math.min(80, cogYDraft))}
+                        onChange={(e) => handleCogYSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitCogY(cogYDraft)}
+                        onKeyUp={() => commitCogY(cogYDraft)}
+                      />
+                      <input
+                        type="number"
+                        className="tension-num-input"
+                        min={0}
+                        max={250}
+                        step={1}
+                        value={cogYDraft}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isFinite(v)) return;
+                          setCogYDraft(v);
+                          if (v >= 0 && v <= 250) commitCogY(v);
+                        }}
+                        onBlur={() => {
+                          const clamped = Math.max(0, Math.min(250, Math.round(cogYDraft)));
+                          setCogYDraft(clamped);
+                          commitCogY(clamped);
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="slider-row">
+                    <label>
+                      <span>CoG Drop Z (mm)</span>
+                      <span className="tension-readout">
+                        <strong>{cogZDraft} mm</strong>
+                        <span className="kpi-sub">
+                          {cogZDraft === 0 ? "· centered on X-beam" : "below X-beam"}
+                        </span>
+                      </span>
+                    </label>
+                    <div className="tension-control-row">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={Math.max(0, Math.min(100, cogZDraft))}
+                        onChange={(e) => handleCogZSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitCogZ(cogZDraft)}
+                        onKeyUp={() => commitCogZ(cogZDraft)}
+                      />
+                      <input
+                        type="number"
+                        className="tension-num-input"
+                        min={0}
+                        max={250}
+                        step={1}
+                        value={cogZDraft}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isFinite(v)) return;
+                          setCogZDraft(v);
+                          if (v >= 0 && v <= 250) commitCogZ(v);
+                        }}
+                        onBlur={() => {
+                          const clamped = Math.max(0, Math.min(250, Math.round(cogZDraft)));
+                          setCogZDraft(clamped);
+                          commitCogZ(clamped);
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
 
             <div className="section-card">
@@ -4256,163 +4212,6 @@ export const DesignPanel: React.FC<Props> = ({
                 )}
               </div>
 
-              <div className="field-row">
-                <label>
-                  <span>Hotend Weight (g)</span>
-                  <span
-                    className="sub-block-tag"
-                    style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}
-                    title="Added directly on top of Toolhead Mass (excl. Hotend) to form moving mass"
-                  >
-                    + {specHotendMassG}g to moving mass
-                  </span>
-                </label>
-                <input
-                  type="number"
-                  min={5}
-                  max={400}
-                  step={1}
-                  value={hotendMassDraft}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    setHotendMassDraft(raw);
-                    const v = Number(raw);
-                    if (raw.trim() !== "" && Number.isFinite(v) && v >= 5 && v <= 400) {
-                      if (hotendMassTimerRef.current != null) {
-                        window.clearTimeout(hotendMassTimerRef.current);
-                      }
-                      hotendMassTimerRef.current = window.setTimeout(() => commitHotendMass(v), 220);
-                    }
-                  }}
-                  onBlur={() => {
-                    const v = Number(hotendMassDraft);
-                    const clamped =
-                      hotendMassDraft.trim() !== "" && Number.isFinite(v)
-                        ? Math.max(5, Math.min(400, Math.round(v)))
-                        : specHotendMassG;
-                    setHotendMassDraft(String(clamped));
-                    commitHotendMass(clamped);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      const v = Number(hotendMassDraft);
-                      if (hotendMassDraft.trim() !== "" && Number.isFinite(v)) {
-                        const clamped = Math.max(5, Math.min(400, Math.round(v)));
-                        setHotendMassDraft(String(clamped));
-                        commitHotendMass(clamped);
-                      }
-                    }
-                  }}
-                />
-              </div>
-
-              <div className="field-row">
-                <label>Hotend Mount Style</label>
-                <select
-                  value={currentHotendMountStyle}
-                  onChange={(e) => {
-                    const nextStyle = e.target.value as HotendMountStyle;
-                    const prevLbl =
-                      HOTEND_MOUNT_STYLE_OPTIONS.find((o) => o.id === currentHotendMountStyle)
-                        ?.shortLabel ?? currentHotendMountStyle;
-                    const nextLbl =
-                      HOTEND_MOUNT_STYLE_OPTIONS.find((o) => o.id === nextStyle)?.shortLabel ??
-                      nextStyle;
-                    update(
-                      (d) => {
-                        d.toolhead.hotend.mount_style = nextStyle;
-                        d.toolhead.hotend.preset_id = null;
-                      },
-                      `Hotend Mount: ${prevLbl} → ${nextLbl}`
-                    );
-                  }}
-                >
-                  {HOTEND_MOUNT_STYLE_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="slider-row">
-                <label>
-                  <span>Hotend Structural Stiffness (N/mm)</span>
-                  <span className="tension-readout">
-                    <strong>{hotendStiffnessDraft.toLocaleString()} N/mm</strong>
-                    <span className="kpi-sub" style={{ color: hotendTier.color }}>
-                      {hotendTier.label}
-                    </span>
-                  </span>
-                </label>
-                <div className="tension-control-row">
-                  <input
-                    type="range"
-                    min={25}
-                    max={4000}
-                    step={25}
-                    value={Math.max(25, Math.min(4000, hotendStiffnessDraft))}
-                    onChange={(e) => handleHotendStiffnessSliderChange(Number(e.target.value))}
-                    onPointerUp={() => commitHotendStiffness(hotendStiffnessDraft)}
-                    onKeyUp={() => commitHotendStiffness(hotendStiffnessDraft)}
-                  />
-                  <input
-                    type="number"
-                    className="tension-num-input"
-                    min={25}
-                    max={4000}
-                    step={25}
-                    value={hotendStiffnessDraft}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (!Number.isFinite(v)) return;
-                      setHotendStiffnessDraft(v);
-                      if (v >= 25 && v <= 4000) commitHotendStiffness(v);
-                    }}
-                    onBlur={() => {
-                      const clamped = Math.max(25, Math.min(4000, Math.round(hotendStiffnessDraft)));
-                      setHotendStiffnessDraft(clamped);
-                      commitHotendStiffness(clamped);
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Heater Power (W)</label>
-                  <input
-                    type="number"
-                    value={spec.toolhead.hotend.heater_power_w}
-                    onChange={(e) =>
-                      updatePositiveNum(
-                        e.target.value,
-                        (d, v) => {
-                          d.toolhead.hotend.heater_power_w = v;
-                        },
-                        (v) => `Heater Power: ${spec.toolhead.hotend.heater_power_w}W → ${v}W`
-                      )
-                    }
-                  />
-                </div>
-                <div className="field-row">
-                  <label>Melt Zone (mm)</label>
-                  <input
-                    type="number"
-                    value={spec.toolhead.hotend.melt_zone_length_mm}
-                    onChange={(e) =>
-                      updatePositiveNum(
-                        e.target.value,
-                        (d, v) => {
-                          d.toolhead.hotend.melt_zone_length_mm = v;
-                        },
-                        (v) => `Melt Zone: ${spec.toolhead.hotend.melt_zone_length_mm} → ${v} mm`
-                      )
-                    }
-                  />
-                </div>
-              </div>
-
               <div className="field-grid-2">
                 <div className="field-row">
                   <label>Nozzle Dia (mm)</label>
@@ -4450,98 +4249,212 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               </div>
 
-              {showHints && (
-                <div className="hint-line">
-                  Titanium stops heat-creep clogs; higher CFM improves overhangs &amp; bridges
-                </div>
-              )}
+              <details className="sub-accordion">
+                <summary>
+                  <span>Custom Hotend Thermal &amp; Stiffness</span>
+                  <span className="sub-accordion-tag">
+                    {spec.toolhead.hotend.heater_power_w}W ·{" "}
+                    {spec.toolhead.hotend.melt_zone_length_mm}mm
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  <div className="field-row">
+                    <label>
+                      <span>Hotend Weight (g)</span>
+                      <span
+                        className="sub-block-tag"
+                        style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}
+                        title="Added directly on top of Toolhead Mass (excl. Hotend) to form moving mass"
+                      >
+                        + {specHotendMassG}g to moving mass
+                      </span>
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={400}
+                      step={1}
+                      value={hotendMassDraft}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setHotendMassDraft(raw);
+                        const v = Number(raw);
+                        if (raw.trim() !== "" && Number.isFinite(v) && v >= 5 && v <= 400) {
+                          if (hotendMassTimerRef.current != null) {
+                            window.clearTimeout(hotendMassTimerRef.current);
+                          }
+                          hotendMassTimerRef.current = window.setTimeout(
+                            () => commitHotendMass(v),
+                            220
+                          );
+                        }
+                      }}
+                      onBlur={() => {
+                        const v = Number(hotendMassDraft);
+                        const clamped =
+                          hotendMassDraft.trim() !== "" && Number.isFinite(v)
+                            ? Math.max(5, Math.min(400, Math.round(v)))
+                            : specHotendMassG;
+                        setHotendMassDraft(String(clamped));
+                        commitHotendMass(clamped);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const v = Number(hotendMassDraft);
+                          if (hotendMassDraft.trim() !== "" && Number.isFinite(v)) {
+                            const clamped = Math.max(5, Math.min(400, Math.round(v)));
+                            setHotendMassDraft(String(clamped));
+                            commitHotendMass(clamped);
+                          }
+                        }
+                      }}
+                    />
+                  </div>
 
-              <div className="field-row">
-                <label>Heatbreak Material</label>
-                <select
-                  value={spec.toolhead.hotend.heatbreak_material}
-                  onChange={(e) => {
-                    const nextVal = e.target.value;
-                    update(
-                      (d) => {
-                        d.toolhead.hotend.heatbreak_material = nextVal;
-                      },
-                      `Heatbreak: ${HEATBREAK_LABELS[spec.toolhead.hotend.heatbreak_material] ?? spec.toolhead.hotend.heatbreak_material} → ${HEATBREAK_LABELS[nextVal] ?? nextVal}`
-                    );
-                  }}
-                >
-                  <option value="titanium_grade5">Titanium Gr.5</option>
-                  <option value="stainless_304">Stainless 304</option>
-                  <option value="brass_c360">Brass C360</option>
-                </select>
-              </div>
+                  <div className="field-row">
+                    <label>Hotend Mount Style</label>
+                    <select
+                      value={currentHotendMountStyle}
+                      onChange={(e) => {
+                        const nextStyle = e.target.value as HotendMountStyle;
+                        const prevLbl =
+                          HOTEND_MOUNT_STYLE_OPTIONS.find((o) => o.id === currentHotendMountStyle)
+                            ?.shortLabel ?? currentHotendMountStyle;
+                        const nextLbl =
+                          HOTEND_MOUNT_STYLE_OPTIONS.find((o) => o.id === nextStyle)?.shortLabel ??
+                          nextStyle;
+                        update(
+                          (d) => {
+                            d.toolhead.hotend.mount_style = nextStyle;
+                            d.toolhead.hotend.preset_id = null;
+                          },
+                          `Hotend Mount: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {HOTEND_MOUNT_STYLE_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="slider-row">
+                    <label>
+                      <span>Hotend Structural Stiffness (N/mm)</span>
+                      <span className="tension-readout">
+                        <strong>{hotendStiffnessDraft.toLocaleString()} N/mm</strong>
+                        <span className="kpi-sub" style={{ color: hotendTier.color }}>
+                          {hotendTier.label}
+                        </span>
+                      </span>
+                    </label>
+                    <div className="tension-control-row">
+                      <input
+                        type="range"
+                        min={25}
+                        max={4000}
+                        step={25}
+                        value={Math.max(25, Math.min(4000, hotendStiffnessDraft))}
+                        onChange={(e) => handleHotendStiffnessSliderChange(Number(e.target.value))}
+                        onPointerUp={() => commitHotendStiffness(hotendStiffnessDraft)}
+                        onKeyUp={() => commitHotendStiffness(hotendStiffnessDraft)}
+                      />
+                      <input
+                        type="number"
+                        className="tension-num-input"
+                        min={25}
+                        max={4000}
+                        step={25}
+                        value={hotendStiffnessDraft}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isFinite(v)) return;
+                          setHotendStiffnessDraft(v);
+                          if (v >= 25 && v <= 4000) commitHotendStiffness(v);
+                        }}
+                        onBlur={() => {
+                          const clamped = Math.max(
+                            25,
+                            Math.min(4000, Math.round(hotendStiffnessDraft))
+                          );
+                          setHotendStiffnessDraft(clamped);
+                          commitHotendStiffness(clamped);
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="field-grid-2">
+                    <div className="field-row">
+                      <label>Heater Power (W)</label>
+                      <input
+                        type="number"
+                        value={spec.toolhead.hotend.heater_power_w}
+                        onChange={(e) =>
+                          updatePositiveNum(
+                            e.target.value,
+                            (d, v) => {
+                              d.toolhead.hotend.heater_power_w = v;
+                            },
+                            (v) => `Heater Power: ${spec.toolhead.hotend.heater_power_w}W → ${v}W`
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-row">
+                      <label>Melt Zone (mm)</label>
+                      <input
+                        type="number"
+                        value={spec.toolhead.hotend.melt_zone_length_mm}
+                        onChange={(e) =>
+                          updatePositiveNum(
+                            e.target.value,
+                            (d, v) => {
+                              d.toolhead.hotend.melt_zone_length_mm = v;
+                            },
+                            (v) =>
+                              `Melt Zone: ${spec.toolhead.hotend.melt_zone_length_mm} → ${v} mm`
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  {showHints && (
+                    <div className="hint-line">
+                      Titanium stops heat-creep clogs; higher CFM improves overhangs &amp; bridges
+                    </div>
+                  )}
+
+                  <div className="field-row">
+                    <label>Heatbreak Material</label>
+                    <select
+                      value={spec.toolhead.hotend.heatbreak_material}
+                      onChange={(e) => {
+                        const nextVal = e.target.value;
+                        update(
+                          (d) => {
+                            d.toolhead.hotend.heatbreak_material = nextVal;
+                          },
+                          `Heatbreak: ${HEATBREAK_LABELS[spec.toolhead.hotend.heatbreak_material] ?? spec.toolhead.hotend.heatbreak_material} → ${HEATBREAK_LABELS[nextVal] ?? nextVal}`
+                        );
+                      }}
+                    >
+                      <option value="titanium_grade5">Titanium Gr.5</option>
+                      <option value="stainless_304">Stainless 304</option>
+                      <option value="brass_c360">Brass C360</option>
+                    </select>
+                  </div>
+                </div>
+              </details>
             </div>
 
             <div className="section-card">
               <div className="section-title">
                 <span>Build Plate &amp; Bed Mount</span>
                 <span className="sub-block-tag">{bedTempDraft}°C</span>
-              </div>
-
-              <div className="inline-readout-strip" title={zTopoMeta.caption}>
-                <strong style={{ color: "var(--accent)" }}>{zTopoMeta.badge}</strong>
-                <span>·</span>
-                <span>{zTopoMeta.caption}</span>
-              </div>
-
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Z Linear Rails / Guideway</label>
-                  <select
-                    value={currentZRailProfile}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as ZRailProfileType;
-                      const prevLbl =
-                        zRailProfileOptions.find((o) => o.id === currentZRailProfile)?.name ??
-                        currentZRailProfile;
-                      const nextLbl =
-                        zRailProfileOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
-                      update(
-                        (d) => {
-                          d.bed.z_rail_profile = nextVal;
-                        },
-                        `Z Rails: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {zRailProfileOptions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field-row">
-                  <label>Z Leadscrew / Drive</label>
-                  <select
-                    value={currentZLeadscrewType}
-                    onChange={(e) => {
-                      const nextVal = e.target.value as ZLeadscrewType;
-                      const prevLbl =
-                        zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)?.name ??
-                        currentZLeadscrewType;
-                      const nextLbl =
-                        zDriveMechanismOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
-                      update(
-                        (d) => {
-                          d.bed.z_leadscrew_type = nextVal;
-                        },
-                        `Z Drive: ${prevLbl} → ${nextLbl}`
-                      );
-                    }}
-                  >
-                    {zDriveMechanismOptions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
               </div>
 
               <div className="slider-row">
@@ -4649,190 +4562,274 @@ export const DesignPanel: React.FC<Props> = ({
                   />
                 </div>
                 <div className="field-row">
-                  <label>Bed Mass (g)</label>
-                  <input
-                    type="number"
-                    min={800}
-                    max={6000}
-                    step={100}
-                    value={spec.bed.mass_g}
-                    onChange={(e) =>
-                      updatePositiveNum(
-                        e.target.value,
-                        (d, v) => {
-                          d.bed.mass_g = Math.max(800, Math.min(6000, Math.round(v)));
+                  <label>Plate Material</label>
+                  <select
+                    value={spec.bed.plate_material}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      update(
+                        (d) => {
+                          d.bed.plate_material = nextVal;
                         },
-                        (v) =>
-                          `Bed Mass: ${spec.bed.mass_g}g → ${Math.max(
-                            800,
-                            Math.min(6000, Math.round(v))
-                          )}g`
-                      )
-                    }
-                  />
+                        `Plate Material: ${materialLabel(spec.bed.plate_material)} → ${materialLabel(
+                          nextVal
+                        )}`
+                      );
+                    }}
+                  >
+                    {plateMaterialOptions.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              <div className="field-row">
-                <label>Plate Material</label>
-                <select
-                  value={spec.bed.plate_material}
-                  onChange={(e) => {
-                    const nextVal = e.target.value;
-                    update(
-                      (d) => {
-                        d.bed.plate_material = nextVal;
-                      },
-                      `Plate Material: ${materialLabel(spec.bed.plate_material)} → ${materialLabel(
-                        nextVal
-                      )}`
-                    );
-                  }}
-                >
-                  {plateMaterialOptions.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <details className="sub-accordion">
+                <summary>
+                  <span>Z-Axis Hardware &amp; Bed Mass</span>
+                  <span className="sub-accordion-tag">
+                    {zTopoMeta.badge} · {spec.bed.mass_g}g
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  <div className="inline-readout-strip" title={zTopoMeta.caption}>
+                    <strong style={{ color: "var(--accent)" }}>{zTopoMeta.badge}</strong>
+                    <span>·</span>
+                    <span>{zTopoMeta.caption}</span>
+                  </div>
+
+                  <div className="field-grid-2">
+                    <div className="field-row">
+                      <label>Z Linear Rails / Guideway</label>
+                      <select
+                        value={currentZRailProfile}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as ZRailProfileType;
+                          const prevLbl =
+                            zRailProfileOptions.find((o) => o.id === currentZRailProfile)?.name ??
+                            currentZRailProfile;
+                          const nextLbl =
+                            zRailProfileOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                          update(
+                            (d) => {
+                              d.bed.z_rail_profile = nextVal;
+                            },
+                            `Z Rails: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        {zRailProfileOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field-row">
+                      <label>Z Leadscrew / Drive</label>
+                      <select
+                        value={currentZLeadscrewType}
+                        onChange={(e) => {
+                          const nextVal = e.target.value as ZLeadscrewType;
+                          const prevLbl =
+                            zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)
+                              ?.name ?? currentZLeadscrewType;
+                          const nextLbl =
+                            zDriveMechanismOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                          update(
+                            (d) => {
+                              d.bed.z_leadscrew_type = nextVal;
+                            },
+                            `Z Drive: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        {zDriveMechanismOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label>Bed Mass (g)</label>
+                    <input
+                      type="number"
+                      min={800}
+                      max={6000}
+                      step={100}
+                      value={spec.bed.mass_g}
+                      onChange={(e) =>
+                        updatePositiveNum(
+                          e.target.value,
+                          (d, v) => {
+                            d.bed.mass_g = Math.max(800, Math.min(6000, Math.round(v)));
+                          },
+                          (v) =>
+                            `Bed Mass: ${spec.bed.mass_g}g → ${Math.max(
+                              800,
+                              Math.min(6000, Math.round(v))
+                            )}g`
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              </details>
             </div>
 
             <div className="section-card">
-              <div className="section-title">
-                <span>Simulation &amp; Anchoring</span>
-                <span className="sub-block-tag">{panelMeshN}×{panelMeshN} Shell</span>
-              </div>
-
-              <div className="field-row">
-                <label>
-                  <span>Benchtop Feet</span>
-                  <span style={{ color: currentFeetType === "rigid_bolted" ? "var(--muted)" : "var(--accent)", fontWeight: 600 }}>
-                    {frameFeetOptionMeta.shortLabel}
+              <details className="sub-accordion">
+                <summary>
+                  <span>Simulation &amp; Anchoring</span>
+                  <span className="sub-accordion-tag">
+                    {frameFeetOptionMeta.shortLabel} · {panelMeshN}×{panelMeshN}
                   </span>
-                </label>
-                <select
-                  value={currentFeetType}
-                  onChange={(e) => {
-                    const nextVal = e.target.value as FrameFeetType;
-                    const prevLbl =
-                      FRAME_FEET_OPTIONS.find((o) => o.id === currentFeetType)?.shortLabel ??
-                      currentFeetType;
-                    const nextLbl =
-                      FRAME_FEET_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                    update(
-                      (d) => {
-                        d.frame.feet_type = nextVal;
-                      },
-                      `Benchtop Feet: ${prevLbl} → ${nextLbl}`
-                    );
-                  }}
-                >
-                  {FRAME_FEET_OPTIONS.map((opt) => {
-                    const catItem = catalog.frame_feet?.find((f) => f.id === opt.id);
-                    return (
-                      <option key={opt.id} value={opt.id}>
-                        {catItem?.name ?? opt.label}
-                      </option>
-                    );
-                  })}
-                </select>
-                {showHints && (
-                  <div className="hint-line">
-                    {frameFeetCatalogEntry?.notes || frameFeetOptionMeta.hint}
-                  </div>
-                )}
-              </div>
-
-              <div className="sub-block">
-                <div className="sub-block-title">
-                  <span>Test Position (X, Y, Z)</span>
-                  <span className="sub-block-tag">
-                    {Math.round(posDraft[0] * 100)} / {Math.round(posDraft[1] * 100)} /{" "}
-                    {Math.round(posDraft[2] * 100)}%
-                  </span>
-                </div>
-
-                <div className="chip-group">
-                  {TEST_POS_PRESETS.map((preset) => {
-                    const isActive =
-                      Math.abs(posDraft[0] - preset.pos[0]) < 0.03 &&
-                      Math.abs(posDraft[1] - preset.pos[1]) < 0.03 &&
-                      Math.abs(posDraft[2] - preset.pos[2]) < 0.03;
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        className={`chip-btn ${isActive ? "active" : ""}`}
-                        onClick={() => {
-                          setPosDraft(preset.pos);
-                          commitToolheadRelPos(preset.pos, `Test Position: ${preset.label}`);
+                </summary>
+                <div className="sub-accordion-body">
+                  <div className="field-row">
+                    <label>
+                      <span>Benchtop Feet</span>
+                      <span
+                        style={{
+                          color: currentFeetType === "rigid_bolted" ? "var(--muted)" : "var(--accent)",
+                          fontWeight: 600,
                         }}
                       >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="pos-slider-grid">
-                  {(
-                    [
-                      [0, "X"],
-                      [1, "Y"],
-                      [2, "Z"],
-                    ] as Array<[0 | 1 | 2, string]>
-                  ).map(([idx, axisName]) => {
-                    const pct = Math.round(posDraft[idx] * 100);
-                    return (
-                      <div key={axisName} className="pos-slider-row">
-                        <span className="pos-axis-lbl">{axisName}</span>
-                        <input
-                          type="range"
-                          min={10}
-                          max={90}
-                          step={5}
-                          value={pct}
-                          onChange={(e) => handlePosAxisSlider(idx, Number(e.target.value))}
-                          onPointerUp={() => commitToolheadRelPos(posDraft)}
-                          onKeyUp={() => commitToolheadRelPos(posDraft)}
-                        />
-                        <span className="pos-axis-val">{pct}%</span>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {showHints && (
-                  <div className="hint-line">
-                    Probe corners or Top/Low Z to reveal cantilever bed droop, Z-column flex, or
-                    asymmetric gantry modes.
-                  </div>
-                )}
-              </div>
-
-              <div className="field-row">
-                <label>Panel Shell Mesh (MITC4)</label>
-                <div className="engine-toggle engine-toggle-4" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
-                  {(
-                    [
-                      [2, "2×2 Fast"],
-                      [3, "3×3 Balanced"],
-                      [4, "4×4 Med"],
-                      [8, "8×8 Max"],
-                    ] as Array<[number, string]>
-                  ).map(([n, label]) => (
-                    <button
-                      key={n}
-                      type="button"
-                      className={`engine-toggle-btn ${panelMeshN === n ? "active" : ""}`}
-                      onClick={() => onPanelMeshNChange(n)}
+                        {frameFeetOptionMeta.shortLabel}
+                      </span>
+                    </label>
+                    <select
+                      value={currentFeetType}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as FrameFeetType;
+                        const prevLbl =
+                          FRAME_FEET_OPTIONS.find((o) => o.id === currentFeetType)?.shortLabel ??
+                          currentFeetType;
+                        const nextLbl =
+                          FRAME_FEET_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                        update(
+                          (d) => {
+                            d.frame.feet_type = nextVal;
+                          },
+                          `Benchtop Feet: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
                     >
-                      {label}
-                    </button>
-                  ))}
+                      {FRAME_FEET_OPTIONS.map((opt) => {
+                        const catItem = catalog.frame_feet?.find((f) => f.id === opt.id);
+                        return (
+                          <option key={opt.id} value={opt.id}>
+                            {catItem?.name ?? opt.label}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {showHints && (
+                      <div className="hint-line">
+                        {frameFeetCatalogEntry?.notes || frameFeetOptionMeta.hint}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="sub-block">
+                    <div className="sub-block-title">
+                      <span>Test Position (X, Y, Z)</span>
+                      <span className="sub-block-tag">
+                        {Math.round(posDraft[0] * 100)} / {Math.round(posDraft[1] * 100)} /{" "}
+                        {Math.round(posDraft[2] * 100)}%
+                      </span>
+                    </div>
+
+                    <div className="chip-group">
+                      {TEST_POS_PRESETS.map((preset) => {
+                        const isActive =
+                          Math.abs(posDraft[0] - preset.pos[0]) < 0.03 &&
+                          Math.abs(posDraft[1] - preset.pos[1]) < 0.03 &&
+                          Math.abs(posDraft[2] - preset.pos[2]) < 0.03;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            className={`chip-btn ${isActive ? "active" : ""}`}
+                            onClick={() => {
+                              setPosDraft(preset.pos);
+                              commitToolheadRelPos(preset.pos, `Test Position: ${preset.label}`);
+                            }}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="pos-slider-grid">
+                      {(
+                        [
+                          [0, "X"],
+                          [1, "Y"],
+                          [2, "Z"],
+                        ] as Array<[0 | 1 | 2, string]>
+                      ).map(([idx, axisName]) => {
+                        const pct = Math.round(posDraft[idx] * 100);
+                        return (
+                          <div key={axisName} className="pos-slider-row">
+                            <span className="pos-axis-lbl">{axisName}</span>
+                            <input
+                              type="range"
+                              min={10}
+                              max={90}
+                              step={5}
+                              value={pct}
+                              onChange={(e) => handlePosAxisSlider(idx, Number(e.target.value))}
+                              onPointerUp={() => commitToolheadRelPos(posDraft)}
+                              onKeyUp={() => commitToolheadRelPos(posDraft)}
+                            />
+                            <span className="pos-axis-val">{pct}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {showHints && (
+                      <div className="hint-line">
+                        Probe corners or Top/Low Z to reveal cantilever bed droop, Z-column flex, or
+                        asymmetric gantry modes.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="field-row">
+                    <label>Panel Shell Mesh (MITC4)</label>
+                    <div
+                      className="engine-toggle engine-toggle-4"
+                      style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+                    >
+                      {(
+                        [
+                          [2, "2×2 Fast"],
+                          [3, "3×3 Balanced"],
+                          [4, "4×4 Med"],
+                          [8, "8×8 Max"],
+                        ] as Array<[number, string]>
+                      ).map(([n, label]) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className={`engine-toggle-btn ${panelMeshN === n ? "active" : ""}`}
+                          onClick={() => onPanelMeshNChange(n)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </details>
             </div>
           </>
         )}

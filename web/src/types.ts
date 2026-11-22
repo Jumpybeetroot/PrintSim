@@ -708,6 +708,16 @@ export interface DeepVerifyResponse {
   deep_simulation: SimulationResponse;
 }
 
+export interface ModeCauseItem {
+  id: string;
+  label: string;
+  subsystem: SubsystemKey | "drive";
+  kind: "stiffness" | "mass";
+  share_pct: number;
+  est_hz_gain: number;
+  detail: string;
+}
+
 export interface ModeShapeData {
   mode_number: number;
   frequency_hz: number;
@@ -729,6 +739,12 @@ export interface ModeShapeData {
   print_impact_score?: number;
   print_impact_level?: "critical" | "high" | "moderate" | "low";
   dominant_problem_area?: SubsystemKey;
+  top_causes?: ModeCauseItem[];
+  limiting_axis_share_pct?: number;
+  x_axis_share_pct?: number;
+  y_axis_share_pct?: number;
+  is_limiting_axis_mode?: boolean;
+  is_primary_limiting_mode?: boolean;
   toolhead_participation_xyz: [number, number, number];
   nodal_vectors: Record<string, [number, number, number]>;
   nodal_rotations?: Record<string, [number, number, number]>;
@@ -739,6 +755,62 @@ export interface AccelBottleneckShares {
   belt: number;
   motor: number;
   bracket: number;
+}
+
+export interface BeltSubBreakdownData {
+  k_belt_cord_n_per_mm: number;
+  k_tooth_mesh_n_per_mm: number;
+  k_idler_shaft_n_per_mm: number;
+  k_belt_total_n_per_mm: number;
+  belt_cord_share_pct: number;
+  tooth_mesh_share_pct: number;
+  idler_shaft_share_pct: number;
+}
+
+export interface OverallLimitingCauseItem {
+  id: string;
+  label: string;
+  category: "belt" | "motor" | "bracket" | "structural" | "mass";
+  subsystem: SubsystemKey | "drive";
+  share_pct: number;
+  est_hz_gain: number;
+  est_accel_gain_mm_s2: number;
+  detail: string;
+}
+
+export interface LimitingMovingMassInfo {
+  axis: "X" | "Y";
+  mass_g: number;
+  label: string;
+  est_hz_gain_25pct_lighter: number;
+}
+
+export interface LimitingModalSummaryData {
+  limiting_axis: "X" | "Y";
+  other_axis: "X" | "Y";
+  effective_freq_hz: number;
+  other_axis_effective_freq_hz: number;
+  recommended_shaper: string;
+  max_accel_mm_s2: number;
+  other_axis_max_accel_mm_s2: number;
+  limiting_kind: "structural" | "belt" | "motor" | "bracket";
+  limiting_kind_label: string;
+  headline: string;
+  belt_included_note: string;
+  structural_freq_hz: number;
+  belt_freq_hz: number;
+  motor_freq_hz: number;
+  bracket_freq_hz: number;
+  drive_freq_hz: number;
+  nozzle_whip_amp_ratio?: number;
+  primary_structural_mode_number: number;
+  primary_structural_mode_label: string;
+  primary_structural_mode_freq_hz: number;
+  primary_structural_mode_share_pct: number;
+  compliance_share_pct: AccelBottleneckShares;
+  belt_sub_breakdown?: BeltSubBreakdownData;
+  top_overall_causes: OverallLimitingCauseItem[];
+  moving_mass_info?: LimitingMovingMassInfo;
 }
 
 export interface AccelBottleneckData {
@@ -1037,6 +1109,7 @@ export interface ModalFeaData {
   recommended_max_accel_mm_s2: number;
   worst_print_mode_number?: number;
   accel_bottleneck?: AccelBottleneckData;
+  limiting_modal_summary?: LimitingModalSummaryData;
   shaper_x: ShaperData | null;
   shaper_y: ShaperData | null;
   shaper_graphs?: { x: AxisShaperGraph; y: AxisShaperGraph };

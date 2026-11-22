@@ -8,14 +8,19 @@ import {
   DeepVerifyResponse,
   GeometryExtrusionFillingData,
   KlipperShaperCandidate,
+  LimitingModalSummaryData,
+  ModeShapeData,
+  OverallLimitingCauseItem,
   PrinterBOMResponse,
   RCSAData,
   SensitivityData,
+  ShaperData,
   SimulationResponse,
   SolidFeaEngine,
   SolidFEAResponse,
   SubsystemKey,
   TetFEAResponse,
+  ThermalStructuralReport,
   TimeDomainMetrologyData,
   ToolheadFlexBreakdownData,
   TopologyOptResponse,
@@ -49,6 +54,7 @@ interface Props {
   topoResult: TopologyOptResponse | null;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
+  onInspectModalMode?: (modeIdx: number) => void;
   bom: PrinterBOMResponse | null;
   bomLoading: boolean;
   stockLengthMm: number;
@@ -437,6 +443,61 @@ const InlineDeltaBadge: React.FC<{
   );
 };
 
+const DeepDiveAccordion: React.FC<{
+  title: string;
+  badge?: string;
+  updated?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}> = ({ title, badge, updated, open, onToggle, children }) => (
+  <div
+    className={`section-card deep-accordion ${open ? "open" : ""} ${updated ? "card-changed" : ""}`}
+  >
+    <button
+      type="button"
+      className="deep-accordion-head"
+      onClick={onToggle}
+      aria-expanded={open}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          minWidth: 0,
+          flex: "1 1 auto",
+          textAlign: "left",
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            fontSize: 10,
+            color: "var(--muted)",
+            width: 10,
+            flexShrink: 0,
+          }}
+        >
+          {open ? "▾" : "▸"}
+        </span>
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {title}
+        </span>
+        {updated && <span className="changed-dot-label">Updated</span>}
+      </span>
+      {badge && <span className="deep-accordion-badge">{badge}</span>}
+    </button>
+    {open && <div className="deep-accordion-body">{children}</div>}
+  </div>
+);
+
 const TopologyOptCard: React.FC<{ topo: TopologyOptResponse }> = ({ topo }) => {
   const hist = topo.history || [];
   const w = 276;
@@ -651,14 +712,6 @@ const TetFEACard: React.FC<{ tet: TetFEAResponse }> = ({ tet }) => {
         <span className="metric-val">{tet.mass_g.toFixed(2)} g</span>
       </div>
       <div className="metric-kv">
-        <span>Max Displacement</span>
-        <span className="metric-val">{tet.max_displacement_um.toFixed(1)} µm</span>
-      </div>
-      <div className="metric-kv">
-        <span>Stiffness</span>
-        <span className="metric-val">{tet.stiffness_n_per_mm.toFixed(1)} N/mm</span>
-      </div>
-      <div className="metric-kv">
         <span>Max von Mises</span>
         <span className="metric-val">
           {tet.max_von_mises_mpa.toFixed(2)} MPa
@@ -670,12 +723,6 @@ const TetFEACard: React.FC<{ tet: TetFEAResponse }> = ({ tet }) => {
         <span className="metric-val">
           {tet.max_z_tensile_mpa.toFixed(2)} MPa
           <span style={{ color: "var(--muted)", fontWeight: 400 }}> / {tet.z_layer_strength_mpa.toFixed(0)}</span>
-        </span>
-      </div>
-      <div className="metric-kv">
-        <span>Safety Factor</span>
-        <span className={`metric-val ${isSafe ? "tag-ok" : "tag-bad"}`}>
-          {tet.safety_factor.toFixed(2)}× ({tet.failure_mode.replace(/_/g, " ")})
         </span>
       </div>
     </div>
@@ -728,7 +775,8 @@ const KlipperShaperPsdCard: React.FC<{
   frameDampingRatio?: number;
   extrusionFilling?: GeometryExtrusionFillingData;
   changed: boolean;
-}> = ({ graphs, frameDampingRatio, extrusionFilling, changed }) => {
+  embedded?: boolean;
+}> = ({ graphs, frameDampingRatio, extrusionFilling, changed, embedded }) => {
   const [axis, setAxis] = useState<"x" | "y">("x");
   const [selectedShaperName, setSelectedShaperName] = useState<string | null>(null);
 
@@ -855,15 +903,31 @@ const KlipperShaperPsdCard: React.FC<{
   const fillingShortName = isFilled && extrusionFilling ? extrusionFilling.short_name : "Hollow";
 
   return (
-    <div className={`section-card psd-card ${changed ? "card-changed" : ""}`}>
-      <div className="section-title">
-        <span>Klipper ADXL345 Resonance (PSD)</span>
-        <span className="psd-peak-pill">
-          Peak {graph.peak_freq_hz.toFixed(1)} Hz
-        </span>
-      </div>
+    <div
+      className={
+        embedded
+          ? "psd-card"
+          : `section-card psd-card ${changed ? "card-changed" : ""}`
+      }
+      style={embedded ? { display: "flex", flexDirection: "column", gap: 8 } : undefined}
+    >
+      {!embedded && (
+        <div className="section-title">
+          <span>Klipper ADXL345 Resonance (PSD)</span>
+          <span className="psd-peak-pill">
+            Peak {graph.peak_freq_hz.toFixed(1)} Hz
+          </span>
+        </div>
+      )}
       <div className="psd-damping-strip">
-        <span>Frame Damping</span>
+        <span>
+          Frame Damping
+          {embedded && (
+            <span className="psd-peak-pill" style={{ marginLeft: 6 }}>
+              Peak {graph.peak_freq_hz.toFixed(1)} Hz
+            </span>
+          )}
+        </span>
         <span className="psd-damping-val">
           {isFilled && extrusionFilling && (
             <span
@@ -1118,31 +1182,58 @@ const BOTTLENECK_SOURCES: Array<{
   { key: "bracket", label: "Brackets", shortLabel: "Bkt", color: "#fb7185" },
 ];
 
+const OVERALL_CAUSE_META: Record<
+  OverallLimitingCauseItem["category"],
+  { badge: string; color: string }
+> = {
+  belt: { badge: "BELT", color: "#f59e0b" },
+  structural: { badge: "STRUCT", color: "#38bdf8" },
+  motor: { badge: "MOTOR", color: "#a78bfa" },
+  bracket: { badge: "BKT", color: "#fb7185" },
+  mass: { badge: "MASS", color: "#22d3ee" },
+};
+
 const AccelBottleneckCard: React.FC<{
-  bottleneck: AccelBottleneckData;
+  bottleneck?: AccelBottleneckData;
+  limitingSummary?: LimitingModalSummaryData;
+  shaperX?: ShaperData | null;
+  shaperY?: ShaperData | null;
+  modes?: ModeShapeData[];
+  onInspectModalMode?: (modeIdx: number) => void;
   changed: boolean;
-}> = ({ bottleneck, changed }) => {
-  const [selectedAxis, setSelectedAxis] = useState<"X" | "Y">(bottleneck.limiting_axis);
+}> = ({ bottleneck, limitingSummary, shaperX, shaperY, modes, onInspectModalMode, changed }) => {
+  const defaultLimitingAxis: "X" | "Y" =
+    limitingSummary?.limiting_axis ?? bottleneck?.limiting_axis ?? "Y";
+  const [selectedAxis, setSelectedAxis] = useState<"X" | "Y">(defaultLimitingAxis);
 
   useEffect(() => {
-    setSelectedAxis(bottleneck.limiting_axis);
-  }, [bottleneck.limiting_axis]);
+    setSelectedAxis(defaultLimitingAxis);
+  }, [defaultLimitingAxis]);
+
+  const fallbackShares: AccelBottleneckShares = limitingSummary?.compliance_share_pct ??
+    bottleneck?.shares_pct ?? { frame: 25, belt: 25, motor: 25, bracket: 25 };
 
   const activeShares: AccelBottleneckShares =
     selectedAxis === "X"
-      ? bottleneck.x_shares_pct ?? bottleneck.shares_pct
-      : bottleneck.y_shares_pct ?? bottleneck.shares_pct;
+      ? shaperX?.compliance_share_pct ?? bottleneck?.x_shares_pct ?? fallbackShares
+      : shaperY?.compliance_share_pct ?? bottleneck?.y_shares_pct ?? fallbackShares;
 
   const totalShare = Math.max(
     BOTTLENECK_SOURCES.reduce((acc, s) => acc + Math.max(0, activeShares[s.key] ?? 0), 0),
     1e-6
   );
 
+  const primarySourceKey: keyof AccelBottleneckShares = limitingSummary
+    ? limitingSummary.limiting_kind === "structural"
+      ? "frame"
+      : limitingSummary.limiting_kind
+    : bottleneck?.primary_source ?? "frame";
+
   const primaryMeta =
-    BOTTLENECK_SOURCES.find((s) => s.key === bottleneck.primary_source) ?? BOTTLENECK_SOURCES[0];
+    BOTTLENECK_SOURCES.find((s) => s.key === primarySourceKey) ?? BOTTLENECK_SOURCES[0];
 
   // Dominant source for the currently viewed axis (highlights the biggest contributor in the legend)
-  let activeDominantKey: keyof AccelBottleneckShares = bottleneck.primary_source;
+  let activeDominantKey: keyof AccelBottleneckShares = primarySourceKey;
   let activeMaxVal = -1;
   for (const s of BOTTLENECK_SOURCES) {
     const v = activeShares[s.key] ?? 0;
@@ -1152,13 +1243,75 @@ const AccelBottleneckCard: React.FC<{
     }
   }
 
+  // Component frequencies for the currently viewed axis
+  const activeShaper = selectedAxis === "X" ? shaperX : shaperY;
+  const useSummaryFreqs = Boolean(
+    limitingSummary && selectedAxis === limitingSummary.limiting_axis
+  );
+  const compFreqs: Record<keyof AccelBottleneckShares, number | undefined> = {
+    frame: useSummaryFreqs
+      ? limitingSummary?.structural_freq_hz
+      : activeShaper?.structural_freq_hz,
+    belt: useSummaryFreqs ? limitingSummary?.belt_freq_hz : activeShaper?.belt_freq_hz,
+    motor: useSummaryFreqs ? limitingSummary?.motor_freq_hz : activeShaper?.motor_freq_hz,
+    bracket: useSummaryFreqs ? limitingSummary?.bracket_freq_hz : activeShaper?.bracket_freq_hz,
+  };
+
+  // X vs Y summary info for comparison strip
+  const xFreq =
+    shaperX?.effective_freq_hz ??
+    (limitingSummary
+      ? limitingSummary.limiting_axis === "X"
+        ? limitingSummary.effective_freq_hz
+        : limitingSummary.other_axis_effective_freq_hz
+      : undefined);
+  const yFreq =
+    shaperY?.effective_freq_hz ??
+    (limitingSummary
+      ? limitingSummary.limiting_axis === "Y"
+        ? limitingSummary.effective_freq_hz
+        : limitingSummary.other_axis_effective_freq_hz
+      : undefined);
+  const xAccel =
+    shaperX?.max_accel_mm_s2 ??
+    (limitingSummary
+      ? limitingSummary.limiting_axis === "X"
+        ? limitingSummary.max_accel_mm_s2
+        : limitingSummary.other_axis_max_accel_mm_s2
+      : undefined);
+  const yAccel =
+    shaperY?.max_accel_mm_s2 ??
+    (limitingSummary
+      ? limitingSummary.limiting_axis === "Y"
+        ? limitingSummary.max_accel_mm_s2
+        : limitingSummary.other_axis_max_accel_mm_s2
+      : undefined);
+
+  const beltSub = limitingSummary?.belt_sub_breakdown;
+  const beltShareForSub = Math.max(
+    limitingSummary?.compliance_share_pct?.belt ?? 0,
+    activeShares.belt ?? 0
+  );
+  const showBeltSub = Boolean(beltSub && beltShareForSub >= 10);
+
+  const primaryModeIdx =
+    limitingSummary && modes && modes.length > 0
+      ? (() => {
+          const byNum = modes.findIndex(
+            (m) => m.mode_number === limitingSummary.primary_structural_mode_number
+          );
+          if (byNum >= 0) return byNum;
+          return modes.findIndex((m) => Boolean(m.is_primary_limiting_mode));
+        })()
+      : -1;
+
   const formatAxisLine = (shares: AccelBottleneckShares) =>
     BOTTLENECK_SOURCES.map((s) => `${s.shortLabel} ${Math.round(shares[s.key] ?? 0)}%`).join(" · ");
 
   return (
     <div className={`section-card bottleneck-card ${changed ? "card-changed" : ""}`}>
       <div className="section-title bottleneck-header">
-        <span>Accel Limit Breakdown</span>
+        <span>{limitingSummary ? "Limiting Resonance & Top Causes" : "Accel Limit Breakdown"}</span>
         <span
           className="bottleneck-pill"
           style={{
@@ -1167,23 +1320,67 @@ const AccelBottleneckCard: React.FC<{
             color: primaryMeta.color,
           }}
         >
-          Limiting: {bottleneck.limiting_axis} · {Math.round(bottleneck.primary_share_pct)}%{" "}
-          {bottleneck.primary_label}
+          {limitingSummary
+            ? `Limiting: ${limitingSummary.limiting_axis} · ${limitingSummary.effective_freq_hz.toFixed(1)} Hz`
+            : bottleneck
+              ? `Limiting: ${bottleneck.limiting_axis} · ${Math.round(bottleneck.primary_share_pct)}% ${bottleneck.primary_label}`
+              : `Limiting: ${defaultLimitingAxis}`}
         </span>
       </div>
+
+      {limitingSummary && (
+        <div className="limiting-headline-box" style={{ borderLeftColor: primaryMeta.color }}>
+          <div className="limiting-headline-text">{limitingSummary.headline}</div>
+          {xFreq != null && yFreq != null && xAccel != null && yAccel != null && (
+            <div className="limiting-xy-compare">
+              {(limitingSummary.limiting_axis === "X"
+                ? (["X", "Y"] as const)
+                : (["Y", "X"] as const)
+              ).map((ax) => {
+                  const isLim = ax === limitingSummary.limiting_axis;
+                  const f = ax === "X" ? xFreq : yFreq;
+                  const a = ax === "X" ? xAccel : yAccel;
+                  const shaperName =
+                    ax === "X"
+                      ? shaperX?.recommended_shaper ??
+                        (isLim ? limitingSummary.recommended_shaper : "")
+                      : shaperY?.recommended_shaper ??
+                        (isLim ? limitingSummary.recommended_shaper : "");
+                  return (
+                    <div
+                      key={ax}
+                      className={`limiting-xy-chip ${isLim ? "is-limiting" : ""}`}
+                    >
+                      <span className="limiting-xy-axis">{ax}:</span>
+                      <strong>{f.toFixed(1)} Hz</strong>
+                      <span className="limiting-xy-sep">·</span>
+                      <span>{Math.round(a).toLocaleString()} mm/s²</span>
+                      {shaperName && <span className="limiting-xy-shaper">({shaperName})</span>}
+                      {isLim && <span className="limiting-tag-mini">LIMITING</span>}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="bottleneck-axis-row">
         <span>Compliance Share ({selectedAxis}-Axis)</span>
         <div className="bottleneck-axis-tabs">
           {(["X", "Y"] as const).map((ax) => {
-            const isLimiting = ax === bottleneck.limiting_axis;
+            const isLimiting = ax === defaultLimitingAxis;
             return (
               <button
                 key={ax}
                 type="button"
                 className={`bottleneck-axis-btn ${selectedAxis === ax ? "active" : ""}`}
                 onClick={() => setSelectedAxis(ax)}
-                title={isLimiting ? `${ax}-axis is the limiting acceleration axis` : `Inspect ${ax}-axis compliance share`}
+                title={
+                  isLimiting
+                    ? `${ax}-axis is the limiting acceleration axis`
+                    : `Inspect ${ax}-axis compliance share`
+                }
               >
                 {ax}
                 {isLimiting ? " ★" : ""}
@@ -1193,7 +1390,11 @@ const AccelBottleneckCard: React.FC<{
         </div>
       </div>
 
-      <div className="bottleneck-bar" role="img" aria-label={`Acceleration compliance share on ${selectedAxis}-axis`}>
+      <div
+        className="bottleneck-bar"
+        role="img"
+        aria-label={`Acceleration compliance share on ${selectedAxis}-axis`}
+      >
         {BOTTLENECK_SOURCES.map((src) => {
           const rawPct = Math.max(0, activeShares[src.key] ?? 0);
           const normPct = (rawPct / totalShare) * 100;
@@ -1215,35 +1416,153 @@ const AccelBottleneckCard: React.FC<{
         {BOTTLENECK_SOURCES.map((src) => {
           const val = activeShares[src.key] ?? 0;
           const isDom = src.key === activeDominantKey;
+          const freq = compFreqs[src.key];
+          const hasFreq = freq != null && Number.isFinite(freq) && freq > 0 && freq < 9999;
           return (
             <div key={src.key} className={`bottleneck-legend-item ${isDom ? "primary" : ""}`}>
               <span className="bottleneck-legend-left">
                 <span className="swatch-dot" style={{ background: src.color }} />
                 <span>{src.label}</span>
               </span>
-              <span className="bottleneck-legend-pct" style={{ color: isDom ? src.color : undefined }}>
-                {val.toFixed(0)}%
+              <span className="bottleneck-legend-right">
+                <span
+                  className="bottleneck-legend-pct"
+                  style={{ color: isDom ? src.color : undefined }}
+                >
+                  {val.toFixed(0)}%
+                </span>
+                {hasFreq && (
+                  <span className="bottleneck-legend-hz">· {Math.round(freq)} Hz</span>
+                )}
               </span>
             </div>
           );
         })}
       </div>
 
-      <div className="bottleneck-xy-strip">
-        <div className={`bottleneck-xy-line ${bottleneck.limiting_axis === "X" ? "is-limiting" : ""}`}>
-          <span className="bottleneck-xy-axis">X:</span>
-          <span>{formatAxisLine(bottleneck.x_shares_pct ?? bottleneck.shares_pct)}</span>
+      {showBeltSub && beltSub && (
+        <div
+          className="belt-sub-strip"
+          title={`Total belt drive stiffness: ${Math.round(beltSub.k_belt_total_n_per_mm)} N/mm (Cord ${Math.round(
+            beltSub.k_belt_cord_n_per_mm
+          )} · Tooth Mesh ${Math.round(beltSub.k_tooth_mesh_n_per_mm)} · Idler Shafts ${Math.round(
+            beltSub.k_idler_shaft_n_per_mm
+          )} N/mm)`}
+        >
+          <span className="belt-sub-prefix">Belt Stretch Split:</span>{" "}
+          <strong>Cord EA/L {Math.round(beltSub.belt_cord_share_pct)}%</strong> (
+          {Math.round(beltSub.k_belt_cord_n_per_mm)} N/mm) · Tooth Mesh{" "}
+          <strong>{Math.round(beltSub.tooth_mesh_share_pct)}%</strong> · Idlers{" "}
+          <strong>{Math.round(beltSub.idler_shaft_share_pct)}%</strong>
         </div>
-        <div className={`bottleneck-xy-line ${bottleneck.limiting_axis === "Y" ? "is-limiting" : ""}`}>
-          <span className="bottleneck-xy-axis">Y:</span>
-          <span>{formatAxisLine(bottleneck.y_shares_pct ?? bottleneck.shares_pct)}</span>
-        </div>
-      </div>
+      )}
 
-      {bottleneck.recommendation && (
-        <div className="bottleneck-tip" style={{ borderLeftColor: primaryMeta.color }}>
-          {bottleneck.recommendation}
+      {limitingSummary &&
+        limitingSummary.top_overall_causes &&
+        limitingSummary.top_overall_causes.length > 0 && (
+          <div className="top-causes-block">
+            <div className="top-causes-head">
+              Top Causes Limiting Your {limitingSummary.limiting_axis}-Axis
+            </div>
+            <div className="top-causes-list">
+              {limitingSummary.top_overall_causes.slice(0, 5).map((cause) => {
+                const meta = OVERALL_CAUSE_META[cause.category] ?? {
+                  badge: "CAUSE",
+                  color: "#38bdf8",
+                };
+                const barWidth = Math.max(4, Math.min(100, cause.share_pct));
+                return (
+                  <div
+                    key={cause.id}
+                    className="top-cause-row"
+                    title={cause.detail}
+                  >
+                    <div className="top-cause-main">
+                      <span
+                        className="cause-cat-pill"
+                        style={{
+                          background: `${meta.color}20`,
+                          borderColor: `${meta.color}66`,
+                          color: meta.color,
+                        }}
+                      >
+                        {meta.badge}
+                      </span>
+                      <span className="top-cause-label">{cause.label}</span>
+                      <span className="top-cause-metrics">
+                        <strong className="top-cause-pct">{Math.round(cause.share_pct)}%</strong>
+                        {cause.est_hz_gain > 0 && (
+                          <span className="top-cause-hz">
+                            +{formatHzGain(cause.est_hz_gain)} Hz
+                          </span>
+                        )}
+                        {cause.est_accel_gain_mm_s2 >= 50 && (
+                          <span className="top-cause-accel">
+                            +{Math.round(cause.est_accel_gain_mm_s2).toLocaleString()} mm/s²
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="top-cause-bar-track">
+                      <div
+                        className="top-cause-bar-fill"
+                        style={{ width: `${barWidth}%`, background: meta.color }}
+                      />
+                    </div>
+                    {cause.detail && <div className="top-cause-detail">{cause.detail}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+      {limitingSummary?.moving_mass_info && (
+        <div className="moving-mass-lever-note">
+          <span className="moving-mass-lever-key">Moving Mass Lever:</span> Cutting 25% off{" "}
+          <strong>{limitingSummary.moving_mass_info.label}</strong> (
+          {Math.round(limitingSummary.moving_mass_info.mass_g)}g) adds{" "}
+          <strong className="moving-mass-lever-gain">
+            +{formatHzGain(limitingSummary.moving_mass_info.est_hz_gain_25pct_lighter)} Hz
+          </strong>
         </div>
+      )}
+
+      {limitingSummary && onInspectModalMode && primaryModeIdx >= 0 && (
+        <button
+          type="button"
+          className="animate-limiting-mode-btn"
+          onClick={() => onInspectModalMode(primaryModeIdx)}
+          title={`Switch 3D viewport to Modal mode and animate Mode ${limitingSummary.primary_structural_mode_number} (${limitingSummary.primary_structural_mode_label})`}
+        >
+          ▶ Animate Limiting Mode M{limitingSummary.primary_structural_mode_number} (
+          {limitingSummary.primary_structural_mode_freq_hz.toFixed(1)} Hz) in 3D
+        </button>
+      )}
+
+      {!limitingSummary && bottleneck && (
+        <>
+          <div className="bottleneck-xy-strip">
+            <div
+              className={`bottleneck-xy-line ${bottleneck.limiting_axis === "X" ? "is-limiting" : ""}`}
+            >
+              <span className="bottleneck-xy-axis">X:</span>
+              <span>{formatAxisLine(bottleneck.x_shares_pct ?? bottleneck.shares_pct)}</span>
+            </div>
+            <div
+              className={`bottleneck-xy-line ${bottleneck.limiting_axis === "Y" ? "is-limiting" : ""}`}
+            >
+              <span className="bottleneck-xy-axis">Y:</span>
+              <span>{formatAxisLine(bottleneck.y_shares_pct ?? bottleneck.shares_pct)}</span>
+            </div>
+          </div>
+
+          {bottleneck.recommendation && (
+            <div className="bottleneck-tip" style={{ borderLeftColor: primaryMeta.color }}>
+              {bottleneck.recommendation}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1252,7 +1571,8 @@ const AccelBottleneckCard: React.FC<{
 const WeightShaperPotentialCard: React.FC<{
   gains: WeightShaperGainsSummary;
   changed: boolean;
-}> = ({ gains, changed }) => {
+  embedded?: boolean;
+}> = ({ gains, changed, embedded }) => {
   const axisTagStyle = (
     axis: "X" | "Y" | "XY",
     affectsLimiting: boolean
@@ -1281,25 +1601,31 @@ const WeightShaperPotentialCard: React.FC<{
 
   return (
     <div
-      className={`section-card ${changed ? "card-changed" : ""}`}
-      style={{
-        gap: 8,
-        borderColor: "rgba(56, 189, 248, 0.32)",
-      }}
+      className={embedded ? undefined : `section-card ${changed ? "card-changed" : ""}`}
+      style={
+        embedded
+          ? { display: "flex", flexDirection: "column", gap: 8 }
+          : {
+              gap: 8,
+              borderColor: "rgba(56, 189, 248, 0.32)",
+            }
+      }
     >
-      <div className="section-title bottleneck-header">
-        <span>Weight-Reduction Shaper Potential</span>
-        <span
-          className="bottleneck-pill"
-          style={{
-            background: "rgba(56, 189, 248, 0.14)",
-            border: "1px solid rgba(56, 189, 248, 0.45)",
-            color: "#38bdf8",
-          }}
-        >
-          Limiting: {gains.limiting_axis}-Axis ({gains.limiting_shaper_hz.toFixed(1)} Hz)
-        </span>
-      </div>
+      {!embedded && (
+        <div className="section-title bottleneck-header">
+          <span>Weight-Reduction Shaper Potential</span>
+          <span
+            className="bottleneck-pill"
+            style={{
+              background: "rgba(56, 189, 248, 0.14)",
+              border: "1px solid rgba(56, 189, 248, 0.45)",
+              color: "#38bdf8",
+            }}
+          >
+            Limiting: {gains.limiting_axis}-Axis ({gains.limiting_shaper_hz.toFixed(1)} Hz)
+          </span>
+        </div>
+      )}
 
       <div
         style={{
@@ -1637,14 +1963,11 @@ function workspaceHeatColors(hz: number, minHz: number, maxHz: number): { bg: st
   };
 }
 
-const CncControlMetrologyCard: React.FC<{
+const CncMetrologyContent: React.FC<{
   metrology?: TimeDomainMetrologyData;
   workspaceFrf?: WorkspaceFRFData;
   rcsa?: RCSAData;
-  sensitivity?: SensitivityData;
-  viewMode: ViewMode;
-  onViewModeChange: (m: ViewMode) => void;
-}> = ({ metrology, workspaceFrf, rcsa, sensitivity, viewMode, onViewModeChange }) => {
+}> = ({ metrology, workspaceFrf, rcsa }) => {
   const ballbarSvg = useMemo(() => {
     const angles = metrology?.ballbar_angles_deg;
     const errs = metrology?.ballbar_radial_error_um;
@@ -1807,17 +2130,8 @@ const CncControlMetrologyCard: React.FC<{
     workspaceFrf && (workspaceFrf.min_axis_freq_grid_hz?.length ?? 0) > 0
   );
   const hasRcsa = Boolean(rcsa);
-  const topStiffen = sensitivity?.top_stiffen_targets?.slice(0, 3) ?? [];
-  const topLighten = sensitivity?.top_lighten_targets?.slice(0, 2) ?? [];
-  const hasSensitivity = Boolean(
-    sensitivity &&
-      (topStiffen.length > 0 ||
-        topLighten.length > 0 ||
-        Boolean(sensitivity.summary_diagnosis) ||
-        Boolean(sensitivity.subsystem_breakdown))
-  );
 
-  if (!hasMetrology && !hasWorkspace && !hasRcsa && !hasSensitivity) {
+  if (!hasMetrology && !hasWorkspace && !hasRcsa) {
     return null;
   }
 
@@ -1835,15 +2149,14 @@ const CncControlMetrologyCard: React.FC<{
   }
 
   return (
-    <div className="section-card cnc-metrology-card">
-      <div className="section-title">
-        <span>CNC Control &amp; Metrology</span>
-        {workspaceFrf?.drive_type && (
+    <div className="cnc-metrology-card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {workspaceFrf?.drive_type && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <span className="badge-pill" style={{ fontSize: 9.5, padding: "1px 6px" }}>
             {workspaceFrf.drive_type.replace(/_/g, " ")}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 1. Virtual ISO 230-4 Circular Ballbar Polar SVG Plot */}
       {metrology && (
@@ -2243,185 +2556,193 @@ const CncControlMetrologyCard: React.FC<{
           )}
         </div>
       )}
+    </div>
+  );
+};
 
-      {/* 4. Adjoint Sensitivity Hotspots */}
-      {hasSensitivity && (
-        <div className="metrology-subblock">
-          <div className="metrology-subhead">
-            <span>Adjoint Sensitivity Hotspots</span>
-            <button
-              type="button"
-              className={`deep-verify-cta ${viewMode === "sensitivity" ? "active" : ""}`}
-              style={{ padding: "2px 8px", fontSize: 10 }}
-              onClick={() => onViewModeChange("sensitivity")}
-              title="Color structural frame & panel bays by adjoint Hz/USD & Hz/100g ROI in the 3D viewport"
-            >
-              {viewMode === "sensitivity" ? "Viewing in 3D" : "View in 3D"}
-            </button>
-          </div>
+const AdjointSensitivityContent: React.FC<{
+  sensitivity: SensitivityData;
+  viewMode: ViewMode;
+  onViewModeChange: (m: ViewMode) => void;
+}> = ({ sensitivity, viewMode, onViewModeChange }) => {
+  const topStiffen = sensitivity.top_stiffen_targets?.slice(0, 3) ?? [];
+  const topLighten = sensitivity.top_lighten_targets?.slice(0, 2) ?? [];
 
-          {sensitivity?.summary_diagnosis && (
-            <div className="sens-diagnosis-banner">{sensitivity.summary_diagnosis}</div>
-          )}
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="metrology-subhead">
+        <span>3D Adjoint Stiffness &amp; Mass ROI</span>
+        <button
+          type="button"
+          className={`deep-verify-cta ${viewMode === "sensitivity" ? "active" : ""}`}
+          style={{ padding: "2px 8px", fontSize: 10 }}
+          onClick={() => onViewModeChange("sensitivity")}
+          title="Color structural frame & panel bays by adjoint Hz/USD & Hz/100g ROI in the 3D viewport"
+        >
+          {viewMode === "sensitivity" ? "Viewing in 3D" : "View in 3D"}
+        </button>
+      </div>
 
-          {sensitivity?.subsystem_breakdown && (() => {
-            const bd = sensitivity.subsystem_breakdown;
-            const primary = sensitivity.primary_problem_subsystem;
-            const thPct = bd.toolhead?.compliance_share_pct ?? 0;
-            const ganPct = bd.gantry?.compliance_share_pct ?? 0;
-            const frPct = bd.frame?.compliance_share_pct ?? 0;
-            const bedPct = bd.bed?.compliance_share_pct ?? 0;
+      {sensitivity.summary_diagnosis && (
+        <div className="sens-diagnosis-banner">{sensitivity.summary_diagnosis}</div>
+      )}
 
-            let calloutText: string | null = null;
-            if (thPct > frPct && thPct >= ganPct && thPct >= 15) {
-              calloutText = `Primary compliance limit: Toolhead & Mount (${Math.round(
-                thPct
-              )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
-            } else if (ganPct > frPct && ganPct >= 15) {
-              calloutText = `Primary compliance limit: X/Y Gantry (${Math.round(
-                ganPct
-              )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
-            } else if (bedPct > frPct && bedPct >= 15) {
-              calloutText = `Primary compliance limit: Bed & Z-Mount (${Math.round(
-                bedPct
-              )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
-            }
+      {sensitivity.subsystem_breakdown && (() => {
+        const bd = sensitivity.subsystem_breakdown;
+        const primary = sensitivity.primary_problem_subsystem;
+        const thPct = bd.toolhead?.compliance_share_pct ?? 0;
+        const ganPct = bd.gantry?.compliance_share_pct ?? 0;
+        const frPct = bd.frame?.compliance_share_pct ?? 0;
+        const bedPct = bd.bed?.compliance_share_pct ?? 0;
 
-            return (
-              <div className="sens-breakdown-card">
-                <div className="sens-breakdown-head">
-                  <span>4-Subsystem Nozzle-Error Share</span>
-                  {primary && (
-                    <span className="badge-pill bad" style={{ padding: "0 6px", fontSize: 9.5 }}>
-                      #1 {SUBSYSTEM_DISPLAY[primary]?.short ?? primary}
-                    </span>
-                  )}
-                </div>
+        let calloutText: string | null = null;
+        if (thPct > frPct && thPct >= ganPct && thPct >= 15) {
+          calloutText = `Primary compliance limit: Toolhead & Mount (${Math.round(
+            thPct
+          )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
+        } else if (ganPct > frPct && ganPct >= 15) {
+          calloutText = `Primary compliance limit: X/Y Gantry (${Math.round(
+            ganPct
+          )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
+        } else if (bedPct > frPct && bedPct >= 15) {
+          calloutText = `Primary compliance limit: Bed & Z-Mount (${Math.round(
+            bedPct
+          )}%) vs. Outer Frame (${Math.round(frPct)}%)`;
+        }
 
-                <div className="subsystem-bar-track">
-                  {SUBSYSTEM_ORDER.map((k) => {
-                    const pct = Math.max(0, bd[k]?.compliance_share_pct ?? 0);
-                    if (pct <= 0.5) return null;
-                    return (
-                      <div
-                        key={k}
-                        className="subsystem-bar-seg"
-                        style={{ width: `${pct}%`, background: SUBSYSTEM_DISPLAY[k].color }}
-                        title={`${bd[k]?.label ?? SUBSYSTEM_DISPLAY[k].full}: ${Math.round(pct)}% of flex`}
-                      />
-                    );
-                  })}
-                </div>
-
-                <div className="sens-subsystem-grid">
-                  {SUBSYSTEM_ORDER.map((k) => {
-                    const entry = bd[k];
-                    const sev = entry?.severity ?? "low";
-                    const isPrimary = primary === k;
-                    return (
-                      <div
-                        key={k}
-                        className={`sens-sub-chip sev-${sev} ${isPrimary ? "primary" : ""}`}
-                        title={
-                          entry
-                            ? `${entry.label}: ${entry.compliance_share_pct.toFixed(1)}% flex • Stiff sens ${entry.modal_stiff_hz.toFixed(
-                                2
-                              )} Hz • Mass sens ${entry.modal_mass_hz.toFixed(2)} Hz`
-                            : SUBSYSTEM_DISPLAY[k].full
-                        }
-                      >
-                        <span className="sens-sub-chip-top">
-                          <span className="sens-sub-chip-name">
-                            <span
-                              className="swatch-dot"
-                              style={{ background: SUBSYSTEM_DISPLAY[k].color }}
-                            />
-                            {SUBSYSTEM_DISPLAY[k].full}
-                          </span>
-                          <strong className="sens-sub-chip-pct">
-                            {Math.round(entry?.compliance_share_pct ?? 0)}%
-                          </strong>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {calloutText && <div className="sens-priority-callout">{calloutText}</div>}
-              </div>
-            );
-          })()}
-
-          {topStiffen.length > 0 && (
-            <div className="sens-group">
-              <div className="sens-group-label stiffen">Primary Compliance Hotspots (Stiffness Limits)</div>
-              {topStiffen.map((t) => (
-                <div
-                  key={`stiff-${t.id}`}
-                  className="sens-row stiffen"
-                  title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
-                >
-                  <div className="sens-row-top">
-                    <span className="sens-id">
-                      <strong>{t.label ?? t.id}</strong>
-                      {!t.label && <span className="sens-role">{t.role}</span>}
-                    </span>
-                  </div>
-                  <div className="sens-badge-row">
-                    {(t.est_hz_gain ?? 0) > 0 && (
-                      <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
-                    )}
-                    {t.compliance_share_pct >= 1 && (
-                      <span className="sens-badge flex">
-                        {t.compliance_share_pct.toFixed(0)}% of flex
-                      </span>
-                    )}
-                    <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
-                  </div>
-                  {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
-                  {t.action_hint && (
-                    <div className="sens-fix">
-                      <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
-                    </div>
-                  )}
-                </div>
-              ))}
+        return (
+          <div className="sens-breakdown-card">
+            <div className="sens-breakdown-head">
+              <span>4-Subsystem Nozzle-Error Share</span>
+              {primary && (
+                <span className="badge-pill bad" style={{ padding: "0 6px", fontSize: 9.5 }}>
+                  #1 {SUBSYSTEM_DISPLAY[primary]?.short ?? primary}
+                </span>
+              )}
             </div>
-          )}
 
-          {topLighten.length > 0 && (
-            <div className="sens-group">
-              <div className="sens-group-label lighten">Primary Inertia Hotspots (Moving-Mass Limits)</div>
-              {topLighten.map((t) => {
-                const gainPer100g = t.hz_gain_per_100g_saved ?? Math.abs(t.hz_per_100g);
+            <div className="subsystem-bar-track">
+              {SUBSYSTEM_ORDER.map((k) => {
+                const pct = Math.max(0, bd[k]?.compliance_share_pct ?? 0);
+                if (pct <= 0.5) return null;
                 return (
                   <div
-                    key={`light-${t.id}`}
-                    className="sens-row lighten"
-                    title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+                    key={k}
+                    className="subsystem-bar-seg"
+                    style={{ width: `${pct}%`, background: SUBSYSTEM_DISPLAY[k].color }}
+                    title={`${bd[k]?.label ?? SUBSYSTEM_DISPLAY[k].full}: ${Math.round(pct)}% of flex`}
+                  />
+                );
+              })}
+            </div>
+
+            <div className="sens-subsystem-grid">
+              {SUBSYSTEM_ORDER.map((k) => {
+                const entry = bd[k];
+                const sev = entry?.severity ?? "low";
+                const isPrimary = primary === k;
+                return (
+                  <div
+                    key={k}
+                    className={`sens-sub-chip sev-${sev} ${isPrimary ? "primary" : ""}`}
+                    title={
+                      entry
+                        ? `${entry.label}: ${entry.compliance_share_pct.toFixed(1)}% flex • Stiff sens ${entry.modal_stiff_hz.toFixed(
+                            2
+                          )} Hz • Mass sens ${entry.modal_mass_hz.toFixed(2)} Hz`
+                        : SUBSYSTEM_DISPLAY[k].full
+                    }
                   >
-                    <div className="sens-row-top">
-                      <span className="sens-id">
-                        <strong>{t.label ?? t.id}</strong>
-                        {!t.label && <span className="sens-role">{t.role}</span>}
+                    <span className="sens-sub-chip-top">
+                      <span className="sens-sub-chip-name">
+                        <span
+                          className="swatch-dot"
+                          style={{ background: SUBSYSTEM_DISPLAY[k].color }}
+                        />
+                        {SUBSYSTEM_DISPLAY[k].full}
                       </span>
-                    </div>
-                    <div className="sens-badge-row">
-                      <span className="sens-badge lighten-gain">
-                        +{gainPer100g.toFixed(2)} Hz / 100g saved
-                      </span>
-                    </div>
-                    {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
-                    {t.action_hint && (
-                      <div className="sens-fix">
-                        <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
-                      </div>
-                    )}
+                      <strong className="sens-sub-chip-pct">
+                        {Math.round(entry?.compliance_share_pct ?? 0)}%
+                      </strong>
+                    </span>
                   </div>
                 );
               })}
             </div>
-          )}
+
+            {calloutText && <div className="sens-priority-callout">{calloutText}</div>}
+          </div>
+        );
+      })()}
+
+      {topStiffen.length > 0 && (
+        <div className="sens-group">
+          <div className="sens-group-label stiffen">Primary Compliance Hotspots (Stiffness Limits)</div>
+          {topStiffen.map((t) => (
+            <div
+              key={`stiff-${t.id}`}
+              className="sens-row stiffen"
+              title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+            >
+              <div className="sens-row-top">
+                <span className="sens-id">
+                  <strong>{t.label ?? t.id}</strong>
+                  {!t.label && <span className="sens-role">{t.role}</span>}
+                </span>
+              </div>
+              <div className="sens-badge-row">
+                {(t.est_hz_gain ?? 0) > 0 && (
+                  <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
+                )}
+                {t.compliance_share_pct >= 1 && (
+                  <span className="sens-badge flex">
+                    {t.compliance_share_pct.toFixed(0)}% of flex
+                  </span>
+                )}
+                <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
+              </div>
+              {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+              {t.action_hint && (
+                <div className="sens-fix">
+                  <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {topLighten.length > 0 && (
+        <div className="sens-group">
+          <div className="sens-group-label lighten">Primary Inertia Hotspots (Moving-Mass Limits)</div>
+          {topLighten.map((t) => {
+            const gainPer100g = t.hz_gain_per_100g_saved ?? Math.abs(t.hz_per_100g);
+            return (
+              <div
+                key={`light-${t.id}`}
+                className="sens-row lighten"
+                title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+              >
+                <div className="sens-row-top">
+                  <span className="sens-id">
+                    <strong>{t.label ?? t.id}</strong>
+                    {!t.label && <span className="sens-role">{t.role}</span>}
+                  </span>
+                </div>
+                <div className="sens-badge-row">
+                  <span className="sens-badge lighten-gain">
+                    +{gainPer100g.toFixed(2)} Hz / 100g saved
+                  </span>
+                </div>
+                {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+                {t.action_hint && (
+                  <div className="sens-fix">
+                    <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -2447,9 +2768,10 @@ const BED_RISK_META: Record<
 const BedPlateFemStrip: React.FC<{
   bedFea: BedPlateFeaData;
   cmpBedFea?: BedPlateFeaData | null;
+  ts?: ThermalStructuralReport | null;
   showBedWarp?: boolean;
   onInspectBedWarp?: () => void;
-}> = ({ bedFea, cmpBedFea, showBedWarp, onInspectBedWarp }) => {
+}> = ({ bedFea, cmpBedFea, ts, showBedWarp, onInspectBedWarp }) => {
   const riskMeta = BED_RISK_META[bedFea.first_layer_risk] ?? BED_RISK_META.low;
   const modeTypeLabel =
     BED_MODE_TYPE_LABELS[bedFea.plate_first_mode_type] ?? bedFea.plate_first_mode_type;
@@ -2464,6 +2786,11 @@ const BedPlateFemStrip: React.FC<{
           <span className={`badge-pill ${riskMeta.cls}`} style={{ padding: "1px 6px", fontSize: 9.5 }}>
             {riskMeta.label} Risk
           </span>
+          {ts && ts.bed_buckling_taco_um > 30 && (
+            <span className="badge-pill bad" style={{ padding: "1px 6px", fontSize: 9.5 }}>
+              Taco Buckling!
+            </span>
+          )}
           {bedFea.mesh_bed_leveling_required && (
             <span className="badge-pill warn" style={{ padding: "1px 6px", fontSize: 9.5 }}>
               Mesh Leveling Needed
@@ -2473,7 +2800,14 @@ const BedPlateFemStrip: React.FC<{
       </div>
 
       <div className="metric-kv">
-        <span>Flatness Error (Total)</span>
+        <span>
+          Flatness Error (Total)
+          {ts && (
+            <span className="metric-sub-inline">
+              Grad {ts.bed_gradient_bow_um.toFixed(1)} µm · Buckling {ts.bed_buckling_taco_um.toFixed(1)} µm
+            </span>
+          )}
+        </span>
         <span
           className={`metric-val metric-val-with-delta ${
             isHighRisk
@@ -2677,6 +3011,7 @@ export const MetricsPanel: React.FC<Props> = ({
   topoResult,
   viewMode,
   onViewModeChange,
+  onInspectModalMode,
   bom,
   bomLoading,
   stockLengthMm,
@@ -2690,6 +3025,12 @@ export const MetricsPanel: React.FC<Props> = ({
 }) => {
   const [rightTab, setRightTab] = useState<"simulation" | "bom">("simulation");
   const [bomCategoryFilter, setBomCategoryFilter] = useState<string>("all");
+  const [sectionOpen, setSectionOpen] = useState<Record<string, boolean>>({});
+  const [showInfoNotes, setShowInfoNotes] = useState<boolean>(false);
+
+  const toggleSection = (key: string) => {
+    setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const isTetActive = Boolean(tetFea) && (activeSolidEngine === "tet10" || !solidFea);
 
@@ -2957,6 +3298,127 @@ export const MetricsPanel: React.FC<Props> = ({
     1
   );
 
+  // Tier 1 & Tier 2 derived summary helpers
+  const curCost = bom?.total_cost_usd ?? sim.geometry.mass_summary.estimated_material_cost_usd;
+  const cmpCost = compareBom?.total_cost_usd ?? compareSim?.geometry.mass_summary.estimated_material_cost_usd;
+
+  const limAxis: "X" | "Y" =
+    mod.limiting_modal_summary?.limiting_axis ??
+    mod.accel_bottleneck?.limiting_axis ??
+    (mod.shaper_x && mod.shaper_y
+      ? mod.shaper_x.max_accel_mm_s2 <= mod.shaper_y.max_accel_mm_s2
+        ? "X"
+        : "Y"
+      : "Y");
+  const limShaper = limAxis === "X" ? mod.shaper_x : mod.shaper_y;
+  const limShaperName =
+    mod.limiting_modal_summary?.recommended_shaper ??
+    limShaper?.recommended_shaper ??
+    "ZV";
+  const limEffHz =
+    mod.limiting_modal_summary?.effective_freq_hz ??
+    limShaper?.effective_freq_hz ??
+    mod.fundamental_freq_hz;
+  const xEffStr = mod.shaper_x ? Math.round(mod.shaper_x.effective_freq_hz).toString() : "—";
+  const yEffStr = mod.shaper_y ? Math.round(mod.shaper_y.effective_freq_hz).toString() : "—";
+  const totalDefects =
+    vp.underextrusion_segments + vp.ringing_segments + vp.step_skip_segments;
+
+  const changedImpactMetrics = impactMetrics.filter((m) => m.status !== "same");
+
+  const classifiedDiags = sim.diagnostics.map((d) => {
+    const lower = d.toLowerCase();
+    const cls: "bad" | "warn" | "info" =
+      d.startsWith("COLLISION") ||
+      lower.includes("overtension") ||
+      lower.includes("overcurrent") ||
+      lower.includes("overheat")
+        ? "bad"
+        : lower.includes("risk") ||
+            lower.includes("low") ||
+            lower.includes("detected") ||
+            lower.includes("bending") ||
+            lower.includes("double-shear") ||
+            lower.includes("twist")
+          ? "warn"
+          : "info";
+    return { text: d, cls };
+  });
+  const alertDiags = classifiedDiags.filter((d) => d.cls === "bad" || d.cls === "warn");
+  const infoDiags = classifiedDiags.filter((d) => d.cls === "info");
+
+  const effDrive = kin.drive_mode || sim.spec.gantry.drive_mode || "2wd";
+  const hasMetrologyData = Boolean(
+    sim.time_domain_metrology ||
+      (sim.workspace_frf && (sim.workspace_frf.min_axis_freq_grid_hz?.length ?? 0) > 0) ||
+      sim.rcsa
+  );
+  const hasSensitivityData = Boolean(
+    sim.sensitivity &&
+      ((sim.sensitivity.top_stiffen_targets?.length ?? 0) > 0 ||
+        (sim.sensitivity.top_lighten_targets?.length ?? 0) > 0 ||
+        Boolean(sim.sensitivity.summary_diagnosis) ||
+        Boolean(sim.sensitivity.subsystem_breakdown))
+  );
+  const hasWeightGains = Boolean(
+    sim.weight_shaper_gains && sim.weight_shaper_gains.items.length > 0
+  );
+
+  const visibleDeepKeys: string[] = ["fea_thermal_struct"];
+  if (mod.shaper_graphs) visibleDeepKeys.push("shaper_psd");
+  visibleDeepKeys.push("modes_kinematics");
+  if (hasWeightGains) visibleDeepKeys.push("weight_potential");
+  if (hasMetrologyData) visibleDeepKeys.push("metrology_frf");
+  if (hasSensitivityData) visibleDeepKeys.push("sensitivity");
+  visibleDeepKeys.push("thermal_print");
+
+  const allExpanded =
+    visibleDeepKeys.length > 0 && visibleDeepKeys.every((k) => Boolean(sectionOpen[k]));
+
+  const feaAccordionBadge = `${fea.combined_max_deflection_um.toFixed(1)} µm · SF ${fea.min_safety_factor.toFixed(1)}×${
+    ts ? ` · ${ts.total_thermal_z_error_um.toFixed(0)} µm Z` : ""
+  }`;
+  const shaperAccordionBadge = mod.shaper_graphs
+    ? `X ${mod.shaper_graphs.x.recommended_shaper} ${Math.round(mod.shaper_graphs.x.recommended_freq_hz)} Hz · Y ${mod.shaper_graphs.y.recommended_shaper} ${Math.round(mod.shaper_graphs.y.recommended_freq_hz)} Hz`
+    : undefined;
+  const modesAccordionBadge = `${effDrive.toUpperCase()} · ${kin.torque_safety_margin.toFixed(1)}× torque${
+    kin.belt_pluck_freq_150mm_hz != null
+      ? ` · ${Math.round(kin.belt_pluck_freq_150mm_hz)} Hz belt`
+      : ""
+  }`;
+  const weightAccordionBadge =
+    sim.weight_shaper_gains && hasWeightGains
+      ? `Up to +${sim.weight_shaper_gains.total_potential_hz_gain.toFixed(1)} Hz (−${Math.round(sim.weight_shaper_gains.total_potential_cut_g)}g)`
+      : undefined;
+  const metrologyBadgeParts: string[] = [];
+  if (sim.time_domain_metrology) {
+    metrologyBadgeParts.push(
+      `G_XY ${(sim.time_domain_metrology.circularity_gxy_um ?? 0).toFixed(1)} µm`
+    );
+  }
+  if (sim.rcsa) {
+    metrologyBadgeParts.push(`Whip ${sim.rcsa.nozzle_to_sensor_amp_ratio.toFixed(2)}×`);
+  } else if (sim.workspace_frf) {
+    metrologyBadgeParts.push(
+      `${sim.workspace_frf.min_freq_hz.toFixed(0)}–${sim.workspace_frf.max_freq_hz.toFixed(0)} Hz`
+    );
+  }
+  const metrologyAccordionBadge = metrologyBadgeParts.join(" · ") || undefined;
+
+  const sensPrimary = sim.sensitivity?.primary_problem_subsystem;
+  const sensPrimaryPct =
+    sensPrimary && sim.sensitivity?.subsystem_breakdown?.[sensPrimary]
+      ? Math.round(sim.sensitivity.subsystem_breakdown[sensPrimary].compliance_share_pct)
+      : null;
+  const sensitivityAccordionBadge = sensPrimary
+    ? `#1 ${SUBSYSTEM_DISPLAY[sensPrimary]?.short ?? sensPrimary}${
+        sensPrimaryPct != null ? ` (${sensPrimaryPct}% flex)` : ""
+      }`
+    : sim.sensitivity?.top_stiffen_targets?.[0]
+      ? `#1 ${sim.sensitivity.top_stiffen_targets[0].label ?? sim.sensitivity.top_stiffen_targets[0].id}`
+      : undefined;
+  const thermalPrintAccordionBadge = `${th.max_volumetric_flow_mm3_s.toFixed(1)} mm³/s · ${vp.total_time_s.toFixed(0)}s print`;
+
   return (
     <aside className="sidebar right">
       <div className="tabs">
@@ -2996,7 +3458,7 @@ export const MetricsPanel: React.FC<Props> = ({
             {viewMode === "solid_part" && isTetActive && tetFea && <TetFEACard tet={tetFea} />}
             {viewMode === "solid_part" && !isTetActive && solidFea && <SolidHexFEACard solidFea={solidFea} />}
 
-            {/* Live Impact Card OR Welcoming Baseline Tip */}
+            {/* Live Impact Card (changed metrics only) OR Compact Baseline Tip */}
             {hasComparison && compareSim ? (
               <div className="section-card impact-card">
                 <div className="impact-header">
@@ -3062,124 +3524,314 @@ export const MetricsPanel: React.FC<Props> = ({
 
                 <div className="impact-summary">{impactSummaryText}</div>
 
-                <div className="impact-grid">
-                  {impactMetrics.map((m) => (
-                    <div key={m.key} className={`impact-tile ${m.status}`}>
-                      <div className="impact-tile-top">
-                        <span className="impact-tile-label">
-                          {m.status !== "same" && <span className={`impact-dot ${m.status}`} />}
-                          {m.label}
-                        </span>
-                        <span className={`impact-badge ${m.status}`}>
-                          {m.status === "same" ? "—" : m.deltaText}
-                        </span>
+                {changedImpactMetrics.length > 0 ? (
+                  <div className="impact-grid">
+                    {changedImpactMetrics.map((m) => (
+                      <div key={m.key} className={`impact-tile ${m.status}`}>
+                        <div className="impact-tile-top">
+                          <span className="impact-tile-label">
+                            <span className={`impact-dot ${m.status}`} />
+                            {m.label}
+                          </span>
+                          <span className={`impact-badge ${m.status}`}>{m.deltaText}</span>
+                        </div>
+                        <div className="impact-tile-sub">
+                          {m.oldText} → <strong>{m.newText}</strong>
+                        </div>
                       </div>
-                      <div className="impact-tile-val">{m.newText}</div>
-                      <div className="impact-tile-sub">
-                        {m.status === "same" ? "No change" : `${m.oldText} → ${m.newText}`}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>No measurable delta</div>
+                )}
               </div>
             ) : (
               <div className="welcome-tip-card">
                 <div className="welcome-tip-text">
-                  Loaded <strong>{baselineLabel}</strong> — adjust any setting in{" "}
-                  <strong>Design Controls</strong> on the left to see its exact impact on stiffness, ringing,
-                  print speed, and cost.
+                  Loaded <strong>{baselineLabel}</strong> — edit <strong>Design Controls</strong> to see live stiffness, ringing, flow &amp; cost impact.
                 </div>
               </div>
             )}
 
-            <div className="score-hero">
-              <div>
-                <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
-                  Composite Engineering Score
+            {/* Tier 1: Unified Overview Card (Composite Score + Subsystem Bars + 6 Headline KPIs) */}
+            <div className="section-card" style={{ gap: 10 }}>
+              <div className="score-hero">
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
+                    Composite Engineering Score
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{sim.printer_name}</div>
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{sim.printer_name}</div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                  <div className="score-number" style={{ color: scoreColor(scores.composite) }}>
+                    {scores.composite.toFixed(1)}
+                  </div>
+                  {compareSim && (
+                    <InlineDeltaBadge
+                      oldVal={compareSim.scores.composite}
+                      newVal={scores.composite}
+                      higherIsBetter={true}
+                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                    />
+                  )}
+                </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                <div className="score-number" style={{ color: scoreColor(scores.composite) }}>
-                  {scores.composite.toFixed(1)}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {(
+                  [
+                    ["Structural (FEA)", scores.structural, compareSim?.scores.structural],
+                    ["Dynamics & Shaper", scores.dynamics, compareSim?.scores.dynamics],
+                    ["Hotend Thermal", scores.thermal, compareSim?.scores.thermal],
+                    ["Virtual Print Quality", scores.print_quality, compareSim?.scores.print_quality],
+                    ["Mass & Packaging", scores.efficiency, compareSim?.scores.efficiency],
+                  ] as Array<[string, number, number | undefined]>
+                ).map(([label, val, oldVal]) => (
+                  <div className="bar-row" key={label}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11 }}>
+                      <span style={{ color: "var(--muted)" }}>{label}</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        {oldVal !== undefined && (
+                          <InlineDeltaBadge
+                            oldVal={oldVal}
+                            newVal={val}
+                            higherIsBetter={true}
+                            formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                          />
+                        )}
+                        <strong>{val.toFixed(1)}</strong>
+                      </span>
+                    </div>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${val}%`, background: scoreColor(val) }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="kpi-grid headline-kpi-grid">
+                <div className="kpi-box">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                    <span className="kpi-label">Safe Max Accel</span>
+                    {compareSim && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.modal_fea.recommended_max_accel_mm_s2}
+                        newVal={mod.recommended_max_accel_mm_s2}
+                        higherIsBetter={true}
+                        eps={15}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
+                      />
+                    )}
+                  </div>
+                  <span className="kpi-value" style={{ color: "var(--accent)" }}>
+                    {Math.round(mod.recommended_max_accel_mm_s2).toLocaleString()} mm/s²
+                  </span>
+                  <span className="kpi-sub">
+                    {limAxis}: {limShaperName} @ {Math.round(limEffHz)} Hz
+                  </span>
                 </div>
-                {compareSim && (
-                  <InlineDeltaBadge
-                    oldVal={compareSim.scores.composite}
-                    newVal={scores.composite}
-                    higherIsBetter={true}
-                    formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
-                  />
+
+                <div className="kpi-box">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                    <span className="kpi-label">Resonance (f₁)</span>
+                    {compareSim && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.modal_fea.fundamental_freq_hz}
+                        newVal={mod.fundamental_freq_hz}
+                        higherIsBetter={true}
+                        eps={0.05}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} Hz`}
+                      />
+                    )}
+                  </div>
+                  <span className="kpi-value">{mod.fundamental_freq_hz.toFixed(1)} Hz</span>
+                  <span className="kpi-sub">
+                    X {xEffStr} / Y {yEffStr} Hz
+                  </span>
+                </div>
+
+                <div className="kpi-box">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                    <span className="kpi-label">Nozzle–Bed Flex</span>
+                    {compareSim && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.static_fea.combined_max_deflection_um}
+                        newVal={fea.combined_max_deflection_um}
+                        higherIsBetter={false}
+                        eps={0.05}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+                      />
+                    )}
+                  </div>
+                  <span className="kpi-value">{fea.combined_max_deflection_um.toFixed(1)} µm</span>
+                  <span className="kpi-sub">
+                    X/Y {fea.toolhead_stiffness_x_n_per_mm.toFixed(0)}/{fea.toolhead_stiffness_y_n_per_mm.toFixed(0)} N/mm
+                  </span>
+                </div>
+
+                <div className="kpi-box">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                    <span className="kpi-label">Max Flow</span>
+                    {compareSim && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.thermal.max_volumetric_flow_mm3_s}
+                        newVal={th.max_volumetric_flow_mm3_s}
+                        higherIsBetter={true}
+                        eps={0.05}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
+                      />
+                    )}
+                  </div>
+                  <span className="kpi-value">{th.max_volumetric_flow_mm3_s.toFixed(1)} mm³/s</span>
+                  <span className="kpi-sub">
+                    {th.filament_id.toUpperCase()} · {th.max_linear_speed_02x04_mm_s.toFixed(0)} mm/s
+                  </span>
+                </div>
+
+                <div className="kpi-box">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                    <span className="kpi-label">Print Time</span>
+                    {compareSim && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.virtual_print.total_time_s}
+                        newVal={vp.total_time_s}
+                        higherIsBetter={false}
+                        eps={0.05}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} s`}
+                      />
+                    )}
+                  </div>
+                  <span className="kpi-value">{vp.total_time_s.toFixed(1)} s</span>
+                  <span
+                    className={`kpi-sub ${totalDefects === 0 ? "tag-ok" : "tag-warn"}`}
+                  >
+                    {totalDefects === 0 ? "0 defects" : `${totalDefects} defects`}
+                  </span>
+                </div>
+
+                <div
+                  className="kpi-box"
+                  title={
+                    cmpCost != null
+                      ? `Build cost: $${Math.round(cmpCost).toLocaleString()} → $${Math.round(curCost).toLocaleString()}`
+                      : `Build cost: $${Math.round(curCost).toLocaleString()}`
+                  }
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                    <span className="kpi-label">Mass &amp; Cost</span>
+                    {compareSim && (
+                      <InlineDeltaBadge
+                        oldVal={compareSim.geometry.mass_summary.total_mass_kg}
+                        newVal={sim.geometry.mass_summary.total_mass_kg}
+                        higherIsBetter={false}
+                        eps={0.01}
+                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(2)} kg`}
+                      />
+                    )}
+                  </div>
+                  <span className="kpi-value">
+                    {sim.geometry.mass_summary.total_mass_kg.toFixed(2)} kg
+                  </span>
+                  <span className="kpi-sub">
+                    ${Math.round(curCost).toLocaleString()} · Y mov{" "}
+                    {Math.round(sim.geometry.mass_summary.y_moving_mass_g)}g
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Tier 1: Single Authoritative Limiting Resonance & Top Causes Card */}
+            {(mod.accel_bottleneck || mod.limiting_modal_summary) && (
+              <AccelBottleneckCard
+                bottleneck={mod.accel_bottleneck}
+                limitingSummary={mod.limiting_modal_summary}
+                shaperX={mod.shaper_x}
+                shaperY={mod.shaper_y}
+                modes={mod.modes}
+                onInspectModalMode={onInspectModalMode}
+                changed={modalChanged}
+              />
+            )}
+
+            {/* Tier 1: Concise Engineering Diagnostics (warnings & errors first) */}
+            <div className="section-card">
+              <div className="section-title">
+                <span>
+                  Engineering Diagnostics
+                  {alertDiags.length > 0 && (
+                    <span
+                      className={`badge-pill ${alertDiags.some((d) => d.cls === "bad") ? "bad" : "warn"}`}
+                      style={{ marginLeft: 6, padding: "0 6px", fontSize: 9.5 }}
+                    >
+                      {alertDiags.length}
+                    </span>
+                  )}
+                </span>
+                {infoDiags.length > 0 && (
+                  <button
+                    type="button"
+                    className="impact-mini-btn"
+                    onClick={() => setShowInfoNotes((v) => !v)}
+                  >
+                    {showInfoNotes
+                      ? `Hide ${infoDiags.length} notes`
+                      : `Show ${infoDiags.length} notes`}
+                  </button>
                 )}
               </div>
-            </div>
-
-            <div className="section-card">
-              <div className="section-title">Subsystem Scorecard</div>
-              {(
-                [
-                  ["Structural (FEA)", scores.structural, compareSim?.scores.structural],
-                  ["Dynamics & Shaper", scores.dynamics, compareSim?.scores.dynamics],
-                  ["Hotend Thermal", scores.thermal, compareSim?.scores.thermal],
-                  ["Virtual Print Quality", scores.print_quality, compareSim?.scores.print_quality],
-                  ["Mass & Packaging", scores.efficiency, compareSim?.scores.efficiency],
-                ] as Array<[string, number, number | undefined]>
-              ).map(([label, val, oldVal]) => (
-                <div className="bar-row" key={label}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5 }}>
-                    <span style={{ color: "var(--muted)" }}>{label}</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      {oldVal !== undefined && (
-                        <InlineDeltaBadge
-                          oldVal={oldVal}
-                          newVal={val}
-                          higherIsBetter={true}
-                          formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
-                        />
-                      )}
-                      <strong>{val.toFixed(1)}</strong>
-                    </span>
-                  </div>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ width: `${val}%`, background: scoreColor(val) }} />
-                  </div>
+              {alertDiags.length === 0 ? (
+                <div
+                  className="diag-item"
+                  style={{
+                    borderLeftColor: "var(--green)",
+                    background: "rgba(34, 197, 94, 0.08)",
+                    color: "var(--green)",
+                  }}
+                >
+                  ✓ All structural, kinematic, thermal &amp; virtual print checks passed
                 </div>
-              ))}
-            </div>
-
-            <div className="section-card">
-              <div className="section-title">Engineering Diagnostics</div>
-              {sim.diagnostics.map((d, idx) => {
-                const lower = d.toLowerCase();
-                const cls =
-                  d.startsWith("COLLISION") ||
-                  lower.includes("overtension") ||
-                  lower.includes("overcurrent") ||
-                  lower.includes("overheat")
-                    ? "bad"
-                    : lower.includes("risk") ||
-                        lower.includes("low") ||
-                        lower.includes("detected") ||
-                        lower.includes("bending") ||
-                        lower.includes("double-shear") ||
-                        lower.includes("twist")
-                      ? "warn"
-                      : "";
-                return (
-                  <div key={idx} className={`diag-item ${cls}`}>
-                    {d}
+              ) : (
+                alertDiags.map((item, idx) => (
+                  <div key={`alert-${idx}`} className={`diag-item ${item.cls}`}>
+                    {item.text}
                   </div>
-                );
-              })}
+                ))
+              )}
+              {showInfoNotes &&
+                infoDiags.map((item, idx) => (
+                  <div key={`info-${idx}`} className="diag-item">
+                    {item.text}
+                  </div>
+                ))}
             </div>
 
-            {viewMode !== "topology" && topoResult && <TopologyOptCard topo={topoResult} />}
+            {/* Tier 2: Expandable Deep Engineering Data Accordions */}
+            <div className="sim-toolbar-row">
+              <span className="section-title" style={{ margin: 0 }}>
+                Deep Engineering Data
+              </span>
+              <button
+                type="button"
+                className="impact-mini-btn"
+                onClick={() => {
+                  const nextVal = !allExpanded;
+                  const next: Record<string, boolean> = {};
+                  for (const k of visibleDeepKeys) next[k] = nextVal;
+                  setSectionOpen(next);
+                }}
+              >
+                {allExpanded ? "Collapse All" : "Expand All"}
+              </button>
+            </div>
 
-            <div className={`section-card ${structuralChanged ? "card-changed" : ""}`}>
-              <div className="section-title">
-                <span>Static 3D Frame FEA</span>
-                {structuralChanged && <span className="changed-dot-label">Updated</span>}
-              </div>
+            {/* Accordion 1: Static FEA, Toolhead & Thermal-Structural */}
+            <DeepDiveAccordion
+              title="Static FEA, Toolhead & Thermal-Structural"
+              badge={feaAccordionBadge}
+              updated={structuralChanged || thermalStructChanged}
+              open={Boolean(sectionOpen["fea_thermal_struct"])}
+              onToggle={() => toggleSection("fea_thermal_struct")}
+            >
               {sim.geometry.panels?.enabled && (() => {
                 const p = sim.geometry.panels;
                 const mountTag =
@@ -3285,28 +3937,24 @@ export const MetricsPanel: React.FC<Props> = ({
                 <span>Gravity Sag (Nozzle)</span>
                 <span className="metric-val">{fea.gravity_sag_toolhead_um.toFixed(1)} µm</span>
               </div>
-              <div className="metric-kv">
-                <span>
-                  Nozzle-to-Bed Flex
-                  {(fea.nozzle_absolute_deflection_um != null || fea.bed_deflection_um != null) && (
-                    <span className="metric-sub-inline">
-                      Abs: {(fea.nozzle_absolute_deflection_um ?? fea.combined_max_deflection_um).toFixed(1)} µm · Bed:{" "}
-                      {(fea.bed_deflection_um ?? 0).toFixed(1)} µm
-                    </span>
-                  )}
-                </span>
-                <span className="metric-val metric-val-with-delta">
-                  {compareSim && (
-                    <InlineDeltaBadge
-                      oldVal={compareSim.static_fea.combined_max_deflection_um}
-                      newVal={fea.combined_max_deflection_um}
-                      higherIsBetter={false}
-                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
-                    />
-                  )}
-                  {fea.combined_max_deflection_um.toFixed(1)} µm
-                </span>
-              </div>
+              {(fea.nozzle_absolute_deflection_um != null || fea.bed_deflection_um != null) && (
+                <div className="metric-kv">
+                  <span>Abs / Bed Flex Split</span>
+                  <span className="metric-val metric-val-with-delta">
+                    {compareSim?.static_fea.nozzle_absolute_deflection_um != null &&
+                      fea.nozzle_absolute_deflection_um != null && (
+                        <InlineDeltaBadge
+                          oldVal={compareSim.static_fea.nozzle_absolute_deflection_um}
+                          newVal={fea.nozzle_absolute_deflection_um}
+                          higherIsBetter={false}
+                          formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+                        />
+                      )}
+                    Abs {(fea.nozzle_absolute_deflection_um ?? fea.combined_max_deflection_um).toFixed(1)} µm · Bed{" "}
+                    {(fea.bed_deflection_um ?? 0).toFixed(1)} µm
+                  </span>
+                </div>
+              )}
               {fea.beam_center_deflection_um != null && (
                 <div className="metric-kv">
                   <span>X-Beam Center Flex</span>
@@ -3357,12 +4005,6 @@ export const MetricsPanel: React.FC<Props> = ({
                   </span>
                 </div>
               )}
-              <div className="metric-kv" title="Nozzle-to-Bed structural loop stiffness">
-                <span>Nozzle-to-Bed Stiffness X / Y</span>
-                <span className="metric-val">
-                  {fea.toolhead_stiffness_x_n_per_mm.toFixed(0)} / {fea.toolhead_stiffness_y_n_per_mm.toFixed(0)} N/mm
-                </span>
-              </div>
               <div className="metric-kv">
                 <span>
                   Max von Mises Stress
@@ -3406,73 +4048,80 @@ export const MetricsPanel: React.FC<Props> = ({
                   onToggleToolheadPunchIn={onToggleToolheadPunchIn}
                 />
               )}
-            </div>
 
-            {ts && (
-              <div className={`section-card ${thermalStructChanged ? "card-changed" : ""}`}>
-                <div className="section-title">
-                  <span>Thermal-Structural &amp; Precision</span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              {ts && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    marginTop: 6,
+                    paddingTop: 8,
+                    borderTop: "1px dashed rgba(255, 255, 255, 0.09)",
+                  }}
+                >
+                  <div className="section-title">
+                    <span>Thermal-Structural &amp; Precision</span>
                     <span className="sub-block-tag">
                       {Math.round(ts.chamber_temp_c)}°C / {Math.round(ts.bed_target_temp_c)}°C
                     </span>
-                    {thermalStructChanged && <span className="changed-dot-label">Updated</span>}
-                  </span>
-                </div>
+                  </div>
 
-                <div className="metric-kv">
-                  <span>Bimetallic Gantry Bow</span>
-                  <span
-                    className={`metric-val metric-val-with-delta ${
-                      ts.gantry_bimetallic_bow_um > 80
-                        ? "tag-bad"
-                        : ts.gantry_bimetallic_bow_um > 40
-                          ? "tag-warn"
-                          : "tag-ok"
-                    }`}
-                  >
-                    {cmpTs && (
-                      <InlineDeltaBadge
-                        oldVal={cmpTs.gantry_bimetallic_bow_um}
-                        newVal={ts.gantry_bimetallic_bow_um}
-                        higherIsBetter={false}
-                        eps={0.2}
-                        formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
-                      />
-                    )}
-                    {ts.gantry_bimetallic_bow_um.toFixed(1)} µm
-                    {ts.gantry_backer_reduction_pct > 0 && (
-                      <span className="badge-pill ok" style={{ padding: "1px 6px", fontSize: 9.5 }}>
-                        -{Math.round(ts.gantry_backer_reduction_pct)}% backer
-                      </span>
-                    )}
-                  </span>
-                </div>
-
-                <div className="metric-kv">
-                  <span>
-                    Bed Thermal Bow / Buckling
-                    <span className="metric-sub-inline">
-                      Grad {ts.bed_gradient_bow_um.toFixed(1)} µm · Buckling {ts.bed_buckling_taco_um.toFixed(1)} µm
+                  <div className="metric-kv">
+                    <span>Bimetallic Gantry Bow</span>
+                    <span
+                      className={`metric-val metric-val-with-delta ${
+                        ts.gantry_bimetallic_bow_um > 80
+                          ? "tag-bad"
+                          : ts.gantry_bimetallic_bow_um > 40
+                            ? "tag-warn"
+                            : "tag-ok"
+                      }`}
+                    >
+                      {cmpTs && (
+                        <InlineDeltaBadge
+                          oldVal={cmpTs.gantry_bimetallic_bow_um}
+                          newVal={ts.gantry_bimetallic_bow_um}
+                          higherIsBetter={false}
+                          eps={0.2}
+                          formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+                        />
+                      )}
+                      {ts.gantry_bimetallic_bow_um.toFixed(1)} µm
+                      {ts.gantry_backer_reduction_pct > 0 && (
+                        <span className="badge-pill ok" style={{ padding: "1px 6px", fontSize: 9.5 }}>
+                          -{Math.round(ts.gantry_backer_reduction_pct)}% backer
+                        </span>
+                      )}
                     </span>
-                  </span>
-                  <span
-                    className={`metric-val metric-val-with-delta ${
-                      ts.bed_buckling_taco_um > 30
-                        ? "tag-bad"
-                        : ts.bed_gradient_bow_um + ts.bed_buckling_taco_um > 50
-                          ? "tag-warn"
-                          : ""
-                    }`}
-                  >
-                    {(ts.bed_gradient_bow_um + ts.bed_buckling_taco_um).toFixed(1)} µm
-                    {ts.bed_buckling_taco_um > 30 && (
-                      <span className="badge-pill bad" style={{ padding: "1px 6px", fontSize: 9.5 }}>
-                        Taco Buckling!
+                  </div>
+
+                  {!bedFea && (
+                    <div className="metric-kv">
+                      <span>
+                        Bed Thermal Bow / Buckling
+                        <span className="metric-sub-inline">
+                          Grad {ts.bed_gradient_bow_um.toFixed(1)} µm · Buckling {ts.bed_buckling_taco_um.toFixed(1)} µm
+                        </span>
                       </span>
-                    )}
-                  </span>
-                </div>
+                      <span
+                        className={`metric-val metric-val-with-delta ${
+                          ts.bed_buckling_taco_um > 30
+                            ? "tag-bad"
+                            : ts.bed_gradient_bow_um + ts.bed_buckling_taco_um > 50
+                              ? "tag-warn"
+                              : ""
+                        }`}
+                      >
+                        {(ts.bed_gradient_bow_um + ts.bed_buckling_taco_um).toFixed(1)} µm
+                        {ts.bed_buckling_taco_um > 30 && (
+                          <span className="badge-pill bad" style={{ padding: "1px 6px", fontSize: 9.5 }}>
+                            Taco Buckling!
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  )}
 
                 <div className="metric-kv" title={`Chamber thermal rise ΔT = ${ts.delta_t_k.toFixed(1)} K`}>
                   <span>Frame Z-Drift</span>
@@ -3584,68 +4233,58 @@ export const MetricsPanel: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {bedFea && (
+                  {bedFea && (
+                    <BedPlateFemStrip
+                      bedFea={bedFea}
+                      cmpBedFea={cmpBedFea}
+                      ts={ts}
+                      showBedWarp={showBedWarp}
+                      onInspectBedWarp={onInspectBedWarp}
+                    />
+                  )}
+                </div>
+              )}
+
+              {!ts && bedFea && (
+                <div style={{ marginTop: 6 }}>
                   <BedPlateFemStrip
                     bedFea={bedFea}
                     cmpBedFea={cmpBedFea}
                     showBedWarp={showBedWarp}
                     onInspectBedWarp={onInspectBedWarp}
                   />
-                )}
-              </div>
-            )}
-
-            {!ts && bedFea && (
-              <div className={`section-card ${thermalStructChanged ? "card-changed" : ""}`}>
-                <div className="section-title">
-                  <span>Heated Bed Plate FEM</span>
-                  {thermalStructChanged && <span className="changed-dot-label">Updated</span>}
                 </div>
-                <BedPlateFemStrip
-                  bedFea={bedFea}
-                  cmpBedFea={cmpBedFea}
-                  showBedWarp={showBedWarp}
-                  onInspectBedWarp={onInspectBedWarp}
-                />
-              </div>
-            )}
+              )}
+            </DeepDiveAccordion>
 
+            {/* Accordion 2: Klipper Input Shaper & ADXL345 PSD */}
             {mod.shaper_graphs && (
-              <KlipperShaperPsdCard
-                graphs={mod.shaper_graphs}
-                frameDampingRatio={mod.frame_damping_ratio}
-                extrusionFilling={sim.geometry.extrusion_filling}
-                changed={modalChanged}
-              />
+              <DeepDiveAccordion
+                title="Klipper Input Shaper & ADXL345 PSD"
+                badge={shaperAccordionBadge}
+                updated={modalChanged}
+                open={Boolean(sectionOpen["shaper_psd"])}
+                onToggle={() => toggleSection("shaper_psd")}
+              >
+                <KlipperShaperPsdCard
+                  graphs={mod.shaper_graphs}
+                  frameDampingRatio={mod.frame_damping_ratio}
+                  extrusionFilling={sim.geometry.extrusion_filling}
+                  changed={modalChanged}
+                  embedded
+                />
+              </DeepDiveAccordion>
             )}
 
-            {mod.accel_bottleneck && (
-              <AccelBottleneckCard bottleneck={mod.accel_bottleneck} changed={modalChanged} />
-            )}
-
-            {sim.weight_shaper_gains && sim.weight_shaper_gains.items.length > 0 && (
-              <WeightShaperPotentialCard
-                gains={sim.weight_shaper_gains}
-                changed={modalChanged}
-              />
-            )}
-
-            <CncControlMetrologyCard
-              metrology={sim.time_domain_metrology}
-              workspaceFrf={sim.workspace_frf}
-              rcsa={sim.rcsa}
-              sensitivity={sim.sensitivity}
-              viewMode={viewMode}
-              onViewModeChange={onViewModeChange}
-            />
-
-            <div className={`section-card ${modalChanged ? "card-changed" : ""}`}>
-              <div className="section-title">
-                <span>Dynamics, Kinematics &amp; Belts</span>
-                {modalChanged && <span className="changed-dot-label">Updated</span>}
-              </div>
+            {/* Accordion 3: Vibration Modes, Kinematics & Belts (Deduplicated) */}
+            <DeepDiveAccordion
+              title="Vibration Modes, Kinematics & Belts"
+              badge={modesAccordionBadge}
+              updated={modalChanged}
+              open={Boolean(sectionOpen["modes_kinematics"])}
+              onToggle={() => toggleSection("modes_kinematics")}
+            >
               {(() => {
-                const effDrive = kin.drive_mode || sim.spec.gantry.drive_mode || "2wd";
                 const motorCount = kin.xy_motor_count ?? (effDrive === "awd" ? 4 : 2);
                 const isAwd = effDrive === "awd";
                 const pluckHz = kin.belt_pluck_freq_150mm_hz;
@@ -3663,20 +4302,6 @@ export const MetricsPanel: React.FC<Props> = ({
                           ? " • Monolith Short"
                           : ""}
                         {sim.spec.gantry.double_shear_pulleys ? " • Double-Shear" : ""}
-                      </span>
-                    </div>
-                    <div className="metric-kv">
-                      <span>Fundamental Mode f₁</span>
-                      <span className="metric-val metric-val-with-delta">
-                        {compareSim && (
-                          <InlineDeltaBadge
-                            oldVal={compareSim.modal_fea.fundamental_freq_hz}
-                            newVal={mod.fundamental_freq_hz}
-                            higherIsBetter={true}
-                            formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} Hz`}
-                          />
-                        )}
-                        {mod.fundamental_freq_hz.toFixed(1)} Hz
                       </span>
                     </div>
                     {mod.nozzle_pitch_twist_freq_hz != null && (
@@ -3721,105 +4346,6 @@ export const MetricsPanel: React.FC<Props> = ({
                         </span>
                       </div>
                     )}
-                    {mod.shaper_x && (
-                      <div className="metric-kv">
-                        <span>X-Axis Shaper &amp; Accel</span>
-                        <span className="metric-val metric-val-with-delta">
-                          {compareSim?.modal_fea.shaper_x && (
-                            <InlineDeltaBadge
-                              oldVal={compareSim.modal_fea.shaper_x.max_accel_mm_s2}
-                              newVal={mod.shaper_x.max_accel_mm_s2}
-                              higherIsBetter={true}
-                              eps={15}
-                              formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
-                            />
-                          )}
-                          {mod.shaper_x.recommended_shaper} @ {mod.shaper_x.effective_freq_hz.toFixed(1)} Hz ·{" "}
-                          <strong>{Math.round(mod.shaper_x.max_accel_mm_s2).toLocaleString()}</strong> mm/s²
-                        </span>
-                      </div>
-                    )}
-                    {mod.shaper_y && (
-                      <div className="metric-kv">
-                        <span>Y-Axis Shaper &amp; Accel</span>
-                        <span className="metric-val metric-val-with-delta">
-                          {compareSim?.modal_fea.shaper_y && (
-                            <InlineDeltaBadge
-                              oldVal={compareSim.modal_fea.shaper_y.max_accel_mm_s2}
-                              newVal={mod.shaper_y.max_accel_mm_s2}
-                              higherIsBetter={true}
-                              eps={15}
-                              formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
-                            />
-                          )}
-                          {mod.shaper_y.recommended_shaper} @ {mod.shaper_y.effective_freq_hz.toFixed(1)} Hz ·{" "}
-                          <strong>{Math.round(mod.shaper_y.max_accel_mm_s2).toLocaleString()}</strong> mm/s²
-                        </span>
-                      </div>
-                    )}
-                    {(mod.shaper_x || mod.shaper_y) && (
-                      <>
-                        <div className="metric-kv">
-                          <span>Structural Freq (X / Y)</span>
-                          <span className="metric-val">
-                            {mod.shaper_x ? mod.shaper_x.structural_freq_hz.toFixed(0) : "—"} /{" "}
-                            {mod.shaper_y ? mod.shaper_y.structural_freq_hz.toFixed(0) : "—"} Hz
-                          </span>
-                        </div>
-                        <div className="metric-kv">
-                          <span>Belt Freq (X / Y)</span>
-                          <span className="metric-val">
-                            {mod.shaper_x ? mod.shaper_x.belt_freq_hz.toFixed(0) : "—"} /{" "}
-                            {mod.shaper_y ? mod.shaper_y.belt_freq_hz.toFixed(0) : "—"} Hz
-                          </span>
-                        </div>
-                        {(mod.shaper_x?.motor_freq_hz != null || mod.shaper_y?.motor_freq_hz != null) && (
-                          <div className="metric-kv">
-                            <span>Motor Stiffness Freq (X / Y)</span>
-                            <span className="metric-val">
-                              {mod.shaper_x?.motor_freq_hz != null
-                                ? mod.shaper_x.motor_freq_hz.toFixed(0)
-                                : "—"}{" "}
-                              /{" "}
-                              {mod.shaper_y?.motor_freq_hz != null
-                                ? mod.shaper_y.motor_freq_hz.toFixed(0)
-                                : "—"}{" "}
-                              Hz
-                            </span>
-                          </div>
-                        )}
-                        {(mod.shaper_x?.bracket_freq_hz != null || mod.shaper_y?.bracket_freq_hz != null) && (
-                          <div className="metric-kv">
-                            <span>Bracket Freq (X / Y)</span>
-                            <span className="metric-val">
-                              {mod.shaper_x?.bracket_freq_hz != null
-                                ? mod.shaper_x.bracket_freq_hz.toFixed(0)
-                                : "—"}{" "}
-                              /{" "}
-                              {mod.shaper_y?.bracket_freq_hz != null
-                                ? mod.shaper_y.bracket_freq_hz.toFixed(0)
-                                : "—"}{" "}
-                              Hz
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <div className="metric-kv">
-                      <span>Rec. Max Accel (Limiting)</span>
-                      <span className="metric-val metric-val-with-delta">
-                        {compareSim && (
-                          <InlineDeltaBadge
-                            oldVal={compareSim.modal_fea.recommended_max_accel_mm_s2}
-                            newVal={mod.recommended_max_accel_mm_s2}
-                            higherIsBetter={true}
-                            eps={15}
-                            formatDelta={(d) => `${d > 0 ? "+" : ""}${Math.round(d).toLocaleString()}`}
-                          />
-                        )}
-                        <strong>{Math.round(mod.recommended_max_accel_mm_s2).toLocaleString()} mm/s²</strong>
-                      </span>
-                    </div>
                     <div className="metric-kv">
                       <span>Stepper Torque Margin</span>
                       <span className={`metric-val metric-val-with-delta ${kin.step_skip_risk ? "tag-bad" : "tag-ok"}`}>
@@ -4071,21 +4597,60 @@ export const MetricsPanel: React.FC<Props> = ({
                             {viewMode === "modal" ? "Viewing Modal" : "View Modal 3D"}
                           </button>
                         </div>
+                        {mod.limiting_modal_summary && (
+                          <div className="modal-summary-belt-note">
+                            3D modes show pure structural vibration (locked belts); belt stretch (
+                            <strong>
+                              {Math.round(mod.limiting_modal_summary.compliance_share_pct.belt)}%
+                            </strong>
+                            ) is coupled in series in the Limiting Resonance card above. Click any
+                            mode to animate in 3D.
+                          </div>
+                        )}
                         <div className="modal-summary-list">
                           {(() => {
-                            const baseModes = mod.modes.slice(0, 3);
+                            const limSummary = mod.limiting_modal_summary;
+                            const limitingModeNum = limSummary?.primary_structural_mode_number;
                             const worstNum = mod.worst_print_mode_number;
-                            const worstExtra =
-                              worstNum != null && !baseModes.some((x) => x.mode_number === worstNum)
-                                ? mod.modes.find((x) => x.mode_number === worstNum)
-                                : undefined;
-                            const shownModes = worstExtra ? [...baseModes, worstExtra] : baseModes;
+
+                            const baseModes = mod.modes.slice(0, 3);
+                            const shownMap = new Map<number, ModeShapeData>();
+                            for (const item of baseModes) {
+                              shownMap.set(item.mode_number, item);
+                            }
+                            const primaryLimitingMode = mod.modes.find(
+                              (x) =>
+                                Boolean(x.is_primary_limiting_mode) ||
+                                (limitingModeNum != null && x.mode_number === limitingModeNum)
+                            );
+                            if (
+                              primaryLimitingMode &&
+                              !shownMap.has(primaryLimitingMode.mode_number)
+                            ) {
+                              shownMap.set(primaryLimitingMode.mode_number, primaryLimitingMode);
+                            }
+                            if (worstNum != null && !shownMap.has(worstNum)) {
+                              const worstExtra = mod.modes.find((x) => x.mode_number === worstNum);
+                              if (worstExtra) {
+                                shownMap.set(worstExtra.mode_number, worstExtra);
+                              }
+                            }
+                            const shownModes = Array.from(shownMap.values()).sort(
+                              (a, b) => a.mode_number - b.mode_number
+                            );
+
                             return shownModes.map((m) => {
+                              const modeIndex = mod.modes.findIndex(
+                                (x) => x.mode_number === m.mode_number
+                              );
                               const axisTag = m.excited_axis
                                 ? `${m.excited_axis}-Accel`
                                 : m.dominant_axis;
                               const sevMeta = modeSeverityMeta(m.severity);
                               const isWorst = worstNum === m.mode_number;
+                              const isPrimaryLimiting =
+                                Boolean(m.is_primary_limiting_mode) ||
+                                (limitingModeNum != null && m.mode_number === limitingModeNum);
                               const hasImpact = m.print_impact_score != null;
                               const impCls = impactLevelCls(
                                 m.print_impact_level,
@@ -4100,17 +4665,52 @@ export const MetricsPanel: React.FC<Props> = ({
                                     pct: Math.round(share[k] ?? 0),
                                   })).filter((p) => p.pct >= 3)
                                 : [];
+                              const topCauses = m.top_causes?.slice(0, 3) ?? [];
+                              const canInspect = Boolean(onInspectModalMode && modeIndex >= 0);
+
+                              const handleActivate = () => {
+                                if (onInspectModalMode && modeIndex >= 0) {
+                                  onInspectModalMode(modeIndex);
+                                }
+                              };
 
                               return (
                                 <div
                                   key={m.mode_number}
                                   className={`modal-mode-item ${m.severity ?? ""} ${
-                                    isWorst ? "worst-mode" : ""
-                                  }`}
+                                    isPrimaryLimiting
+                                      ? "limiting-mode"
+                                      : isWorst
+                                        ? "worst-mode"
+                                        : ""
+                                  } ${canInspect ? "clickable" : ""}`}
+                                  onClick={canInspect ? handleActivate : undefined}
+                                  role={canInspect ? "button" : undefined}
+                                  tabIndex={canInspect ? 0 : undefined}
+                                  onKeyDown={
+                                    canInspect
+                                      ? (e) => {
+                                          if (e.key === "Enter" || e.key === " ") {
+                                            e.preventDefault();
+                                            handleActivate();
+                                          }
+                                        }
+                                      : undefined
+                                  }
+                                  title={
+                                    canInspect
+                                      ? `Click to animate Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz) in 3D`
+                                      : undefined
+                                  }
                                 >
                                   <div className="modal-mode-top">
                                     <span className="modal-mode-title">
-                                      {isWorst && (
+                                      {isPrimaryLimiting && (
+                                        <span className="limiting-mode-pill-inline">
+                                          LIMITING {limSummary?.limiting_axis ?? m.excited_axis ?? "XY"}
+                                        </span>
+                                      )}
+                                      {!isPrimaryLimiting && isWorst && (
                                         <span className="worst-star-inline" title="Worst print-impact mode">
                                           ★{" "}
                                         </span>
@@ -4140,9 +4740,16 @@ export const MetricsPanel: React.FC<Props> = ({
 
                                   {((m.nozzle_whip_ratio ?? 0) >= 1.25 ||
                                     shareParts.length > 0 ||
-                                    isWorst) && (
+                                    isWorst ||
+                                    m.limiting_axis_share_pct != null) && (
                                     <div className="modal-mode-meta-row">
-                                      {isWorst && (
+                                      {isPrimaryLimiting && m.limiting_axis_share_pct != null && (
+                                        <span className="sens-badge limiting-share">
+                                          {Math.round(m.limiting_axis_share_pct)}% of{" "}
+                                          {limSummary?.limiting_axis ?? "axis"} struct flex
+                                        </span>
+                                      )}
+                                      {isWorst && !isPrimaryLimiting && (
                                         <span className="sens-badge flex">★ Worst Print Mode</span>
                                       )}
                                       {(m.nozzle_whip_ratio ?? 0) >= 1.25 && (
@@ -4174,6 +4781,38 @@ export const MetricsPanel: React.FC<Props> = ({
                                     </div>
                                   )}
 
+                                  {topCauses.length > 0 && (
+                                    <div className="mode-causes-list">
+                                      {topCauses.map((cause) => {
+                                        const isMass = cause.kind === "mass";
+                                        return (
+                                          <div
+                                            key={cause.id}
+                                            className="mode-cause-row"
+                                            title={cause.detail}
+                                          >
+                                            <span
+                                              className={`cause-kind-tag ${
+                                                isMass ? "mass" : "flex"
+                                              }`}
+                                            >
+                                              {isMass ? "MASS" : "FLEX"}
+                                            </span>
+                                            <span className="mode-cause-label">{cause.label}</span>
+                                            <span className="mode-cause-stats">
+                                              <strong>{Math.round(cause.share_pct)}%</strong>
+                                              {cause.est_hz_gain > 0 && (
+                                                <span className="mode-cause-hz">
+                                                  +{formatHzGain(cause.est_hz_gain)} Hz
+                                                </span>
+                                              )}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+
                                   {m.how_to_fix ? (
                                     <div className="modal-mode-fix">
                                       <span className="sens-fix-prefix">Main limit:</span> {m.how_to_fix}
@@ -4191,29 +4830,67 @@ export const MetricsPanel: React.FC<Props> = ({
                   </>
                 );
               })()}
-            </div>
+            </DeepDiveAccordion>
 
-            {viewMode !== "solid_part" && isTetActive && tetFea && <TetFEACard tet={tetFea} />}
-            {viewMode !== "solid_part" && !isTetActive && solidFea && <SolidHexFEACard solidFea={solidFea} />}
+            {/* Accordion 4: Weight-Reduction Potential */}
+            {hasWeightGains && sim.weight_shaper_gains && (
+              <DeepDiveAccordion
+                title="Weight-Reduction Potential"
+                badge={weightAccordionBadge}
+                updated={modalChanged}
+                open={Boolean(sectionOpen["weight_potential"])}
+                onToggle={() => toggleSection("weight_potential")}
+              >
+                <WeightShaperPotentialCard
+                  gains={sim.weight_shaper_gains}
+                  changed={modalChanged}
+                  embedded
+                />
+              </DeepDiveAccordion>
+            )}
 
-            <div className={`section-card ${thermalChanged ? "card-changed" : ""}`}>
+            {/* Accordion 5: CNC Metrology & Workspace FRF */}
+            {hasMetrologyData && (
+              <DeepDiveAccordion
+                title="CNC Metrology & Workspace FRF"
+                badge={metrologyAccordionBadge}
+                open={Boolean(sectionOpen["metrology_frf"])}
+                onToggle={() => toggleSection("metrology_frf")}
+              >
+                <CncMetrologyContent
+                  metrology={sim.time_domain_metrology}
+                  workspaceFrf={sim.workspace_frf}
+                  rcsa={sim.rcsa}
+                />
+              </DeepDiveAccordion>
+            )}
+
+            {/* Accordion 6: Adjoint Sensitivity Hotspots */}
+            {hasSensitivityData && sim.sensitivity && (
+              <DeepDiveAccordion
+                title="Adjoint Sensitivity Hotspots"
+                badge={sensitivityAccordionBadge}
+                open={Boolean(sectionOpen["sensitivity"])}
+                onToggle={() => toggleSection("sensitivity")}
+              >
+                <AdjointSensitivityContent
+                  sensitivity={sim.sensitivity}
+                  viewMode={viewMode}
+                  onViewModeChange={onViewModeChange}
+                />
+              </DeepDiveAccordion>
+            )}
+
+            {/* Accordion 7: Hotend Thermal & Virtual Print */}
+            <DeepDiveAccordion
+              title="Hotend Thermal & Virtual Print"
+              badge={thermalPrintAccordionBadge}
+              updated={thermalChanged || printChanged}
+              open={Boolean(sectionOpen["thermal_print"])}
+              onToggle={() => toggleSection("thermal_print")}
+            >
               <div className="section-title">
                 <span>Hotend FVM Thermal &amp; Cooling ({th.filament_id.toUpperCase()})</span>
-                {thermalChanged && <span className="changed-dot-label">Updated</span>}
-              </div>
-              <div className="metric-kv">
-                <span>Max Volumetric Flow</span>
-                <span className="metric-val metric-val-with-delta">
-                  {compareSim && (
-                    <InlineDeltaBadge
-                      oldVal={compareSim.thermal.max_volumetric_flow_mm3_s}
-                      newVal={th.max_volumetric_flow_mm3_s}
-                      higherIsBetter={true}
-                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`}
-                    />
-                  )}
-                  {th.max_volumetric_flow_mm3_s.toFixed(1)} mm³/s
-                </span>
               </div>
               <div className="metric-kv">
                 <span>Flow Bottleneck</span>
@@ -4262,46 +4939,40 @@ export const MetricsPanel: React.FC<Props> = ({
                   Hotend Heat-up ({th.target_temp_c}°C in {th.heatup_time_215c_s.toFixed(0)}s)
                 </text>
               </svg>
-            </div>
 
-            <div className={`section-card ${printChanged ? "card-changed" : ""}`}>
-              <div className="section-title">
-                <span>Virtual G-code Print</span>
-                {printChanged && <span className="changed-dot-label">Updated</span>}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  marginTop: 6,
+                  paddingTop: 8,
+                  borderTop: "1px dashed rgba(255, 255, 255, 0.09)",
+                }}
+              >
+                <div className="section-title">
+                  <span>Virtual G-code Print</span>
+                </div>
+                <div className="metric-kv">
+                  <span>Avg / Peak Print Speed</span>
+                  <span className="metric-val">
+                    {vp.avg_print_speed_mm_s.toFixed(0)} / {vp.peak_print_speed_mm_s.toFixed(0)} mm/s
+                  </span>
+                </div>
+                <div className="metric-kv">
+                  <span>Peak Flow / Ringing</span>
+                  <span className="metric-val">
+                    {vp.peak_volumetric_flow_mm3_s.toFixed(1)} mm³/s | {(vp.max_ringing_severity * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div className="metric-kv">
+                  <span>Defect Segments</span>
+                  <span className="metric-val">
+                    {vp.underextrusion_segments} flow • {vp.ringing_segments} ring • {vp.step_skip_segments} skip
+                  </span>
+                </div>
               </div>
-              <div className="metric-kv">
-                <span>Simulated Print Time</span>
-                <span className="metric-val metric-val-with-delta">
-                  {compareSim && (
-                    <InlineDeltaBadge
-                      oldVal={compareSim.virtual_print.total_time_s}
-                      newVal={vp.total_time_s}
-                      higherIsBetter={false}
-                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} s`}
-                    />
-                  )}
-                  {vp.total_time_s.toFixed(1)} s
-                </span>
-              </div>
-              <div className="metric-kv">
-                <span>Avg / Peak Print Speed</span>
-                <span className="metric-val">
-                  {vp.avg_print_speed_mm_s.toFixed(0)} / {vp.peak_print_speed_mm_s.toFixed(0)} mm/s
-                </span>
-              </div>
-              <div className="metric-kv">
-                <span>Peak Flow / Ringing</span>
-                <span className="metric-val">
-                  {vp.peak_volumetric_flow_mm3_s.toFixed(1)} mm³/s | {(vp.max_ringing_severity * 100).toFixed(0)}%
-                </span>
-              </div>
-              <div className="metric-kv">
-                <span>Defect Segments</span>
-                <span className="metric-val">
-                  {vp.underextrusion_segments} flow • {vp.ringing_segments} ring • {vp.step_skip_segments} skip
-                </span>
-              </div>
-            </div>
+            </DeepDiveAccordion>
           </>
         )}
 

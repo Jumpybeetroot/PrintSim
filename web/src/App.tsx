@@ -1248,10 +1248,28 @@ export default function App() {
     spec,
   ]);
 
-  // Live Studio Session Bridge: poll GET /api/studio/commands every 600ms
+  // Live Studio Session Bridge: visibility-aware poll GET /api/studio/commands every 2000ms
   useEffect(() => {
     let active = true;
     let inFlight = false;
+    let pollTimerId: number | null = null;
+    const POLL_INTERVAL_MS = 2000;
+
+    const clearPollTimer = () => {
+      if (pollTimerId !== null) {
+        window.clearTimeout(pollTimerId);
+        pollTimerId = null;
+      }
+    };
+
+    const scheduleNextPoll = () => {
+      clearPollTimer();
+      if (!active || document.hidden) return;
+      pollTimerId = window.setTimeout(() => {
+        pollTimerId = null;
+        void pollCommands();
+      }, POLL_INTERVAL_MS);
+    };
 
     const handleStudioCommand = async (cmd: StudioCommand, hasMoreAfter: boolean) => {
       const clientId = clientIdRef.current;
@@ -1358,7 +1376,8 @@ export default function App() {
     };
 
     const pollCommands = async () => {
-      if (!active || inFlight) return;
+      if (!active || inFlight || document.hidden) return;
+      clearPollTimer();
       inFlight = true;
       try {
         const clientId = encodeURIComponent(clientIdRef.current);
@@ -1387,16 +1406,29 @@ export default function App() {
         }
       } finally {
         inFlight = false;
+        scheduleNextPoll();
       }
     };
 
-    const intervalId = window.setInterval(() => {
+    const onVisibilityChange = () => {
+      if (!active) return;
+      if (document.hidden) {
+        clearPollTimer();
+      } else {
+        clearPollTimer();
+        void pollCommands();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (!document.hidden) {
       void pollCommands();
-    }, 600);
+    }
 
     return () => {
       active = false;
-      window.clearInterval(intervalId);
+      clearPollTimer();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, []);
 
@@ -1711,6 +1743,11 @@ export default function App() {
     }
   };
 
+  const handleInspectModalMode = useCallback((modeIndex: number) => {
+    setSelectedModeIdx(modeIndex);
+    setViewMode("modal");
+  }, []);
+
   return (
     <div className="app-shell">
       <style>{`@keyframes studioSyncPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }`}</style>
@@ -1768,11 +1805,9 @@ export default function App() {
                     ? "0 0 8px rgba(56, 189, 248, 0.9)"
                     : "0 0 6px rgba(34, 197, 94, 0.75)",
                 animation:
-                  studioSyncStatus === "offline"
-                    ? "none"
-                    : studioSyncStatus === "syncing"
+                  studioSyncStatus === "syncing"
                     ? "studioSyncPulse 0.85s ease-in-out infinite"
-                    : "studioSyncPulse 2.4s ease-in-out infinite",
+                    : "none",
               }}
             />
             <span>Agent Sync</span>
@@ -1922,6 +1957,7 @@ export default function App() {
           topoResult={topoResult}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
+          onInspectModalMode={handleInspectModalMode}
           bom={bom}
           bomLoading={bomLoading}
           stockLengthMm={stockLengthMm}

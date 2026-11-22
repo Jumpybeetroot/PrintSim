@@ -256,6 +256,28 @@ const SUBSYSTEM_META: Record<SubsystemKey, { label: string; color: string }> = {
   bed: { label: "Bed", color: "#a855f7" },
 };
 
+const MODAL_COMPLIANCE_SOURCES: Array<{
+  key: "frame" | "belt" | "motor" | "bracket";
+  short: string;
+  color: string;
+}> = [
+  { key: "frame", short: "Struct", color: "#38bdf8" },
+  { key: "belt", short: "Belt", color: "#f59e0b" },
+  { key: "motor", short: "Motor", color: "#a78bfa" },
+  { key: "bracket", short: "Bkt", color: "#fb7185" },
+];
+
+const CAUSE_CATEGORY_COLORS: Record<
+  "belt" | "motor" | "bracket" | "structural" | "mass",
+  string
+> = {
+  belt: "#f59e0b",
+  structural: "#38bdf8",
+  motor: "#a78bfa",
+  bracket: "#fb7185",
+  mass: "#22d3ee",
+};
+
 function getLensScore(
   entry:
     | {
@@ -1616,6 +1638,9 @@ export const PrinterViewport: React.FC<Props> = ({
   const [internalToolheadPunchIn, setInternalToolheadPunchIn] = useState<boolean>(false);
   const [isolateToolheadModal, setIsolateToolheadModal] = useState<boolean>(false);
   const [modalAmpScale, setModalAmpScale] = useState<number>(1.0);
+  const [ecoDpr, setEcoDpr] = useState<boolean>(false);
+  const [modalPaused, setModalPaused] = useState<boolean>(false);
+  const [showHudDetails, setShowHudDetails] = useState<boolean>(false);
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
 
@@ -1679,6 +1704,7 @@ export const PrinterViewport: React.FC<Props> = ({
   const onRegisterCaptureRef = useRef(onRegisterCapture);
   onRegisterCaptureRef.current = onRegisterCapture;
   const captureFnRef = useRef<((frames?: number, delayMs?: number) => Promise<string[]>) | null>(null);
+  const requestRenderRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (onRegisterCapture && captureFnRef.current) {
@@ -1745,6 +1771,8 @@ export const PrinterViewport: React.FC<Props> = ({
     isolateToolheadModal: boolean;
     modalAmpScale: number;
     isToolheadPunchIn: boolean;
+    ecoDpr: boolean;
+    modalPaused: boolean;
   }>({
     inspectableMeshes: [],
     hoveredMesh: null,
@@ -1776,19 +1804,43 @@ export const PrinterViewport: React.FC<Props> = ({
     isolateToolheadModal: false,
     modalAmpScale: 1.0,
     isToolheadPunchIn: false,
+    ecoDpr: false,
+    modalPaused: false,
   });
 
   useEffect(() => {
     stateRef.current.isolateToolheadModal = isToolheadIsolated;
+    requestRenderRef.current?.();
   }, [isToolheadIsolated]);
 
   useEffect(() => {
     stateRef.current.modalAmpScale = modalAmpScale;
+    requestRenderRef.current?.();
   }, [modalAmpScale]);
 
   useEffect(() => {
     stateRef.current.isToolheadPunchIn = toolheadPunchIn;
+    requestRenderRef.current?.();
   }, [toolheadPunchIn]);
+
+  useEffect(() => {
+    stateRef.current.modalPaused = modalPaused;
+    requestRenderRef.current?.();
+  }, [modalPaused]);
+
+  useEffect(() => {
+    stateRef.current.ecoDpr = ecoDpr;
+    const renderer = stateRef.current.renderer;
+    const el = containerRef.current;
+    if (renderer && el) {
+      const nextDpr = ecoDpr ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
+      renderer.setPixelRatio(nextDpr);
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        renderer.setSize(el.clientWidth, el.clientHeight);
+      }
+      requestRenderRef.current?.();
+    }
+  }, [ecoDpr]);
 
   const handleCloseInspector = () => {
     if (stateRef.current.pinnedMesh) {
@@ -1799,6 +1851,7 @@ export const PrinterViewport: React.FC<Props> = ({
         prevPinned,
         stateRef.current.hoveredMesh === prevPinned ? "hover" : "none"
       );
+      requestRenderRef.current?.();
     } else {
       stateRef.current.pinnedKey = null;
     }
@@ -1814,22 +1867,30 @@ export const PrinterViewport: React.FC<Props> = ({
     if (!el) return;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.05, 200);
+    const viewportBgColor = new THREE.Color("#0d1422");
+    scene.background = viewportBgColor;
+
+    const initW = Math.max(el.clientWidth, 1);
+    const initH = Math.max(el.clientHeight, 1);
+    const camera = new THREE.PerspectiveCamera(42, initW / initH, 0.05, 200);
     camera.position.set(7.5, 6.2, 8.2);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(el.clientWidth, el.clientHeight);
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: "low-power",
+    });
+    renderer.setClearColor(viewportBgColor, 1);
+    renderer.setPixelRatio(
+      stateRef.current.ecoDpr ? 1 : Math.min(window.devicePixelRatio || 1, 1.5)
+    );
+    renderer.setSize(initW, initH);
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.target.set(0, 2.3, 0);
-    const onControlsStart = () => {
-      cameraAnimRef.current.active = false;
-    };
-    controls.addEventListener("start", onControlsStart);
 
     // Studio CAD Lighting (key + hemisphere + warm front-lower fill + cool rim for crisp metallic speculars)
     scene.add(new THREE.AmbientLight(0xffffff, 0.48));
@@ -1857,139 +1918,21 @@ export const PrinterViewport: React.FC<Props> = ({
     stateRef.current.controls = controls;
     stateRef.current.dynamicGroup = dynamicGroup;
 
-    // Interactive 3D raycasting for Part Inspector (click vs orbit-drag safe)
-    const raycaster = new THREE.Raycaster();
-    const pointerNdc = new THREE.Vector2();
-    let pointerDownPos: { x: number; y: number; button: number } | null = null;
-    let lastMoveTs = 0;
-
-    const pickInspectableMesh = (clientX: number, clientY: number): THREE.Mesh | null => {
-      const targets = stateRef.current.inspectableMeshes;
-      if (!targets.length) return null;
-      const rect = renderer.domElement.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return null;
-      pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointerNdc, camera);
-      const hits = raycaster.intersectObjects(targets, false);
-      for (const hit of hits) {
-        const obj = hit.object as THREE.Mesh;
-        if (obj.userData?.inspectInfo) {
-          return obj;
-        }
-      }
-      return null;
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      if (e.button === 0) {
-        pointerDownPos = { x: e.clientX, y: e.clientY, button: e.button };
-      } else {
-        pointerDownPos = null;
-      }
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      const now = performance.now();
-      if (now - lastMoveTs < 30) return;
-      lastMoveTs = now;
-      if (e.buttons !== 0) {
-        // User is actively orbiting/panning — clear hover indicator cleanly
-        if (stateRef.current.hoveredMesh) {
-          const oldHover = stateRef.current.hoveredMesh;
-          stateRef.current.hoveredMesh = null;
-          if (oldHover !== stateRef.current.pinnedMesh) {
-            applyInspectHighlight(oldHover, "none");
-          }
-        }
-        if (stateRef.current.hoveredKey !== null) {
-          stateRef.current.hoveredKey = null;
-          setHoveredPart(null);
-        }
-        renderer.domElement.style.cursor = "";
-        return;
-      }
-
-      const hitMesh = pickInspectableMesh(e.clientX, e.clientY);
-      const info = (hitMesh?.userData?.inspectInfo as InspectedPartInfo | undefined) ?? null;
-      renderer.domElement.style.cursor = info ? "pointer" : "";
-
-      if (hitMesh !== stateRef.current.hoveredMesh) {
-        const prevHover = stateRef.current.hoveredMesh;
-        stateRef.current.hoveredMesh = hitMesh;
-        if (prevHover && prevHover !== stateRef.current.pinnedMesh) {
-          applyInspectHighlight(prevHover, "none");
-        }
-        if (hitMesh && hitMesh !== stateRef.current.pinnedMesh) {
-          applyInspectHighlight(hitMesh, "hover");
-        }
-      }
-
-      const nextKey = info?.key ?? null;
-      if (nextKey !== stateRef.current.hoveredKey) {
-        stateRef.current.hoveredKey = nextKey;
-        setHoveredPart(info);
-      }
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      if (!pointerDownPos || e.button !== 0) return;
-      const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-      pointerDownPos = null;
-      if (dist >= 5) return; // orbit drag, not a part click
-
-      const hitMesh = pickInspectableMesh(e.clientX, e.clientY);
-      const info = (hitMesh?.userData?.inspectInfo as InspectedPartInfo | undefined) ?? null;
-      const prevPinned = stateRef.current.pinnedMesh;
-
-      if (prevPinned && prevPinned !== hitMesh) {
-        applyInspectHighlight(
-          prevPinned,
-          stateRef.current.hoveredMesh === prevPinned ? "hover" : "none"
-        );
-      }
-
-      if (hitMesh && info) {
-        stateRef.current.pinnedMesh = hitMesh;
-        stateRef.current.pinnedKey = info.key;
-        applyInspectHighlight(hitMesh, "pin", 0.5);
-        setPinnedPart(info);
-      } else {
-        stateRef.current.pinnedMesh = null;
-        stateRef.current.pinnedKey = null;
-        setPinnedPart(null);
-      }
-    };
-
-    const onPointerLeave = () => {
-      pointerDownPos = null;
-      renderer.domElement.style.cursor = "";
-      const prevHover = stateRef.current.hoveredMesh;
-      stateRef.current.hoveredMesh = null;
-      if (prevHover && prevHover !== stateRef.current.pinnedMesh) {
-        applyInspectHighlight(prevHover, "none");
-      }
-      if (stateRef.current.hoveredKey !== null) {
-        stateRef.current.hoveredKey = null;
-        setHoveredPart(null);
-      }
-    };
-
-    renderer.domElement.addEventListener("pointerdown", onPointerDown);
-    renderer.domElement.addEventListener("pointermove", onPointerMove);
-    renderer.domElement.addEventListener("pointerup", onPointerUp);
-    renderer.domElement.addEventListener("pointerleave", onPointerLeave);
-
-    const onResize = () => {
-      if (!el) return;
-      camera.aspect = el.clientWidth / el.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(el.clientWidth, el.clientHeight);
-    };
-    window.addEventListener("resize", onResize);
-
     let disposed = false;
-    const clock = new THREE.Clock();
+    let rafId: number | null = null;
+    let modalTimerId: number | null = null;
+    let userOrbiting = false;
+    let needsDamping = false;
+    let inInternalControlsUpdate = false;
+    let settledFrames = 0;
+    let dampFrames = 0;
+    let modalPhaseSec = 0;
+    let lastModalAdvanceMs: number | null = null;
+    let prevCamAnimMs: number | null = null;
+    const MODAL_FRAME_INTERVAL_MS = 33; // ~30 FPS modal animation cadence
+    const prevCamPos = new THREE.Vector3();
+    const prevCtrlTarget = new THREE.Vector3();
+
     const captureBgColor = new THREE.Color("#0e1522");
     const tmpPosA = new THREE.Vector3();
     const tmpPosB = new THREE.Vector3();
@@ -2032,31 +1975,89 @@ export const PrinterViewport: React.FC<Props> = ({
     const tmpCollarS2 = new THREE.Vector3();
     const tmpNozTipWorld = new THREE.Vector3();
     const tmpRelQuat = new THREE.Quaternion();
-    let prevRenderTime = 0;
 
-    const renderAtTime = (t: number) => {
-      if (disposed) return;
-      const dt = Math.min(Math.max(t - prevRenderTime, 0.001), 0.1);
-      prevRenderTime = t;
+    const hasActiveModalMeshes = (): boolean =>
+      stateRef.current.isModal &&
+      (stateRef.current.modalContinuousBeams.length > 0 ||
+        stateRef.current.modalMeshes.length > 0 ||
+        stateRef.current.modalShellMeshes.length > 0);
 
-      if (cameraAnimRef.current.active) {
-        const alpha = 1 - Math.exp(-10 * dt);
-        camera.position.lerp(cameraAnimRef.current.targetPos, alpha);
-        controls.target.lerp(cameraAnimRef.current.targetLook, alpha);
-        if (
-          camera.position.distanceToSquared(cameraAnimRef.current.targetPos) < 1e-4 &&
-          controls.target.distanceToSquared(cameraAnimRef.current.targetLook) < 1e-4
-        ) {
-          camera.position.copy(cameraAnimRef.current.targetPos);
-          controls.target.copy(cameraAnimRef.current.targetLook);
-          cameraAnimRef.current.active = false;
-        }
+    const isModalAnimating = (): boolean =>
+      hasActiveModalMeshes() && !stateRef.current.modalPaused && !document.hidden;
+
+    const clearModalTimer = () => {
+      if (modalTimerId !== null) {
+        window.clearTimeout(modalTimerId);
+        modalTimerId = null;
       }
-      controls.update();
+    };
 
-      if (stateRef.current.pinnedMesh) {
-        const pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
-        applyInspectHighlight(stateRef.current.pinnedMesh, "pin", pulse);
+    const clearScheduledRaf = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      stateRef.current.animFrame = undefined;
+    };
+
+    const renderFrame = (t: number, stepCamera: boolean) => {
+      if (disposed) return;
+
+      if (stepCamera) {
+        prevCamPos.copy(camera.position);
+        prevCtrlTarget.copy(controls.target);
+
+        if (cameraAnimRef.current.active) {
+          const nowMs = performance.now();
+          const dt =
+            prevCamAnimMs !== null
+              ? Math.min(Math.max((nowMs - prevCamAnimMs) / 1000, 0.001), 0.1)
+              : 0.016;
+          prevCamAnimMs = nowMs;
+          const alpha = 1 - Math.exp(-10 * dt);
+          camera.position.lerp(cameraAnimRef.current.targetPos, alpha);
+          controls.target.lerp(cameraAnimRef.current.targetLook, alpha);
+          if (
+            camera.position.distanceToSquared(cameraAnimRef.current.targetPos) < 1e-4 &&
+            controls.target.distanceToSquared(cameraAnimRef.current.targetLook) < 1e-4
+          ) {
+            camera.position.copy(cameraAnimRef.current.targetPos);
+            controls.target.copy(cameraAnimRef.current.targetLook);
+            cameraAnimRef.current.active = false;
+            prevCamAnimMs = null;
+          }
+        }
+
+        let controlsUpdated = false;
+        inInternalControlsUpdate = true;
+        try {
+          controlsUpdated = controls.update();
+        } finally {
+          inInternalControlsUpdate = false;
+        }
+
+        if (needsDamping) {
+          if (userOrbiting) {
+            settledFrames = 0;
+            dampFrames = 0;
+          } else {
+            dampFrames += 1;
+            const camDeltaSq =
+              prevCamPos.distanceToSquared(camera.position) +
+              prevCtrlTarget.distanceToSquared(controls.target);
+            const stillMoving = controlsUpdated && camDeltaSq >= 1e-8;
+            if (stillMoving && dampFrames < 240) {
+              settledFrames = 0;
+            } else {
+              settledFrames += 1;
+              if (settledFrames >= 2 || dampFrames >= 240) {
+                needsDamping = false;
+                settledFrames = 0;
+                dampFrames = 0;
+              }
+            }
+          }
+        }
       }
 
       if (
@@ -2588,11 +2589,280 @@ export const PrinterViewport: React.FC<Props> = ({
       renderer.render(scene, camera);
     };
 
-    const animate = () => {
-      stateRef.current.animFrame = requestAnimationFrame(animate);
-      renderAtTime(clock.getElapsedTime());
+    function scheduleModalTick(): void {
+      if (disposed || modalTimerId !== null || rafId !== null) return;
+      if (!isModalAnimating()) return;
+      modalTimerId = window.setTimeout(() => {
+        modalTimerId = null;
+        if (disposed || !isModalAnimating()) return;
+        scheduleRaf();
+      }, MODAL_FRAME_INTERVAL_MS);
+    }
+
+    function scheduleRaf(): void {
+      if (disposed || document.hidden) return;
+      clearModalTimer();
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(runRafTick);
+      stateRef.current.animFrame = rafId;
+    }
+
+    function runRafTick(): void {
+      rafId = null;
+      stateRef.current.animFrame = undefined;
+      if (disposed || document.hidden) {
+        lastModalAdvanceMs = null;
+        prevCamAnimMs = null;
+        return;
+      }
+
+      if (isModalAnimating()) {
+        const nowMs = performance.now();
+        const dtModal =
+          lastModalAdvanceMs !== null
+            ? Math.min(Math.max((nowMs - lastModalAdvanceMs) / 1000, 0), 0.1)
+            : 0;
+        lastModalAdvanceMs = nowMs;
+        modalPhaseSec += dtModal;
+      } else {
+        lastModalAdvanceMs = null;
+      }
+
+      renderFrame(modalPhaseSec, true);
+
+      const needsInteractiveRaf =
+        userOrbiting || needsDamping || cameraAnimRef.current.active;
+      if (needsInteractiveRaf) {
+        scheduleRaf();
+      } else if (isModalAnimating()) {
+        scheduleModalTick();
+      }
+    }
+
+    const requestRender = () => {
+      if (disposed) return;
+      if (document.hidden) {
+        clearModalTimer();
+        clearScheduledRaf();
+        lastModalAdvanceMs = null;
+        prevCamAnimMs = null;
+        return;
+      }
+      if (!isModalAnimating()) {
+        clearModalTimer();
+        lastModalAdvanceMs = null;
+      }
+      if (cameraAnimRef.current.active) {
+        needsDamping = false;
+        prevCamAnimMs = null;
+      }
+      scheduleRaf();
     };
-    animate();
+
+    requestRenderRef.current = requestRender;
+
+    const onControlsStart = () => {
+      cameraAnimRef.current.active = false;
+      prevCamAnimMs = null;
+      userOrbiting = true;
+      needsDamping = true;
+      settledFrames = 0;
+      dampFrames = 0;
+      scheduleRaf();
+    };
+
+    const onControlsChange = () => {
+      if (inInternalControlsUpdate) return;
+      needsDamping = true;
+      settledFrames = 0;
+      dampFrames = 0;
+      scheduleRaf();
+    };
+
+    const onControlsEnd = () => {
+      userOrbiting = false;
+      needsDamping = true;
+      settledFrames = 0;
+      dampFrames = 0;
+      scheduleRaf();
+    };
+
+    controls.addEventListener("start", onControlsStart);
+    controls.addEventListener("change", onControlsChange);
+    controls.addEventListener("end", onControlsEnd);
+
+    // Interactive 3D raycasting for Part Inspector (click vs orbit-drag safe)
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
+    let pointerDownPos: { x: number; y: number; button: number } | null = null;
+    let lastMoveTs = 0;
+
+    const pickInspectableMesh = (clientX: number, clientY: number): THREE.Mesh | null => {
+      const targets = stateRef.current.inspectableMeshes;
+      if (!targets.length) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNdc, camera);
+      const hits = raycaster.intersectObjects(targets, false);
+      for (const hit of hits) {
+        const obj = hit.object as THREE.Mesh;
+        if (obj.userData?.inspectInfo) {
+          return obj;
+        }
+      }
+      return null;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button === 0) {
+        pointerDownPos = { x: e.clientX, y: e.clientY, button: e.button };
+      } else {
+        pointerDownPos = null;
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const now = performance.now();
+      if (now - lastMoveTs < 30) return;
+      lastMoveTs = now;
+      if (e.buttons !== 0) {
+        // User is actively orbiting/panning — clear hover indicator cleanly
+        if (stateRef.current.hoveredMesh) {
+          const oldHover = stateRef.current.hoveredMesh;
+          stateRef.current.hoveredMesh = null;
+          if (oldHover !== stateRef.current.pinnedMesh) {
+            applyInspectHighlight(oldHover, "none");
+            requestRender();
+          }
+        }
+        if (stateRef.current.hoveredKey !== null) {
+          stateRef.current.hoveredKey = null;
+          setHoveredPart(null);
+        }
+        renderer.domElement.style.cursor = "";
+        return;
+      }
+
+      const hitMesh = pickInspectableMesh(e.clientX, e.clientY);
+      const info = (hitMesh?.userData?.inspectInfo as InspectedPartInfo | undefined) ?? null;
+      renderer.domElement.style.cursor = info ? "pointer" : "";
+
+      if (hitMesh !== stateRef.current.hoveredMesh) {
+        const prevHover = stateRef.current.hoveredMesh;
+        stateRef.current.hoveredMesh = hitMesh;
+        if (prevHover && prevHover !== stateRef.current.pinnedMesh) {
+          applyInspectHighlight(prevHover, "none");
+        }
+        if (hitMesh && hitMesh !== stateRef.current.pinnedMesh) {
+          applyInspectHighlight(hitMesh, "hover");
+        }
+        requestRender();
+      }
+
+      const nextKey = info?.key ?? null;
+      if (nextKey !== stateRef.current.hoveredKey) {
+        stateRef.current.hoveredKey = nextKey;
+        setHoveredPart(info);
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!pointerDownPos || e.button !== 0) return;
+      const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+      pointerDownPos = null;
+      if (dist >= 5) return; // orbit drag, not a part click
+
+      const hitMesh = pickInspectableMesh(e.clientX, e.clientY);
+      const info = (hitMesh?.userData?.inspectInfo as InspectedPartInfo | undefined) ?? null;
+      const prevPinned = stateRef.current.pinnedMesh;
+
+      if (prevPinned && prevPinned !== hitMesh) {
+        applyInspectHighlight(
+          prevPinned,
+          stateRef.current.hoveredMesh === prevPinned ? "hover" : "none"
+        );
+      }
+
+      if (hitMesh && info) {
+        stateRef.current.pinnedMesh = hitMesh;
+        stateRef.current.pinnedKey = info.key;
+        applyInspectHighlight(hitMesh, "pin", 0.65);
+        setPinnedPart(info);
+        if (prevPinned !== hitMesh) {
+          requestRender();
+        }
+      } else {
+        stateRef.current.pinnedMesh = null;
+        stateRef.current.pinnedKey = null;
+        setPinnedPart(null);
+        if (prevPinned) {
+          requestRender();
+        }
+      }
+    };
+
+    const onPointerLeave = () => {
+      pointerDownPos = null;
+      renderer.domElement.style.cursor = "";
+      const prevHover = stateRef.current.hoveredMesh;
+      stateRef.current.hoveredMesh = null;
+      if (prevHover && prevHover !== stateRef.current.pinnedMesh) {
+        applyInspectHighlight(prevHover, "none");
+        requestRender();
+      }
+      if (stateRef.current.hoveredKey !== null) {
+        stateRef.current.hoveredKey = null;
+        setHoveredPart(null);
+      }
+    };
+
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+    renderer.domElement.addEventListener("pointerleave", onPointerLeave);
+
+    const onResize = () => {
+      if (disposed || !el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w <= 0 || h <= 0) return;
+      renderer.setPixelRatio(
+        stateRef.current.ecoDpr ? 1 : Math.min(window.devicePixelRatio || 1, 1.5)
+      );
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+      requestRender();
+    };
+    window.addEventListener("resize", onResize);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        onResize();
+      });
+      resizeObserver.observe(el);
+    }
+
+    const onVisibilityChange = () => {
+      if (disposed) return;
+      if (document.hidden) {
+        clearModalTimer();
+        clearScheduledRaf();
+        lastModalAdvanceMs = null;
+        prevCamAnimMs = null;
+      } else {
+        lastModalAdvanceMs = null;
+        prevCamAnimMs = null;
+        requestRender();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    // Render initial frame on demand
+    requestRender();
 
     const captureViewport = async (frames = 2, delayMs = 420): Promise<string[]> => {
       if (disposed) return [];
@@ -2601,9 +2871,9 @@ export const PrinterViewport: React.FC<Props> = ({
       const results: string[] = [];
 
       const isModal = stateRef.current.isModal;
-      let t0 = clock.getElapsedTime();
+      let t0 = modalPhaseSec;
       // In modal mode, guarantee crisp peak deformation (avoid zero-crossings) and
-      // deterministic opposite-extreme half-cycle phase stepping even in background tabs.
+      // deterministic opposite-extreme half-cycle phase stepping even when paused or in background tabs.
       if (isModal && Math.abs(Math.sin(t0 * 7.5)) < 0.65) {
         const halfCycles = Math.round((t0 * 7.5) / Math.PI - 0.5);
         t0 = ((halfCycles + 0.5) * Math.PI) / 7.5;
@@ -2615,7 +2885,7 @@ export const PrinterViewport: React.FC<Props> = ({
         const tFrame = t0 + i * stepSec;
         const prevBg = scene.background;
         scene.background = captureBgColor;
-        renderAtTime(tFrame);
+        renderFrame(tFrame, false);
         try {
           const dataUrl = renderer.domElement.toDataURL("image/png");
           if (dataUrl && dataUrl.startsWith("data:image/png")) {
@@ -2626,8 +2896,8 @@ export const PrinterViewport: React.FC<Props> = ({
         } finally {
           scene.background = prevBg;
         }
-        // Restore live frame immediately so foreground rendering stays seamless
-        renderAtTime(clock.getElapsedTime());
+        // Restore current/paused pose immediately so foreground rendering stays seamless
+        renderFrame(modalPhaseSec, false);
 
         if (i < count - 1 && waitMs > 0) {
           await new Promise<void>((resolve) => {
@@ -2643,18 +2913,24 @@ export const PrinterViewport: React.FC<Props> = ({
 
     return () => {
       disposed = true;
+      requestRenderRef.current = null;
       captureFnRef.current = null;
+      clearModalTimer();
+      clearScheduledRaf();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("resize", onResize);
+      resizeObserver?.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
-      if (stateRef.current.animFrame) cancelAnimationFrame(stateRef.current.animFrame);
       disposeGroupChildren(dynamicGroup);
       grid.geometry.dispose();
       if (Array.isArray(grid.material)) grid.material.forEach((m) => m.dispose());
       else grid.material.dispose();
       controls.removeEventListener("start", onControlsStart);
+      controls.removeEventListener("change", onControlsChange);
+      controls.removeEventListener("end", onControlsEnd);
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
@@ -2666,6 +2942,7 @@ export const PrinterViewport: React.FC<Props> = ({
     const group = stateRef.current.dynamicGroup;
     if (!group) return;
 
+    try {
     // Dispose and clear previous meshes cleanly
     disposeGroupChildren(group);
 
@@ -7475,13 +7752,16 @@ export const PrinterViewport: React.FC<Props> = ({
       );
       if (matched && matched.userData?.inspectInfo) {
         stateRef.current.pinnedMesh = matched;
-        applyInspectHighlight(matched, "pin", 0.5);
+        applyInspectHighlight(matched, "pin", 0.65);
         setPinnedPart(matched.userData.inspectInfo as InspectedPartInfo);
       } else {
         stateRef.current.pinnedMesh = null;
         stateRef.current.pinnedKey = null;
         setPinnedPart(null);
       }
+    }
+    } finally {
+      requestRenderRef.current?.();
     }
   }, [
     sim,
@@ -7549,6 +7829,7 @@ export const PrinterViewport: React.FC<Props> = ({
           cameraAnimRef.current.targetPos.copy(mid).add(macroOffset);
           cameraAnimRef.current.active = true;
           lastPunchTargetRef.current = mid.clone();
+          requestRenderRef.current?.();
         } else if (
           !lastPunchTargetRef.current ||
           lastPunchTargetRef.current.distanceTo(mid) > 0.08
@@ -7561,6 +7842,7 @@ export const PrinterViewport: React.FC<Props> = ({
           cameraAnimRef.current.targetPos.copy(cam.position).add(delta);
           cameraAnimRef.current.active = true;
           lastPunchTargetRef.current = mid.clone();
+          requestRenderRef.current?.();
         }
       }
     } else if (wasPunchIn && !toolheadPunchIn) {
@@ -7575,6 +7857,7 @@ export const PrinterViewport: React.FC<Props> = ({
       }
       cameraAnimRef.current.active = true;
       lastPunchTargetRef.current = null;
+      requestRenderRef.current?.();
     }
   }, [toolheadPunchIn, sim]);
 
@@ -7584,6 +7867,22 @@ export const PrinterViewport: React.FC<Props> = ({
       ? Math.min(selectedModeIdx, sim.modal_fea.modes.length - 1)
       : 0;
   const activeMode = sim?.modal_fea.modes[clampedModeIdx];
+  const limitingSummary = sim?.modal_fea.limiting_modal_summary;
+  const primaryLimitingModeIdx =
+    sim && sim.modal_fea.modes.length > 0
+      ? (() => {
+          if (limitingSummary?.primary_structural_mode_number != null) {
+            const byNum = sim.modal_fea.modes.findIndex(
+              (m) => m.mode_number === limitingSummary.primary_structural_mode_number
+            );
+            if (byNum >= 0) return byNum;
+          }
+          return sim.modal_fea.modes.findIndex((m) => Boolean(m.is_primary_limiting_mode));
+        })()
+      : -1;
+  const primaryLimitingModeNum =
+    limitingSummary?.primary_structural_mode_number ??
+    (primaryLimitingModeIdx >= 0 ? sim?.modal_fea.modes[primaryLimitingModeIdx]?.mode_number : undefined);
 
   const xRailMountHud: XRailMountType =
     sim?.geometry.linear_rails?.x_rail_mount ??
@@ -7752,6 +8051,25 @@ export const PrinterViewport: React.FC<Props> = ({
               )}
             </button>
           )}
+
+          <div className="hud-pill-group">
+            <button
+              type="button"
+              className={`hud-pill ${ecoDpr ? "active" : ""}`}
+              onClick={() => setEcoDpr((v) => !v)}
+              title="Toggle 1× pixel ratio (Eco) vs 1.5× Retina DPR to reduce GPU fill rate"
+            >
+              Eco 1×
+            </button>
+            <button
+              type="button"
+              className={`hud-pill ${showHudDetails ? "active" : ""}`}
+              onClick={() => setShowHudDetails((prev) => !prev)}
+              title="Toggle detailed HUD overlays over the 3D viewport (all full details are also in the right panel)"
+            >
+              {showHudDetails ? "HUD: Full" : "HUD: Clean"}
+            </button>
+          </div>
         </div>
 
         {sim && (
@@ -7768,6 +8086,162 @@ export const PrinterViewport: React.FC<Props> = ({
             </span>
           </div>
         )}
+
+        {showHudDetails && viewMode === "modal" && sim && limitingSummary && (() => {
+          const shares = limitingSummary.compliance_share_pct;
+          const totalShare = Math.max(
+            MODAL_COMPLIANCE_SOURCES.reduce((acc, s) => acc + Math.max(0, shares[s.key] ?? 0), 0),
+            1e-6
+          );
+          const bnKind = limitingSummary.limiting_kind;
+          const bnColor =
+            bnKind === "belt"
+              ? "#f59e0b"
+              : bnKind === "motor"
+                ? "#a78bfa"
+                : bnKind === "bracket"
+                  ? "#fb7185"
+                  : (shares.frame ?? 0) >= 60
+                    ? "#ef4444"
+                    : "#38bdf8";
+          const bnText =
+            bnKind === "structural"
+              ? `Structural Mode M${limitingSummary.primary_structural_mode_number} ${Math.round(
+                  shares.frame ?? 0
+                )}%`
+              : bnKind === "belt"
+                ? `Belt Stretch ${Math.round(shares.belt ?? 0)}%`
+                : bnKind === "motor"
+                  ? `Motor Stiffness ${Math.round(shares.motor ?? 0)}%`
+                  : `Gantry Brackets ${Math.round(shares.bracket ?? 0)}%`;
+
+          const freqMap: Record<"frame" | "belt" | "motor" | "bracket", number> = {
+            frame: limitingSummary.structural_freq_hz,
+            belt: limitingSummary.belt_freq_hz,
+            motor: limitingSummary.motor_freq_hz,
+            bracket: limitingSummary.bracket_freq_hz,
+          };
+
+          const showFocusBtn =
+            primaryLimitingModeIdx >= 0 && primaryLimitingModeIdx !== clampedModeIdx;
+
+          return (
+            <div className="hud-card hud-limiting-banner">
+              <div className="hud-limiting-top">
+                <div className="hud-limiting-badges">
+                  <span className="hud-limiting-main-pill">
+                    LIMITING: {limitingSummary.limiting_axis}-Axis ·{" "}
+                    {limitingSummary.effective_freq_hz.toFixed(1)} Hz (
+                    {limitingSummary.recommended_shaper} · ≤
+                    {Math.round(limitingSummary.max_accel_mm_s2).toLocaleString()} mm/s²)
+                  </span>
+                  <span className="hud-limiting-compare">
+                    ({limitingSummary.other_axis}:{" "}
+                    {limitingSummary.other_axis_effective_freq_hz.toFixed(1)} Hz)
+                  </span>
+                  <span
+                    className="hud-limiting-bn-pill"
+                    style={{
+                      background: `${bnColor}22`,
+                      borderColor: `${bnColor}66`,
+                      color: bnColor,
+                    }}
+                    title={limitingSummary.headline}
+                  >
+                    #1 {bnText}
+                  </span>
+                </div>
+
+                {showFocusBtn && (
+                  <button
+                    type="button"
+                    className="hud-focus-limiting-btn"
+                    onClick={() => onSelectModeIdx(primaryLimitingModeIdx)}
+                    title={`Snap 3D modal animation to Mode ${limitingSummary.primary_structural_mode_number} (${limitingSummary.primary_structural_mode_label})`}
+                  >
+                    Focus Limiting Mode M{limitingSummary.primary_structural_mode_number}
+                  </button>
+                )}
+              </div>
+
+              <div className="hud-limiting-mid">
+                <div className="hud-limiting-comp-group">
+                  <div
+                    className="hud-limiting-bar"
+                    title={`${limitingSummary.limiting_axis}-Axis compliance breakdown`}
+                  >
+                    {MODAL_COMPLIANCE_SOURCES.map((src) => {
+                      const rawPct = Math.max(0, shares[src.key] ?? 0);
+                      const normPct = (rawPct / totalShare) * 100;
+                      if (normPct < 0.5) return null;
+                      return (
+                        <div
+                          key={src.key}
+                          className="hud-limiting-bar-seg"
+                          style={{ width: `${normPct}%`, background: src.color }}
+                          title={`${src.short}: ${rawPct.toFixed(0)}% (${freqMap[src.key].toFixed(0)} Hz)`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="hud-limiting-freq-strip">
+                    {MODAL_COMPLIANCE_SOURCES.map((src, i) => {
+                      const f = freqMap[src.key];
+                      const showFreq = Number.isFinite(f) && f > 0 && f < 9999;
+                      return (
+                        <React.Fragment key={src.key}>
+                          {i > 0 && <span className="hud-limiting-dot">·</span>}
+                          <span className="hud-limiting-freq-item">
+                            <span className="swatch-dot" style={{ background: src.color }} />
+                            {src.short}
+                            {showFreq ? <strong> {Math.round(f)}Hz</strong> : null}
+                          </span>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {limitingSummary.top_overall_causes &&
+                  limitingSummary.top_overall_causes.length > 0 && (
+                    <div className="hud-limiting-cause-chips">
+                      {limitingSummary.top_overall_causes.slice(0, 3).map((cause, idx) => {
+                        const cColor = CAUSE_CATEGORY_COLORS[cause.category] ?? "#38bdf8";
+                        return (
+                          <span
+                            key={cause.id}
+                            className="hud-limiting-cause-chip"
+                            style={{ borderLeftColor: cColor }}
+                            title={cause.detail}
+                          >
+                            <span className="hud-limiting-rank" style={{ color: cColor }}>
+                              #{idx + 1}
+                            </span>
+                            <span className="hud-limiting-cause-lbl">{cause.label}</span>
+                            <strong>{Math.round(cause.share_pct)}%</strong>
+                            {cause.est_hz_gain > 0 && (
+                              <span className="hud-limiting-cause-gain">
+                                (+{formatHzGain(cause.est_hz_gain)} Hz)
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+              </div>
+
+              {limitingSummary.belt_included_note && (
+                <div
+                  className="hud-limiting-note"
+                  title={limitingSummary.belt_included_note}
+                >
+                  {limitingSummary.belt_included_note}
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Compact Hover Pill for 3D Part Raycasting */}
@@ -8082,40 +8556,42 @@ export const PrinterViewport: React.FC<Props> = ({
                 </div>
               )}
 
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "3px 8px",
-                  fontSize: 10,
-                  color: "var(--muted)",
-                  paddingTop: 4,
-                  borderTop: "1px dashed rgba(255, 255, 255, 0.08)",
-                  fontVariantNumeric: "tabular-nums",
-                }}
-              >
-                <span>
-                  Backplate:{" "}
-                  <strong style={{ color: "var(--text)" }}>
-                    {bpMat.shortLabel} ({bpThickMm.toFixed(1)}mm)
-                  </strong>
-                </span>
-                <span>
-                  Body:{" "}
-                  <strong style={{ color: "var(--text)" }}>
-                    {bodyMatInfo.shortLabel} ({bodyThickMm.toFixed(1)}mm)
-                  </strong>
-                </span>
-                <span>
-                  Clamp:{" "}
-                  <strong style={{ color: "var(--text)" }}>
-                    {clampMatInfo.shortLabel} ({clampThickMm.toFixed(1)}mm)
-                  </strong>
-                </span>
-                <span>
-                  Hotend: <strong style={{ color: "var(--text)" }}>{Math.round(heStiff)} N/mm</strong>
-                </span>
-              </div>
+              {showHudDetails && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "3px 8px",
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    paddingTop: 4,
+                    borderTop: "1px dashed rgba(255, 255, 255, 0.08)",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  <span>
+                    Backplate:{" "}
+                    <strong style={{ color: "var(--text)" }}>
+                      {bpMat.shortLabel} ({bpThickMm.toFixed(1)}mm)
+                    </strong>
+                  </span>
+                  <span>
+                    Body:{" "}
+                    <strong style={{ color: "var(--text)" }}>
+                      {bodyMatInfo.shortLabel} ({bodyThickMm.toFixed(1)}mm)
+                    </strong>
+                  </span>
+                  <span>
+                    Clamp:{" "}
+                    <strong style={{ color: "var(--text)" }}>
+                      {clampMatInfo.shortLabel} ({clampThickMm.toFixed(1)}mm)
+                    </strong>
+                  </span>
+                  <span>
+                    Hotend: <strong style={{ color: "var(--text)" }}>{Math.round(heStiff)} N/mm</strong>
+                  </span>
+                </div>
+              )}
 
               {isToolheadIsolated && (
                 <div
@@ -8138,7 +8614,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 </div>
               )}
 
-              {bd && domSource && (
+              {showHudDetails && bd && domSource && (
                 <div style={{ fontSize: 10.5, lineHeight: 1.35, color: "#cbd5e1" }}>
                   <span className="sens-fix-prefix">Main limit:</span>{" "}
                   {PUNCHIN_FLEX_SOURCE_LABELS[domSource]} ({Math.round(domPct)}% of toolhead tip
@@ -8151,7 +8627,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
         {canShowBedWarpHud && showBedWarp && bedPlateFeaHud && (
           <div className="hud-card bed-warp-hud">
-            <span className="badge-pill">2D MITC4 Bed Plate</span>
+            {showHudDetails && <span className="badge-pill">2D MITC4 Bed Plate</span>}
             <div className="bed-warp-legend">
               <span style={{ color: "#60a5fa" }}>Valley</span>
               <div className="legend-gradient bed-warp" />
@@ -8173,14 +8649,18 @@ export const PrinterViewport: React.FC<Props> = ({
                 {bedPlateFeaHud.total_flatness_error_um.toFixed(1)} µm
               </strong>
             </span>
-            <span style={{ color: "var(--muted)" }}>|</span>
-            <span>
-              Taco: <strong>{bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm</strong>
-            </span>
-            <span style={{ color: "var(--muted)" }}>|</span>
-            <span>
-              Plate 1st Mode: <strong>{bedPlateFeaHud.plate_first_mode_hz.toFixed(0)} Hz</strong>
-            </span>
+            {showHudDetails && (
+              <>
+                <span style={{ color: "var(--muted)" }}>|</span>
+                <span>
+                  Taco: <strong>{bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm</strong>
+                </span>
+                <span style={{ color: "var(--muted)" }}>|</span>
+                <span>
+                  Plate 1st Mode: <strong>{bedPlateFeaHud.plate_first_mode_hz.toFixed(0)} Hz</strong>
+                </span>
+              </>
+            )}
           </div>
         )}
         {viewMode === "fea_stress" && sim && (
@@ -8230,30 +8710,32 @@ export const PrinterViewport: React.FC<Props> = ({
                 />
               </label>
             </div>
-            <div className="hud-card hud-guide-bar">
-              <div className="hud-guide-row">
-                <span className="badge-pill hud-guide-pill">{FEA_LOAD_META[feaLoadCase].label}</span>
-                <span className="hud-guide-lead">{FEA_LOAD_META[feaLoadCase].explanation}</span>
+            {showHudDetails && (
+              <div className="hud-card hud-guide-bar">
+                <div className="hud-guide-row">
+                  <span className="badge-pill hud-guide-pill">{FEA_LOAD_META[feaLoadCase].label}</span>
+                  <span className="hud-guide-lead">{FEA_LOAD_META[feaLoadCase].explanation}</span>
+                </div>
+                {sim.static_fea.top_flex_explanation ? (
+                  <div className="hud-guide-sub">
+                    {sim.static_fea.top_flex_explanation}
+                    {sim.static_fea.peak_stress_part_label &&
+                      !sim.static_fea.top_flex_explanation
+                        .toLowerCase()
+                        .includes(sim.static_fea.peak_stress_part_label.toLowerCase()) && (
+                        <>
+                          {" "}
+                          · Peak stress: <strong>{sim.static_fea.peak_stress_part_label}</strong>
+                        </>
+                      )}
+                  </div>
+                ) : sim.static_fea.peak_stress_part_label ? (
+                  <div className="hud-guide-sub">
+                    Peak von Mises stress in <strong>{sim.static_fea.peak_stress_part_label}</strong>
+                  </div>
+                ) : null}
               </div>
-              {sim.static_fea.top_flex_explanation ? (
-                <div className="hud-guide-sub">
-                  {sim.static_fea.top_flex_explanation}
-                  {sim.static_fea.peak_stress_part_label &&
-                    !sim.static_fea.top_flex_explanation
-                      .toLowerCase()
-                      .includes(sim.static_fea.peak_stress_part_label.toLowerCase()) && (
-                      <>
-                        {" "}
-                        · Peak stress: <strong>{sim.static_fea.peak_stress_part_label}</strong>
-                      </>
-                    )}
-                </div>
-              ) : sim.static_fea.peak_stress_part_label ? (
-                <div className="hud-guide-sub">
-                  Peak von Mises stress in <strong>{sim.static_fea.peak_stress_part_label}</strong>
-                </div>
-              ) : null}
-            </div>
+            )}
           </>
         )}
 
@@ -8261,47 +8743,90 @@ export const PrinterViewport: React.FC<Props> = ({
           <>
             <div className="hud-card">
               <span style={{ color: "var(--muted)", fontWeight: 600 }}>Mode:</span>
-              {sim.modal_fea.modes.slice(0, 6).map((m, idx) => {
-                const axisTag = m.excited_axis ? `${m.excited_axis}-Accel` : m.dominant_axis;
-                const isWorst = sim.modal_fea.worst_print_mode_number === m.mode_number;
-                const impMeta = m.print_impact_level ? impactLevelMeta(m.print_impact_level) : null;
-                return (
+              {(() => {
+                const visibleModes = sim.modal_fea.modes.slice(0, 6).map((m, idx) => ({ m, idx }));
+                if (primaryLimitingModeIdx >= 6 && sim.modal_fea.modes[primaryLimitingModeIdx]) {
+                  visibleModes.push({
+                    m: sim.modal_fea.modes[primaryLimitingModeIdx],
+                    idx: primaryLimitingModeIdx,
+                  });
+                }
+                return visibleModes.map(({ m, idx }) => {
+                  const axisTag = m.excited_axis ? `${m.excited_axis}-Accel` : m.dominant_axis;
+                  const isWorst = sim.modal_fea.worst_print_mode_number === m.mode_number;
+                  const isPrimaryLimiting =
+                    Boolean(m.is_primary_limiting_mode) ||
+                    (primaryLimitingModeNum != null && m.mode_number === primaryLimitingModeNum);
+                  const impMeta = m.print_impact_level
+                    ? impactLevelMeta(m.print_impact_level)
+                    : null;
+                  const limAxis = limitingSummary?.limiting_axis;
+                  return (
+                    <button
+                      key={m.mode_number}
+                      type="button"
+                      className={`hud-pill modal-mode-pill ${clampedModeIdx === idx ? "active" : ""} ${
+                        isPrimaryLimiting ? "limiting-mode" : isWorst ? "worst-mode" : ""
+                      }`}
+                      style={{ padding: "4px 8px" }}
+                      onClick={() => onSelectModeIdx(idx)}
+                      title={
+                        [
+                          `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz · ${axisTag})`,
+                          m.mode_label ? `— ${m.mode_label}` : "",
+                          m.limiting_axis_share_pct != null && limAxis
+                            ? `• Drives ${Math.round(
+                                m.limiting_axis_share_pct
+                              )}% of ${limAxis}-axis structural compliance`
+                            : "",
+                          m.print_impact_score != null
+                            ? `• Print Impact ${Math.round(m.print_impact_score)}/100`
+                            : "",
+                          isPrimaryLimiting
+                            ? `• Primary limiting structural mode${limAxis ? ` on ${limAxis}-axis` : ""}`
+                            : isWorst
+                              ? "★ Worst print-impact mode"
+                              : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")
+                      }
+                    >
+                      {impMeta && (
+                        <span
+                          className="impact-dot-mini"
+                          style={{ background: impMeta.dotColor }}
+                        />
+                      )}
+                      {isPrimaryLimiting && <span className="limit-pill-tag">LIMIT</span>}
+                      {!isPrimaryLimiting && isWorst && (
+                        <span className="worst-star" title="Worst print-impact mode">
+                          ★
+                        </span>
+                      )}
+                      M{m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
+                    </button>
+                  );
+                });
+              })()}
+              {!showHudDetails &&
+                primaryLimitingModeIdx >= 0 &&
+                primaryLimitingModeIdx !== clampedModeIdx &&
+                primaryLimitingModeNum != null && (
                   <button
-                    key={m.mode_number}
                     type="button"
-                    className={`hud-pill modal-mode-pill ${clampedModeIdx === idx ? "active" : ""} ${
-                      isWorst ? "worst-mode" : ""
+                    className="hud-focus-limiting-btn"
+                    style={{ padding: "3px 8px", fontSize: 10.5 }}
+                    onClick={() => onSelectModeIdx(primaryLimitingModeIdx)}
+                    title={`Snap 3D modal animation to Limiting Mode M${primaryLimitingModeNum}${
+                      limitingSummary?.primary_structural_mode_label
+                        ? ` (${limitingSummary.primary_structural_mode_label})`
+                        : ""
                     }`}
-                    style={{ padding: "4px 8px" }}
-                    onClick={() => onSelectModeIdx(idx)}
-                    title={
-                      [
-                        `Mode ${m.mode_number} (${m.frequency_hz.toFixed(1)} Hz · ${axisTag})`,
-                        m.mode_label ? `— ${m.mode_label}` : "",
-                        m.print_impact_score != null
-                          ? `• Print Impact ${Math.round(m.print_impact_score)}/100`
-                          : "",
-                        isWorst ? "★ Worst print-impact mode" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")
-                    }
                   >
-                    {impMeta && (
-                      <span
-                        className="impact-dot-mini"
-                        style={{ background: impMeta.dotColor }}
-                      />
-                    )}
-                    {isWorst && (
-                      <span className="worst-star" title="Worst print-impact mode">
-                        ★
-                      </span>
-                    )}
-                    M{m.mode_number} · {m.frequency_hz.toFixed(1)} Hz ({axisTag})
+                    ★ Focus Limiting M{primaryLimitingModeNum}
                   </button>
-                );
-              })}
+                )}
               <span style={{ color: "var(--muted)" }}>|</span>
               <span style={{ color: "var(--muted)", fontWeight: 600 }}>Color:</span>
               <button
@@ -8350,6 +8875,20 @@ export const PrinterViewport: React.FC<Props> = ({
                   aria-label="Modal display scale"
                 />
               </label>
+              <span style={{ color: "var(--muted)" }}>|</span>
+              <button
+                type="button"
+                className={`hud-pill ${modalPaused ? "active" : ""}`}
+                style={{ padding: "3px 8px", fontSize: 10.5 }}
+                onClick={() => setModalPaused((p) => !p)}
+                title={
+                  modalPaused
+                    ? "Resume 3D modal vibration animation (~30 FPS)"
+                    : "Pause 3D modal vibration animation (0 FPS idle GPU)"
+                }
+              >
+                {modalPaused ? "▶ Play" : "⏸ Pause"}
+              </button>
             </div>
 
             {activeMode && (() => {
@@ -8372,10 +8911,21 @@ export const PrinterViewport: React.FC<Props> = ({
                   : null;
               const isWorstActive =
                 sim.modal_fea.worst_print_mode_number === activeMode.mode_number;
+              const isPrimaryLimitingActive =
+                Boolean(activeMode.is_primary_limiting_mode) ||
+                (primaryLimitingModeNum != null &&
+                  activeMode.mode_number === primaryLimitingModeNum);
+              const limAxis = limitingSummary?.limiting_axis;
               const share = activeMode.subsystem_share_pct;
+              const topCauses = activeMode.top_causes?.slice(0, 4) ?? [];
+              const firstCause = topCauses[0];
 
               return (
-                <div className="hud-card hud-guide-bar modal-guide">
+                <div
+                  className={`hud-card hud-guide-bar modal-guide ${
+                    isPrimaryLimitingActive ? "is-limiting-active" : ""
+                  }`}
+                >
                   <div className="hud-guide-row hud-guide-header">
                     <div className="hud-guide-badges">
                       <span className="badge-pill hud-guide-pill">
@@ -8383,17 +8933,28 @@ export const PrinterViewport: React.FC<Props> = ({
                         {activeMode.frequency_hz.toFixed(1)} Hz
                       </span>
                       <span className="badge-pill hud-axis-pill">{axisTag}</span>
-                      {impMeta ? (
-                        <span className={`badge-pill ${impMeta.cls}`}>
-                          {impMeta.label}
-                          {activeMode.print_impact_score != null
-                            ? ` ${Math.round(activeMode.print_impact_score)}/100`
+                      {showHudDetails && isPrimaryLimitingActive && (
+                        <span className="badge-pill hud-limit-mode-badge">
+                          LIMITING {limAxis ?? activeMode.excited_axis ?? "XY"}-AXIS MODE
+                          {activeMode.limiting_axis_share_pct != null
+                            ? ` (${Math.round(activeMode.limiting_axis_share_pct)}% of ${
+                                limAxis ?? "axis"
+                              } struct flex)`
                             : ""}
                         </span>
-                      ) : (
-                        sevMeta && <span className={`badge-pill ${sevMeta.cls}`}>{sevMeta.label}</span>
                       )}
-                      {(activeMode.nozzle_whip_ratio ?? 0) >= 1.25 && (
+                      {showHudDetails &&
+                        (impMeta ? (
+                          <span className={`badge-pill ${impMeta.cls}`}>
+                            {impMeta.label}
+                            {activeMode.print_impact_score != null
+                              ? ` ${Math.round(activeMode.print_impact_score)}/100`
+                              : ""}
+                          </span>
+                        ) : (
+                          sevMeta && <span className={`badge-pill ${sevMeta.cls}`}>{sevMeta.label}</span>
+                        ))}
+                      {showHudDetails && (activeMode.nozzle_whip_ratio ?? 0) >= 1.25 && (
                         <span
                           className={`badge-pill ${
                             (activeMode.nozzle_whip_ratio ?? 0) >= 1.8 ? "bad" : "warn"
@@ -8403,65 +8964,130 @@ export const PrinterViewport: React.FC<Props> = ({
                           {activeMode.nozzle_whip_ratio!.toFixed(2)}× whip
                         </span>
                       )}
-                      {activeMode.toolhead_flop_pct != null && activeMode.toolhead_flop_pct >= 5 && (
-                        <span
-                          className={`badge-pill ${
-                            activeMode.toolhead_flop_pct >= 50 ? "bad" : "warn"
-                          }`}
-                          title="Fraction of relative nozzle-to-bed motion coming from local toolhead mount/stem flop"
-                        >
-                          Toolhead Flop: {Math.round(activeMode.toolhead_flop_pct)}%
-                        </span>
-                      )}
+                      {showHudDetails &&
+                        activeMode.toolhead_flop_pct != null &&
+                        activeMode.toolhead_flop_pct >= 5 && (
+                          <span
+                            className={`badge-pill ${
+                              activeMode.toolhead_flop_pct >= 50 ? "bad" : "warn"
+                            }`}
+                            title="Fraction of relative nozzle-to-bed motion coming from local toolhead mount/stem flop"
+                          >
+                            Toolhead Flop: {Math.round(activeMode.toolhead_flop_pct)}%
+                          </span>
+                        )}
                       {activeMode.mode_label && (
                         <strong className="hud-guide-title">{activeMode.mode_label}</strong>
                       )}
+                      {!showHudDetails && firstCause && (
+                        <span
+                          className={`hud-mode-cause-chip ${
+                            firstCause.kind === "mass" ? "mass" : "flex"
+                          }`}
+                          title={firstCause.detail}
+                        >
+                          <span style={{ color: "var(--accent)", fontWeight: 800 }}>#1</span>
+                          <span className="hud-cause-name">{firstCause.label}</span>
+                          <strong className="hud-cause-pct">
+                            {Math.round(firstCause.share_pct)}%
+                          </strong>
+                        </span>
+                      )}
                     </div>
                     <div className="hud-guide-meta">
-                      <span>
-                        <strong style={{ color: "#f59e0b" }}>●</strong> CoG ·{" "}
-                        <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle
-                      </span>
-                      <span>·</span>
-                      <span>
-                        XYZ:{" "}
-                        <strong>
-                          {activeMode.toolhead_participation_xyz
-                            .map((v) => `${Math.round(v * 100)}%`)
-                            .join("/")}
-                        </strong>
-                      </span>
-                      {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
+                      {showHudDetails && (
                         <>
+                          <span>
+                            <strong style={{ color: "#f59e0b" }}>●</strong> CoG ·{" "}
+                            <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle
+                          </span>
                           <span>·</span>
                           <span>
-                            MITC4{" "}
-                            {sim.geometry.panel_mesh_n
-                              ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}`
-                              : "Shell"}
-                            {(sim.modal_fea.panel_drum_freq_hz ?? 0) > 0
-                              ? ` (${sim.modal_fea.panel_drum_freq_hz!.toFixed(0)} Hz)`
-                              : ""}
+                            XYZ:{" "}
+                            <strong>
+                              {activeMode.toolhead_participation_xyz
+                                .map((v) => `${Math.round(v * 100)}%`)
+                                .join("/")}
+                            </strong>
                           </span>
-                        </>
-                      )}
-                      {sim.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
-                        <>
+                          {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
+                            <>
+                              <span>·</span>
+                              <span>
+                                MITC4{" "}
+                                {sim.geometry.panel_mesh_n
+                                  ? `${sim.geometry.panel_mesh_n}×${sim.geometry.panel_mesh_n}`
+                                  : "Shell"}
+                                {(sim.modal_fea.panel_drum_freq_hz ?? 0) > 0
+                                  ? ` (${sim.modal_fea.panel_drum_freq_hz!.toFixed(0)} Hz)`
+                                  : ""}
+                              </span>
+                            </>
+                          )}
+                          {sim.geometry.extrusion_filling &&
+                            sim.geometry.extrusion_filling.id !== "none" && (
+                              <>
+                                <span>·</span>
+                                <span className="hud-fill-badge">
+                                  <span
+                                    className="swatch-dot"
+                                    style={{ background: sim.geometry.extrusion_filling.color_hex }}
+                                  />
+                                  {sim.geometry.extrusion_filling.short_name} (ζ=
+                                  {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
+                                </span>
+                              </>
+                            )}
                           <span>·</span>
-                          <span className="hud-fill-badge">
-                            <span
-                              className="swatch-dot"
-                              style={{ background: sim.geometry.extrusion_filling.color_hex }}
-                            />
-                            {sim.geometry.extrusion_filling.short_name} (ζ=
-                            {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
-                          </span>
                         </>
                       )}
+                      <button
+                        type="button"
+                        className="hud-inline-more-btn"
+                        onClick={() => setShowHudDetails((prev) => !prev)}
+                        title={
+                          showHudDetails
+                            ? "Collapse detailed HUD overlays"
+                            : "Expand full mode causes, subsystem bars, and explanations"
+                        }
+                      >
+                        {showHudDetails ? "Less ▴" : "More ▾"}
+                      </button>
                     </div>
                   </div>
 
-                  {share && (
+                  {showHudDetails && topCauses.length > 0 && (
+                    <div className="hud-mode-causes">
+                      <span className="hud-mode-causes-label">
+                        Top Causes of Mode {activeMode.mode_number}:
+                      </span>
+                      <div className="hud-mode-causes-chips">
+                        {topCauses.map((cause) => {
+                          const isMass = cause.kind === "mass";
+                          return (
+                            <span
+                              key={cause.id}
+                              className={`hud-mode-cause-chip ${isMass ? "mass" : "flex"}`}
+                              title={cause.detail}
+                            >
+                              <span className={`cause-kind-tag ${isMass ? "mass" : "flex"}`}>
+                                {isMass ? "MASS" : "FLEX"}
+                              </span>
+                              <span className="hud-cause-name">{cause.label}</span>
+                              <strong className="hud-cause-pct">{Math.round(cause.share_pct)}%</strong>
+                              {cause.est_hz_gain > 0 && (
+                                <span className="hud-cause-hz">
+                                  +{formatHzGain(cause.est_hz_gain)} Hz
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {showHudDetails && share && (
                     <div className="subsystem-bar-wrap">
                       <div className="subsystem-bar-track" title="Modal strain/kinetic energy share by subsystem">
                         {SUBSYSTEM_ORDER.map((k) => {
@@ -8492,14 +9118,14 @@ export const PrinterViewport: React.FC<Props> = ({
                     </div>
                   )}
 
-                  {activeMode.what_is_shaking && (
-                    <div className="hud-guide-line">
+                  {showHudDetails && activeMode.what_is_shaking && (
+                    <div className="hud-guide-line hud-guide-compact">
                       <span className="hud-guide-key">What&apos;s shaking:</span>{" "}
                       <span className="hud-guide-val">{activeMode.what_is_shaking}</span>
                     </div>
                   )}
-                  {activeMode.how_to_fix && (
-                    <div className="hud-guide-line hud-fix-line">
+                  {showHudDetails && activeMode.how_to_fix && (
+                    <div className="hud-guide-line hud-fix-line hud-guide-compact">
                       <span className="hud-fix-key">Main limit:</span>{" "}
                       <span className="hud-fix-val">{activeMode.how_to_fix}</span>
                     </div>
@@ -8571,7 +9197,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 </div>
               </div>
 
-              {breakdown && (
+              {showHudDetails && breakdown && (
                 <div className="subsystem-bar-wrap">
                   <div className="subsystem-bar-track" title="Static nozzle-to-bed print error share by subsystem">
                     {SUBSYSTEM_ORDER.map((k) => {
@@ -8611,7 +9237,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 </div>
               )}
 
-              {(topStiff || topLight) && (
+              {showHudDetails && (topStiff || topLight) && (
                 <div className="hud-guide-row hud-sens-takeaway">
                   {topStiff && (
                     <span className="hud-sens-item">
@@ -8805,12 +9431,13 @@ export const PrinterViewport: React.FC<Props> = ({
         {viewMode === "assembly" && (
           <div className="hud-card" style={{ color: "var(--muted)" }}>
             <span>
-              <strong style={{ color: "#f59e0b" }}>●</strong> Toolhead CoG
+              <strong style={{ color: "#f59e0b" }}>●</strong> {showHudDetails ? "Toolhead CoG" : "CoG"}
             </span>
+            <span>·</span>
             <span>
-              <strong style={{ color: "#fbbf24" }}>▼</strong> Nozzle Tip
+              <strong style={{ color: "#fbbf24" }}>▼</strong> {showHudDetails ? "Nozzle Tip" : "Nozzle"}
             </span>
-            {sim?.geometry.gantry_brackets && (
+            {showHudDetails && sim?.geometry.gantry_brackets && (
               <span className="hud-inline-badge">
                 <span
                   className="swatch-dot"
@@ -8822,25 +9449,31 @@ export const PrinterViewport: React.FC<Props> = ({
                 </strong>
               </span>
             )}
-            {sim?.geometry.extrusion_filling && sim.geometry.extrusion_filling.id !== "none" && (
-              <span className="hud-fill-badge">
-                <span
-                  className="swatch-dot"
-                  style={{ background: sim.geometry.extrusion_filling.color_hex }}
-                />
-                Fill: <strong>{sim.geometry.extrusion_filling.short_name}</strong> (+
-                {sim.geometry.extrusion_filling.added_mass_kg.toFixed(1)} kg, ζ=
-                {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
-              </span>
-            )}
-            {railHudBadgeText && (
+            {showHudDetails &&
+              sim?.geometry.extrusion_filling &&
+              sim.geometry.extrusion_filling.id !== "none" && (
+                <span className="hud-fill-badge">
+                  <span
+                    className="swatch-dot"
+                    style={{ background: sim.geometry.extrusion_filling.color_hex }}
+                  />
+                  Fill: <strong>{sim.geometry.extrusion_filling.short_name}</strong> (+
+                  {sim.geometry.extrusion_filling.added_mass_kg.toFixed(1)} kg, ζ=
+                  {sim.geometry.extrusion_filling.damping_ratio.toFixed(3)})
+                </span>
+              )}
+            {showHudDetails && railHudBadgeText && (
               <span className="hud-fill-badge">
                 <span className="swatch-dot" style={{ background: "#8e9aa8" }} />
                 Rails: <strong>{railHudBadgeText}</strong>
               </span>
             )}
-            <span>|</span>
-            <span>Click part to inspect • Drag to orbit • Scroll to zoom</span>
+            <span>·</span>
+            <span>
+              {showHudDetails
+                ? "Click part to inspect • Drag to orbit • Scroll to zoom"
+                : "Click any part to inspect"}
+            </span>
           </div>
         )}
       </div>
