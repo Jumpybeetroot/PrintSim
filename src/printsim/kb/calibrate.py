@@ -3,12 +3,62 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from printsim.engine import evaluate_printer
-from printsim.kb.extract import infer_preset_hint
+from printsim.kb.extract import MAX_SHAPER_FREQ_HZ, MIN_SHAPER_FREQ_HZ, infer_preset_hint
 from printsim.kb.store import TouchstoneKB
 from printsim.schema import PrinterSpec
+
+_UNMAPPED_OUTLIER_RE = re.compile(
+    r"\b(?:ender\s*[567]|creality\s*k1|k1\s*max|k1c|bambu(?:\s*lab)?|x1c|p1[ps]|a1\s*mini|"
+    r"qidi|sovol\s*sv0[78]|tronxy|sapphire|anycubic|flashforge|elegoo\s*centauri|"
+    r"snapmaker|biqu\s*hurakan|flying\s*bear|kingroon|artillery)\b",
+    re.IGNORECASE,
+)
+_CONFIDENT_VORON_COREXY_RE = re.compile(
+    r"\b(?:voron|v2\.4|2\.4|trident|vt\s*\d|monolith|doomcube|doomish|hevort|annex\s*k3|v0(?:\.\d)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _valid_shaper_hz(val: Any) -> float | None:
+    if val is None:
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    if MIN_SHAPER_FREQ_HZ <= f <= MAX_SHAPER_FREQ_HZ:
+        return f
+    return None
+
+
+def _has_confident_preset_match(build: dict[str, Any], preset_path: Path) -> bool:
+    """Return True only when a build maps confidently to a supported PrintSim reference preset."""
+    identity = " ".join(
+        str(build.get(k) or "") for k in ("build_name", "printer_model")
+    ).strip()
+    full_text = " ".join(
+        str(build.get(k) or "")
+        for k in ("build_name", "printer_model", "frame_profile", "panel_spec", "notes")
+    ).strip()
+
+    # Exclude obvious unmapped non-Voron community outliers (e.g. Ender 7, Bambu X1C, Creality K1)
+    if _UNMAPPED_OUTLIER_RE.search(identity) and not _CONFIDENT_VORON_COREXY_RE.search(identity):
+        return False
+
+    if preset_path.stem == "corexy_voron_style":
+        if _UNMAPPED_OUTLIER_RE.search(full_text) and not _CONFIDENT_VORON_COREXY_RE.search(full_text):
+            return False
+        if _CONFIDENT_VORON_COREXY_RE.search(full_text):
+            return True
+        if build.get("frame_profile") and build.get("drive_mode"):
+            return True
+        return False
+
+    return True
 
 
 def _default_examples_dir() -> Path:
@@ -63,10 +113,19 @@ def run_kb_calibration(
     y_abs_errs: list[float] = []
     x_signed_errs: list[float] = []
     y_signed_errs: list[float] = []
+    skipped_invalid_hz = 0
+    skipped_unmapped = 0
 
     for b in builds:
+        meas_x = _valid_shaper_hz(b.get("x_shaper_hz"))
+        meas_y = _valid_shaper_hz(b.get("y_shaper_hz"))
+        if meas_x is None and meas_y is None:
+            skipped_invalid_hz += 1
+            continue
+
         preset_path = _resolve_preset_yaml(b, ex_dir)
-        if preset_path is None:
+        if preset_path is None or not _has_confident_preset_match(b, preset_path):
+            skipped_unmapped += 1
             continue
 
         if preset_path not in eval_cache:
@@ -76,8 +135,6 @@ def run_kb_calibration(
         report = eval_cache[preset_path]
         pred_x = round(float(report.modal_fea.shaper_x.effective_freq_hz), 2)
         pred_y = round(float(report.modal_fea.shaper_y.effective_freq_hz), 2)
-        meas_x = float(b["x_shaper_hz"]) if b.get("x_shaper_hz") is not None else None
-        meas_y = float(b["y_shaper_hz"]) if b.get("y_shaper_hz") is not None else None
 
         x_err = _signed_error_pct(pred_x, meas_x)
         y_err = _signed_error_pct(pred_y, meas_y)
@@ -117,6 +174,8 @@ def run_kb_calibration(
     all_abs_errs = x_abs_errs + y_abs_errs
     return {
         "builds_evaluated": len(results),
+        "builds_skipped_unmapped": skipped_unmapped,
+        "builds_skipped_invalid_hz": skipped_invalid_hz,
         "presets_evaluated": len(eval_cache),
         "x_mape_pct": round(sum(x_abs_errs) / len(x_abs_errs), 2) if x_abs_errs else None,
         "y_mape_pct": round(sum(y_abs_errs) / len(y_abs_errs), 2) if y_abs_errs else None,
@@ -162,7 +221,9 @@ def _classify_build_bucket(b: dict[str, Any]) -> str:
     drive = str(b.get("drive_mode") or "").lower()
     belt_w = float(b.get("belt_width_mm") or 0.0)
 
-    if arch == "cartesian_bedslinger" or any(k in text for k in ("bedslinger", "ender", "mk4", "switchwire")):
+    if arch == "cartesian_bedslinger" or any(
+        k in text for k in ("bedslinger", "ender 3", "ender-3", "ender3", "mk4", "switchwire")
+    ):
         return "bedslinger"
     if arch == "delta" or "delta" in text:
         return "delta"
@@ -182,7 +243,7 @@ def analyze_coverage_gaps(kb: TouchstoneKB) -> dict[str, Any]:
     builds = kb.list_builds()
     bucket_counts: dict[str, int] = {k: 0 for k, _, _, _ in _TARGET_BUILD_BUCKETS}
     for b in builds:
-        if b.get("x_shaper_hz") is None and b.get("y_shaper_hz") is None:
+        if _valid_shaper_hz(b.get("x_shaper_hz")) is None and _valid_shaper_hz(b.get("y_shaper_hz")) is None:
             continue
         bkt = _classify_build_bucket(b)
         bucket_counts[bkt] = bucket_counts.get(bkt, 0) + 1

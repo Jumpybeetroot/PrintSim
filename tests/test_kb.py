@@ -16,9 +16,12 @@ from typer.testing import CliRunner
 from printsim.cli import app
 from printsim.kb import (
     TouchstoneKB,
+    analyze_coverage_gaps,
     extract_structured_records,
+    harvest_answer_overflow,
     harvest_discourse,
     harvest_github_issues,
+    infer_preset_hint,
     ingest_local_path,
     parse_klipper_shaper_csv,
     resolve_bot_token,
@@ -27,6 +30,7 @@ from printsim.kb import (
     score_engineering_signal,
     seed_from_benchmark_docs,
 )
+from printsim.kb.calibrate import _classify_build_bucket
 
 
 class _FakeHTTPResponse:
@@ -294,15 +298,31 @@ def test_seed_from_monolith_benchmarks_doc(tmp_path: Path) -> None:
     db_path = tmp_path / "seeded.db"
     with TouchstoneKB(db_path) as kb:
         res1 = seed_from_benchmark_docs(kb)
-        assert res1["files_processed"] >= 1
-        assert res1["builds_added"] == 6
-        assert res1["material_tests_added"] >= 4
+        assert res1["files_processed"] >= 2
+        assert res1["builds_added"] >= 18  # 6 monolith + 13 community touchstones
+        assert res1["weights_added"] >= 16
+        assert res1["material_tests_added"] >= 9
         assert res1["troubleshooting_added"] >= 4
 
-        # Verify all 6 named community builds are present with accurate measurements
+        # Verify all 6 named Monolith builds + key community touchstone builds are present
         builds = kb.list_builds()
         names = [b["build_name"] for b in builds]
-        for expected in ("Hanarius", "onewayne", "Stas_Robotmaker", "Beattune", "CloakedWayne", "dderg"):
+        for expected in (
+            "Hanarius",
+            "onewayne",
+            "Stas_Robotmaker",
+            "Beattune",
+            "CloakedWayne",
+            "dderg",
+            "Stock Voron Trident 300",
+            "Stock Voron 2.4 300",
+            "RatRig V-Core 3.1 300",
+            "VzBot 330 AWD",
+            "Ender 3 V2 Klipper",
+            "Prusa MK4S Input Shaper",
+            "FLSUN V400 Klipper",
+            "Doron Velta",
+        ):
             assert any(expected in n for n in names), f"Missing seeded build: {expected}"
 
         hanarius = next(b for b in builds if "Hanarius" in b["build_name"])
@@ -318,17 +338,30 @@ def test_seed_from_monolith_benchmarks_doc(tmp_path: Path) -> None:
         assert dderg["belt_width_mm"] == pytest.approx(12.0)
         assert dderg["voltage_v"] == pytest.approx(48.0)
 
-        # Verify belt core shootout entries extracted
+        # Verify belt core shootout + structural filament TDS entries extracted
         shootout_hits = kb.search("Aramid", table="material_tests")
         assert len(shootout_hits) == 1
         assert shootout_hits[0]["record"]["shaper_hz"] == pytest.approx(119.4)
         assert shootout_hits[0]["record"]["belt_pluck_hz"] == pytest.approx(266.0)
 
+        for mat_query, expected_gpa in [("PPA-CF", 10.8), ("PPS-CF", 9.2), ("PET-CF15", 6.2)]:
+            mhits = kb.search(mat_query, table="material_tests")
+            assert len(mhits) >= 1, f"Missing material TDS for {mat_query}"
+            assert mhits[0]["record"]["modulus_gpa"] == pytest.approx(expected_gpa)
+
+        # Verify component weights across all 4 categories
+        w_hits = kb.search("StealthBurner", table="component_weights")
+        assert len(w_hits) == 1
+        assert w_hits[0]["record"]["mass_g"] == pytest.approx(415.0)
+        assert w_hits[0]["record"]["category"] == "toolhead"
+
         # Idempotent re-seeding adds zero duplicates
+        total_builds_first = len(builds)
         res2 = seed_from_benchmark_docs(kb)
         assert res2["builds_added"] == 0
+        assert res2["weights_added"] == 0
         assert res2["material_tests_added"] == 0
-        assert len(kb.list_builds()) == 6
+        assert len(kb.list_builds()) == total_builds_first
 
 
 # ---------------------------------------------------------------------------
@@ -626,11 +659,32 @@ def test_kb_calibration_against_seeded_builds(tmp_path: Path) -> None:
     db_path = tmp_path / "cal.db"
     with TouchstoneKB(db_path) as kb:
         seed_from_benchmark_docs(kb)
+        # Also inject an unmapped non-Voron outlier & a bogus Hz record to verify filtering
+        kb.add_build(
+            build_name="Ender 7 Community Mod",
+            architecture="corexy",
+            printer_model="Ender 7",
+            x_shaper_type="mzv",
+            x_shaper_hz=61.0,
+            y_shaper_type="mzv",
+            y_shaper_hz=44.0,
+            preset_hint="corexy_voron_style",
+        )
+        kb.add_build(
+            build_name="Voron Trident Bogus Sample Rate",
+            architecture="corexy",
+            printer_model="Voron Trident 300",
+            x_shaper_hz=5.0,
+            y_shaper_hz=3200.0,
+            preset_hint="voron_trident_300",
+        )
         rep = run_kb_calibration(kb)
 
-    # 5 of the 6 seeded builds have numeric measured X/Y Hz (Stas_Robotmaker has accel only)
-    assert rep["builds_evaluated"] == 5
-    assert rep["presets_evaluated"] >= 2
+    # 5 Monolith builds + 13 community touchstone builds have valid numeric X/Y Hz
+    assert rep["builds_evaluated"] == 18
+    assert rep["builds_skipped_unmapped"] == 1
+    assert rep["builds_skipped_invalid_hz"] == 1
+    assert rep["presets_evaluated"] >= 6
     assert rep["x_mape_pct"] is not None and rep["x_mape_pct"] >= 0.0
     assert rep["y_mape_pct"] is not None and rep["y_mape_pct"] >= 0.0
     assert rep["overall_mape_pct"] is not None and rep["overall_mape_pct"] >= 0.0
@@ -638,9 +692,179 @@ def test_kb_calibration_against_seeded_builds(tmp_path: Path) -> None:
     for row in rep["results"]:
         assert row["predicted_x_hz"] > 0.0
         assert row["predicted_y_hz"] > 0.0
+        assert "Ender 7" not in row["build_name"]
+        assert "Bogus Sample Rate" not in row["build_name"]
         if row["measured_x_hz"] is not None:
             expected_err = round(((row["predicted_x_hz"] - row["measured_x_hz"]) / row["measured_x_hz"]) * 100.0, 2)
             assert row["x_error_pct"] == pytest.approx(expected_err, abs=0.02)
+
+
+def test_harvest_answer_overflow_mocked(tmp_path: Path) -> None:
+    db_path = tmp_path / "ao.db"
+
+    search_html = """
+    <html><body>
+      <a href="/m/111111111111">Voron Trident Shaper</a>
+      <a href="https://www.answeroverflow.com/m/222222222222">Toolhead weights</a>
+      <a href="/m/111111111111">Duplicate link</a>
+      <script>self.__next_f.push([1, "{\\"url\\":\\"\\/m\\/333333333333\\"}"])</script>
+    </body></html>
+    """
+
+    page_json_ld = """
+    <html><head>
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "QAPage",
+        "mainEntity": {
+          "@type": "Question",
+          "name": "Voron Trident 300 SHAPER_CALIBRATE results",
+          "text": "Stock Voron Trident 300 2020 2WD 6mm belts @ 110 Hz pluck: X: MZV @ 54.6 Hz (<=8600), Y: MZV @ 47.4 Hz (<=6600).",
+          "datePublished": "2026-10-12T10:00:00Z",
+          "author": {"@type": "Person", "name": "trident_builder"},
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Good baseline numbers for StealthBurner + CW2 (415 g) on clip-in acrylic panels."
+          }
+        }
+      }
+      </script>
+    </head><body><main>Fallback</main></body></html>
+    """
+
+    page_next_data = """
+    <html><head><title>XOL 2 Weight Check - Answer Overflow</title></head><body>
+      <script id="__NEXT_DATA__" type="application/json">
+      {
+        "props": {
+          "pageProps": {
+            "thread": {"name": "XOL 2 and A4T scale weights"},
+            "channel": {"name": "toolheads"},
+            "messages": [
+              {
+                "content": "Weighed my XOL 2 toolhead: 248 g complete with Sherpa Mini and Rapido.",
+                "author": {"name": "scale_checker"},
+                "timestamp": "2026-10-14T15:30:00Z"
+              }
+            ]
+          }
+        }
+      }
+      </script>
+    </body></html>
+    """
+
+    page_low_signal = """
+    <html><head><title>Off topic chat - Answer Overflow</title></head>
+    <body><main><h1>Off topic chat</h1><p>Just saying hello to everyone in the channel today!</p></main></body></html>
+    """
+
+    def fake_get_text(url: str, headers: dict[str, str], timeout_s: float = 20.0) -> str:
+        if "answeroverflow.com/search" in url:
+            return search_html
+        if url.endswith("/m/111111111111"):
+            return page_json_ld
+        if url.endswith("/m/222222222222"):
+            return page_next_data
+        if url.endswith("/m/333333333333"):
+            return page_low_signal
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    with patch("printsim.kb.harvesters._http_get_text", side_effect=fake_get_text):
+        with TouchstoneKB(db_path) as kb:
+            res = harvest_answer_overflow(
+                kb,
+                queries=["SHAPER_CALIBRATE voron trident"],
+                max_pages=10,
+                auto_approve=True,
+                delay_s=0.0,
+            )
+            assert res["source"] == "answeroverflow.com"
+            assert res["pages_fetched"] == 3
+            assert res["items_seen"] == 3
+            assert res["items_kept"] == 2
+            assert res["items_skipped_low_signal"] == 1
+            assert res["builds_added"] == 1
+            assert res["weights_added"] >= 1
+            assert res["errors"] == []
+
+            builds = kb.list_builds()
+            assert len(builds) == 1
+            assert builds[0]["x_shaper_hz"] == pytest.approx(54.6)
+            assert builds[0]["y_shaper_hz"] == pytest.approx(47.4)
+            assert builds[0]["preset_hint"] == "voron_trident_300"
+
+            w_hits = kb.search("XOL", table="component_weights")
+            assert len(w_hits) >= 1
+            assert w_hits[0]["record"]["mass_g"] == pytest.approx(248.0)
+
+
+def test_coverage_gaps_preset_hints_and_sanity_filters(tmp_path: Path) -> None:
+    # 1. Verify Ender 7 (CoreXY) is NOT misclassified as bedslinger, while Ender 3 IS bedslinger
+    assert (
+        _classify_build_bucket(
+            {
+                "build_name": "Creality Ender 7 CoreXY",
+                "architecture": "corexy",
+                "printer_model": "Ender 7",
+                "drive_mode": "2wd",
+                "belt_width_mm": 6.0,
+            }
+        )
+        != "bedslinger"
+    )
+    assert (
+        _classify_build_bucket(
+            {
+                "build_name": "Ender 3 V2 Klipper",
+                "architecture": "cartesian_bedslinger",
+                "printer_model": "Ender 3 V2",
+            }
+        )
+        == "bedslinger"
+    )
+
+    # 2. Verify infer_preset_hint cleanly distinguishes Voron 2.4 vs Trident vs VzBot vs RatRig
+    assert infer_preset_hint(printer_model="Voron 2.4 300") == "corexy_voron_style"
+    assert infer_preset_hint(printer_model="V2.4 350") == "corexy_voron_style"
+    assert infer_preset_hint(printer_model="Voron Trident 300") == "voron_trident_300"
+    assert infer_preset_hint(printer_model="VzBot 330 AWD", drive_mode="awd") == "vzbot_330_awd"
+    assert infer_preset_hint(printer_model="RatRig V-Core 3.1 300", frame_profile="3030", belt_width_mm=9.0) == "hyper_corexy_carbon"
+
+    # 3. Verify extract_structured_records rejects out-of-range shaper Hz (<15 or >250 Hz)
+    bogus_post = (
+        "ADXL345 resonance sweep config: X: 5 Hz start step, Y: 3200 Hz sample rate. "
+        "No valid shaper frequency reported."
+    )
+    bogus_extracted = extract_structured_records(bogus_post, title="ADXL config question")
+    assert bogus_extracted["builds"] == []
+
+    # Valid shaper after a bogus step frequency in the same post is still captured
+    mixed_post = "Sweep X: 5 Hz start, then final result X: MZV @ 61.5 Hz (<=11000), Y: MZV @ 48.0 Hz (<=6700)."
+    mixed_extracted = extract_structured_records(mixed_post, title="Voron 2.4 300 calibration")
+    assert len(mixed_extracted["builds"]) == 1
+    assert mixed_extracted["builds"][0]["x_shaper_hz"] == pytest.approx(61.5)
+    assert mixed_extracted["builds"][0]["y_shaper_hz"] == pytest.approx(48.0)
+
+    # 4. Verify analyze_coverage_gaps reports all target buckets covered after seeding both docs
+    db_path = tmp_path / "gaps.db"
+    with TouchstoneKB(db_path) as kb:
+        seed_from_benchmark_docs(kb)
+        gaps = analyze_coverage_gaps(kb)
+
+    build_status = {g["bucket"]: g["status"] for g in gaps["build_gaps"]}
+    for bkt, status in build_status.items():
+        assert status == "covered", f"Expected build bucket '{bkt}' to be covered, got {status}"
+
+    weight_status = {g["category"]: g["status"] for g in gaps["weight_gaps"]}
+    for cat, status in weight_status.items():
+        assert status == "covered", f"Expected weight category '{cat}' to be covered, got {status}"
+
+    mat_status = {g["topic"]: g["status"] for g in gaps["material_gaps"]}
+    for topic, status in mat_status.items():
+        assert status == "covered", f"Expected material topic '{topic}' to be covered, got {status}"
+    assert gaps["priority_missing"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -662,11 +886,12 @@ def test_cli_kb_end_to_end_smoke(tmp_path: Path) -> None:
     r_seed = runner.invoke(app, ["kb", "seed", "--db", str(db_path), "--json"])
     assert r_seed.exit_code == 0, r_seed.output
     seed_data = json.loads(r_seed.output)
-    assert seed_data["builds_added"] == 6
+    assert seed_data["builds_added"] == 19  # 6 monolith + 13 community touchstones
+    assert seed_data["weights_added"] == 16
 
     r_stats = runner.invoke(app, ["kb", "stats", "--db", str(db_path), "--json"])
     assert r_stats.exit_code == 0, r_stats.output
-    assert json.loads(r_stats.output)["builds"] == 6
+    assert json.loads(r_stats.output)["builds"] == 19
 
     r_search = runner.invoke(app, ["kb", "search", "Hanarius", "--db", str(db_path), "--json"])
     assert r_search.exit_code == 0, r_search.output
@@ -697,4 +922,33 @@ def test_cli_kb_end_to_end_smoke(tmp_path: Path) -> None:
     r_cal = runner.invoke(app, ["kb", "calibrate", "--db", str(db_path), "--json"])
     assert r_cal.exit_code == 0, r_cal.output
     cal_data = json.loads(r_cal.output)
-    assert cal_data["builds_evaluated"] == 6  # 5 seeded + 1 newly approved
+    assert cal_data["builds_evaluated"] == 19  # 18 seeded with Hz + 1 newly approved
+
+    r_gaps = runner.invoke(app, ["kb", "gaps", "--db", str(db_path), "--json"])
+    assert r_gaps.exit_code == 0, r_gaps.output
+    gaps_data = json.loads(r_gaps.output)
+    assert gaps_data["priority_missing"] == []
+
+    # Verify sync-public CLI wiring for --include-answer-overflow / --no-include-answer-overflow
+    with (
+        patch("printsim.kb.harvest_discourse", return_value={"source": "klipper.discourse.group", "items_seen": 1, "items_kept": 1, "items_skipped_low_signal": 0, "errors": []}),
+        patch("printsim.kb.harvest_github_issues", return_value={"repo": "mock/repo", "items_seen": 1, "items_kept": 1, "items_skipped_low_signal": 0, "errors": []}),
+        patch("printsim.kb.harvest_answer_overflow", return_value={"source": "answeroverflow.com", "items_seen": 2, "items_kept": 1, "items_skipped_low_signal": 1, "errors": []}) as mock_ao,
+    ):
+        r_sync_with = runner.invoke(
+            app,
+            ["kb", "sync-public", "--source", "all", "--delay", "0", "--db", str(db_path), "--json"],
+        )
+        assert r_sync_with.exit_code == 0, r_sync_with.output
+        assert mock_ao.call_count == 1
+        sync_with_data = json.loads(r_sync_with.output)
+        assert any(r.get("source") == "answeroverflow.com" for r in sync_with_data["reports"])
+
+        r_sync_without = runner.invoke(
+            app,
+            ["kb", "sync-public", "--source", "all", "--no-include-answer-overflow", "--delay", "0", "--db", str(db_path), "--json"],
+        )
+        assert r_sync_without.exit_code == 0, r_sync_without.output
+        assert mock_ao.call_count == 1  # Not called when disabled
+        sync_without_data = json.loads(r_sync_without.output)
+        assert not any(r.get("source") == "answeroverflow.com" for r in sync_without_data["reports"])

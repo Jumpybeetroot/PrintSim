@@ -640,6 +640,7 @@ def kb_seed_cmd(
             f"Database: [bold cyan]{out['db_path']}[/bold cyan]\n"
             f"Docs processed: {out['files_processed']} | Raw items added: {out['raw_items_added']}\n"
             f"Builds: [bold green]+{out['builds_added']}[/bold green] | "
+            f"Weights: +{out.get('weights_added', 0)} | "
             f"Material tests: +{out['material_tests_added']} | "
             f"Troubleshooting cases: +{out['troubleshooting_added']}",
             title="PrintSim KB Seed",
@@ -683,24 +684,30 @@ def kb_ingest_cmd(
 @kb_app.command("sync-public")
 def kb_sync_public_cmd(
     db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
-    source: str = typer.Option("all", "--source", help="all | discourse | github"),
-    max_items: int = typer.Option(15, "--max-items", min=1, max=100, help="Max topics/issues per source"),
+    source: str = typer.Option("all", "--source", help="all | discourse | github | answer_overflow"),
+    max_items: int = typer.Option(15, "--max-items", min=1, max=100, help="Max topics/issues/pages per source"),
+    include_answer_overflow: bool = typer.Option(
+        True,
+        "--include-answer-overflow/--no-include-answer-overflow",
+        help="Include public Answer Overflow Discord-mirror threads when --source=all",
+    ),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Auto-approve harvested items"),
     delay_s: float = typer.Option(0.8, "--delay", min=0.0, help="Polite delay between HTTP requests (seconds)"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
 ) -> None:
-    """Politely harvest public 3D printer engineering posts from Discourse forums and GitHub issues."""
+    """Politely harvest public 3D printer engineering posts from Discourse, GitHub, and Answer Overflow."""
     from printsim.kb import (
         DEFAULT_PUBLIC_DISCOURSE_TARGETS,
         DEFAULT_PUBLIC_GITHUB_REPOS,
         TouchstoneKB,
+        harvest_answer_overflow,
         harvest_discourse,
         harvest_github_issues,
     )
 
     src = source.strip().lower()
-    if src not in ("all", "discourse", "github"):
-        raise typer.BadParameter("--source must be one of: all, discourse, github")
+    if src not in ("all", "discourse", "github", "answer_overflow"):
+        raise typer.BadParameter("--source must be one of: all, discourse, github, answer_overflow")
 
     reports: list[dict] = []
     with TouchstoneKB(db) as kb:
@@ -728,6 +735,15 @@ def kb_sync_public_cmd(
                         delay_s=delay_s,
                     )
                 )
+        if src == "answer_overflow" or (src == "all" and include_answer_overflow):
+            reports.append(
+                harvest_answer_overflow(
+                    kb,
+                    max_pages=max_items,
+                    auto_approve=auto_approve,
+                    delay_s=delay_s,
+                )
+            )
         out = {"db_path": str(kb.db_path), "source": src, "reports": reports}
 
     if json_out:

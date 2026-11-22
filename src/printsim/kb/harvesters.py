@@ -1,4 +1,4 @@
-"""Seed importer, local archive batch ingester, and polite public API harvesters (Discourse & GitHub)."""
+"""Seed importer, local archive batch ingester, and polite public harvesters (Discourse, GitHub, Answer Overflow)."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from printsim.kb.extract import (
     _infer_printer_model,
     _infer_toolhead,
     _infer_voltage,
+    _is_valid_shaper_hz,
     _parse_accel_number,
     extract_structured_records,
     infer_preset_hint,
@@ -41,17 +42,30 @@ USER_AGENT = "PrintSim-KB/1.0"
 DEFAULT_PUBLIC_DISCOURSE_TARGETS: list[tuple[str, list[str]]] = [
     (
         "https://klipper.discourse.group",
-        ["SHAPER_CALIBRATE corexy", "input shaper resonance belt tension"],
-    ),
-    (
-        "https://forum.vorondesign.com",
-        ["input shaper trident", "AWD monolith resonance"],
+        [
+            "SHAPER_CALIBRATE voron",
+            "input shaper trident 2.4",
+            "shaper_freq_x ender bedslinger",
+            "input shaper delta resonance",
+        ],
     ),
 ]
 
 DEFAULT_PUBLIC_GITHUB_REPOS: list[tuple[str, list[str]]] = [
-    ("Frix-x/klippain-shaketune", ["resonance shaper", "belt tension"]),
-    ("VoronDesign/Voron-Trident", ["resonance", "input shaper"]),
+    ("Frix-x/klippain-shaketune", ["resonance shaper", "belt tension", "voron"]),
+    ("VoronDesign/Voron-2", ["input shaper", "resonance"]),
+    ("VoronDesign/Voron-Trident", ["input shaper", "resonance"]),
+    ("VzBoT3D/VzBoT-Vz330", ["shaper", "resonance"]),
+    ("Armchair-Heavy-Industries/Xol-Toolhead", ["weight", "grams"]),
+    ("Armchair-Heavy-Industries/A4T", ["weight", "grams"]),
+    ("Klipper3d/klipper", ["shaper_freq_x", "SHAPER_CALIBRATE"]),
+]
+
+DEFAULT_ANSWER_OVERFLOW_QUERIES: list[str] = [
+    "SHAPER_CALIBRATE voron trident",
+    "input shaper voron 2.4",
+    "belt tension shaper ratrig vzbot",
+    "toolhead weight grams stealthburner xol",
 ]
 
 
@@ -89,7 +103,9 @@ def _parse_shaper_cell(cell: str) -> tuple[str, float | None, float | None]:
 
     m_hz = re.search(r"~?\s*(\d+(?:\.\d+)?)\s*hz\b", clean, re.IGNORECASE)
     if m_hz:
-        freq_hz = float(m_hz.group(1))
+        cand_hz = float(m_hz.group(1))
+        if _is_valid_shaper_hz(cand_hz):
+            freq_hz = cand_hz
 
     m_acc = re.search(r"\(\s*(?:<=|≤|~)?\s*(\d+(?:\.\d+)?)\s*(k|mm/s\^?2|mm/s²)?\s*\)", clean, re.IGNORECASE)
     if m_acc:
@@ -98,27 +114,43 @@ def _parse_shaper_cell(cell: str) -> tuple[str, float | None, float | None]:
     return (shaper_type, freq_hz, max_accel)
 
 
+def _parse_float_cell(cell: str) -> float | None:
+    clean = _strip_md(cell)
+    if not clean or clean in ("-", "—", "n/a", "N/A"):
+        return None
+    m = re.search(r"(\d+(?:\.\d+)?)", clean)
+    return float(m.group(1)) if m else None
+
+
+def _find_col(header_cols: list[str], keywords: tuple[str, ...], default: int | None = None) -> int | None:
+    for idx, col in enumerate(header_cols):
+        if any(k in col for k in keywords):
+            return idx
+    return default
+
+
 # ---------------------------------------------------------------------------
-# 1. Seed from docs/monolith_discord_benchmarks.md (and other benchmark docs)
+# 1. Seed from docs/*benchmark*.md and docs/*touchstone*.md
 # ---------------------------------------------------------------------------
 
 def seed_from_benchmark_docs(
     kb: TouchstoneKB,
     docs_dir: Path | None = None,
 ) -> dict[str, int]:
-    """Seed the KB from ``docs/monolith_discord_benchmarks.md`` (builds, belt shootout, panel/creep cases)."""
+    """Seed the KB from benchmark & touchstone docs (builds, weights, material TDS, troubleshooting)."""
     root = Path(docs_dir) if docs_dir is not None else _default_docs_dir()
     summary = {
         "files_processed": 0,
         "raw_items_added": 0,
         "builds_added": 0,
+        "weights_added": 0,
         "material_tests_added": 0,
         "troubleshooting_added": 0,
     }
     if not root.exists():
         return summary
 
-    doc_files = sorted(root.glob("*benchmark*.md"))
+    doc_files = sorted(set(root.glob("*benchmark*.md")) | set(root.glob("*touchstone*.md")))
     if not doc_files and (root / "monolith_discord_benchmarks.md").exists():
         doc_files = [root / "monolith_discord_benchmarks.md"]
 
@@ -138,94 +170,176 @@ def seed_from_benchmark_docs(
         if inserted:
             summary["raw_items_added"] += 1
 
-        # A. Parse Markdown benchmark table rows (Build | Frame | Drive & Belts | Gantry / Panels | Measured X | Measured Y)
+        # A. Parse Markdown tables:
+        #    - Build Shaper Baselines (Build | Frame | Drive & Belts | Gantry / Panels | Measured X | Measured Y)
+        #    - Verified Component Weights (Category | Component | Mass (g) | Source / Notes)
+        #    - Verified Structural Material TDS (Material | Modulus (GPa) | HDT (C) | Creep Limit (N) | Source / Notes)
         lines = text.splitlines()
-        in_table = False
+        table_kind: str | None = None
         header_cols: list[str] = []
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("|") and stripped.endswith("|"):
                 cells = [c.strip() for c in stripped.strip("|").split("|")]
-                if not in_table:
+                if table_kind is None:
                     lower_cells = [c.lower() for c in cells]
                     if any("build" in c for c in lower_cells) and any("shaper" in c for c in lower_cells):
                         header_cols = lower_cells
-                        in_table = True
+                        table_kind = "builds"
+                    elif (
+                        any("category" in c for c in lower_cells)
+                        and any("component" in c for c in lower_cells)
+                        and any("mass" in c or "weight" in c for c in lower_cells)
+                    ):
+                        header_cols = lower_cells
+                        table_kind = "weights"
+                    elif any("material" in c for c in lower_cells) and (
+                        any("modulus" in c for c in lower_cells)
+                        or any("hdt" in c for c in lower_cells)
+                        or any("creep" in c for c in lower_cells)
+                    ):
+                        header_cols = lower_cells
+                        table_kind = "materials"
                     continue
                 if all(re.fullmatch(r"[:\-\s]+", c) for c in cells):
                     continue
-                if len(cells) < 6:
-                    continue
 
-                build_cell = _strip_md(cells[0])
-                frame_cell = _strip_md(cells[1])
-                drive_cell = _strip_md(cells[2])
-                gantry_cell = _strip_md(cells[3])
-                x_cell = cells[4]
-                y_cell = cells[5]
+                if table_kind == "builds":
+                    if len(cells) < 6:
+                        continue
 
-                row_combined = f"{build_cell} | {frame_cell} | {drive_cell} | {gantry_cell}"
-                x_type, x_hz, x_accel = _parse_shaper_cell(x_cell)
-                y_type, y_hz, y_accel = _parse_shaper_cell(y_cell)
+                    build_cell = _strip_md(cells[0])
+                    frame_cell = _strip_md(cells[1])
+                    drive_cell = _strip_md(cells[2])
+                    gantry_cell = _strip_md(cells[3])
+                    x_cell = cells[4]
+                    y_cell = cells[5]
 
-                arch = _infer_architecture(row_combined)
-                model = _infer_printer_model(row_combined) or build_cell
-                frame_profile = _infer_frame_profile(frame_cell) or _infer_frame_profile(row_combined)
-                frame_size = _infer_frame_size_mm(f"{build_cell} {frame_cell}")
-                drive_mode = _infer_drive_mode(drive_cell) or _infer_drive_mode(row_combined)
-                belt_width = _infer_belt_width_mm(drive_cell)
-                if belt_width is None:
-                    bm = re.search(r"(\d+)(?:\s*[-–]\s*(\d+))?\s*mm", drive_cell)
-                    if bm:
-                        v1 = float(bm.group(1))
-                        v2 = float(bm.group(2)) if bm.group(2) else v1
-                        belt_width = round((v1 + v2) / 2.0, 1)
-                belt_pluck = _infer_belt_pluck_hz(drive_cell)
-                belt_core = _infer_belt_core(drive_cell) or "fiberglass"
-                voltage = _infer_voltage(drive_cell)
-                motors = _infer_motors(drive_cell)
-                panel_spec = _infer_panel_spec(gantry_cell) or gantry_cell
-                preset = infer_preset_hint(
-                    architecture=arch,
-                    printer_model=model,
-                    frame_profile=frame_profile,
-                    drive_mode=drive_mode,
-                    belt_width_mm=belt_width,
-                    panel_spec=panel_spec,
-                )
+                    row_combined = f"{build_cell} | {frame_cell} | {drive_cell} | {gantry_cell}"
+                    x_type, x_hz, x_accel = _parse_shaper_cell(x_cell)
+                    y_type, y_hz, y_accel = _parse_shaper_cell(y_cell)
 
-                before = kb.conn.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
-                kb.add_build(
-                    raw_item_id=raw_id,
-                    build_name=build_cell,
-                    architecture=arch,
-                    printer_model=model,
-                    frame_profile=frame_profile,
-                    frame_size_mm=frame_size,
-                    panel_spec=panel_spec,
-                    drive_mode=drive_mode,
-                    belt_width_mm=belt_width,
-                    belt_core=belt_core,
-                    belt_pluck_hz=belt_pluck,
-                    motors=motors,
-                    voltage_v=voltage,
-                    toolhead=_infer_toolhead(row_combined),
-                    hotend=_infer_hotend(row_combined),
-                    x_shaper_type=x_type,
-                    x_shaper_hz=x_hz,
-                    x_max_accel=x_accel,
-                    y_shaper_type=y_type,
-                    y_shaper_hz=y_hz,
-                    y_max_accel=y_accel,
-                    preset_hint=preset,
-                    notes=f"Frame: {frame_cell}; Drive: {drive_cell}; Gantry/Panels: {gantry_cell}",
-                )
-                after = kb.conn.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
-                if after > before:
-                    summary["builds_added"] += 1
+                    arch = _infer_architecture(row_combined)
+                    model = _infer_printer_model(row_combined) or build_cell
+                    frame_profile = _infer_frame_profile(frame_cell) or _infer_frame_profile(row_combined)
+                    frame_size = _infer_frame_size_mm(f"{build_cell} {frame_cell}")
+                    drive_mode = _infer_drive_mode(drive_cell) or _infer_drive_mode(row_combined)
+                    belt_width = _infer_belt_width_mm(drive_cell)
+                    if belt_width is None:
+                        bm = re.search(r"(\d+)(?:\s*[-–]\s*(\d+))?\s*mm", drive_cell)
+                        if bm:
+                            v1 = float(bm.group(1))
+                            v2 = float(bm.group(2)) if bm.group(2) else v1
+                            belt_width = round((v1 + v2) / 2.0, 1)
+                    belt_pluck = _infer_belt_pluck_hz(drive_cell)
+                    belt_core = _infer_belt_core(drive_cell) or "fiberglass"
+                    voltage = _infer_voltage(drive_cell)
+                    motors = _infer_motors(drive_cell)
+                    panel_spec = _infer_panel_spec(gantry_cell) or gantry_cell
+                    preset = infer_preset_hint(
+                        architecture=arch,
+                        printer_model=model,
+                        frame_profile=frame_profile,
+                        drive_mode=drive_mode,
+                        belt_width_mm=belt_width,
+                        panel_spec=panel_spec,
+                    )
+
+                    before = kb.conn.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
+                    kb.add_build(
+                        raw_item_id=raw_id,
+                        build_name=build_cell,
+                        architecture=arch,
+                        printer_model=model,
+                        frame_profile=frame_profile,
+                        frame_size_mm=frame_size,
+                        panel_spec=panel_spec,
+                        drive_mode=drive_mode,
+                        belt_width_mm=belt_width,
+                        belt_core=belt_core,
+                        belt_pluck_hz=belt_pluck,
+                        motors=motors,
+                        voltage_v=voltage,
+                        toolhead=_infer_toolhead(row_combined),
+                        hotend=_infer_hotend(row_combined),
+                        x_shaper_type=x_type,
+                        x_shaper_hz=x_hz,
+                        x_max_accel=x_accel,
+                        y_shaper_type=y_type,
+                        y_shaper_hz=y_hz,
+                        y_max_accel=y_accel,
+                        preset_hint=preset,
+                        notes=f"Frame: {frame_cell}; Drive: {drive_cell}; Gantry/Panels: {gantry_cell}",
+                    )
+                    after = kb.conn.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
+                    if after > before:
+                        summary["builds_added"] += 1
+
+                elif table_kind == "weights":
+                    cat_idx = _find_col(header_cols, ("category",), 0)
+                    comp_idx = _find_col(header_cols, ("component", "name"), 1)
+                    mass_idx = _find_col(header_cols, ("mass", "weight"), 2)
+                    notes_idx = _find_col(header_cols, ("source", "note", "detail"), 3)
+                    if cat_idx is None or comp_idx is None or mass_idx is None:
+                        continue
+                    if max(cat_idx, comp_idx, mass_idx) >= len(cells):
+                        continue
+
+                    category = _strip_md(cells[cat_idx]).lower()
+                    comp_name = _strip_md(cells[comp_idx])
+                    mass_raw = _strip_md(cells[mass_idx])
+                    mass_val = _parse_float_cell(mass_raw)
+                    if not category or not comp_name or mass_val is None or mass_val <= 0:
+                        continue
+                    if "kg" in mass_raw.lower():
+                        mass_val = round(mass_val * 1000.0, 2)
+                    details = _strip_md(cells[notes_idx]) if (notes_idx is not None and notes_idx < len(cells)) else ""
+
+                    before = kb.conn.execute("SELECT COUNT(*) FROM component_weights").fetchone()[0]
+                    kb.add_component_weight(
+                        raw_item_id=raw_id,
+                        category=category,
+                        component_name=comp_name,
+                        mass_g=mass_val,
+                        details=details,
+                    )
+                    after = kb.conn.execute("SELECT COUNT(*) FROM component_weights").fetchone()[0]
+                    if after > before:
+                        summary["weights_added"] += 1
+
+                elif table_kind == "materials":
+                    mat_idx = _find_col(header_cols, ("material",), 0)
+                    mod_idx = _find_col(header_cols, ("modulus", "gpa"), 1)
+                    hdt_idx = _find_col(header_cols, ("hdt",), 2)
+                    creep_idx = _find_col(header_cols, ("creep",), 3)
+                    notes_idx = _find_col(header_cols, ("source", "note"), 4)
+                    if mat_idx is None or mat_idx >= len(cells):
+                        continue
+
+                    mat_name = _strip_md(cells[mat_idx])
+                    if not mat_name:
+                        continue
+                    modulus_gpa = _parse_float_cell(cells[mod_idx]) if (mod_idx is not None and mod_idx < len(cells)) else None
+                    hdt_c = _parse_float_cell(cells[hdt_idx]) if (hdt_idx is not None and hdt_idx < len(cells)) else None
+                    creep_n = _parse_float_cell(cells[creep_idx]) if (creep_idx is not None and creep_idx < len(cells)) else None
+                    test_notes = _strip_md(cells[notes_idx]) if (notes_idx is not None and notes_idx < len(cells)) else ""
+
+                    before = kb.conn.execute("SELECT COUNT(*) FROM material_tests").fetchone()[0]
+                    kb.add_material_test(
+                        raw_item_id=raw_id,
+                        material_name=mat_name,
+                        modulus_gpa=modulus_gpa,
+                        hdt_c=hdt_c,
+                        creep_limit_n=creep_n,
+                        test_notes=test_notes,
+                    )
+                    after = kb.conn.execute("SELECT COUNT(*) FROM material_tests").fetchone()[0]
+                    if after > before:
+                        summary["material_tests_added"] += 1
             else:
-                if in_table and stripped:
-                    in_table = False
+                if table_kind is not None:
+                    table_kind = None
+                    header_cols = []
 
         # B. Parse Matched-Tension Belt Core Shootout & Panel Material Comparisons
         for raw_line in lines:
@@ -699,10 +813,14 @@ def ingest_local_path(
 # 3. Public Discourse JSON Harvester
 # ---------------------------------------------------------------------------
 
-def _http_get_json(url: str, headers: dict[str, str], timeout_s: float = 20.0) -> Any:
+def _http_get_text(url: str, headers: dict[str, str], timeout_s: float = 20.0) -> str:
     req = urllib.request.Request(url, headers=headers, method="GET")
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def _http_get_json(url: str, headers: dict[str, str], timeout_s: float = 20.0) -> Any:
+    return json.loads(_http_get_text(url, headers=headers, timeout_s=timeout_s))
 
 
 def harvest_discourse(
@@ -750,9 +868,9 @@ def harvest_discourse(
             stats["errors"].append(f"search '{q}': {exc}")
             continue
 
-        topics = payload.get("topics") or []
+        topics = payload.get("topics") or [] if isinstance(payload, dict) else []
         for t in topics:
-            tid = t.get("id")
+            tid = t.get("id") if isinstance(t, dict) else None
             if isinstance(tid, int) and tid not in seen_set:
                 seen_set.add(tid)
                 seen_topic_ids.append(tid)
@@ -768,6 +886,9 @@ def harvest_discourse(
             topic_data = _http_get_json(topic_url, headers=headers)
         except Exception as exc:  # noqa: BLE001
             stats["errors"].append(f"topic {tid}: {exc}")
+            continue
+        if not isinstance(topic_data, dict):
+            stats["errors"].append(f"topic {tid}: unexpected non-JSON object response")
             continue
 
         stats["topics_fetched"] += 1
@@ -899,5 +1020,295 @@ def harvest_github_issues(
                 auto_approve=auto_approve,
                 stats=stats,
             )
+
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# 5. Public Answer Overflow Discord-Mirror Harvester
+# ---------------------------------------------------------------------------
+
+def _extract_answer_overflow_links(search_html: str) -> list[str]:
+    """Extract deduplicated ``/m/<id>`` thread paths from Answer Overflow search HTML."""
+    normalized = (search_html or "").replace("\\/", "/")
+    matches = re.findall(
+        r"(?:https?://(?:www\.)?answeroverflow\.com)?(/m/\d+)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in matches:
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def _extract_json_ld_blocks(page_html: str) -> list[Any]:
+    blocks: list[Any] = []
+    for m in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        page_html or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        raw = m.group(1).strip()
+        if not raw:
+            continue
+        try:
+            blocks.append(json.loads(raw))
+        except json.JSONDecodeError:
+            continue
+    return blocks
+
+
+def _collect_json_ld_discussion(
+    node: Any,
+    titles: list[str],
+    texts: list[str],
+    authors: list[str],
+    dates: list[str],
+) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _collect_json_ld_discussion(item, titles, texts, authors, dates)
+        return
+    if not isinstance(node, dict):
+        return
+
+    for key in ("headline", "name"):
+        val = node.get(key)
+        if isinstance(val, str) and val.strip() and node.get("@type") in (
+            "Question",
+            "QAPage",
+            "DiscussionForumPosting",
+            "Article",
+        ):
+            titles.append(val.strip())
+
+    for key in ("text", "articleBody", "description"):
+        val = node.get(key)
+        if isinstance(val, str) and val.strip():
+            texts.append(val.strip())
+
+    auth = node.get("author")
+    if isinstance(auth, dict):
+        aname = auth.get("name") or auth.get("alternateName")
+        if isinstance(aname, str) and aname.strip():
+            authors.append(aname.strip())
+    elif isinstance(auth, str) and auth.strip():
+        authors.append(auth.strip())
+
+    dp = node.get("datePublished") or node.get("dateCreated")
+    if isinstance(dp, str) and dp.strip():
+        dates.append(dp.strip())
+
+    for child_key in ("@graph", "mainEntity", "acceptedAnswer", "suggestedAnswer", "comment", "hasPart"):
+        if child_key in node:
+            _collect_json_ld_discussion(node[child_key], titles, texts, authors, dates)
+
+
+def _extract_next_data_messages(page_html: str) -> tuple[str, str, str, str, list[str]]:
+    """Extract (title, channel, author, published_at, message_texts) from ``__NEXT_DATA__`` if present."""
+    m = re.search(
+        r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+        page_html or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return ("", "", "", "", [])
+    try:
+        data = json.loads(m.group(1).strip())
+    except json.JSONDecodeError:
+        return ("", "", "", "", [])
+
+    title = ""
+    channel = ""
+    author = ""
+    published_at = ""
+    texts: list[str] = []
+
+    def _walk(obj: Any) -> None:
+        nonlocal title, channel, author, published_at
+        if isinstance(obj, list):
+            for it in obj:
+                _walk(it)
+            return
+        if not isinstance(obj, dict):
+            return
+
+        if not title and isinstance(obj.get("thread"), dict):
+            tname = obj["thread"].get("name")
+            if isinstance(tname, str) and tname.strip():
+                title = tname.strip()
+        if not channel and isinstance(obj.get("channel"), dict):
+            cname = obj["channel"].get("name")
+            if isinstance(cname, str) and cname.strip():
+                channel = cname.strip()
+
+        msgs = obj.get("messages")
+        if isinstance(msgs, list):
+            for msg in msgs:
+                if not isinstance(msg, dict):
+                    continue
+                content = str(msg.get("content") or "").strip()
+                if content:
+                    texts.append(content)
+                if not author:
+                    a = _extract_author_name(msg.get("author"))
+                    if a:
+                        author = a
+                if not published_at:
+                    ts = str(msg.get("timestamp") or msg.get("createdTimestamp") or "").strip()
+                    if ts:
+                        published_at = ts
+
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                _walk(v)
+
+    _walk(data)
+    return (title, channel, author, published_at, texts)
+
+
+def _extract_answer_overflow_page(page_html: str, fallback_title: str = "") -> dict[str, str]:
+    """Extract structured title + clean discussion text from an Answer Overflow thread page."""
+    ld_titles: list[str] = []
+    ld_texts: list[str] = []
+    ld_authors: list[str] = []
+    ld_dates: list[str] = []
+    for block in _extract_json_ld_blocks(page_html):
+        _collect_json_ld_discussion(block, ld_titles, ld_texts, ld_authors, ld_dates)
+
+    nd_title, nd_channel, nd_author, nd_date, nd_texts = _extract_next_data_messages(page_html)
+
+    # Title resolution: JSON-LD -> __NEXT_DATA__ -> <h1> -> <title> -> fallback
+    title = ld_titles[0] if ld_titles else nd_title
+    if not title:
+        h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", page_html or "", flags=re.IGNORECASE | re.DOTALL)
+        if h1_m:
+            title = _strip_html(h1_m.group(1))
+    if not title:
+        t_m = re.search(r"<title[^>]*>(.*?)</title>", page_html or "", flags=re.IGNORECASE | re.DOTALL)
+        if t_m:
+            title = re.sub(r"\s*[-|]\s*Answer\s*Overflow\s*$", "", _strip_html(t_m.group(1)), flags=re.IGNORECASE).strip()
+    if not title:
+        title = fallback_title
+
+    # Combine unique structured passages (JSON-LD + __NEXT_DATA__)
+    combined_parts: list[str] = []
+    seen_parts: set[str] = set()
+    for part in [*ld_texts, *nd_texts]:
+        cleaned = re.sub(r"\s+", " ", part).strip()
+        if cleaned and cleaned not in seen_parts:
+            seen_parts.add(cleaned)
+            combined_parts.append(cleaned)
+
+    text = "\n\n---\n\n".join(combined_parts)
+
+    # Clean HTML fallback when structured metadata is absent or sparse
+    if len(text) < 40:
+        cleaned_html = re.sub(
+            r"<(script|style|noscript|svg)\b[^>]*>.*?</\1>",
+            " ",
+            page_html or "",
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        main_m = re.search(r"<(?:main|article)\b[^>]*>(.*?)</(?:main|article)>", cleaned_html, flags=re.IGNORECASE | re.DOTALL)
+        snippet_html = main_m.group(1) if main_m else cleaned_html
+        fallback_text = _strip_html(snippet_html)
+        if len(fallback_text) > len(text):
+            text = fallback_text
+
+    return {
+        "title": title,
+        "text": text,
+        "author": ld_authors[0] if ld_authors else nd_author,
+        "channel": nd_channel,
+        "published_at": ld_dates[0] if ld_dates else nd_date,
+    }
+
+
+def harvest_answer_overflow(
+    kb: TouchstoneKB,
+    queries: list[str] | None = None,
+    max_pages: int = 15,
+    auto_approve: bool = False,
+    delay_s: float = 0.8,
+    min_score: float = 0.20,
+) -> dict[str, Any]:
+    """Politely harvest public Discord-mirror threads from Answer Overflow (``answeroverflow.com``)."""
+    active_queries = list(queries) if queries is not None else list(DEFAULT_ANSWER_OVERFLOW_QUERIES)
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    stats: dict[str, Any] = {
+        "source": "answeroverflow.com",
+        "pages_fetched": 0,
+        "items_seen": 0,
+        "items_kept": 0,
+        "items_skipped_low_signal": 0,
+        "items_deduplicated": 0,
+        "builds_added": 0,
+        "weights_added": 0,
+        "material_tests_added": 0,
+        "troubleshooting_added": 0,
+        "errors": [],
+    }
+
+    seen_paths: list[str] = []
+    seen_set: set[str] = set()
+    req_count = 0
+
+    for q in active_queries:
+        if len(seen_paths) >= max_pages:
+            break
+        if req_count > 0 and delay_s > 0:
+            time.sleep(delay_s)
+        req_count += 1
+        search_url = f"https://www.answeroverflow.com/search?q={urllib.parse.quote_plus(q)}"
+        try:
+            search_html = _http_get_text(search_url, headers=headers)
+        except Exception as exc:  # noqa: BLE001
+            stats["errors"].append(f"search '{q}': {exc}")
+            continue
+
+        for path in _extract_answer_overflow_links(search_html):
+            if path not in seen_set:
+                seen_set.add(path)
+                seen_paths.append(path)
+                if len(seen_paths) >= max_pages:
+                    break
+
+    for path in seen_paths[:max_pages]:
+        if req_count > 0 and delay_s > 0:
+            time.sleep(delay_s)
+        req_count += 1
+        page_url = f"https://www.answeroverflow.com{path}"
+        try:
+            page_html = _http_get_text(page_url, headers=headers)
+        except Exception as exc:  # noqa: BLE001
+            stats["errors"].append(f"page {path}: {exc}")
+            continue
+
+        stats["pages_fetched"] += 1
+        parsed = _extract_answer_overflow_page(page_html, fallback_title=f"Answer Overflow {path}")
+        _ingest_single_record(
+            kb,
+            source_type="answer_overflow",
+            source_name="answeroverflow.com",
+            channel=parsed["channel"],
+            author=parsed["author"],
+            url=page_url,
+            published_at=parsed["published_at"],
+            title=parsed["title"],
+            raw_text=parsed["text"],
+            attachments=[],
+            min_score=min_score,
+            auto_approve=auto_approve,
+            stats=stats,
+        )
 
     return stats

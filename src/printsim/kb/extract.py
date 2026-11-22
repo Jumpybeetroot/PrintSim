@@ -169,6 +169,14 @@ def _infer_architecture(text: str) -> str:
     return "corexy"
 
 
+MIN_SHAPER_FREQ_HZ = 15.0
+MAX_SHAPER_FREQ_HZ = 250.0
+
+
+def _is_valid_shaper_hz(freq_hz: float | None) -> bool:
+    return freq_hz is not None and MIN_SHAPER_FREQ_HZ <= freq_hz <= MAX_SHAPER_FREQ_HZ
+
+
 def _infer_printer_model(text: str) -> str:
     patterns = [
         r"\b(Voron\s*Trident(?:\s*\d{3})?)\b",
@@ -176,13 +184,15 @@ def _infer_printer_model(text: str) -> str:
         r"\b(Voron\s*(?:2\.4|V2\.4|V0(?:\.\d)?)(?:\s*\d{3})?)\b",
         r"\b(DoomCube(?:\s*\d{3})?|Doomish)\b",
         r"\b(VzBot(?:\s*\d{3})?(?:\s*AWD)?)\b",
-        r"\b(RatRig\s*V-?Core(?:\s*\d)?(?:\s*\d{3})?)\b",
+        r"\b(RatRig\s*V-?Core(?:\s*\d(?:\.\d)?)?(?:\s*\d{3})?)\b",
         r"\b(Annex\s*K3|K3Z)\b",
         r"\b(Monolith(?:\s*AWD)?(?:\s*\d{3})?)\b",
         r"\b(HM\d{3})\b",
         r"\b(HevORT)\b",
-        r"\b(Ender\s*3(?:\s*\w+)?)\b",
-        r"\b(Prusa\s*MK\d\w?)\b",
+        r"\b(FLSUN\s*\w+)\b",
+        r"\b(Doron\s*Velta)\b",
+        r"\b(Ender\s*[357](?:\s*\w+)?)\b",
+        r"\b(Prusa\s*MK\d\w*)\b",
     ]
     for pat in patterns:
         m = re.search(pat, text, re.IGNORECASE)
@@ -356,15 +366,19 @@ def infer_preset_hint(
         return "delta_racer"
     if arch == "cartesian_bedslinger":
         return "cartesian_bedslinger"
-    if "vzbot" in model:
+    if "vzbot" in model or "vz330" in model or "vz235" in model:
         return "vzbot_330_awd"
     if "doom" in model or "4040" in prof:
         return "doomcube_4040"
+    if "ratrig" in model or "v-core" in model or "vcore" in model:
+        return "hyper_corexy_carbon"
     if drive == "awd" or "monolith" in model or (belt_width_mm is not None and belt_width_mm >= 9.0 and "3030" not in prof):
         return "voron_monolith_awd"
     if "3030" in prof:
         return "hyper_corexy_carbon"
-    if "trident" in model or "vt" in model:
+    if "2.4" in model or "v2.4" in model:
+        return "corexy_voron_style"
+    if "trident" in model or re.search(r"\bvt\s*\d", model):
         return "voron_trident_300"
     if "5052" in panel or "steel" in panel:
         return "voron_monolith_awd"
@@ -380,31 +394,36 @@ def _extract_shaper_axis(text: str, axis: str) -> tuple[str, float | None, float
 
     # Pattern 1: Klipper SHAPER_CALIBRATE style:
     # "Recommended shaper_type_x = mzv, shaper_freq_x = 64.2 Hz"
-    m1 = re.search(
+    for m1 in re.finditer(
         rf"shaper_type_{ax}\s*[=:]\s*([a-z0-9_]+)\s*[,;]?\s*shaper_freq_{ax}\s*[=:]\s*(\d+(?:\.\d+)?)",
         text,
         re.IGNORECASE,
-    )
-    if m1:
-        shaper_type = m1.group(1).lower()
-        freq_hz = float(m1.group(2))
+    ):
+        cand_hz = float(m1.group(2))
+        if _is_valid_shaper_hz(cand_hz):
+            shaper_type = m1.group(1).lower()
+            freq_hz = cand_hz
+            break
 
     # Pattern 2: Compact axis prefix:
     # "X: MZV @ 86.8 Hz (<=22000)" / "Y: smooth_zv @ 122 Hz (50k)" / "X: Raw ~136 Hz (46k)"
     if freq_hz is None:
-        m2 = re.search(
+        for m2 in re.finditer(
             rf"(?:^|[\s|,;(\n]){ax}(?:\s*(?:axis|shaper))?\s*[:=-]\s*`?"
             rf"(smooth_mzv|smooth_zv|2hump_ei|3hump_ei|mzv|zvd|zv|ei|raw)?`?\s*"
             rf"(?:@|at)?\s*~?\s*\**(\d+(?:\.\d+)?)\s*hz\**"
             rf"(?:\s*\(\s*(?:<=|≤|~)?\s*(\d+(?:\.\d+)?)\s*(k|mm/s\^?2|mm/s²)?\s*\))?",
             text,
             re.IGNORECASE | re.MULTILINE,
-        )
-        if m2:
+        ):
+            cand_hz = float(m2.group(2))
+            if not _is_valid_shaper_hz(cand_hz):
+                continue
             shaper_type = (m2.group(1) or "").lower()
-            freq_hz = float(m2.group(2))
+            freq_hz = cand_hz
             if m2.group(3):
                 max_accel = _parse_accel_number(m2.group(3), m2.group(4))
+            break
 
     # Pattern 3: Axis shaper with accel only (no Hz): "X: MZV (~27k)"
     if freq_hz is None and max_accel is None:
@@ -439,8 +458,10 @@ def _extract_shaper_axis(text: str, axis: str) -> tuple[str, float | None, float
                 re.IGNORECASE,
             )
             if m_rec:
-                shaper_type = m_rec.group(1).lower()
-                freq_hz = float(m_rec.group(2))
+                cand_hz = float(m_rec.group(2))
+                if _is_valid_shaper_hz(cand_hz):
+                    shaper_type = m_rec.group(1).lower()
+                    freq_hz = cand_hz
             m_sug = re.search(
                 r"suggested\s+max_accel\s*(?:<=|≤)\s*(\d+(?:\.\d+)?)\s*(k|mm/s(?:\^?2|²)|mm/sec\^?2)?",
                 text,
@@ -448,6 +469,9 @@ def _extract_shaper_axis(text: str, axis: str) -> tuple[str, float | None, float
             )
             if m_sug and max_accel is None:
                 max_accel = _parse_accel_number(m_sug.group(1), m_sug.group(2))
+
+    if not _is_valid_shaper_hz(freq_hz):
+        freq_hz = None
 
     return (shaper_type, freq_hz, max_accel)
 

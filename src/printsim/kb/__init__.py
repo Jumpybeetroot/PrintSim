@@ -9,8 +9,10 @@ from printsim.kb.extract import (
     score_engineering_signal,
 )
 from printsim.kb.harvesters import (
+    DEFAULT_ANSWER_OVERFLOW_QUERIES,
     DEFAULT_PUBLIC_DISCOURSE_TARGETS,
     DEFAULT_PUBLIC_GITHUB_REPOS,
+    harvest_answer_overflow,
     harvest_discourse,
     harvest_github_issues,
     ingest_local_path,
@@ -19,6 +21,7 @@ from printsim.kb.harvesters import (
 from printsim.kb.store import TouchstoneKB, compute_content_hash, default_kb_path
 
 __all__ = [
+    "DEFAULT_ANSWER_OVERFLOW_QUERIES",
     "DEFAULT_PUBLIC_DISCOURSE_TARGETS",
     "DEFAULT_PUBLIC_GITHUB_REPOS",
     "TouchstoneKB",
@@ -26,6 +29,7 @@ __all__ = [
     "compute_content_hash",
     "default_kb_path",
     "extract_structured_records",
+    "harvest_answer_overflow",
     "harvest_discourse",
     "harvest_github_issues",
     "infer_preset_hint",
