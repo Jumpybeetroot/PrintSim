@@ -712,9 +712,10 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
 
             rec_x = abs(comp_x_noz)
             rec_y = abs(comp_y_noz)
-            receptance_x.append((freq_hz, rec_x))
-            receptance_y.append((freq_hz, rec_y))
-            car_mode_entries.append((freq_hz, comp_x_car, comp_y_car, max(0.0, ke_panel)))
+            if not is_isolated_panel_drum:
+                receptance_x.append((freq_hz, rec_x))
+                receptance_y.append((freq_hz, rec_y))
+                car_mode_entries.append((freq_hz, comp_x_car, comp_y_car, max(0.0, ke_panel)))
 
             sum_comp_x_car += comp_x_car
             sum_comp_y_car += comp_y_car

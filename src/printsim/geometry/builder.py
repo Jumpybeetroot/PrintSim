@@ -1600,6 +1600,10 @@ def _add_corexy_shell_panels(
     fastener_springs: list[FastenerSpring] = []
     total_panel_mass_kg = 0.0
     rep_panel_props: dict[str, float] | None = None
+    # Share shell nodes across *_low / *_top seam so bolted-to-gantry side & rear walls
+    # behave as continuous one-piece sheets (preserving C1 out-of-plane bending continuity).
+    seam_nodes: dict[tuple[str, int], str] = {}
+    seam_springs: dict[tuple[str, int], FastenerSpring] = {}
 
     for bay, bl_id, br_id, tl_id, tr_id, n_tup, wall_h in bays:
         p00 = nmap[bl_id].position_m
@@ -1612,6 +1616,9 @@ def _add_corexy_shell_panels(
             continue
 
         is_split_wall = wall_h is not None
+        wall_base = bay[:-4] if bay.endswith("_low") or bay.endswith("_top") else ""
+        is_low_wall = bay.endswith("_low")
+        is_top_wall = bay.endswith("_top")
         prop_h = wall_h if (wall_h is not None and wall_h > bh) else bh
         props = panel_mechanical_properties(
             pmat,
@@ -1647,6 +1654,19 @@ def _add_corexy_shell_panels(
         for j in range(ny_g + 1):
             eta = j / ny_g
             for i in range(nx_g + 1):
+                if is_top_wall and j == 0 and (wall_base, i) in seam_nodes:
+                    # Stitch top sub-bay seamlessly onto lower sub-bay's gantry-level shell nodes
+                    sid = seam_nodes[(wall_base, i)]
+                    grid[j, i] = sid
+                    if i in (0, nx_g) and (wall_base, i) in seam_springs:
+                        # Add upper vertical column tributary length to the shared corner bolt
+                        ds_col_top = 0.5 * (bh / ny_g)
+                        sp_existing = seam_springs[(wall_base, i)]
+                        sp_existing.k_shear_n_m += k_shear_per_m * ds_col_top
+                        sp_existing.k_normal_n_m += k_normal_per_m * ds_col_top
+                        sp_existing.k_rot_nm_rad += k_rot_per_m * ds_col_top
+                    continue
+
                 xi = i / nx_g
                 p_frame = (
                     (1.0 - xi) * (1.0 - eta) * p00
@@ -1660,6 +1680,8 @@ def _add_corexy_shell_panels(
                 nodes.append(node)
                 nmap[sid] = node
                 grid[j, i] = sid
+                if is_low_wall and j == ny_g:
+                    seam_nodes[(wall_base, i)] = sid
 
                 if i in (0, nx_g) or j in (0, ny_g):
                     fid = _find_or_split_frame_node(
@@ -1671,23 +1693,24 @@ def _add_corexy_shell_panels(
                     if i in (0, nx_g):
                         ds += (bh / ny_g) * (0.5 if j in (0, ny_g) else 1.0)
                     actual_off = p_shell - nmap[fid].position_m
-                    fastener_springs.append(
-                        FastenerSpring(
-                            id=f"cbush_{bay}_{j}_{i}",
-                            bay=bay,
-                            shell_node_id=sid,
-                            frame_node_id=fid,
-                            k_shear_n_m=k_shear_per_m * ds,
-                            k_normal_n_m=k_normal_per_m * ds,
-                            k_rot_nm_rad=k_rot_per_m * ds,
-                            normal_vec=n_tup,
-                            offset_m=(
-                                float(actual_off[0]),
-                                float(actual_off[1]),
-                                float(actual_off[2]),
-                            ),
-                        )
+                    sp = FastenerSpring(
+                        id=f"cbush_{bay}_{j}_{i}",
+                        bay=bay,
+                        shell_node_id=sid,
+                        frame_node_id=fid,
+                        k_shear_n_m=k_shear_per_m * ds,
+                        k_normal_n_m=k_normal_per_m * ds,
+                        k_rot_nm_rad=k_rot_per_m * ds,
+                        normal_vec=n_tup,
+                        offset_m=(
+                            float(actual_off[0]),
+                            float(actual_off[1]),
+                            float(actual_off[2]),
+                        ),
                     )
+                    fastener_springs.append(sp)
+                    if is_low_wall and j == ny_g:
+                        seam_springs[(wall_base, i)] = sp
 
         for j in range(ny_g):
             for i in range(nx_g):

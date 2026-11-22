@@ -499,18 +499,29 @@ def test_fixed_gantry_vs_flying_gantry_panel_bolting() -> None:
     mo_nobolt = solve_modal_fea(asm_nobolt)
     mo_flying = solve_modal_fea(asm_flying)
 
-    # Bolting to fixed gantry beams increases X stiffness, reduces deflection, and raises f1
-    # (Y stiffness is dominated by open T-slot X-gantry beam torsion, so bolted vs unbolted Y stays within 0.5%)
+    # Bolting to fixed gantry beams increases X stiffness, reduces deflection, and raises panel drum frequency;
+    # for stiff solid metal panels (4mm Al 5052) it also raises f1 & shaper_x (on 4mm ACM, continuous bolting
+    # couples the soft LDPE core's 75.5 Hz drum mode into the gantry)
     assert st_bolt.toolhead_stiffness_x_n_per_mm > st_nobolt.toolhead_stiffness_x_n_per_mm
     assert st_bolt.toolhead_stiffness_y_n_per_mm >= st_nobolt.toolhead_stiffness_y_n_per_mm * 0.995
     assert st_bolt.combined_max_deflection_um < st_nobolt.combined_max_deflection_um
-    assert mo_bolt.fundamental_freq_hz > mo_nobolt.fundamental_freq_hz
+    assert mo_bolt.panel_drum_freq_hz > mo_nobolt.panel_drum_freq_hz
+
+    spec_al_bolt = spec_trident_bolt.model_copy(deep=True)
+    spec_al_bolt.frame.panel_material = "aluminum_5052_sheet"
+    spec_al_nobolt = spec_al_bolt.model_copy(deep=True)
+    spec_al_nobolt.frame.bolt_panels_to_gantry = False
+    mo_al_bolt = solve_modal_fea(build_assembly(spec_al_bolt))
+    mo_al_nobolt = solve_modal_fea(build_assembly(spec_al_nobolt))
+    assert mo_al_bolt.fundamental_freq_hz > mo_al_nobolt.fundamental_freq_hz
+    assert mo_al_bolt.shaper_x is not None and mo_al_nobolt.shaper_x is not None
+    assert mo_al_bolt.shaper_x.structural_freq_hz > mo_al_nobolt.shaper_x.structural_freq_hz + 5.0
 
     assert st_bolt.toolhead_stiffness_x_n_per_mm > st_flying.toolhead_stiffness_x_n_per_mm
     # Flying-gantry anchors its bed directly to fixed base feet, whereas Trident's moving Z-bed adds ~0.2 um/N loop compliance
     assert st_bolt.toolhead_stiffness_y_n_per_mm >= st_flying.toolhead_stiffness_y_n_per_mm * 0.96
     assert st_bolt.combined_max_deflection_um < st_flying.combined_max_deflection_um
-    assert mo_bolt.fundamental_freq_hz > mo_flying.fundamental_freq_hz
+    assert mo_al_bolt.fundamental_freq_hz > mo_flying.fundamental_freq_hz
 
     # Unhealthy flying gantry (structural < 80) emits helpful gantry-bolting note
     spec_weak_fly = _panel_corexy_spec(True, "bolted_structural", "acrylic_pmma", 2.0)
