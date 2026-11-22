@@ -114,6 +114,46 @@ def _trapezoidal_segment_time(
     return t_acc + t_flat + t_dec, v_peak
 
 
+def _klipper_junction_speed_mm_s(
+    d_prev: np.ndarray,
+    d_next: np.ndarray,
+    len_prev: float,
+    len_next: float,
+    v_prev: float,
+    v_next: float,
+    accel_j: float,
+    scv: float,
+) -> float:
+    """Compute exact Klipper toolhead.py centripetal junction_deviation corner speed.
+
+    Let theta be the interior angle between incoming (-d_prev) and outgoing (+d_next) moves,
+    so cos(theta) = -dot(d_prev, d_next) (theta=pi straight, pi/2 for 90 deg, 0 for 180 deg reversal).
+    """
+    if len_prev <= 1e-6 or len_next <= 1e-6:
+        return 0.0
+
+    jcos_theta = float(np.clip(-np.dot(d_prev, d_next), -1.0, 1.0))
+    sin_theta_d2 = math.sqrt(max(0.5 * (1.0 - jcos_theta), 0.0))
+    cos_theta_d2 = math.sqrt(max(0.5 * (1.0 + jcos_theta), 0.0))
+
+    if sin_theta_d2 >= 1.0 - 1e-6:
+        return min(v_prev, v_next)
+    if sin_theta_d2 <= 1e-9:
+        return 0.0
+
+    a_j = max(accel_j, 1e-6)
+    junction_dev = (scv**2) * (math.sqrt(2.0) - 1.0) / a_j
+    v_j_sq = a_j * junction_dev * (sin_theta_d2 / (1.0 - sin_theta_d2))
+    if cos_theta_d2 > 1e-6:
+        tan_theta_d2 = sin_theta_d2 / cos_theta_d2
+        v_j_sq = min(
+            v_j_sq,
+            0.5 * len_prev * tan_theta_d2 * a_j,
+            0.5 * len_next * tan_theta_d2 * a_j,
+        )
+    return min(v_prev, v_next, math.sqrt(max(v_j_sq, 0.0)))
+
+
 def simulate_gcode(
     gcode_text: str,
     assembly: AssemblyModel,
@@ -177,20 +217,18 @@ def simulate_gcode(
     junction_v = np.zeros(n + 1, dtype=float)
     corner_angles_deg = np.zeros(n, dtype=float)
     for i in range(1, n):
-        cos_theta = float(np.clip(np.dot(dirs[i - 1], dirs[i]), -1.0, 1.0))
-        angle_rad = math.acos(cos_theta)
-        corner_angles_deg[i] = math.degrees(angle_rad)
-        sin_half = math.sin(angle_rad * 0.5)
-        if sin_half < 1e-4:
-            v_j = min(v_targets[i - 1], v_targets[i])
-        else:
-            # Klipper junction speed approximation
-            v_j = min(
-                v_targets[i - 1],
-                v_targets[i],
-                scv * math.sqrt(max(1.0 - sin_half, 0.05) / sin_half),
-            )
-        junction_v[i] = v_j
+        cos_turn = float(np.clip(np.dot(dirs[i - 1], dirs[i]), -1.0, 1.0))
+        corner_angles_deg[i] = math.degrees(math.acos(cos_turn))
+        junction_v[i] = _klipper_junction_speed_mm_s(
+            d_prev=dirs[i - 1],
+            d_next=dirs[i],
+            len_prev=lengths[i - 1],
+            len_next=lengths[i],
+            v_prev=v_targets[i - 1],
+            v_next=v_targets[i],
+            accel_j=min(accels[i - 1], accels[i]),
+            scv=scv,
+        )
 
     # Backward + forward lookahead pass so segments can decelerate/accelerate smoothly
     for i in range(n - 1, 0, -1):

@@ -175,6 +175,7 @@ def test_parametric_bracket_condensation_spd_scaling_and_cache(tmp_path: Path) -
         "bolt_hole_mm": 5.2,
         "fillet_mm": 2.0,
         "n_modes": 6,
+        "fdm_anisotropic": False,
     }
     se_abs = condense_parametric_bracket(params, "abs_printed", cache_dir=tmp_path)
     se_al = condense_parametric_bracket(params, "aluminum_6061_t6", cache_dir=tmp_path)

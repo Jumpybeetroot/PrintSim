@@ -18,6 +18,9 @@ from printsim.schema import get_material
 from .solid_fem import (
     FaceName,
     PartPreset,
+    VoxelSize,
+    _normalize_voxel_size,
+    _scalar_voxel_size_mm,
     constitutive_matrix_3d,
     generate_parametric_part_grid,
     hex8_element_stiffness,
@@ -92,6 +95,7 @@ class TopologyOptResult:
         default_factory=lambda: np.zeros((0, 0, 0), dtype=bool),
         repr=False,
     )
+    voxel_dims_mm: tuple[float, float, float] | None = None
 
     def to_dict(self, include_voxels: bool = True) -> dict:
         """Serialize optimization results into JSON-friendly units without the raw 3D grid."""
@@ -304,27 +308,48 @@ def _oc_update(
     move: float = 0.2,
     rho_min: float = 1e-3,
 ) -> np.ndarray:
-    """Optimality Criteria density update with Lagrange multiplier bisection."""
+    """Scale-invariant Optimality Criteria density update with normalized Lagrange bisection."""
     n_elem = len(rho)
     target_vol = target_volume_fraction * n_elem
     neg_dc = np.maximum(0.0, -dc_filt)
+    dc_max = float(np.max(neg_dc))
+    if dc_max <= 0.0:
+        return rho.copy()
+
+    # Normalize sensitivities by dc_max so the bisection bracket is invariant to SI force/modulus scale
+    d_norm = neg_dc / dc_max
+    lower_lim = np.maximum(rho_min, rho - move)
+    upper_lim = np.minimum(1.0, rho + move)
+
+    def _trial(lam_norm: float) -> np.ndarray:
+        if lam_norm <= 0.0:
+            rho_t = np.where(d_norm > 0.0, upper_lim, lower_lim)
+        else:
+            rho_cand = rho * np.sqrt(d_norm / lam_norm)
+            rho_t = np.maximum(lower_lim, np.minimum(upper_lim, rho_cand))
+        if preserve_boundaries:
+            rho_t[passive_mask] = 1.0
+        return rho_t
+
+    rho_zero = _trial(0.0)
+    if float(np.sum(rho_zero)) <= target_vol:
+        return rho_zero
 
     l1 = 0.0
-    l2 = max(1e9, float(np.max(neg_dc)) * 1e6 + 1.0)
-    rho_new = rho.copy()
+    l2 = 1e4
+    rho_trial = _trial(l2)
+    for _ in range(40):
+        if float(np.sum(rho_trial)) <= target_vol or l2 >= 1e16:
+            break
+        l2 *= 4.0
+        rho_trial = _trial(l2)
 
+    rho_new = rho_trial
     for _ in range(80):
-        if (l2 - l1) / max(l1 + l2, 1e-12) <= 1e-4 or (l2 - l1) < 1e-18:
+        if (l2 - l1) <= 1e-6 * max(l1 + l2, 1e-15):
             break
         lmid = 0.5 * (l1 + l2)
-        b_e = neg_dc / max(lmid, 1e-30)
-        rho_cand = rho * np.sqrt(b_e)
-        rho_trial = np.maximum(
-            rho_min,
-            np.maximum(rho - move, np.minimum(1.0, np.minimum(rho + move, rho_cand))),
-        )
-        if preserve_boundaries:
-            rho_trial[passive_mask] = 1.0
+        rho_trial = _trial(lmid)
         rho_new = rho_trial
         if float(np.sum(rho_trial)) > target_vol:
             l1 = lmid
@@ -434,7 +459,7 @@ def _prune_disconnected_islands(
 
 def optimize_solid_topology(
     grid: np.ndarray,
-    voxel_size_mm: float,
+    voxel_size_mm: VoxelSize,
     material_id: str = "pa12_cf_printed",
     fixed_face: FaceName = "min_x",
     load_face: FaceName = "max_x",
@@ -451,8 +476,7 @@ def optimize_solid_topology(
     domain = np.asarray(grid, dtype=bool)
     if domain.ndim != 3:
         raise ValueError(f"Expected 3D boolean grid, got shape {domain.shape}")
-    if voxel_size_mm <= 0.0:
-        raise ValueError(f"voxel_size_mm must be positive, got {voxel_size_mm}")
+    hx_mm, hy_mm, hz_mm = _normalize_voxel_size(voxel_size_mm)
     if not (0.0 < target_volume_fraction <= 1.0):
         raise ValueError(
             f"target_volume_fraction must be in (0, 1], got {target_volume_fraction}"
@@ -464,11 +488,12 @@ def optimize_solid_topology(
     emin_ratio = 1e-3
 
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else ("printed" in material_id)
-    h = float(voxel_size_mm) * 1e-3  # meters (strict SI)
+    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
+    hx_m, hy_m, hz_m = hx_mm * 1e-3, hy_mm * 1e-3, hz_mm * 1e-3  # meters (strict SI)
+    elem_vol_m3 = hx_m * hy_m * hz_m
 
     D = constitutive_matrix_3d(mat, fdm_anisotropic=is_fdm)
-    Ke, _ = hex8_element_stiffness(D, h)
+    Ke, _ = hex8_element_stiffness(D, (hx_m, hy_m, hz_m))
     diag_floor = float(Ke[0, 0]) * 1e-10
 
     sys_data = _build_voxel_mesh_system(domain, Ke, fixed_face, load_face, force_n)
@@ -522,7 +547,7 @@ def optimize_solid_topology(
         rho = rho_new
         iterations_run = it
 
-        mass_iter_g = float(np.sum(rho)) * (h**3) * mat.density_kg_m3 * 1000.0
+        mass_iter_g = float(np.sum(rho)) * elem_vol_m3 * mat.density_kg_m3 * 1000.0
         history.append(
             {
                 "iteration": it,
@@ -638,9 +663,9 @@ def optimize_solid_topology(
             voxels_out.append(
                 {
                     "center_mm": [
-                        round((float(ix) + 0.5) * voxel_size_mm, 2),
-                        round((float(iy) + 0.5) * voxel_size_mm, 2),
-                        round((float(iz) + 0.5) * voxel_size_mm, 2),
+                        round((float(ix) + 0.5) * hx_mm, 3),
+                        round((float(iy) + 0.5) * hy_mm, 3),
+                        round((float(iz) + 0.5) * hz_mm, 3),
                     ],
                     "disp_mm": [0.0, 0.0, 0.0],
                     "von_mises_mpa": 0.0,
@@ -655,7 +680,7 @@ def optimize_solid_topology(
         part_name=part_name,
         material_id=material_id,
         is_fdm_anisotropic=is_fdm,
-        voxel_size_mm=float(voxel_size_mm),
+        voxel_size_mm=_scalar_voxel_size_mm(voxel_size_mm),
         target_volume_fraction=float(target_volume_fraction),
         achieved_volume_fraction=achieved_volume_fraction,
         penalization=p,
@@ -679,6 +704,7 @@ def optimize_solid_topology(
         history=history,
         voxels=voxels_out,
         optimized_grid=optimized_grid,
+        voxel_dims_mm=(hx_mm, hy_mm, hz_mm),
     )
 
 
@@ -714,15 +740,14 @@ def optimize_preset_topology(
 
 def voxel_grid_to_trimesh(
     grid: np.ndarray,
-    voxel_size_mm: float,
+    voxel_size_mm: VoxelSize,
     smooth_iterations: int = 0,
 ) -> trimesh.Trimesh:
     """Convert a 3D boolean voxel grid into a watertight, outward-wound Trimesh without skimage."""
     domain = np.asarray(grid, dtype=bool)
     if domain.ndim != 3:
         raise ValueError(f"Expected 3D boolean grid, got shape {domain.shape}")
-    if voxel_size_mm <= 0.0:
-        raise ValueError(f"voxel_size_mm must be positive, got {voxel_size_mm}")
+    hx_mm, hy_mm, hz_mm = _normalize_voxel_size(voxel_size_mm)
     if not np.any(domain):
         raise ValueError("Cannot build STL mesh from an empty voxel grid")
 
@@ -752,7 +777,7 @@ def voxel_grid_to_trimesh(
     rem = uniq_keys % stride_x
     vy = rem // stride_y
     vz = rem % stride_y
-    vertices = np.stack([vx, vy, vz], axis=1).astype(float) * float(voxel_size_mm)
+    vertices = np.stack([vx * hx_mm, vy * hy_mm, vz * hz_mm], axis=1).astype(float)
 
     quads = inverse.reshape(-1, 4)
     faces = np.vstack([quads[:, [0, 1, 2]], quads[:, [0, 2, 3]]])
@@ -768,9 +793,10 @@ def topology_result_to_stl_bytes(
     smooth_iterations: int = 0,
 ) -> bytes:
     """Serialize an optimized topology voxel grid into binary STL bytes."""
+    vox_size: VoxelSize = result.voxel_dims_mm if result.voxel_dims_mm is not None else result.voxel_size_mm
     mesh = voxel_grid_to_trimesh(
         result.optimized_grid,
-        voxel_size_mm=result.voxel_size_mm,
+        voxel_size_mm=vox_size,
         smooth_iterations=smooth_iterations,
     )
     exported = mesh.export(file_type="stl")

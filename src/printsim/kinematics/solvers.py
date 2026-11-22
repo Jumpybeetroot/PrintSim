@@ -7,11 +7,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from printsim.fea.components import (
-    belt_effective_ea_n,
-    gerbert_tooth_mesh_stiffness_n_m,
-    idler_shaft_and_bearing_stiffness,
-)
 from printsim.geometry.builder import AssemblyModel
 from printsim.schema import (
     BELT_ROUTING_CATALOG,
@@ -204,6 +199,12 @@ def compute_drive_stiffness_details_n_per_m(
     assembly: AssemblyModel, axis: str = "X"
 ) -> dict[str, object]:
     """Compute detailed series drive-train stiffness components (cord, tooth mesh, idler, motor, bracket)."""
+    from printsim.fea.components import (
+        belt_effective_ea_n,
+        gerbert_tooth_mesh_stiffness_n_m,
+        idler_shaft_and_bearing_stiffness,
+    )
+
     spec = assembly.spec
     belt = spec.gantry.belt
     kin = spec.kinematics
@@ -342,13 +343,14 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     # Linear friction estimate (extra AWD idlers/motors add modest drag: 3.6 N vs 2.5 N)
     f_fric = 3.6 if is_awd else 2.5
     j_rot = kin.xy_stepper.rotor_inertia_kg_m2
-    alpha_max = a_max_m_s2 / r_p
+    # CoreXY 45-degree diagonal move accelerates one belt loop & rotor at sqrt(2)*a_max
+    alpha_max = ((math.sqrt(2.0) * a_max_m_s2) if spec.architecture == "corexy" else a_max_m_s2) / r_p
 
     if spec.architecture == "corexy":
-        # 2WD shares pure X/Y load across 2 motors (0.5 each); AWD shares across 4 motors (0.25 each)
+        # Worst-case 45-degree diagonal move: one motor carries 1/sqrt(2) of load (2WD) or 1/(2*sqrt(2)) (AWD)
         f_x = assembly.x_moving_mass_kg * a_max_m_s2 + f_fric
         f_y = assembly.y_moving_mass_kg * a_max_m_s2 + f_fric
-        share = 0.25 if is_awd else 0.5
+        share = (1.0 / (2.0 * math.sqrt(2.0))) if is_awd else (1.0 / math.sqrt(2.0))
         t_req_x = (share * f_x) * r_p + j_rot * alpha_max
         t_req_y = (share * f_y) * r_p + j_rot * alpha_max
         peak_belt_force = max(f_x, f_y) * share

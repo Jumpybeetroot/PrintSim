@@ -234,7 +234,7 @@ def solve_step_tet_fea(
     skfem, meshio = _require_tet_fea_deps()
     path = Path(step_path)
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else ("printed" in material_id)
+    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
     resolved_name = part_name if part_name is not None else path.name
 
     points_mm, tets, used_h_mm = _mesh_step_with_gmsh(path, mesh_size_mm)

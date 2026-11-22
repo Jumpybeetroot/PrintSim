@@ -27,7 +27,12 @@ from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
 from printsim.fea.bracket_designer import _bracket_layout_dims
-from printsim.fea.solid_fem import FaceName, constitutive_matrix_3d, hex8_element_stiffness
+from printsim.fea.solid_fem import (
+    FaceName,
+    constitutive_matrix_3d,
+    hex8_element_mass,
+    hex8_element_stiffness,
+)
 from printsim.schema import get_material
 
 _BRACKET_CACHE: dict[str, "CraigBamptonSuperelement"] = {}
@@ -291,15 +296,18 @@ def condense_craig_bampton(
 
     # 1. Static constraint modes: Psi_cb = -K_ii^{-1} K_ib
     lu_kii = None
+    K_ii_solve = None
     if is_sparse or n_i > 350:
         K_ii_csc = K_ii_sp if is_sparse else csc_matrix(K_ii_den)
         try:
             lu_kii = splu(K_ii_csc)
+            K_ii_solve = K_ii_csc
             Psi_cb = lu_kii.solve(-K_ib_dense) if n_b > 0 else np.zeros((n_i, 0), dtype=float)
         except RuntimeError:
             k_diag = np.asarray(K_ii_csc.diagonal(), dtype=float)
             reg = 1e-9 * max(float(np.max(k_diag)), 1.0)
-            lu_kii = splu((K_ii_csc + sparse.diags(np.full(n_i, reg), format="csc")).tocsc())
+            K_ii_solve = (K_ii_csc + sparse.diags(np.full(n_i, reg), format="csc")).tocsc()
+            lu_kii = splu(K_ii_solve)
             Psi_cb = lu_kii.solve(-K_ib_dense) if n_b > 0 else np.zeros((n_i, 0), dtype=float)
     else:
         try:
@@ -328,12 +336,11 @@ def condense_craig_bampton(
             M_ii_eig_den = M_ii_den + np.diag(np.where(m_diag < m_floor, m_floor, 0.0))
 
         solved_sparse_eig = False
-        if (is_sparse or n_i > 350) and 1 <= n_m < n_i - 1 and lu_kii is not None:
+        if (is_sparse or n_i > 350) and 1 <= n_m < n_i - 1 and lu_kii is not None and K_ii_solve is not None:
             try:
-                K_ii_csc = K_ii_sp if is_sparse else csc_matrix(K_ii_den)
-                op = LinearOperator(K_ii_csc.shape, matvec=lu_kii.solve, dtype=float)
+                op = LinearOperator(K_ii_solve.shape, matvec=lu_kii.solve, dtype=float)
                 eigvals, eigvecs = eigsh(
-                    K_ii_csc,
+                    K_ii_solve,
                     k=n_m,
                     M=M_ii_eig_sp if is_sparse else csc_matrix(M_ii_eig_den),
                     sigma=0.0,
@@ -625,47 +632,12 @@ def assemble_superelement_into_global(
     return K_aug, M_aug
 
 
-def hex8_element_mass(rho_kg_m3: float, h_m: float) -> np.ndarray:
-    """Compute exact 24x24 consistent Hex8 element mass matrix via 2x2x2 Gauss quadrature."""
-    signs = np.array(
-        [
-            [-1, -1, -1],
-            [1, -1, -1],
-            [1, 1, -1],
-            [-1, 1, -1],
-            [-1, -1, 1],
-            [1, -1, 1],
-            [1, 1, 1],
-            [-1, 1, 1],
-        ],
-        dtype=float,
-    )
-    gp = 1.0 / math.sqrt(3.0)
-    det_j = (0.5 * h_m) ** 3
-    m_scalar = np.zeros((8, 8), dtype=float)
-    for xi in (-gp, gp):
-        for eta in (-gp, gp):
-            for zeta in (-gp, gp):
-                N = (
-                    0.125
-                    * (1.0 + signs[:, 0] * xi)
-                    * (1.0 + signs[:, 1] * eta)
-                    * (1.0 + signs[:, 2] * zeta)
-                )
-                m_scalar += np.outer(N, N) * (rho_kg_m3 * det_j)
-
-    Me = np.zeros((24, 24), dtype=float)
-    for d in range(3):
-        Me[d::3, d::3] = m_scalar
-    return 0.5 * (Me + Me.T)
-
-
 def _build_coarse_bracket_grid(
     bracket_type: str,
     dims: dict[str, float],
     target_elements: int = 380,
-) -> tuple[np.ndarray, float]:
-    """Generate a fast coarse cubic Hex8 boolean occupancy grid for CMS condensation."""
+) -> tuple[np.ndarray, tuple[float, float, float]]:
+    """Generate a coarse Hex8 occupancy grid and exact brick sizes (hx, hy, hz) in mm."""
     Lx, Ly, Lz = dims["Lx"], dims["Ly"], dims["Lz"]
     min_dim = min(Lx, Ly, Lz)
     h_vol = ((Lx * Ly * Lz) / max(float(target_elements), 64.0)) ** (1.0 / 3.0)
@@ -674,11 +646,11 @@ def _build_coarse_bracket_grid(
     nx = max(5, int(round(Lx / h_mm)))
     ny = max(5, int(round(Ly / h_mm)))
     nz = max(3, int(round(Lz / h_mm)))
-    # Use uniform cubic voxel size h_mm centered on [0..nx*h, 0..ny*h, 0..nz*h]
+    # Exact rectangular brick dimensions spanning [0..Lx] x [0..Ly] x [0..Lz]
     hx = Lx / nx
     hy = Ly / ny
     hz = Lz / nz
-    h_cubic = (hx * hy * hz) ** (1.0 / 3.0)
+    h_eq = (hx * hy * hz) ** (1.0 / 3.0)
 
     xc = (np.arange(nx, dtype=float) + 0.5) * hx
     yc = (np.arange(ny, dtype=float) + 0.5) * hy
@@ -707,7 +679,7 @@ def _build_coarse_bracket_grid(
                 grid |= in_tri & (Z <= z_rib)
 
         d_eff = dims["d_eff"]
-        if d_eff > 0.5 and h_cubic < 0.7 * d_eff:
+        if d_eff > 0.5 and h_eq < 0.7 * d_eff:
             rad = 0.5 * d_eff
             z_mid = 0.5 * Lz
             if bracket_type == "corner_gusset":
@@ -737,7 +709,7 @@ def _build_coarse_bracket_grid(
     else:
         raise ValueError(f"Unknown bracket_type '{bracket_type}'")
 
-    return grid, float(h_cubic)
+    return grid, (float(hx), float(hy), float(hz))
 
 
 def _load_cached_superelement(cache_dir: Path, source_hash: str) -> CraigBamptonSuperelement | None:
@@ -785,12 +757,13 @@ def condense_parametric_bracket(
     bracket_params: dict[str, Any],
     material_id: str,
     cache_dir: Path | None = None,
+    fdm_anisotropic: bool | None = None,
 ) -> CraigBamptonSuperelement:
     """Build a coarse Hex8 mesh of a parametric bracket, apply VPT on 2 ports, and condense via CB CMS.
 
-    Reuses ``constitutive_matrix_3d`` and ``hex8_element_stiffness`` from ``solid_fem.py``
-    combined with exact consistent Hex8 mass. Caches results by SHA256 hash in memory
-    and optionally on disk in ``cache_dir``.
+    Reuses ``constitutive_matrix_3d``, ``hex8_element_stiffness``, and ``hex8_element_mass``
+    from ``solid_fem.py`` with exact rectangular brick geometry ``(hx, hy, hz)``. Caches
+    results by SHA256 hash in memory and optionally on disk in ``cache_dir``.
     """
     bracket_type = str(bracket_params.get("bracket_type", "corner_gusset"))
     arm_length_mm = float(bracket_params.get("arm_length_mm", 40.0))
@@ -801,13 +774,15 @@ def condense_parametric_bracket(
     fillet_mm = float(bracket_params.get("fillet_mm", 2.0))
     n_modes = int(bracket_params.get("n_modes", 6))
     target_elements = int(bracket_params.get("target_elements", 380))
-    fdm_anisotropic = bool(bracket_params.get("fdm_anisotropic", False))
+    mat = get_material(material_id)
+    raw_fdm = fdm_anisotropic if fdm_anisotropic is not None else bracket_params.get("fdm_anisotropic")
+    is_fdm = bool(raw_fdm) if raw_fdm is not None else bool(mat.is_printed_polymer)
     interface_mode: Literal["rbe3", "rbe2"] = bracket_params.get("interface_mode", "rbe3")
     fixed_face: FaceName = bracket_params.get("fixed_face", "min_y")
     load_face: FaceName = bracket_params.get("load_face", "max_y")
 
     canonical_payload = {
-        "schema_v": 1,
+        "schema_v": 2,
         "bracket_type": bracket_type,
         "arm_length_mm": arm_length_mm,
         "height_mm": height_mm,
@@ -817,7 +792,7 @@ def condense_parametric_bracket(
         "fillet_mm": fillet_mm,
         "n_modes": n_modes,
         "target_elements": target_elements,
-        "fdm_anisotropic": fdm_anisotropic,
+        "fdm_anisotropic": is_fdm,
         "interface_mode": interface_mode,
         "fixed_face": fixed_face,
         "load_face": load_face,
@@ -838,7 +813,6 @@ def condense_parametric_bracket(
             _save_cached_superelement(Path(cache_dir), cached)
         return cached
 
-    mat = get_material(material_id)
     dims = _bracket_layout_dims(
         bracket_type=bracket_type,  # type: ignore[arg-type]
         arm_length_mm=arm_length_mm,
@@ -848,8 +822,10 @@ def condense_parametric_bracket(
         bolt_hole_mm=bolt_hole_mm,
         fillet_mm=fillet_mm,
     )
-    grid, h_mm = _build_coarse_bracket_grid(bracket_type, dims, target_elements=target_elements)
-    h_m = h_mm * 1e-3
+    grid, (hx_mm, hy_mm, hz_mm) = _build_coarse_bracket_grid(
+        bracket_type, dims, target_elements=target_elements
+    )
+    brick_m = (hx_mm * 1e-3, hy_mm * 1e-3, hz_mm * 1e-3)
 
     occ = np.argwhere(grid)
     n_elem = len(occ)
@@ -886,11 +862,11 @@ def condense_parametric_bracket(
     node_iy = rem // (nz + 1)
     node_iz = rem % (nz + 1)
     node_grid_coords = np.stack([node_ix, node_iy, node_iz], axis=1)
-    node_coords_m = node_grid_coords.astype(float) * h_m
+    node_coords_m = node_grid_coords.astype(float) * np.asarray(brick_m, dtype=float)[None, :]
 
-    D = constitutive_matrix_3d(mat, fdm_anisotropic=fdm_anisotropic)
-    Ke, _ = hex8_element_stiffness(D, h_m)
-    Me = hex8_element_mass(mat.density_kg_m3, h_m)
+    D = constitutive_matrix_3d(mat, fdm_anisotropic=is_fdm)
+    Ke, _ = hex8_element_stiffness(D, brick_m)
+    Me = hex8_element_mass(mat.density_kg_m3, brick_m)
 
     elem_dofs = np.empty((n_elem, 24), dtype=int)
     elem_dofs[:, 0::3] = 3 * elem_nodes
@@ -924,7 +900,7 @@ def condense_parametric_bracket(
     p0_vp = np.mean(p0_coords, axis=0)
     p1_vp = np.mean(p1_coords, axis=0)
 
-    mass_kg = float(n_elem * (h_m**3) * mat.density_kg_m3)
+    mass_kg = float(n_elem * (brick_m[0] * brick_m[1] * brick_m[2]) * mat.density_kg_m3)
     se = condense_solid_patch_to_vp(
         K,
         M,

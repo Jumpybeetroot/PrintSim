@@ -508,10 +508,10 @@ class BeltSpec(BaseModel):
 
     @property
     def linear_mass_kg_m(self) -> float:
-        """Belt linear mass density mu (kg/m) for transverse pluck frequency f = (1/2L)*sqrt(T/mu)."""
+        """Belt linear mass density mu (kg/m) calibrated to Gates PowerGrip 2GT (8.3 g/m for 6mm)."""
         width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.5, "gt2_12mm": 2.0}[self.type]
         core_density_scale = {"fiberglass": 1.0, "aramid": 0.94, "steel": 1.35}[self.core]
-        return 0.0115 * width_scale * core_density_scale
+        return 0.0083 * width_scale * core_density_scale
 
     @property
     def max_working_tension_n(self) -> float:
@@ -616,11 +616,14 @@ class StepperSpec(BaseModel):
 
     @property
     def effective_holding_torque_nm(self) -> float:
-        """Current-scaled static holding torque with magnetic core soft saturation above rated current."""
+        """Current-scaled static holding torque: linear below rated current, soft saturation above."""
         import math
 
-        ratio = max(self.run_current_a, 0.05) / max(self.rated_current_a, 0.1)
-        return self.holding_torque_nm * (math.tanh(1.1 * ratio) / math.tanh(1.1))
+        ratio = max(self.run_current_a, 0.0) / max(self.rated_current_a, 0.1)
+        if ratio <= 1.0:
+            return self.holding_torque_nm * ratio
+        sat = 1.8
+        return self.holding_torque_nm * (1.0 + math.tanh(sat * (ratio - 1.0)) / sat)
 
     def dynamic_voltage_efficiency(self, rpm: float = 250.0) -> float:
         """Back-EMF + inductive current-tracking efficiency eta_V in (0, 1] at speed/vibration operating point."""

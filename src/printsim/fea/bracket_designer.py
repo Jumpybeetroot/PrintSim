@@ -171,19 +171,18 @@ def _choose_voxel_pitch_mm(Lx: float, Ly: float, Lz: float) -> float:
 def _build_bracket_voxel_grid(
     bracket_type: BracketType,
     dims: dict[str, float],
-) -> tuple[np.ndarray, float, FaceName, FaceName]:
-    """Construct exact 3D boolean voxel occupancy grid + (voxel_size_mm, fixed_face, load_face)."""
+) -> tuple[np.ndarray, tuple[float, float, float], FaceName, FaceName]:
+    """Construct exact 3D boolean voxel occupancy grid + ((hx, hy, hz)_mm, fixed_face, load_face)."""
     Lx, Ly, Lz = dims["Lx"], dims["Ly"], dims["Lz"]
     h_mm = _choose_voxel_pitch_mm(Lx, Ly, Lz)
 
     nx = max(6, int(round(Lx / h_mm)))
     ny = max(6, int(round(Ly / h_mm)))
     nz = max(4, int(round(Lz / h_mm)))
-    # Re-scale h slightly so grid spans [0..Lx] evenly along max axis while keeping cubic voxels
+    # Exact rectangular brick dimensions (hx, hy, hz) matching [0..Lx] x [0..Ly] x [0..Lz]
     hx = Lx / nx
     hy = Ly / ny
     hz = Lz / nz
-    # Cubic voxels use h_mm; map normalized coordinates into [0..Lx], [0..Ly], [0..Lz]
     xc = (np.arange(nx, dtype=float) + 0.5) * hx
     yc = (np.arange(ny, dtype=float) + 0.5) * hy
     zc = (np.arange(nz, dtype=float) + 0.5) * hz
@@ -292,7 +291,7 @@ def _build_bracket_voxel_grid(
                 grid &= ~((Y <= w_eff) & (((X - bx) ** 2 + (Z - z_mid) ** 2) <= rad**2))
             grid &= ~((X <= w_eff) & (((Y - dims["hy"]) ** 2 + (Z - z_mid) ** 2) <= rad**2))
 
-    return grid, float(h_mm), fixed_face, load_face
+    return grid, (float(hx), float(hy), float(hz)), fixed_face, load_face
 
 
 def _build_parametric_bracket_brep(
@@ -509,7 +508,7 @@ def design_and_evaluate_bracket(
         engine=engine,
     )
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else ("printed" in material_id)
+    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
     f_vec = (float(force_n[0]), float(force_n[1]), float(force_n[2]))
     f_mag = float(np.linalg.norm(np.asarray(f_vec, dtype=float)))
 
@@ -545,7 +544,7 @@ def design_and_evaluate_bracket(
                 step_bytes = tmp_step.read_bytes()
 
     voxel_grid: np.ndarray | None = None
-    voxel_h_mm: float = 0.0
+    voxel_h_mm: float | tuple[float, float, float] = 0.0
 
     if engine == "tet10":
         assert brep_tuple is not None and step_bytes is not None

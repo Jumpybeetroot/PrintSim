@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +17,30 @@ from printsim.schema import MaterialSpec, get_material
 
 PartPreset = Literal["corner_gusset", "xy_motor_mount", "toolhead_carriage", "cantilever_bar"]
 FaceName = Literal["min_x", "max_x", "min_y", "max_y", "min_z", "max_z"]
+VoxelSize = float | tuple[float, float, float]
+
+
+def _normalize_voxel_size(voxel_size: VoxelSize | Sequence[float]) -> tuple[float, float, float]:
+    """Normalize scalar or 3-tuple voxel size (hx, hy, hz) and verify positivity."""
+    if isinstance(voxel_size, (int, float, np.floating, np.integer)):
+        h = float(voxel_size)
+        if h <= 0.0:
+            raise ValueError(f"voxel_size must be positive, got {voxel_size}")
+        return (h, h, h)
+    arr = tuple(float(v) for v in voxel_size)
+    if len(arr) != 3:
+        raise ValueError(f"Expected scalar or 3-tuple voxel_size, got {voxel_size}")
+    if any(v <= 0.0 for v in arr):
+        raise ValueError(f"All voxel dimensions must be positive, got {arr}")
+    return (arr[0], arr[1], arr[2])
+
+
+def _scalar_voxel_size_mm(voxel_size_mm: VoxelSize | Sequence[float]) -> float:
+    """Return exact scalar float if isotropic, else volume-equivalent geometric mean."""
+    if isinstance(voxel_size_mm, (int, float, np.floating, np.integer)):
+        return float(voxel_size_mm)
+    hx, hy, hz = _normalize_voxel_size(voxel_size_mm)
+    return float((hx * hy * hz) ** (1.0 / 3.0))
 
 
 @dataclass
@@ -37,6 +63,7 @@ class SolidFEAResult:
     safety_factor: float
     failure_mode: str  # "safe", "isotropic_yield", "fdm_layer_delamination"
     voxels: list[dict] = field(default_factory=list)  # [{center_mm, disp_mm, von_mises_mpa, fixed, loaded}]
+    voxel_dims_mm: tuple[float, float, float] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -82,9 +109,11 @@ def constitutive_matrix_3d(mat: MaterialSpec, fdm_anisotropic: bool = False) -> 
 
     # Transversely isotropic compliance matrix S for FDM printed parts (XY strong, Z layer-bond weaker)
     E_xy = E
-    E_z = E * 0.68  # Typical FDM inter-layer modulus reduction
+    E_z = E * float(mat.e3_ratio)
     nu_xy = nu
-    nu_xz = nu * 0.85
+    # Enforce thermodynamic positive-definiteness: 1 - nu_xy - 2 * nu_xz^2 * (E_z / E_xy) > 0
+    max_nu_xz = 0.9 * math.sqrt(max(1.0 - nu_xy, 1e-6) * E_xy / max(2.0 * E_z, 1e-12))
+    nu_xz = min(nu * 0.85, max_nu_xz)
     G_xy = E_xy / (2.0 * (1.0 + nu_xy))
     G_xz = E_z / (2.0 * (1.0 + nu_xz))
 
@@ -99,31 +128,42 @@ def constitutive_matrix_3d(mat: MaterialSpec, fdm_anisotropic: bool = False) -> 
         ],
         dtype=float,
     )
-    return np.linalg.inv(S)
+    D = np.linalg.inv(S)
+    return 0.5 * (D + D.T)
 
 
-def _hex8_b_matrix(xi: float, eta: float, zeta: float, h: float) -> np.ndarray:
-    """6x24 strain-displacement matrix B for a regular cubic Hex8 element of edge length h."""
-    signs = np.array(
-        [
-            [-1, -1, -1],
-            [1, -1, -1],
-            [1, 1, -1],
-            [-1, 1, -1],
-            [-1, -1, 1],
-            [1, -1, 1],
-            [1, 1, 1],
-            [-1, 1, 1],
-        ],
-        dtype=float,
-    )
-    inv_j = 2.0 / h  # d(xi)/dx = 2/h for regular cube
+_HEX8_CORNER_SIGNS = np.array(
+    [
+        [-1, -1, -1],
+        [1, -1, -1],
+        [1, 1, -1],
+        [-1, 1, -1],
+        [-1, -1, 1],
+        [1, -1, 1],
+        [1, 1, 1],
+        [-1, 1, 1],
+    ],
+    dtype=float,
+)
+
+
+def _hex8_b_matrix(
+    xi: float,
+    eta: float,
+    zeta: float,
+    h: VoxelSize,
+) -> np.ndarray:
+    """6x24 strain-displacement matrix B for a Hex8 brick of edge lengths h or (hx, hy, hz)."""
+    hx, hy, hz = _normalize_voxel_size(h)
+    inv_jx = 2.0 / hx  # d(xi)/dx = 2/hx
+    inv_jy = 2.0 / hy  # d(eta)/dy = 2/hy
+    inv_jz = 2.0 / hz  # d(zeta)/dz = 2/hz
     B = np.zeros((6, 24), dtype=float)
     for i in range(8):
-        sx, sy, sz = signs[i]
-        dN_dx = 0.125 * sx * (1.0 + sy * eta) * (1.0 + sz * zeta) * inv_j
-        dN_dy = 0.125 * sy * (1.0 + sx * xi) * (1.0 + sz * zeta) * inv_j
-        dN_dz = 0.125 * sz * (1.0 + sx * xi) * (1.0 + sy * eta) * inv_j
+        sx, sy, sz = _HEX8_CORNER_SIGNS[i]
+        dN_dx = 0.125 * sx * (1.0 + sy * eta) * (1.0 + sz * zeta) * inv_jx
+        dN_dy = 0.125 * sy * (1.0 + sx * xi) * (1.0 + sz * zeta) * inv_jy
+        dN_dz = 0.125 * sz * (1.0 + sx * xi) * (1.0 + sy * eta) * inv_jz
         col = 3 * i
         B[0, col + 0] = dN_dx
         B[1, col + 1] = dN_dy
@@ -137,18 +177,45 @@ def _hex8_b_matrix(xi: float, eta: float, zeta: float, h: float) -> np.ndarray:
     return B
 
 
-def hex8_element_stiffness(D: np.ndarray, h: float) -> tuple[np.ndarray, np.ndarray]:
+def hex8_element_stiffness(
+    D: np.ndarray,
+    h: VoxelSize,
+) -> tuple[np.ndarray, np.ndarray]:
     """Compute exact 24x24 Hex8 stiffness matrix Ke via 2x2x2 Gauss quadrature and center B0."""
-    gp = 1.0 / np.sqrt(3.0)
-    det_j = (h * 0.5) ** 3
+    hx, hy, hz = _normalize_voxel_size(h)
+    gp = 1.0 / math.sqrt(3.0)
+    det_j = (hx * hy * hz) * 0.125
     Ke = np.zeros((24, 24), dtype=float)
     for xi in (-gp, gp):
         for eta in (-gp, gp):
             for zeta in (-gp, gp):
-                B = _hex8_b_matrix(xi, eta, zeta, h)
+                B = _hex8_b_matrix(xi, eta, zeta, (hx, hy, hz))
                 Ke += (B.T @ D @ B) * det_j
-    B_center = _hex8_b_matrix(0.0, 0.0, 0.0, h)
+    B_center = _hex8_b_matrix(0.0, 0.0, 0.0, (hx, hy, hz))
     return 0.5 * (Ke + Ke.T), B_center
+
+
+def hex8_element_mass(rho_kg_m3: float, h_m: VoxelSize) -> np.ndarray:
+    """Compute exact 24x24 consistent Hex8 element mass matrix via 2x2x2 Gauss quadrature."""
+    hx, hy, hz = _normalize_voxel_size(h_m)
+    gp = 1.0 / math.sqrt(3.0)
+    det_j = (hx * hy * hz) * 0.125
+    m_scalar = np.zeros((8, 8), dtype=float)
+    for xi in (-gp, gp):
+        for eta in (-gp, gp):
+            for zeta in (-gp, gp):
+                N = (
+                    0.125
+                    * (1.0 + _HEX8_CORNER_SIGNS[:, 0] * xi)
+                    * (1.0 + _HEX8_CORNER_SIGNS[:, 1] * eta)
+                    * (1.0 + _HEX8_CORNER_SIGNS[:, 2] * zeta)
+                )
+                m_scalar += np.outer(N, N) * (rho_kg_m3 * det_j)
+
+    Me = np.zeros((24, 24), dtype=float)
+    for d in range(3):
+        Me[d::3, d::3] = m_scalar
+    return 0.5 * (Me + Me.T)
 
 
 def generate_parametric_part_grid(
@@ -254,7 +321,7 @@ def voxelize_stl_file(path: str | Path, target_max_dim_voxels: int = 18) -> tupl
 
 def solve_solid_voxel_fea(
     grid: np.ndarray,
-    voxel_size_mm: float,
+    voxel_size_mm: VoxelSize,
     material_id: str = "abs_printed",
     fixed_face: FaceName = "min_x",
     load_face: FaceName = "max_x",
@@ -264,8 +331,9 @@ def solve_solid_voxel_fea(
 ) -> SolidFEAResult:
     """Solve 3D linear elastic Hex8 FEA on a boolean voxel grid using SciPy sparse direct solver."""
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else ("printed" in material_id)
-    h = voxel_size_mm * 1e-3  # meters
+    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
+    hx_mm, hy_mm, hz_mm = _normalize_voxel_size(voxel_size_mm)
+    hx_m, hy_m, hz_m = hx_mm * 1e-3, hy_mm * 1e-3, hz_mm * 1e-3  # strict SI meters
 
     occ = np.argwhere(grid)
     n_elem = len(occ)
@@ -308,7 +376,7 @@ def solve_solid_voxel_fea(
 
     # Assemble global sparse stiffness matrix K (vectorized COO -> CSR)
     D = constitutive_matrix_3d(mat, fdm_anisotropic=is_fdm)
-    Ke, B_center = hex8_element_stiffness(D, h)
+    Ke, B_center = hex8_element_stiffness(D, (hx_m, hy_m, hz_m))
 
     elem_dofs = np.empty((n_elem, 24), dtype=int)
     elem_dofs[:, 0::3] = 3 * elem_nodes
@@ -400,7 +468,7 @@ def solve_solid_voxel_fea(
     avg_load_disp_m = float(np.mean(np.linalg.norm(u_nodes[loaded_nodes], axis=1)))
     stiffness_n_per_mm = f_mag / max(avg_load_disp_m * 1e3, 1e-9)
 
-    mass_g = n_elem * (h**3) * mat.density_kg_m3 * 1000.0
+    mass_g = n_elem * (hx_m * hy_m * hz_m) * mat.density_kg_m3 * 1000.0
 
     # Build voxel list for 3D visualization
     fixed_set = set(fixed_nodes.tolist())
@@ -415,9 +483,9 @@ def solve_solid_voxel_fea(
         voxels_out.append(
             {
                 "center_mm": [
-                    round((float(ix) + 0.5) * voxel_size_mm, 2),
-                    round((float(iy) + 0.5) * voxel_size_mm, 2),
-                    round((float(iz) + 0.5) * voxel_size_mm, 2),
+                    round((float(ix) + 0.5) * hx_mm, 3),
+                    round((float(iy) + 0.5) * hy_mm, 3),
+                    round((float(iz) + 0.5) * hz_mm, 3),
                 ],
                 "disp_mm": [round(float(v), 6) for v in mean_disp_mm],
                 "von_mises_mpa": round(float(von_mises[e_idx]) * 1e-6, 3),
@@ -430,7 +498,7 @@ def solve_solid_voxel_fea(
         part_name=part_name,
         material_id=material_id,
         is_fdm_anisotropic=is_fdm,
-        voxel_size_mm=voxel_size_mm,
+        voxel_size_mm=_scalar_voxel_size_mm(voxel_size_mm),
         num_elements=n_elem,
         num_nodes=n_nodes,
         num_dofs=n_dof,
@@ -445,6 +513,7 @@ def solve_solid_voxel_fea(
         safety_factor=safety_factor,
         failure_mode=failure_mode,
         voxels=voxels_out,
+        voxel_dims_mm=(hx_mm, hy_mm, hz_mm),
     )
 
 

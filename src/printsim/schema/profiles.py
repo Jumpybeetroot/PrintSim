@@ -107,7 +107,7 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         area_m2=1.62e-4,  # 162 mm^2 (Misumi HFS5-2020)
         iy_m4=0.68e-8,  # 0.68 cm^4
         iz_m4=0.68e-8,
-        j_m4=0.42e-8,
+        j_m4=0.11e-8,  # 0.11 cm^4 open T-slot St. Venant torsion constant I_t (Bosch/Item datasheet)
     ),
     "extrusion_2040": ProfileSpec(
         id="extrusion_2040",
@@ -118,7 +118,7 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         area_m2=2.98e-4,  # 298 mm^2 (Misumi HFS5-2040)
         iy_m4=4.55e-8,  # 4.55 cm^4 (strong axis)
         iz_m4=1.24e-8,  # 1.24 cm^4 (weak axis)
-        j_m4=1.35e-8,
+        j_m4=0.36e-8,  # 0.36 cm^4 open T-slot torsion constant I_t (Item/Misumi datasheet)
     ),
     "extrusion_3030": ProfileSpec(
         id="extrusion_3030",
@@ -129,7 +129,7 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         area_m2=3.48e-4,  # 348 mm^2 (Misumi HFS6-3030)
         iy_m4=2.95e-8,  # 2.95 cm^4
         iz_m4=2.95e-8,
-        j_m4=1.85e-8,
+        j_m4=0.45e-8,  # 0.45 cm^4 open T-slot torsion constant I_t (Bosch/Item datasheet)
     ),
     "extrusion_4040": ProfileSpec(
         id="extrusion_4040",
@@ -140,7 +140,7 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         area_m2=6.15e-4,  # 615 mm^2 (Misumi HFS8-4040)
         iy_m4=9.30e-8,  # 9.30 cm^4
         iz_m4=9.30e-8,
-        j_m4=5.80e-8,
+        j_m4=1.30e-8,  # 1.30 cm^4 open T-slot torsion constant I_t (Bosch Rexroth 40x40L datasheet)
     ),
     "extrusion_3060": ProfileSpec(
         id="extrusion_3060",
@@ -151,7 +151,7 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         area_m2=6.80e-4,
         iy_m4=21.2e-8,
         iz_m4=5.80e-8,
-        j_m4=6.40e-8,
+        j_m4=2.10e-8,  # 2.10 cm^4 open T-slot torsion constant I_t (Bosch/Item 30x60 datasheet)
     ),
     "cnc_al_beam_20x20": ProfileSpec(
         id="cnc_al_beam_20x20",
