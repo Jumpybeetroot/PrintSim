@@ -238,14 +238,14 @@ def test_evaluator_integration_all_example_presets_and_diagnostics() -> None:
         assert d is not None
         assert set(d.keys()) == _REQUIRED_KEYS
 
-        assert d["grid_nx"] == 5
-        assert d["grid_ny"] == 5
-        assert len(d["grid_x_rel"]) == 5
-        assert len(d["grid_y_rel"]) == 5
+        assert d["grid_nx"] == 9
+        assert d["grid_ny"] == 9
+        assert len(d["grid_x_rel"]) == 9
+        assert len(d["grid_y_rel"]) == 9
         assert len(d["mount_points_rel"]) >= 2
 
         for grid_field in ("z_gravity_um", "z_thermal_um", "z_total_um", "mode1_shape_z"):
-            assert len(d[grid_field]) == 25
+            assert len(d[grid_field]) == 81
             assert all(math.isfinite(float(v)) for v in d[grid_field])
 
         assert max(abs(v) for v in d["mode1_shape_z"]) == pytest.approx(1.0, abs=1e-4)

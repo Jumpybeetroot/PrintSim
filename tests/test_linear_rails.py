@@ -251,8 +251,12 @@ def test_x_rail_mount_orientations_stiffness_sag_twist_and_lever_arm() -> None:
     assert st_dual.toolhead_stiffness_z_n_per_mm > st_front.toolhead_stiffness_z_n_per_mm
     s_top_fix = _corexy_spec(x_rail_mount="top")
     s_top_fix.bed.z_drive = "leadscrew_triple"
+    s_top_fix.bed.mount_type = "fixed_4pt"
+    s_top_fix.bed.z_leadscrew_type = "sfu1204_bk10"
     s_dual_fix = _corexy_spec(x_rail_mount="dual_top_bottom")
     s_dual_fix.bed.z_drive = "leadscrew_triple"
+    s_dual_fix.bed.mount_type = "fixed_4pt"
+    s_dual_fix.bed.z_leadscrew_type = "sfu1204_bk10"
     assert solve_static_fea(build_assembly(s_dual_fix)).gravity_sag_toolhead_um < solve_static_fea(build_assembly(s_top_fix)).gravity_sag_toolhead_um
 
     # Clamping edge cases: small Y offset doesn't flip sign on top; small Z drop clamps to >= 10 mm on bottom
@@ -443,14 +447,21 @@ def test_zero_mass_cost_double_counting_with_cf_beam_and_epoxy_granite() -> None
     bare_cf_kg = cf_prof.area_m2 * w_m * cf_mat.density_kg_m3
     one_x_rail_kg = x_rail_prof.area_m2 * w_m * steel_mat.density_kg_m3
     two_y_rails_kg = 2.0 * y_rail_prof.area_m2 * d_m * steel_mat.density_kg_m3
+    h_m = s_cf_none_front.frame.height_mm * 1e-3
+    z_rail_prof = get_profile(s_cf_none_front.bed.z_rail_profile)
+    four_z_rails_kg = 4.0 * z_rail_prof.area_m2 * h_m * steel_mat.density_kg_m3
 
-    # 1. Exact total_rail_mass_kg across X and Y rails
-    assert asm_f.total_rail_mass_kg == pytest.approx(one_x_rail_kg + two_y_rails_kg, rel=1e-9)
-    assert asm_d.total_rail_mass_kg == pytest.approx(2.0 * one_x_rail_kg + two_y_rails_kg, rel=1e-9)
+    # 1. Exact total_rail_mass_kg across X, Y, and Z rails
+    assert asm_f.total_rail_mass_kg == pytest.approx(
+        one_x_rail_kg + two_y_rails_kg + four_z_rails_kg, rel=1e-9
+    )
+    assert asm_d.total_rail_mass_kg == pytest.approx(
+        2.0 * one_x_rail_kg + two_y_rails_kg + four_z_rails_kg, rel=1e-9
+    )
 
     # 2. Exact y_moving_mass_kg (NO double-counting of x_rail_mass!)
     expected_y_mov_f = (
-        s_cf_epoxy_front.toolhead.total_mass_g * 1e-3
+        (s_cf_epoxy_front.toolhead.total_mass_g + s_cf_epoxy_front.toolhead.hotend.mass_g) * 1e-3
         + bare_cf_kg
         + one_x_rail_kg
         + s_cf_epoxy_front.gantry.carriage_mass_g * 1e-3
@@ -498,6 +509,8 @@ def test_geometry_dict_and_api_expose_linear_rails_telemetry() -> None:
         "x_rail_profile": "mgn12_rail",
         "y_rail_profile": "mgn9_rail",
         "rail_material": "steel_4140",
+        "rail_quality": "hiwin_genuine",
+        "rail_preload": "Z1",
         "x_rail_mount": "bottom",
         "y_rail_mount": "inner",
         "dual_x_rails": False,

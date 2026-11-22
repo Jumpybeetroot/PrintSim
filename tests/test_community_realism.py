@@ -130,13 +130,15 @@ def test_z_probe_monotonic_stiffness_pitch_freq_and_tap_compliance() -> None:
             < reports[b].modal_fea.fundamental_freq_hz
         )
 
-    # printed_tap measurably increases toolhead compliance & lowers accel vs static_eddy
+    # printed_tap measurably increases toolhead compliance & lowers accel vs static_eddy without injecting hidden mass
     r_tap = reports["printed_tap"]
     r_eddy = reports["static_eddy"]
     assert r_tap.modal_fea.modes[0].subsystem_share_pct["toolhead"] > r_eddy.modal_fea.modes[0].subsystem_share_pct["toolhead"]
     assert r_tap.static_fea.nozzle_twist_amplification_pct > r_eddy.static_fea.nozzle_twist_amplification_pct
     assert r_tap.modal_fea.recommended_max_accel_mm_s2 < r_eddy.modal_fea.recommended_max_accel_mm_s2
-    assert r_tap.assembly.x_moving_mass_kg > r_eddy.assembly.x_moving_mass_kg
+    assert r_tap.assembly.x_moving_mass_kg == pytest.approx(r_eddy.assembly.x_moving_mass_kg, rel=1e-12)
+    assert r_tap.assembly.y_moving_mass_kg == pytest.approx(r_eddy.assembly.y_moving_mass_kg, rel=1e-12)
+    assert r_tap.assembly.total_mass_kg == pytest.approx(r_eddy.assembly.total_mass_kg, abs=1e-8)
     assert any("Voron Tap" in d or "static_eddy" in d for d in r_tap.diagnostics)
     assert not any("Voron Tap" in d for d in r_eddy.diagnostics)
 

@@ -372,10 +372,11 @@ def test_benchmark5_deep_verify_convergence_bom_api_cli_and_mcp() -> None:
     cuts_deep = [(c.profile_id, c.material_id, c.role, c.length_mm, c.quantity) for c in bom_deep.cut_list]
     assert cuts_deep == cuts_fast
 
-    # Direct Python evaluator deep verify
+    # Direct Python evaluator deep verify (balanced 3x3/8x8 vs max-accuracy 8x8/16x16)
     deep_res = verify_printer_deep(spec)
-    assert deep_res["fast_mesh_n"] == 2
-    assert deep_res["deep_mesh_n"] == 6
+    assert deep_res["fast_mesh_n"] == 3
+    assert deep_res["deep_mesh_n"] == 8
+    assert deep_res["deep_bed_mesh_n"] == 16
     assert deep_res["deep_summary"]["num_shell_elements"] > deep_res["fast_summary"]["num_shell_elements"]
     assert deep_res["deep_summary"]["panel_max_von_mises_mpa"] > 0.0
     assert deep_res["deep_summary"]["panel_drum_freq_hz"] > 65.0
@@ -385,7 +386,7 @@ def test_benchmark5_deep_verify_convergence_bom_api_cli_and_mcp() -> None:
     sim = deep_res["deep_simulation"]
     assert len(sim["static_fea"]["shell_panel_stresses"]) == deep_res["deep_summary"]["num_shell_elements"]
     assert sim["modal_fea"]["panel_drum_freq_hz"] == deep_res["deep_summary"]["panel_drum_freq_hz"]
-    assert sim["geometry"]["panel_mesh_n"] == 6
+    assert sim["geometry"]["panel_mesh_n"] == 8
     assert len(sim["geometry"]["shell_panels"]) == deep_res["deep_summary"]["num_shell_elements"]
 
     # FastAPI /api/health (v1.1.0) & POST /api/verify/deep
@@ -397,18 +398,18 @@ def test_benchmark5_deep_verify_convergence_bom_api_cli_and_mcp() -> None:
     r_verify = client.post("/api/verify/deep", json={"yaml_text": monolith_yaml})
     assert r_verify.status_code == 200
     api_data = r_verify.json()
-    assert api_data["deep_mesh_n"] == 6
+    assert api_data["deep_mesh_n"] == 8
     assert api_data["convergence"]["converged"] is True
 
     # CLI `printsim verify <yaml> --json`
     runner = CliRunner()
     cli_res = runner.invoke(cli_app, ["verify", str(monolith_path), "--json"])
     assert cli_res.exit_code == 0, cli_res.output
-    assert '"deep_mesh_n": 6' in cli_res.output
+    assert '"deep_mesh_n": 8' in cli_res.output
 
     # MCP `run_deep_frame_verify`
     mcp_res = dispatch_tool("run_deep_frame_verify", {"yaml_text": monolith_yaml})
-    assert mcp_res["deep_mesh_n"] == 6
+    assert mcp_res["deep_mesh_n"] == 8
     assert mcp_res["convergence"]["converged"] is True
     assert mcp_res["deep_summary"]["panel_max_von_mises_mpa"] > 0.0
 
