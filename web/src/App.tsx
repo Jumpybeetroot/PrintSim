@@ -100,8 +100,35 @@ const MOUNT_MATERIAL_LABELS: Record<string, string> = {
   pa12_cf_printed: "Printed PA12-CF",
   ppa_cf_printed: "Printed PPA-CF",
   pps_cf_printed: "Printed PPS-CF",
+  carbon_fiber_plate: "3K Carbon Fiber Plate",
   aluminum_6061_t6: "CNC Al 6061",
   aluminum_7075_t6: "CNC Al 7075",
+};
+
+const Z_RAIL_LABELS: Record<string, string> = {
+  mgn12_rail: "MGN12H",
+  mgn9_rail: "MGN9H",
+  steel_rod_8mm: "8mm Smooth Rods",
+  steel_rod_10mm: "10mm Smooth Rods",
+  steel_rod_12mm: "12mm Smooth Rods",
+  none: "None",
+};
+
+const Z_LEADSCREW_LABELS: Record<string, string> = {
+  auto: "Auto",
+  tr8x4_pom: "TR8×4 POM",
+  tr8x8_pom: "TR8×8 POM",
+  tr8x8_brass: "TR8×8 Brass",
+  sfu1204_bk10: "SFU1204 Ballscrew",
+  gt2_6mm_z_belt: "GT2 6mm Z-Belt",
+  gt2_9mm_z_belt: "GT2 9mm Z-Belt",
+};
+
+const HOTEND_MOUNT_STYLE_LABELS: Record<string, string> = {
+  groove_mount: "Groove Mount",
+  rigid_4bolt_m3: "4× M3 Rigid",
+  dragon_4bolt_m25: "Dragon 4× M2.5",
+  chube_6bolt_m3_18pcd: "Chube 6× M3 Ti",
 };
 
 const EXTRUSION_FILLING_LABELS: Record<string, string> = {
@@ -298,6 +325,20 @@ function describeSpecDiff(
       `Gantry Type: ${Z_DRIVE_LABELS[prev.bed.z_drive] ?? prev.bed.z_drive} → ${
         Z_DRIVE_LABELS[next.bed.z_drive] ?? next.bed.z_drive
       }`
+    );
+  }
+  const prevZRail = prev.bed.z_rail_profile ?? "mgn12_rail";
+  const nextZRail = next.bed.z_rail_profile ?? "mgn12_rail";
+  if (prevZRail !== nextZRail) {
+    diffs.push(
+      `Z Rails: ${Z_RAIL_LABELS[prevZRail] ?? prevZRail} → ${Z_RAIL_LABELS[nextZRail] ?? nextZRail}`
+    );
+  }
+  const prevZLead = prev.bed.z_leadscrew_type ?? "auto";
+  const nextZLead = next.bed.z_leadscrew_type ?? "auto";
+  if (prevZLead !== nextZLead) {
+    diffs.push(
+      `Z Drive: ${Z_LEADSCREW_LABELS[prevZLead] ?? prevZLead} → ${Z_LEADSCREW_LABELS[nextZLead] ?? nextZLead}`
     );
   }
   if (
@@ -518,6 +559,42 @@ function describeSpecDiff(
       }`
     );
   }
+  const prevCarMat = prev.toolhead.carriage_mount_material ?? prevMount;
+  const nextCarMat = next.toolhead.carriage_mount_material ?? nextMount;
+  if (prevCarMat !== nextCarMat && (prev.toolhead.carriage_mount_material || next.toolhead.carriage_mount_material)) {
+    diffs.push(
+      `Backplate: ${MOUNT_MATERIAL_LABELS[prevCarMat] ?? prevCarMat} → ${MOUNT_MATERIAL_LABELS[nextCarMat] ?? nextCarMat}`
+    );
+  }
+  const prevBodyMat = prev.toolhead.body_material ?? prevMount;
+  const nextBodyMat = next.toolhead.body_material ?? nextMount;
+  if (prevBodyMat !== nextBodyMat && (prev.toolhead.body_material || next.toolhead.body_material)) {
+    diffs.push(
+      `Toolhead Body: ${MOUNT_MATERIAL_LABELS[prevBodyMat] ?? prevBodyMat} → ${MOUNT_MATERIAL_LABELS[nextBodyMat] ?? nextBodyMat}`
+    );
+  }
+  const prevHeMountMat = prev.toolhead.hotend_mount_material ?? prevBodyMat;
+  const nextHeMountMat = next.toolhead.hotend_mount_material ?? nextBodyMat;
+  if (prevHeMountMat !== nextHeMountMat && (prev.toolhead.hotend_mount_material || next.toolhead.hotend_mount_material)) {
+    diffs.push(
+      `Hotend Clamp: ${MOUNT_MATERIAL_LABELS[prevHeMountMat] ?? prevHeMountMat} → ${MOUNT_MATERIAL_LABELS[nextHeMountMat] ?? nextHeMountMat}`
+    );
+  }
+  if ((prev.toolhead.hotend.preset_id ?? "") !== (next.toolhead.hotend.preset_id ?? "") && next.toolhead.hotend.preset_id) {
+    diffs.push(`Hotend: ${prev.toolhead.hotend.name} → ${next.toolhead.hotend.name}`);
+  }
+  const prevHeStyle = prev.toolhead.hotend.mount_style ?? "rigid_4bolt_m3";
+  const nextHeStyle = next.toolhead.hotend.mount_style ?? "rigid_4bolt_m3";
+  if (prevHeStyle !== nextHeStyle) {
+    diffs.push(
+      `Hotend Mount: ${HOTEND_MOUNT_STYLE_LABELS[prevHeStyle] ?? prevHeStyle} → ${HOTEND_MOUNT_STYLE_LABELS[nextHeStyle] ?? nextHeStyle}`
+    );
+  }
+  const prevHeStiff = Math.round(prev.toolhead.hotend.structural_stiffness_n_per_mm ?? 450);
+  const nextHeStiff = Math.round(next.toolhead.hotend.structural_stiffness_n_per_mm ?? 450);
+  if (prevHeStiff !== nextHeStiff && (prev.toolhead.hotend.structural_stiffness_n_per_mm != null || next.toolhead.hotend.structural_stiffness_n_per_mm != null)) {
+    diffs.push(`Hotend Stiffness: ${prevHeStiff} → ${nextHeStiff} N/mm`);
+  }
   const prevZProbe = prev.toolhead.z_probe_type ?? "static_eddy";
   const nextZProbe = next.toolhead.z_probe_type ?? "static_eddy";
   if (prevZProbe !== nextZProbe) {
@@ -633,8 +710,9 @@ export default function App() {
   const [inspectedPartId, setInspectedPartId] = useState<string | null>(null);
   const [layerLimit, setLayerLimit] = useState<number>(999);
   const [toolheadRelPos, setToolheadRelPos] = useState<[number, number, number]>([0.5, 0.5, 0.5]);
-  const [panelMeshN, setPanelMeshN] = useState<number>(2);
+  const [panelMeshN, setPanelMeshN] = useState<number>(3);
   const [showBedWarp, setShowBedWarp] = useState<boolean>(false);
+  const [toolheadPunchIn, setToolheadPunchIn] = useState<boolean>(false);
   const [studioSyncStatus, setStudioSyncStatus] = useState<"connected" | "syncing" | "offline">("syncing");
 
   // Refs for atomic history capture, live studio bridge & stale-request guarding
@@ -653,7 +731,7 @@ export default function App() {
   const catalogRef = useRef<CatalogResponse | null>(null);
   const stockLengthRef = useRef<number>(1000);
   const toolheadRelPosRef = useRef<[number, number, number]>([0.5, 0.5, 0.5]);
-  const panelMeshNRef = useRef<number>(2);
+  const panelMeshNRef = useRef<number>(3);
   const viewportCaptureRef = useRef<((frames?: number, delayMs?: number) => Promise<string[]>) | null>(null);
 
   simRef.current = sim;
@@ -1547,6 +1625,13 @@ export default function App() {
     setViewMode("fea_stress");
   }, [deepVerifyResult]);
 
+  const handleOpenToolheadPunchIn = useCallback(() => {
+    setViewMode((prev) =>
+      prev === "solid_part" || prev === "topology" || prev === "toolpath" ? "modal" : prev
+    );
+    setToolheadPunchIn((prev) => !prev);
+  }, []);
+
   const displaySim: SimulationResponse | null =
     viewingDeepSim && deepVerifyResult
       ? {
@@ -1802,6 +1887,8 @@ export default function App() {
           onLayerLimitChange={setLayerLimit}
           showBedWarp={showBedWarp}
           onToggleBedWarp={setShowBedWarp}
+          toolheadPunchIn={toolheadPunchIn}
+          onToggleToolheadPunchIn={setToolheadPunchIn}
           sensitivityLens={sensitivityLens}
           onSensitivityLensChange={setSensitivityLens}
           modalColorMode={modalColorMode}
@@ -1842,6 +1929,8 @@ export default function App() {
           onDownloadBomCsv={handleExportBomCsv}
           showBedWarp={showBedWarp}
           onInspectBedWarp={handleInspectBedWarp}
+          toolheadPunchIn={toolheadPunchIn}
+          onToggleToolheadPunchIn={handleOpenToolheadPunchIn}
           error={error}
         />
       </main>

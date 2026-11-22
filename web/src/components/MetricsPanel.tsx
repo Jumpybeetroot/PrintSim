@@ -17,8 +17,10 @@ import {
   SubsystemKey,
   TetFEAResponse,
   TimeDomainMetrologyData,
+  ToolheadFlexBreakdownData,
   TopologyOptResponse,
   ViewMode,
+  WeightShaperGainsSummary,
   WorkspaceFRFData,
 } from "../types";
 
@@ -54,6 +56,8 @@ interface Props {
   onDownloadBomCsv: () => void;
   showBedWarp?: boolean;
   onInspectBedWarp?: () => void;
+  toolheadPunchIn?: boolean;
+  onToggleToolheadPunchIn?: () => void;
   error: string | null;
 }
 
@@ -1245,6 +1249,192 @@ const AccelBottleneckCard: React.FC<{
   );
 };
 
+const WeightShaperPotentialCard: React.FC<{
+  gains: WeightShaperGainsSummary;
+  changed: boolean;
+}> = ({ gains, changed }) => {
+  const axisTagStyle = (
+    axis: "X" | "Y" | "XY",
+    affectsLimiting: boolean
+  ): React.CSSProperties => ({
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "0 4px",
+    borderRadius: 4,
+    fontSize: 8.5,
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+    marginLeft: 5,
+    verticalAlign: "middle",
+    background: affectsLimiting
+      ? axis === "XY"
+        ? "rgba(56, 189, 248, 0.16)"
+        : "rgba(16, 185, 129, 0.16)"
+      : "rgba(148, 163, 184, 0.1)",
+    border: affectsLimiting
+      ? axis === "XY"
+        ? "1px solid rgba(56, 189, 248, 0.38)"
+        : "1px solid rgba(16, 185, 129, 0.38)"
+      : "1px solid rgba(148, 163, 184, 0.22)",
+    color: affectsLimiting ? (axis === "XY" ? "#7dd3fc" : "#6ee7b7") : "#64748b",
+  });
+
+  return (
+    <div
+      className={`section-card ${changed ? "card-changed" : ""}`}
+      style={{
+        gap: 8,
+        borderColor: "rgba(56, 189, 248, 0.32)",
+      }}
+    >
+      <div className="section-title bottleneck-header">
+        <span>Weight-Reduction Shaper Potential</span>
+        <span
+          className="bottleneck-pill"
+          style={{
+            background: "rgba(56, 189, 248, 0.14)",
+            border: "1px solid rgba(56, 189, 248, 0.45)",
+            color: "#38bdf8",
+          }}
+        >
+          Limiting: {gains.limiting_axis}-Axis ({gains.limiting_shaper_hz.toFixed(1)} Hz)
+        </span>
+      </div>
+
+      <div
+        style={{
+          padding: "7px 9px",
+          borderRadius: 6,
+          background: "rgba(13, 19, 29, 0.78)",
+          border: "1px solid rgba(39, 50, 71, 0.9)",
+          borderLeft: "2.5px solid #34d399",
+          fontSize: 11,
+          lineHeight: 1.42,
+          color: "var(--text)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        Reducing <strong>{gains.limiting_axis}-axis</strong> moving weight by 25% (
+        <span style={{ color: "var(--muted)" }}>−{Math.round(gains.total_potential_cut_g)}g</span>
+        ) adds up to{" "}
+        <strong style={{ color: "#34d399" }}>
+          +{gains.total_potential_hz_gain.toFixed(1)} Hz
+        </strong>{" "}
+        <span style={{ color: "#7dd3fc", fontWeight: 600 }}>
+          (+{Math.round(gains.total_potential_accel_gain_mm_s2).toLocaleString()} mm/s²)
+        </span>
+      </div>
+
+      <div className="psd-table-wrap" style={{ overflowX: "auto" }}>
+        <table className="psd-table" style={{ width: "100%", fontSize: 10.5 }}>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th className="num">Mass / Cut</th>
+              <th className="num">Shaper Gain</th>
+              <th className="num">Hz/100g</th>
+            </tr>
+          </thead>
+          <tbody>
+            {gains.items.map((item) => {
+              const affectsLimiting =
+                item.affects_axis === "XY" || item.affects_axis === gains.limiting_axis;
+              const isMuted = !affectsLimiting || item.est_hz_gain < 0.05;
+              const isHighGain = affectsLimiting && item.est_hz_gain >= 1.0;
+
+              return (
+                <tr
+                  key={item.id}
+                  title={item.note || undefined}
+                  style={{
+                    background: isHighGain ? "rgba(16, 185, 129, 0.07)" : undefined,
+                    opacity: isMuted ? 0.58 : 1,
+                  }}
+                >
+                  <td
+                    style={{
+                      padding: "5px 4px",
+                      borderBottom: "1px dashed rgba(255, 255, 255, 0.05)",
+                      boxShadow: isHighGain ? "inset 2px 0 0 #34d399" : undefined,
+                      color: isMuted ? "var(--muted)" : "var(--text)",
+                      fontWeight: isHighGain ? 600 : 500,
+                    }}
+                  >
+                    <span>{item.label}</span>
+                    <span style={axisTagStyle(item.affects_axis, affectsLimiting)}>
+                      {item.affects_axis}
+                    </span>
+                  </td>
+                  <td
+                    className="num"
+                    style={{
+                      padding: "5px 4px",
+                      borderBottom: "1px dashed rgba(255, 255, 255, 0.05)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <div style={{ color: isMuted ? "var(--muted)" : "var(--text)" }}>
+                      {Math.round(item.current_mass_g)}g
+                    </div>
+                    <div style={{ fontSize: 9, color: "var(--muted)", lineHeight: 1.15 }}>
+                      −{Math.round(item.example_cut_g)}g
+                    </div>
+                  </td>
+                  <td
+                    className="num"
+                    style={{
+                      padding: "5px 4px",
+                      borderBottom: "1px dashed rgba(255, 255, 255, 0.05)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: isHighGain ? 700 : 600,
+                        color: isHighGain
+                          ? "#34d399"
+                          : isMuted
+                            ? "var(--muted)"
+                            : "#7dd3fc",
+                      }}
+                    >
+                      +{item.est_hz_gain.toFixed(1)} Hz
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        color: isHighGain ? "rgba(125, 211, 252, 0.85)" : "var(--muted)",
+                        lineHeight: 1.15,
+                      }}
+                    >
+                      +{Math.round(item.est_accel_gain_mm_s2).toLocaleString()} mm/s²
+                    </div>
+                  </td>
+                  <td
+                    className="num"
+                    style={{
+                      padding: "5px 4px",
+                      borderBottom: "1px dashed rgba(255, 255, 255, 0.05)",
+                      whiteSpace: "nowrap",
+                      color: isHighGain
+                        ? "#7dd3fc"
+                        : isMuted
+                          ? "var(--muted)"
+                          : "var(--text)",
+                    }}
+                  >
+                    +{item.hz_per_100g.toFixed(1)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 const DeepVerifyCard: React.FC<{
   result: DeepVerifyResponse;
   viewingDeepSim: boolean;
@@ -2343,6 +2533,125 @@ const BedPlateFemStrip: React.FC<{
   );
 };
 
+const DOMINANT_FLEX_LABELS: Record<
+  ToolheadFlexBreakdownData["dominant_flex_source"],
+  string
+> = {
+  rail_xbeam: "X-beam & linear rail bending/torsion",
+  carriage_body: "X-carriage backplate & toolhead body compliance",
+  hotend_nozzle: "hotend mount & nozzle stem bending",
+};
+
+const ToolheadFlexBreakdownStrip: React.FC<{
+  breakdown: ToolheadFlexBreakdownData;
+  toolheadPunchIn?: boolean;
+  onToggleToolheadPunchIn?: () => void;
+}> = ({ breakdown, toolheadPunchIn, onToggleToolheadPunchIn }) => {
+  const railPct = Math.max(0, breakdown.rail_and_xbeam_pct);
+  const bodyPct = Math.max(0, breakdown.carriage_and_body_pct);
+  const hotendPct = Math.max(0, breakdown.hotend_and_nozzle_pct);
+  const domSource = breakdown.dominant_flex_source;
+  const domPct =
+    domSource === "hotend_nozzle"
+      ? hotendPct
+      : domSource === "carriage_body"
+        ? bodyPct
+        : railPct;
+
+  return (
+    <div
+      className="sens-breakdown-card"
+      style={{
+        marginTop: 6,
+        borderColor: "rgba(56, 189, 248, 0.35)",
+      }}
+    >
+      <div className="sens-breakdown-head">
+        <span>Toolhead Flex Breakdown</span>
+        {onToggleToolheadPunchIn && (
+          <button
+            type="button"
+            className={`deep-verify-cta ${toolheadPunchIn ? "active" : ""}`}
+            style={{ padding: "1px 7px", fontSize: 9.5 }}
+            onClick={onToggleToolheadPunchIn}
+            title="Zoom camera directly onto the toolhead, backplate, and hotend to inspect local flex"
+          >
+            {toolheadPunchIn ? "Exit Punch-In" : "Punch-In View"}
+          </button>
+        )}
+      </div>
+
+      <div
+        className="subsystem-bar-track"
+        title={`X-Beam & Rail: ${railPct.toFixed(0)}% • Carriage & Body: ${bodyPct.toFixed(
+          0
+        )}% • Hotend & Nozzle: ${hotendPct.toFixed(0)}%`}
+      >
+        {railPct > 0.5 && (
+          <div
+            className="subsystem-bar-seg"
+            style={{ width: `${railPct}%`, background: "#38bdf8" }}
+          />
+        )}
+        {bodyPct > 0.5 && (
+          <div
+            className="subsystem-bar-seg"
+            style={{ width: `${bodyPct}%`, background: "#f59e0b" }}
+          />
+        )}
+        {hotendPct > 0.5 && (
+          <div
+            className="subsystem-bar-seg"
+            style={{ width: `${hotendPct}%`, background: "#f43f5e" }}
+          />
+        )}
+      </div>
+
+      <div className="subsystem-bar-legend">
+        <span className={`subsystem-legend-item ${domSource === "rail_xbeam" ? "primary" : ""}`}>
+          <span className="swatch-dot" style={{ background: "#38bdf8" }} />
+          Rail/Beam <strong>{Math.round(railPct)}%</strong>
+        </span>
+        <span className={`subsystem-legend-item ${domSource === "carriage_body" ? "primary" : ""}`}>
+          <span className="swatch-dot" style={{ background: "#f59e0b" }} />
+          Carriage/Body <strong>{Math.round(bodyPct)}%</strong>
+        </span>
+        <span className={`subsystem-legend-item ${domSource === "hotend_nozzle" ? "primary" : ""}`}>
+          <span className="swatch-dot" style={{ background: "#f43f5e" }} />
+          Hotend/Nozzle <strong>{Math.round(hotendPct)}%</strong>
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "4px 10px",
+          fontSize: 10.5,
+          color: "var(--muted)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        <span>
+          Tip k: <strong style={{ color: "var(--text)" }}>{Math.round(breakdown.effective_tip_stiffness_n_per_mm)} N/mm</strong>
+        </span>
+        <span>
+          Mount: <strong style={{ color: "var(--text)" }}>{Math.round(breakdown.carriage_mount_stiffness_n_per_mm)} N/mm</strong>
+        </span>
+        <span>
+          Hotend: <strong style={{ color: "var(--text)" }}>{Math.round(breakdown.hotend_stiffness_n_per_mm)} N/mm</strong>
+        </span>
+      </div>
+
+      <div style={{ fontSize: 10.5, lineHeight: 1.35, color: "#cbd5e1" }}>
+        <span className="sens-fix-prefix">Main limit:</span>{" "}
+        {DOMINANT_FLEX_LABELS[domSource] ?? domSource} ({Math.round(domPct)}% of local toolhead tip
+        flex).
+      </div>
+    </div>
+  );
+};
+
 export const MetricsPanel: React.FC<Props> = ({
   sim,
   deepVerifyResult,
@@ -2375,6 +2684,8 @@ export const MetricsPanel: React.FC<Props> = ({
   onDownloadBomCsv,
   showBedWarp,
   onInspectBedWarp,
+  toolheadPunchIn,
+  onToggleToolheadPunchIn,
   error,
 }) => {
   const [rightTab, setRightTab] = useState<"simulation" | "bom">("simulation");
@@ -2528,7 +2839,15 @@ export const MetricsPanel: React.FC<Props> = ({
       (sim.geometry.linear_rails?.y_rail_profile ?? "") !==
         (compareSim.geometry.linear_rails?.y_rail_profile ?? "") ||
       Boolean(sim.geometry.linear_rails?.dual_x_rails) !==
-        Boolean(compareSim.geometry.linear_rails?.dual_x_rails));
+        Boolean(compareSim.geometry.linear_rails?.dual_x_rails) ||
+      Math.abs(
+        (fea.toolhead_flex_breakdown?.hotend_and_nozzle_pct ?? 0) -
+          (compareSim.static_fea.toolhead_flex_breakdown?.hotend_and_nozzle_pct ?? 0)
+      ) >= 1 ||
+      Math.abs(
+        (fea.toolhead_flex_breakdown?.effective_tip_stiffness_n_per_mm ?? 0) -
+          (compareSim.static_fea.toolhead_flex_breakdown?.effective_tip_stiffness_n_per_mm ?? 0)
+      ) >= 1);
   const modalChanged =
     compareSim != null &&
     (Math.abs(mod.fundamental_freq_hz - compareSim.modal_fea.fundamental_freq_hz) >= 0.05 ||
@@ -2569,6 +2888,10 @@ export const MetricsPanel: React.FC<Props> = ({
       Math.abs(
         (mod.accel_bottleneck?.primary_share_pct ?? 0) -
           (compareSim.modal_fea.accel_bottleneck?.primary_share_pct ?? 0)
+      ) >= 1 ||
+      Math.abs(
+        (sim.weight_shaper_gains?.limiting_moving_mass_g ?? 0) -
+          (compareSim.weight_shaper_gains?.limiting_moving_mass_g ?? 0)
       ) >= 1);
   const thermalChanged =
     compareSim != null &&
@@ -3076,6 +3399,13 @@ export const MetricsPanel: React.FC<Props> = ({
               {fea.top_flex_explanation && (
                 <div className="fea-explain-note">{fea.top_flex_explanation}</div>
               )}
+              {fea.toolhead_flex_breakdown && (
+                <ToolheadFlexBreakdownStrip
+                  breakdown={fea.toolhead_flex_breakdown}
+                  toolheadPunchIn={toolheadPunchIn}
+                  onToggleToolheadPunchIn={onToggleToolheadPunchIn}
+                />
+              )}
             </div>
 
             {ts && (
@@ -3291,6 +3621,13 @@ export const MetricsPanel: React.FC<Props> = ({
 
             {mod.accel_bottleneck && (
               <AccelBottleneckCard bottleneck={mod.accel_bottleneck} changed={modalChanged} />
+            )}
+
+            {sim.weight_shaper_gains && sim.weight_shaper_gains.items.length > 0 && (
+              <WeightShaperPotentialCard
+                gains={sim.weight_shaper_gains}
+                changed={modalChanged}
+              />
             )}
 
             <CncControlMetrologyCard

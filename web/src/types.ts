@@ -67,6 +67,14 @@ export type BracketMaterialType =
 
 export type ToolheadMountMaterial = BracketMaterialType;
 
+export type ToolheadConstructionType =
+  | "multi_piece_clamshell"
+  | "compact_cage"
+  | "plate_sandwich_cf"
+  | "extruder_as_chassis"
+  | "cnc_monoblock"
+  | "cantilever_bowden";
+
 export type XRailMountType = "front" | "top" | "bottom" | "dual_top_bottom";
 
 export type YRailMountType = "top" | "inner" | "bottom";
@@ -79,6 +87,12 @@ export type CornerJointType =
   | "corner_cube";
 
 export type RailPreloadType = "ZF" | "Z0" | "Z1" | "ZA" | "ZB";
+
+export type RailQualityType =
+  | "budget_generic"
+  | "midgrade_matched"
+  | "hiwin_genuine"
+  | "precision_thk_nsk";
 
 export type RailBlockType = "C" | "H";
 
@@ -103,6 +117,29 @@ export type FrameFeetType =
 export type ZProbeType = "static_eddy" | "klicky_inductive" | "cnc_tap" | "printed_tap";
 
 export type BeltRoutingType = "stock_corexy" | "monolith_short";
+
+export type ZRailProfileType =
+  | "mgn12_rail"
+  | "mgn9_rail"
+  | "steel_rod_8mm"
+  | "steel_rod_10mm"
+  | "steel_rod_12mm"
+  | "none";
+
+export type ZLeadscrewType =
+  | "auto"
+  | "tr8x4_pom"
+  | "tr8x8_pom"
+  | "tr8x8_brass"
+  | "sfu1204_bk10"
+  | "gt2_6mm_z_belt"
+  | "gt2_9mm_z_belt";
+
+export type HotendMountStyle =
+  | "groove_mount"
+  | "rigid_4bolt_m3"
+  | "dragon_4bolt_m25"
+  | "chube_6bolt_m3_18pcd";
 
 export type AdjointLens = "print_impact" | "compliance" | "modal" | "mass";
 
@@ -163,6 +200,15 @@ export interface GantryBracketInfo {
   color_hex: string;
 }
 
+export interface GantryWeightClassItem {
+  id: string;
+  name: string;
+  short_name: string;
+  carriage_mass_g: number;
+  suggested_bracket_material: string;
+  notes: string;
+}
+
 export interface ZProbeCatalogItem {
   id: ZProbeType;
   name: string;
@@ -178,6 +224,16 @@ export interface BeltRoutingCatalogItem {
   notes?: string;
 }
 
+export interface ToolheadConstructionCatalogItem {
+  id: ToolheadConstructionType;
+  name: string;
+  short_name: string;
+  body_stiffness_base_n_per_mm: number;
+  torsion_mult: number;
+  mass_delta_g?: number;
+  notes: string;
+}
+
 export interface ToolheadPresetItem {
   preset_id: string;
   name: string;
@@ -185,8 +241,50 @@ export interface ToolheadPresetItem {
   cog_offset_mm: [number, number, number];
   nozzle_offset_mm: [number, number, number];
   mount_material: ToolheadMountMaterial;
+  body_construction?: ToolheadConstructionType | null;
   internal_stiffness_n_per_mm?: number;
   z_probe_type?: ZProbeType;
+}
+
+export type ToolheadPresetData = ToolheadPresetItem;
+
+export interface HotendPresetItem {
+  id: string;
+  name: string;
+  short_name?: string;
+  mount_style: string;
+  mass_g?: number;
+  overall_length_mm: number;
+  heater_power_w: number;
+  block_material: string;
+  block_mass_g: number;
+  nozzle_material: string;
+  melt_zone_length_mm: number;
+  heatbreak_material: string;
+  heatbreak_length_mm: number;
+  heatbreak_wall_mm: number;
+  heatbreak_id_mm: number;
+  heatsink_thermal_resistance_k_w: number;
+  structural_stiffness_n_per_mm: number;
+  max_temp_c: number;
+  cost_usd?: number;
+  notes?: string;
+}
+
+export interface ZDriveMechanismItem {
+  id: string;
+  name: string;
+  kind: "leadscrew" | "ballscrew" | "belt";
+  lead_mm?: number;
+  diameter_mm?: number;
+  backlash_um?: number;
+  notes?: string;
+}
+
+export interface ZRailProfileItem {
+  id: string;
+  name: string;
+  mass_kg_per_m?: number;
 }
 
 export interface CatalogResponse {
@@ -197,14 +295,28 @@ export interface CatalogResponse {
   presets: PresetItem[];
   steppers?: StepperCatalogItem[];
   toolhead_presets?: ToolheadPresetItem[];
+  toolhead_constructions?: ToolheadConstructionCatalogItem[];
   extrusion_fillings?: ExtrusionFillingInfo[];
   gantry_brackets?: GantryBracketInfo[];
+  gantry_weight_classes?: GantryWeightClassItem[];
   x_rail_mounts?: RailMountOption<XRailMountType>[];
   y_rail_mounts?: RailMountOption<YRailMountType>[];
   bed_mounts?: BedMountCatalogItem[];
   frame_feet?: FrameFeetCatalogItem[];
   z_probes?: ZProbeCatalogItem[];
   belt_routings?: BeltRoutingCatalogItem[];
+  hotend_presets?: HotendPresetItem[];
+  z_drive_mechanisms?: ZDriveMechanismItem[];
+  z_rail_profiles?: ZRailProfileItem[];
+  rail_qualities?: Array<{
+    id: RailQualityType;
+    name: string;
+    short_name: string;
+    stiffness_mult: number;
+    drag_mult: number;
+    cost_mult: number;
+    notes: string;
+  }>;
 }
 
 export type CatalogData = CatalogResponse;
@@ -416,6 +528,7 @@ export interface PrinterSpecData {
     y_rail_mount?: YRailMountType;
     dual_x_rails: boolean;
     rail_preload?: RailPreloadType;
+    rail_quality?: RailQualityType;
     rail_block_type?: RailBlockType;
     rail_bolt_pitch_mm?: number;
     rail_backer_material?: RailBackerMaterialType;
@@ -480,11 +593,23 @@ export interface PrinterSpecData {
     cog_offset_mm: [number, number, number];
     nozzle_offset_mm?: [number, number, number];
     mount_material?: ToolheadMountMaterial;
+    body_construction?: ToolheadConstructionType | null;
+    carriage_mount_material?: string | null;
+    body_material?: string | null;
+    hotend_mount_material?: string | null;
+    carriage_plate_thickness_mm?: number;
+    body_wall_thickness_mm?: number;
+    hotend_mount_thickness_mm?: number;
     internal_stiffness_n_per_mm?: number;
     z_probe_type?: ZProbeType;
     envelope_mm: [number, number, number];
     hotend: {
+      preset_id?: string | null;
       name: string;
+      mass_g?: number;
+      mount_style?: HotendMountStyle;
+      structural_stiffness_n_per_mm?: number;
+      overall_length_mm?: number;
       heater_power_w: number;
       block_material: string;
       block_mass_g: number;
@@ -514,6 +639,8 @@ export interface PrinterSpecData {
     heater_power_w: number;
     mass_g: number;
     z_drive: string;
+    z_rail_profile?: ZRailProfileType;
+    z_leadscrew_type?: ZLeadscrewType;
     target_temp_c?: number;
     mount_type?: BedMountType;
   };
@@ -604,6 +731,7 @@ export interface ModeShapeData {
   dominant_problem_area?: SubsystemKey;
   toolhead_participation_xyz: [number, number, number];
   nodal_vectors: Record<string, [number, number, number]>;
+  nodal_rotations?: Record<string, [number, number, number]>;
 }
 
 export interface AccelBottleneckShares {
@@ -730,6 +858,7 @@ export interface GeometryLinearRailsData {
   x_rail_mount: XRailMountType;
   y_rail_mount: YRailMountType;
   dual_x_rails: boolean;
+  rail_quality?: RailQualityType;
   x_rail_width_mm: number;
   x_rail_height_mm: number;
   y_rail_width_mm: number;
@@ -738,6 +867,78 @@ export interface GeometryLinearRailsData {
   x_beam_ei_z_boost_pct: number;
   y_rail_ei_x_boost_pct: number;
   total_rail_mass_g: number;
+}
+
+export interface ZRailGeometryData {
+  id: string;
+  start_mm: [number, number, number];
+  end_mm: [number, number, number];
+  profile_id: string;
+  carriage_z_mm: number;
+  normal: [number, number, number];
+}
+
+export interface ZLeadscrewGeometryData {
+  id: string;
+  kind: "leadscrew" | "ballscrew" | "belt";
+  mechanism_id: string;
+  start_mm: [number, number, number];
+  end_mm: [number, number, number];
+  nut_z_mm: number;
+  motor_pos_mm: [number, number, number];
+  diameter_mm: number;
+}
+
+export interface ToolheadStageStiffnessesData {
+  rail_carriage_n_per_mm?: number;
+  backplate_only_n_per_mm?: number;
+  carriage_mount_n_per_mm?: number;
+  body_n_per_mm?: number;
+  hotend_clamp_n_per_mm?: number;
+  hotend_total_n_per_mm?: number;
+  combined_toolhead_n_per_mm?: number;
+}
+
+export interface ToolheadStructureGeometryData {
+  body_construction?: ToolheadConstructionType | null;
+  construction_mass_delta_g?: number;
+  carriage_mount_material: string;
+  body_material: string;
+  hotend_mount_material: string;
+  carriage_plate_thickness_mm?: number;
+  body_wall_thickness_mm?: number;
+  hotend_mount_thickness_mm?: number;
+  thickness_mass_delta_g?: number;
+  hotend_mass_g?: number;
+  toolhead_body_mass_g?: number;
+  assembled_toolhead_mass_g?: number;
+  hotend_preset_id: string | null;
+  hotend_mount_style: string;
+  hotend_stiffness_n_per_mm: number;
+  hotend_overall_length_mm: number;
+  stage_stiffnesses_n_per_mm?: ToolheadStageStiffnessesData;
+}
+
+export interface ToolheadFlexBreakdownData {
+  rail_and_xbeam_pct: number;
+  carriage_and_body_pct: number;
+  hotend_and_nozzle_pct: number;
+  effective_tip_stiffness_n_per_mm: number;
+  hotend_stiffness_n_per_mm: number;
+  carriage_mount_stiffness_n_per_mm: number;
+  dominant_flex_source: "rail_xbeam" | "carriage_body" | "hotend_nozzle";
+}
+
+export interface GeometryMassSummaryData {
+  frame_mass_kg: number;
+  total_mass_kg: number;
+  x_moving_mass_g: number;
+  y_moving_mass_g: number;
+  x_beam_mass_g?: number;
+  x_rail_mass_g?: number;
+  x_backer_mass_g?: number;
+  y_carriage_joints_mass_g?: number;
+  estimated_material_cost_usd: number;
 }
 
 export interface GeometryData {
@@ -772,6 +973,10 @@ export interface GeometryData {
   bed_z_drive?: string;
   feet_type?: FrameFeetType;
   bed_support_points_mm?: [number, number, number][];
+  bed_mount_points_mm?: [number, number, number][];
+  z_rails?: ZRailGeometryData[];
+  z_leadscrews?: ZLeadscrewGeometryData[];
+  toolhead_structure?: ToolheadStructureGeometryData;
   toolhead_node_id: string;
   nozzle_node_id?: string;
   toolhead_cog_node_id?: string;
@@ -783,13 +988,7 @@ export interface GeometryData {
   members: GeometryMember[];
   panel_mesh_n?: number;
   shell_panels?: ShellPanelGeometryData[];
-  mass_summary: {
-    frame_mass_kg: number;
-    total_mass_kg: number;
-    x_moving_mass_g: number;
-    y_moving_mass_g: number;
-    estimated_material_cost_usd: number;
-  };
+  mass_summary: GeometryMassSummaryData;
 }
 
 export interface StaticFeaData {
@@ -805,6 +1004,7 @@ export interface StaticFeaData {
   toolhead_stiffness_x_n_per_mm: number;
   toolhead_stiffness_y_n_per_mm: number;
   toolhead_stiffness_z_n_per_mm: number;
+  toolhead_flex_breakdown?: ToolheadFlexBreakdownData;
   max_von_mises_mpa: number;
   panel_max_von_mises_mpa?: number;
   peak_stress_part_label?: string;
@@ -1042,6 +1242,29 @@ export interface BedPlateFeaData {
   summary: string;
 }
 
+export interface WeightShaperGainItem {
+  id: string;
+  label: string;
+  current_mass_g: number;
+  example_cut_g: number;
+  hz_per_100g: number;
+  est_hz_gain: number;
+  est_accel_gain_mm_s2: number;
+  affects_axis: "X" | "Y" | "XY";
+  note: string;
+}
+
+export interface WeightShaperGainsSummary {
+  limiting_axis: "X" | "Y";
+  limiting_shaper_hz: number;
+  limiting_max_accel_mm_s2: number;
+  limiting_moving_mass_g: number;
+  total_potential_cut_g: number;
+  total_potential_hz_gain: number;
+  total_potential_accel_gain_mm_s2: number;
+  items: WeightShaperGainItem[];
+}
+
 export interface SimulationResponse {
   printer_name: string;
   architecture: string;
@@ -1073,6 +1296,7 @@ export interface SimulationResponse {
   time_domain_metrology?: TimeDomainMetrologyData;
   rcsa?: RCSAData;
   sensitivity?: SensitivityData;
+  weight_shaper_gains?: WeightShaperGainsSummary;
   thermal: {
     filament_id: string;
     filament_name: string;

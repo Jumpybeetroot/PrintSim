@@ -11,18 +11,26 @@ import {
   ExtrusionFillingType,
   FrameFeetType,
   GantryBracketInfo,
+  GantryWeightClassItem,
+  HotendMountStyle,
+  HotendPresetItem,
   PrinterSpecData,
   RailBackerMaterialType,
   RailBlockType,
   RailMountOption,
   RailPreloadType,
+  RailQualityType,
   SimulationResponse,
   SolidFeaEngine,
+  ToolheadConstructionCatalogItem,
+  ToolheadConstructionType,
   ToolheadMountMaterial,
   TopoOptRequestParams,
   XRailMountType,
   YRailMountType,
+  ZLeadscrewType,
   ZProbeType,
+  ZRailProfileType,
 } from "../types";
 
 interface Props {
@@ -279,6 +287,68 @@ const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
   },
 ];
 
+const FALLBACK_GANTRY_WEIGHT_CLASSES: GantryWeightClassItem[] = [
+  {
+    id: "ultralight_printed",
+    name: "Ultralight Printed (85g)",
+    short_name: "Ultralight Printed",
+    carriage_mass_g: 85,
+    suggested_bracket_material: "abs_printed",
+    notes: "Minimalist printed XY joints & lightweight Y-carriages (Annex / VzBot style).",
+  },
+  {
+    id: "standard_printed",
+    name: "Standard Printed (140g)",
+    short_name: "Standard Printed",
+    carriage_mass_g: 140,
+    suggested_bracket_material: "abs_printed",
+    notes: "Stock Voron 2.4 / Trident printed ABS/ASA XY joints, idlers & Y-carriages.",
+  },
+  {
+    id: "stiffness_printed_cf",
+    name: "Stiffness-Optimized Printed CF (185g)",
+    short_name: "Printed CF Stiff",
+    carriage_mass_g: 185,
+    suggested_bracket_material: "ppa_cf_printed",
+    notes: "Beefed-up double-shear PPA-CF / PET-CF XY joints & gusseted Y-carriages.",
+  },
+  {
+    id: "cnc_al_light",
+    name: "CNC Aluminum Light (210g)",
+    short_name: "CNC Al Light",
+    carriage_mass_g: 210,
+    suggested_bracket_material: "aluminum_6061_t6",
+    notes: "Pocketed CNC 6061-T6 XY joints & lightweight machined Y-carriages.",
+  },
+  {
+    id: "cnc_al_heavy",
+    name: "CNC Aluminum Heavy-Duty (280g)",
+    short_name: "CNC Al Heavy",
+    carriage_mass_g: 280,
+    suggested_bracket_material: "aluminum_7075_t6",
+    notes: "Heavy billet CNC 7075-T6 AWD / double-shear XY blocks & thick Y-carriages.",
+  },
+];
+
+function inferAutoXBeamMaterial(profileId: string, currentMaterial: string): string | null {
+  if (profileId.startsWith("cf_tube_")) return "carbon_fiber_tube";
+  if (profileId.startsWith("ti_tube_")) return "titanium_grade5";
+  if (profileId.startsWith("steel_tube_") || profileId.startsWith("steel_rod_")) {
+    return "steel_4140";
+  }
+  if (
+    (profileId.startsWith("extrusion_") ||
+      profileId.startsWith("al_tube_") ||
+      profileId.startsWith("cnc_al_")) &&
+    (currentMaterial === "carbon_fiber_tube" ||
+      currentMaterial === "titanium_grade5" ||
+      currentMaterial === "steel_4140")
+  ) {
+    return "aluminum_6063_t5";
+  }
+  return null;
+}
+
 const MOUNT_MATERIAL_OPTIONS: Array<{
   id: ToolheadMountMaterial;
   label: string;
@@ -292,6 +362,284 @@ const MOUNT_MATERIAL_OPTIONS: Array<{
   { id: "aluminum_6061_t6", label: "CNC Al 6061-T6 (68.9 GPa)", shortLabel: "CNC Al 6061" },
   { id: "aluminum_7075_t6", label: "CNC Al 7075-T6 (71.7 GPa)", shortLabel: "CNC Al 7075" },
 ];
+
+const TOOLHEAD_PART_MATERIAL_OPTIONS: Array<{
+  id: string;
+  label: string;
+  shortLabel: string;
+}> = [
+  { id: "abs_printed", label: "Printed ABS (2.1 GPa)", shortLabel: "ABS" },
+  { id: "pet_cf_printed", label: "Printed PET-CF15 (5.2 GPa)", shortLabel: "PET-CF" },
+  { id: "pa12_cf_printed", label: "Printed PA12-CF (6.2 GPa)", shortLabel: "PA12-CF" },
+  { id: "ppa_cf_printed", label: "Printed PPA-CF (11.8 GPa)", shortLabel: "PPA-CF" },
+  { id: "pps_cf_printed", label: "Printed PPS-CF (8.5 GPa)", shortLabel: "PPS-CF" },
+  { id: "carbon_fiber_plate", label: "3K Carbon Fiber Plate (55 GPa)", shortLabel: "3K CF Plate" },
+  { id: "aluminum_6061_t6", label: "CNC Al 6061-T6 (68.9 GPa)", shortLabel: "CNC Al 6061" },
+  { id: "aluminum_7075_t6", label: "CNC Al 7075-T6 (71.7 GPa)", shortLabel: "CNC Al 7075" },
+];
+
+const TOOLHEAD_CONSTRUCTION_OPTIONS: ToolheadConstructionCatalogItem[] = [
+  {
+    id: "multi_piece_clamshell",
+    name: "Multi-Piece Clamshell (StealthBurner / Afterburner)",
+    short_name: "Multi-Piece Clamshell",
+    body_stiffness_base_n_per_mm: 420,
+    torsion_mult: 0.72,
+    mass_delta_g: 15,
+    notes: "Stacked printed halves + separate shroud; extra bolted seams add compliance and mass.",
+  },
+  {
+    id: "compact_cage",
+    name: "Compact Open-Cage Box (XOL / Dragon Burner / A4T)",
+    short_name: "Compact Cage",
+    body_stiffness_base_n_per_mm: 680,
+    torsion_mult: 1.0,
+    mass_delta_g: 0,
+    notes: "Single-piece boxed truss around the hotend; balanced stiffness-to-weight baseline.",
+  },
+  {
+    id: "plate_sandwich_cf",
+    name: "Plate Sandwich + Standoffs (Archetype / VzBot / EVA)",
+    short_name: "Plate Sandwich",
+    body_stiffness_base_n_per_mm: 950,
+    torsion_mult: 1.18,
+    mass_delta_g: -12,
+    notes: "Front/rear structural plates tied with metal standoffs; high bending stiffness with low mass.",
+  },
+  {
+    id: "extruder_as_chassis",
+    name: "Integrated Extruder-as-Chassis (Direct-Bolted Core)",
+    short_name: "Extruder-as-Chassis",
+    body_stiffness_base_n_per_mm: 1250,
+    torsion_mult: 1.32,
+    mass_delta_g: -25,
+    notes: "Direct-bolted extruder housing acts as the load path, eliminating redundant brackets and overhang.",
+  },
+  {
+    id: "cnc_monoblock",
+    name: "CNC Monoblock / Ribbed Billet Chassis",
+    short_name: "CNC Monoblock",
+    body_stiffness_base_n_per_mm: 2400,
+    torsion_mult: 1.75,
+    mass_delta_g: 18,
+    notes: "One-piece machined ribbed chassis; eliminates inter-part joint slip for maximum tip rigidity.",
+  },
+  {
+    id: "cantilever_bowden",
+    name: "Minimalist Bowden / Remote-Drive Mount",
+    short_name: "Bowden Mount",
+    body_stiffness_base_n_per_mm: 520,
+    torsion_mult: 0.85,
+    mass_delta_g: -65,
+    notes: "Minimalist hotend-only bracket with remote extruder; drastically cuts moving mass.",
+  },
+];
+
+function inferToolheadConstruction(
+  spec: PrinterSpecData,
+  sim: SimulationResponse | null
+): ToolheadConstructionType {
+  if (spec.toolhead.body_construction) return spec.toolhead.body_construction;
+  const simConstruction = sim?.geometry?.toolhead_structure?.body_construction;
+  if (simConstruction) return simConstruction;
+  if (spec.toolhead.extruder?.type === "bowden") return "cantilever_bowden";
+  const pid = (spec.toolhead.preset_id || "").toLowerCase();
+  if (pid.includes("stealthburner") || pid.includes("afterburner") || pid.includes("heavy_uhf")) {
+    return "multi_piece_clamshell";
+  }
+  if (pid.includes("archetype") || pid.includes("vz") || pid.includes("eva")) {
+    return "plate_sandwich_cf";
+  }
+  if (pid.includes("cnc")) {
+    return "cnc_monoblock";
+  }
+  return "compact_cage";
+}
+
+const HOTEND_MOUNT_STYLE_OPTIONS: Array<{
+  id: HotendMountStyle;
+  label: string;
+  shortLabel: string;
+}> = [
+  { id: "groove_mount", label: "Groove Mount (E3D V6)", shortLabel: "Groove Mount" },
+  { id: "rigid_4bolt_m3", label: "4× M3 Rigid Flange", shortLabel: "4× M3 Rigid" },
+  { id: "dragon_4bolt_m25", label: "Dragon 4× M2.5 Standoffs", shortLabel: "Dragon 4× M2.5" },
+  { id: "chube_6bolt_m3_18pcd", label: "Chube 6× M3 Ti Shell (18mm PCD)", shortLabel: "Chube 6× M3 Ti" },
+];
+
+const FALLBACK_HOTEND_PRESETS: HotendPresetItem[] = [
+  {
+    id: "e3d_v6_groove",
+    name: "E3D V6 Groove Mount",
+    short_name: "E3D V6",
+    mount_style: "groove_mount",
+    mass_g: 42,
+    overall_length_mm: 62,
+    heater_power_w: 40,
+    block_material: "aluminum_6061_t6",
+    block_mass_g: 12,
+    nozzle_material: "brass_c360",
+    melt_zone_length_mm: 12,
+    heatbreak_material: "stainless_304",
+    heatbreak_length_mm: 14,
+    heatbreak_wall_mm: 0.45,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 8.5,
+    structural_stiffness_n_per_mm: 45,
+    max_temp_c: 285,
+  },
+  {
+    id: "e3d_revo_voron",
+    name: "E3D Revo Voron (4-Bolt M3)",
+    short_name: "Revo Voron",
+    mount_style: "rigid_4bolt_m3",
+    mass_g: 36,
+    overall_length_mm: 52,
+    heater_power_w: 40,
+    block_material: "brass_c360",
+    block_mass_g: 8,
+    nozzle_material: "brass_c360",
+    melt_zone_length_mm: 13,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 12,
+    heatbreak_wall_mm: 0.35,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 7.2,
+    structural_stiffness_n_per_mm: 240,
+    max_temp_c: 300,
+  },
+  {
+    id: "phaetus_dragon_hf",
+    name: "Phaetus Dragon HF (4× M2.5 Standoffs)",
+    short_name: "Dragon HF",
+    mount_style: "dragon_4bolt_m25",
+    mass_g: 52,
+    overall_length_mm: 61,
+    heater_power_w: 60,
+    block_material: "copper_c110",
+    block_mass_g: 16,
+    nozzle_material: "brass_c360",
+    melt_zone_length_mm: 17,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 14,
+    heatbreak_wall_mm: 0.25,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 6.8,
+    structural_stiffness_n_per_mm: 520,
+    max_temp_c: 500,
+  },
+  {
+    id: "phaetus_rapido_2_uhf",
+    name: "Phaetus Rapido 2 UHF (4× M2.5 Standoffs)",
+    short_name: "Rapido 2 UHF",
+    mount_style: "dragon_4bolt_m25",
+    mass_g: 58,
+    overall_length_mm: 68,
+    heater_power_w: 115,
+    block_material: "copper_c110",
+    block_mass_g: 19,
+    nozzle_material: "copper_c110",
+    melt_zone_length_mm: 27,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 14,
+    heatbreak_wall_mm: 0.25,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 6.5,
+    structural_stiffness_n_per_mm: 480,
+    max_temp_c: 350,
+  },
+  {
+    id: "vz_goliath",
+    name: "VzBot Goliath Long (4× M2.5 Rigid)",
+    short_name: "Goliath",
+    mount_style: "dragon_4bolt_m25",
+    mass_g: 74,
+    overall_length_mm: 76,
+    heater_power_w: 115,
+    block_material: "copper_c110",
+    block_mass_g: 28,
+    nozzle_material: "copper_c110",
+    melt_zone_length_mm: 36,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 15,
+    heatbreak_wall_mm: 0.3,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 5.8,
+    structural_stiffness_n_per_mm: 780,
+    max_temp_c: 450,
+  },
+  {
+    id: "lukes_lab_chube_air",
+    name: "Luke's Lab Chube Air (6× M3 Ti Shell)",
+    short_name: "Chube Air",
+    mount_style: "chube_6bolt_m3_18pcd",
+    mass_g: 86,
+    overall_length_mm: 68,
+    heater_power_w: 120,
+    block_material: "copper_c110",
+    block_mass_g: 26,
+    nozzle_material: "copper_c110",
+    melt_zone_length_mm: 36,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 15,
+    heatbreak_wall_mm: 0.35,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 5.2,
+    structural_stiffness_n_per_mm: 2400,
+    max_temp_c: 450,
+  },
+  {
+    id: "lukes_lab_chube_conduction",
+    name: "Luke's Lab Chube Conduction (6× M3 Ti Shell + CNC Block)",
+    short_name: "Chube Conduction",
+    mount_style: "chube_6bolt_m3_18pcd",
+    mass_g: 98,
+    overall_length_mm: 65,
+    heater_power_w: 120,
+    block_material: "copper_c110",
+    block_mass_g: 28,
+    nozzle_material: "copper_c110",
+    melt_zone_length_mm: 38,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 14,
+    heatbreak_wall_mm: 0.35,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 3.8,
+    structural_stiffness_n_per_mm: 3600,
+    max_temp_c: 450,
+  },
+];
+
+const FALLBACK_Z_RAIL_PROFILES: Array<{ id: ZRailProfileType; name: string }> = [
+  { id: "mgn12_rail", name: "MGN12H Linear Rail (12×8mm)" },
+  { id: "mgn9_rail", name: "MGN9H Linear Rail (9×6.5mm)" },
+  { id: "steel_rod_8mm", name: "8mm Smooth Steel Rods" },
+  { id: "steel_rod_10mm", name: "10mm Smooth Steel Rods" },
+  { id: "steel_rod_12mm", name: "12mm Smooth Steel Rods" },
+  { id: "none", name: "None (Leadscrew Guided)" },
+];
+
+const FALLBACK_Z_DRIVE_MECHANISMS: Array<{ id: ZLeadscrewType; name: string }> = [
+  { id: "auto", name: "Auto (Match Z Architecture)" },
+  { id: "tr8x4_pom", name: "TR8×4 Trident POM Nut" },
+  { id: "tr8x8_pom", name: "TR8×8 POM Nut" },
+  { id: "tr8x8_brass", name: "TR8×8 Brass Nut" },
+  { id: "sfu1204_bk10", name: "SFU1204 C7 Ballscrew + BK10" },
+  { id: "gt2_6mm_z_belt", name: "GT2 6mm Z-Belt" },
+  { id: "gt2_9mm_z_belt", name: "GT2 9mm Z-Belt" },
+];
+
+function toolheadPartMatShort(id?: string | null): string {
+  if (!id) return "ABS";
+  return TOOLHEAD_PART_MATERIAL_OPTIONS.find((m) => m.id === id)?.shortLabel ?? id.replace(/_/g, " ");
+}
+
+function hotendStiffnessTier(k: number): { label: string; color: string } {
+  if (k < 100) return { label: "Floppy", color: "var(--red)" };
+  if (k < 350) return { label: "Moderate", color: "var(--amber)" };
+  if (k < 1200) return { label: "Rigid", color: "var(--accent)" };
+  return { label: "Ultra-Rigid", color: "var(--green)" };
+}
 
 const BUS_VOLTAGE_PRESETS = [24, 36, 48, 60];
 
@@ -357,17 +705,6 @@ function railProfileShort(id?: string): string {
   return id;
 }
 
-function mountMaterialShort(id?: string): string {
-  return MOUNT_MATERIAL_OPTIONS.find((m) => m.id === id)?.shortLabel ?? "Printed ABS";
-}
-
-function toolheadStiffnessTier(k: number): { label: string; color: string } {
-  if (k < 250) return { label: "Soft Printed", color: "var(--amber)" };
-  if (k <= 700) return { label: "Standard Printed", color: "var(--muted)" };
-  if (k <= 1500) return { label: "Rigid CF-Polymer", color: "var(--accent)" };
-  return { label: "CNC Monoblock", color: "var(--green)" };
-}
-
 function shortMotorName(name: string): string {
   return name.split("(")[0].trim() || name;
 }
@@ -414,6 +751,53 @@ const RAIL_PRELOAD_OPTIONS: Array<{ id: RailPreloadType; label: string; shortLab
   { id: "Z1", label: "Z1 Light Preload", shortLabel: "Z1" },
   { id: "ZA", label: "ZA Medium", shortLabel: "ZA" },
   { id: "ZB", label: "ZB Heavy", shortLabel: "ZB" },
+];
+
+const FALLBACK_RAIL_QUALITIES: Array<{
+  id: RailQualityType;
+  name: string;
+  short_name: string;
+  stiffness_mult: number;
+  drag_mult: number;
+  cost_mult: number;
+  notes: string;
+}> = [
+  {
+    id: "budget_generic",
+    name: "Budget / Generic Clone",
+    short_name: "Budget Clone",
+    stiffness_mult: 0.55,
+    drag_mult: 1.45,
+    cost_mult: 0.45,
+    notes: "Loose ball-groove tolerance & uneven preload — noticeable carriage roll play.",
+  },
+  {
+    id: "midgrade_matched",
+    name: "Matched 3D-Printer Grade (LDO / HoneyBadger)",
+    short_name: "LDO / Matched",
+    stiffness_mult: 0.85,
+    drag_mult: 1.05,
+    cost_mult: 0.78,
+    notes: "QC-matched carriage & rail set; smooth glide and solid value for CoreXY builds.",
+  },
+  {
+    id: "hiwin_genuine",
+    name: "Genuine HIWIN / PMI (Grade C/H)",
+    short_name: "HIWIN",
+    stiffness_mult: 1.0,
+    drag_mult: 1.0,
+    cost_mult: 1.0,
+    notes: "Datasheet Hertzian ball contact stiffness with consistent preload and low drag.",
+  },
+  {
+    id: "precision_thk_nsk",
+    name: "Precision Ground (THK / NSK / IKO Grade P)",
+    short_name: "THK / NSK P",
+    stiffness_mult: 1.28,
+    drag_mult: 0.85,
+    cost_mult: 2.1,
+    notes: "Precision-ground raceways & tight ball sorting for peak roll stiffness and ultra-low drag.",
+  },
 ];
 
 const RAIL_BLOCK_OPTIONS: Array<{ id: RailBlockType; label: string; shortLabel: string }> = [
@@ -519,25 +903,25 @@ const Z_PROBE_OPTIONS: Array<{
     id: "static_eddy",
     label: "Static Eddy (Beacon/Cartographer)",
     shortLabel: "Static Eddy",
-    hint: "Rigid direct-bolt carriage (~5g) — avoids Voron Tap's +62–78g mass and sliding-rail resonance penalty.",
+    hint: "Rigid direct-bolt carriage mount — avoids Voron Tap's sliding-rail compliance penalty.",
   },
   {
     id: "klicky_inductive",
     label: "Klicky / Inductive",
     shortLabel: "Klicky / Inductive",
-    hint: "Rigid carriage mount (~12g) — avoids Tap's sliding-rail compliance penalty while keeping high nozzle resonance.",
+    hint: "Rigid carriage mount — avoids Tap's sliding-rail compliance penalty while keeping high nozzle resonance.",
   },
   {
     id: "cnc_tap",
-    label: "CNC Voron Tap (+62g)",
+    label: "CNC Voron Tap",
     shortLabel: "CNC Tap",
-    hint: "Nozzle-tap MGN9 sliding rail adds +62g moving mass and extra carriage compliance — cuts resonance vs a rigid Beacon/eddy mount.",
+    hint: "Nozzle-tap MGN9 sliding rail adds extra carriage compliance in the nozzle load path (include probe weight in Toolhead Mass below).",
   },
   {
     id: "printed_tap",
-    label: "Printed Voron Tap (+78g, soft)",
+    label: "Printed Voron Tap (soft)",
     shortLabel: "Printed Tap",
-    hint: "Printed sliding-rail Tap adds +78g and soft compliance in the nozzle load path — sharp resonance drop vs a rigid Beacon/eddy mount.",
+    hint: "Printed sliding-rail Tap adds soft compliance in the nozzle load path — sharp resonance drop vs a rigid Beacon/eddy mount (include probe weight in Toolhead Mass below).",
   },
 ];
 
@@ -671,6 +1055,11 @@ export const DesignPanel: React.FC<Props> = ({
   const [tensionDraft, setTensionDraft] = useState<number>(spec?.gantry.belt.pretension_n ?? 28);
   const tensionTimerRef = useRef<number | null>(null);
 
+  const [carriageMassDraft, setCarriageMassDraft] = useState<number>(
+    Math.round(spec?.gantry.carriage_mass_g ?? 140)
+  );
+  const carriageMassTimerRef = useRef<number | null>(null);
+
   const [runCurrentDraft, setRunCurrentDraft] = useState<number>(
     spec?.kinematics.xy_stepper.run_current_a ?? 1.2
   );
@@ -691,10 +1080,30 @@ export const DesignPanel: React.FC<Props> = ({
   );
   const nozzleZTimerRef = useRef<number | null>(null);
 
-  const [toolheadStiffnessDraft, setToolheadStiffnessDraft] = useState<number>(
-    Math.round(spec?.toolhead.internal_stiffness_n_per_mm ?? 450)
+  const [hotendStiffnessDraft, setHotendStiffnessDraft] = useState<number>(
+    Math.round(spec?.toolhead.hotend.structural_stiffness_n_per_mm ?? 450)
   );
-  const toolheadStiffnessTimerRef = useRef<number | null>(null);
+  const hotendStiffnessTimerRef = useRef<number | null>(null);
+
+  const [hotendMassDraft, setHotendMassDraft] = useState<string>(
+    String(Math.round(spec?.toolhead.hotend.mass_g ?? 45))
+  );
+  const hotendMassTimerRef = useRef<number | null>(null);
+
+  const [carriagePlateThickDraft, setCarriagePlateThickDraft] = useState<number>(
+    Number((spec?.toolhead.carriage_plate_thickness_mm ?? 5.0).toFixed(1))
+  );
+  const carriagePlateThickTimerRef = useRef<number | null>(null);
+
+  const [bodyWallThickDraft, setBodyWallThickDraft] = useState<number>(
+    Number((spec?.toolhead.body_wall_thickness_mm ?? 4.0).toFixed(1))
+  );
+  const bodyWallThickTimerRef = useRef<number | null>(null);
+
+  const [hotendMountThickDraft, setHotendMountThickDraft] = useState<number>(
+    Number((spec?.toolhead.hotend_mount_thickness_mm ?? 8.0).toFixed(1))
+  );
+  const hotendMountThickTimerRef = useRef<number | null>(null);
 
   const [chamberTempDraft, setChamberTempDraft] = useState<number>(
     Math.round(spec?.frame.chamber_temp_c ?? 25)
@@ -724,6 +1133,12 @@ export const DesignPanel: React.FC<Props> = ({
   }, [spec?.gantry.belt.pretension_n]);
 
   useEffect(() => {
+    if (spec?.gantry.carriage_mass_g != null) {
+      setCarriageMassDraft(Math.round(spec.gantry.carriage_mass_g));
+    }
+  }, [spec?.gantry.carriage_mass_g]);
+
+  useEffect(() => {
     if (spec?.kinematics.xy_stepper) {
       const nextA =
         spec.kinematics.xy_stepper.run_current_a ??
@@ -749,9 +1164,39 @@ export const DesignPanel: React.FC<Props> = ({
 
   useEffect(() => {
     if (spec) {
-      setToolheadStiffnessDraft(Math.round(spec.toolhead.internal_stiffness_n_per_mm ?? 450));
+      setHotendStiffnessDraft(
+        Math.round(spec.toolhead.hotend.structural_stiffness_n_per_mm ?? 450)
+      );
     }
-  }, [spec?.toolhead.internal_stiffness_n_per_mm]);
+  }, [spec?.toolhead.hotend.structural_stiffness_n_per_mm]);
+
+  useEffect(() => {
+    if (spec) {
+      setHotendMassDraft(String(Math.round(spec.toolhead.hotend.mass_g ?? 45)));
+    }
+  }, [spec?.toolhead.hotend.mass_g]);
+
+  useEffect(() => {
+    if (spec) {
+      setCarriagePlateThickDraft(
+        Number((spec.toolhead.carriage_plate_thickness_mm ?? 5.0).toFixed(1))
+      );
+    }
+  }, [spec?.toolhead.carriage_plate_thickness_mm]);
+
+  useEffect(() => {
+    if (spec) {
+      setBodyWallThickDraft(Number((spec.toolhead.body_wall_thickness_mm ?? 4.0).toFixed(1)));
+    }
+  }, [spec?.toolhead.body_wall_thickness_mm]);
+
+  useEffect(() => {
+    if (spec) {
+      setHotendMountThickDraft(
+        Number((spec.toolhead.hotend_mount_thickness_mm ?? 8.0).toFixed(1))
+      );
+    }
+  }, [spec?.toolhead.hotend_mount_thickness_mm]);
 
   useEffect(() => {
     if (spec) {
@@ -775,11 +1220,18 @@ export const DesignPanel: React.FC<Props> = ({
   useEffect(() => {
     return () => {
       if (tensionTimerRef.current != null) window.clearTimeout(tensionTimerRef.current);
+      if (carriageMassTimerRef.current != null) window.clearTimeout(carriageMassTimerRef.current);
       if (currentTimerRef.current != null) window.clearTimeout(currentTimerRef.current);
       if (cogYTimerRef.current != null) window.clearTimeout(cogYTimerRef.current);
       if (cogZTimerRef.current != null) window.clearTimeout(cogZTimerRef.current);
       if (nozzleZTimerRef.current != null) window.clearTimeout(nozzleZTimerRef.current);
-      if (toolheadStiffnessTimerRef.current != null) window.clearTimeout(toolheadStiffnessTimerRef.current);
+      if (hotendStiffnessTimerRef.current != null) window.clearTimeout(hotendStiffnessTimerRef.current);
+      if (hotendMassTimerRef.current != null) window.clearTimeout(hotendMassTimerRef.current);
+      if (carriagePlateThickTimerRef.current != null)
+        window.clearTimeout(carriagePlateThickTimerRef.current);
+      if (bodyWallThickTimerRef.current != null) window.clearTimeout(bodyWallThickTimerRef.current);
+      if (hotendMountThickTimerRef.current != null)
+        window.clearTimeout(hotendMountThickTimerRef.current);
       if (chamberTempTimerRef.current != null) window.clearTimeout(chamberTempTimerRef.current);
       if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
       if (posTimerRef.current != null) window.clearTimeout(posTimerRef.current);
@@ -843,6 +1295,30 @@ export const DesignPanel: React.FC<Props> = ({
     }, 220);
   };
 
+  const commitCarriageMass = (rawVal: number) => {
+    const val = Math.max(20, Math.min(600, Math.round(rawVal)));
+    if (carriageMassTimerRef.current != null) {
+      window.clearTimeout(carriageMassTimerRef.current);
+      carriageMassTimerRef.current = null;
+    }
+    if (Math.round(spec.gantry.carriage_mass_g) === val) return;
+    update(
+      (d) => {
+        d.gantry.carriage_mass_g = val;
+      },
+      `XY-Joints & Y-Carriages Mass: ${Math.round(spec.gantry.carriage_mass_g)}g → ${val}g`
+    );
+  };
+
+  const handleCarriageMassSliderChange = (nextVal: number) => {
+    const val = Math.max(20, Math.min(600, Math.round(nextVal)));
+    setCarriageMassDraft(val);
+    if (carriageMassTimerRef.current != null) window.clearTimeout(carriageMassTimerRef.current);
+    carriageMassTimerRef.current = window.setTimeout(() => {
+      commitCarriageMass(val);
+    }, 220);
+  };
+
   const specRunCurrentA =
     spec.kinematics.xy_stepper.run_current_a ??
     Math.min(spec.kinematics.xy_stepper.rated_current_a || 1.2, 1.2);
@@ -874,7 +1350,6 @@ export const DesignPanel: React.FC<Props> = ({
   const specCogYAbs = Math.round(Math.abs(spec.toolhead.cog_offset_mm?.[1] ?? 18));
   const specCogZAbs = Math.round(Math.abs(spec.toolhead.cog_offset_mm?.[2] ?? 25));
   const specNozzleZAbs = Math.round(Math.abs(spec.toolhead.nozzle_offset_mm?.[2] ?? 62));
-  const specToolheadStiffness = Math.round(spec.toolhead.internal_stiffness_n_per_mm ?? 450);
 
   const commitCogY = (rawVal: number) => {
     const val = Math.max(0, Math.min(250, Math.round(rawVal)));
@@ -945,29 +1420,132 @@ export const DesignPanel: React.FC<Props> = ({
     nozzleZTimerRef.current = window.setTimeout(() => commitNozzleZ(nextVal), 220);
   };
 
-  const commitToolheadStiffness = (rawVal: number) => {
-    const val = Math.max(25, Math.min(20000, Math.round(rawVal)));
-    if (toolheadStiffnessTimerRef.current != null) {
-      window.clearTimeout(toolheadStiffnessTimerRef.current);
-      toolheadStiffnessTimerRef.current = null;
+  const specHotendStiffness = Math.round(spec.toolhead.hotend.structural_stiffness_n_per_mm ?? 450);
+  const commitHotendStiffness = (rawVal: number) => {
+    const val = Math.max(25, Math.min(4000, Math.round(rawVal)));
+    if (hotendStiffnessTimerRef.current != null) {
+      window.clearTimeout(hotendStiffnessTimerRef.current);
+      hotendStiffnessTimerRef.current = null;
     }
-    if (val === specToolheadStiffness) return;
+    if (val === specHotendStiffness) return;
     update(
       (d) => {
-        d.toolhead.internal_stiffness_n_per_mm = val;
-        d.toolhead.preset_id = "custom";
+        d.toolhead.hotend.structural_stiffness_n_per_mm = val;
+        d.toolhead.hotend.preset_id = null;
       },
-      `Toolhead Stiffness: ${specToolheadStiffness} → ${val} N/mm`
+      `Hotend Stiffness: ${specHotendStiffness} → ${val} N/mm`
     );
   };
 
-  const handleToolheadStiffnessSliderChange = (nextVal: number) => {
-    setToolheadStiffnessDraft(nextVal);
-    if (toolheadStiffnessTimerRef.current != null) {
-      window.clearTimeout(toolheadStiffnessTimerRef.current);
+  const handleHotendStiffnessSliderChange = (nextVal: number) => {
+    setHotendStiffnessDraft(nextVal);
+    if (hotendStiffnessTimerRef.current != null) {
+      window.clearTimeout(hotendStiffnessTimerRef.current);
     }
-    toolheadStiffnessTimerRef.current = window.setTimeout(
-      () => commitToolheadStiffness(nextVal),
+    hotendStiffnessTimerRef.current = window.setTimeout(
+      () => commitHotendStiffness(nextVal),
+      220
+    );
+  };
+
+  const specHotendMassG = Math.round(spec.toolhead.hotend.mass_g ?? 45);
+  const assembledToolheadMassG = Math.round(spec.toolhead.total_mass_g + specHotendMassG);
+  const commitHotendMass = (rawVal: number) => {
+    const val = Math.max(5, Math.min(400, Math.round(rawVal)));
+    if (hotendMassTimerRef.current != null) {
+      window.clearTimeout(hotendMassTimerRef.current);
+      hotendMassTimerRef.current = null;
+    }
+    if (val === specHotendMassG) return;
+    update(
+      (d) => {
+        d.toolhead.hotend.mass_g = val;
+      },
+      `Hotend Weight: ${specHotendMassG}g → ${val}g`
+    );
+  };
+
+  const specCarriagePlateThickMm = Number(
+    (spec.toolhead.carriage_plate_thickness_mm ?? 5.0).toFixed(1)
+  );
+  const commitCarriagePlateThick = (rawVal: number) => {
+    const val = Math.max(2.0, Math.min(15.0, Math.round(rawVal * 2) / 2));
+    if (carriagePlateThickTimerRef.current != null) {
+      window.clearTimeout(carriagePlateThickTimerRef.current);
+      carriagePlateThickTimerRef.current = null;
+    }
+    if (Math.abs(val - specCarriagePlateThickMm) < 0.05) return;
+    update(
+      (d) => {
+        d.toolhead.carriage_plate_thickness_mm = val;
+        d.toolhead.preset_id = "custom";
+      },
+      `X-Carriage Plate Thickness: ${specCarriagePlateThickMm.toFixed(1)}mm → ${val.toFixed(1)}mm`
+    );
+  };
+  const handleCarriagePlateThickSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 2) / 2;
+    setCarriagePlateThickDraft(rounded);
+    if (carriagePlateThickTimerRef.current != null) {
+      window.clearTimeout(carriagePlateThickTimerRef.current);
+    }
+    carriagePlateThickTimerRef.current = window.setTimeout(
+      () => commitCarriagePlateThick(rounded),
+      220
+    );
+  };
+
+  const specBodyWallThickMm = Number((spec.toolhead.body_wall_thickness_mm ?? 4.0).toFixed(1));
+  const commitBodyWallThick = (rawVal: number) => {
+    const val = Math.max(2.0, Math.min(12.0, Math.round(rawVal * 2) / 2));
+    if (bodyWallThickTimerRef.current != null) {
+      window.clearTimeout(bodyWallThickTimerRef.current);
+      bodyWallThickTimerRef.current = null;
+    }
+    if (Math.abs(val - specBodyWallThickMm) < 0.05) return;
+    update(
+      (d) => {
+        d.toolhead.body_wall_thickness_mm = val;
+        d.toolhead.preset_id = "custom";
+      },
+      `Toolhead Body Wall: ${specBodyWallThickMm.toFixed(1)}mm → ${val.toFixed(1)}mm`
+    );
+  };
+  const handleBodyWallThickSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 2) / 2;
+    setBodyWallThickDraft(rounded);
+    if (bodyWallThickTimerRef.current != null) {
+      window.clearTimeout(bodyWallThickTimerRef.current);
+    }
+    bodyWallThickTimerRef.current = window.setTimeout(() => commitBodyWallThick(rounded), 220);
+  };
+
+  const specHotendMountThickMm = Number(
+    (spec.toolhead.hotend_mount_thickness_mm ?? 8.0).toFixed(1)
+  );
+  const commitHotendMountThick = (rawVal: number) => {
+    const val = Math.max(3.0, Math.min(20.0, Math.round(rawVal * 2) / 2));
+    if (hotendMountThickTimerRef.current != null) {
+      window.clearTimeout(hotendMountThickTimerRef.current);
+      hotendMountThickTimerRef.current = null;
+    }
+    if (Math.abs(val - specHotendMountThickMm) < 0.05) return;
+    update(
+      (d) => {
+        d.toolhead.hotend_mount_thickness_mm = val;
+        d.toolhead.preset_id = "custom";
+      },
+      `Hotend Mount Thickness: ${specHotendMountThickMm.toFixed(1)}mm → ${val.toFixed(1)}mm`
+    );
+  };
+  const handleHotendMountThickSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 2) / 2;
+    setHotendMountThickDraft(rounded);
+    if (hotendMountThickTimerRef.current != null) {
+      window.clearTimeout(hotendMountThickTimerRef.current);
+    }
+    hotendMountThickTimerRef.current = window.setTimeout(
+      () => commitHotendMountThick(rounded),
       220
     );
   };
@@ -1018,6 +1596,13 @@ export const DesignPanel: React.FC<Props> = ({
 
   const currentCornerJoint: CornerJointType = spec.frame.corner_joint_type ?? "blind_joint";
   const currentRailPreload: RailPreloadType = spec.gantry.rail_preload ?? "Z0";
+  const currentRailQuality: RailQualityType = spec.gantry.rail_quality ?? "hiwin_genuine";
+  const railQualityOptions =
+    catalog.rail_qualities && catalog.rail_qualities.length > 0
+      ? catalog.rail_qualities
+      : FALLBACK_RAIL_QUALITIES;
+  const selectedRailQuality =
+    railQualityOptions.find((q) => q.id === currentRailQuality) ?? railQualityOptions[2] ?? railQualityOptions[0];
   const currentRailBlock: RailBlockType = spec.gantry.rail_block_type ?? "H";
   const currentRailBoltPitch: number = spec.gantry.rail_bolt_pitch_mm ?? 25;
   const currentRailBacker: RailBackerMaterialType = spec.gantry.rail_backer_material ?? "none";
@@ -1159,6 +1744,16 @@ export const DesignPanel: React.FC<Props> = ({
   const simBracketStiffness = sim?.kinematics.bracket_stiffness_n_per_mm;
   const bracketCreepRisk = Boolean(sim?.kinematics.bracket_creep_risk);
 
+  const gantryWeightClasses: GantryWeightClassItem[] =
+    catalog.gantry_weight_classes && catalog.gantry_weight_classes.length > 0
+      ? catalog.gantry_weight_classes
+      : FALLBACK_GANTRY_WEIGHT_CLASSES;
+  const matchedWeightClass =
+    gantryWeightClasses.find(
+      (cls) => Math.abs(cls.carriage_mass_g - spec.gantry.carriage_mass_g) < 0.5
+    ) ?? null;
+  const simMassSummary = sim?.geometry?.mass_summary ?? null;
+
   const xRailMounts: RailMountOption<XRailMountType>[] =
     catalog.x_rail_mounts && catalog.x_rail_mounts.length > 0
       ? catalog.x_rail_mounts
@@ -1211,8 +1806,49 @@ export const DesignPanel: React.FC<Props> = ({
   const motorOvercurrentDraft = runCurrentDraft > ratedCurrentA + 1e-6 || Boolean(sim?.kinematics.motor_overcurrent_risk);
 
   const toolheadPresets = catalog.toolhead_presets ?? [];
+  const toolheadConstructions: ToolheadConstructionCatalogItem[] =
+    catalog.toolhead_constructions && catalog.toolhead_constructions.length > 0
+      ? catalog.toolhead_constructions
+      : TOOLHEAD_CONSTRUCTION_OPTIONS;
+  const currentBodyConstruction: ToolheadConstructionType = inferToolheadConstruction(spec, sim);
+  const selectedBodyConstruction: ToolheadConstructionCatalogItem =
+    toolheadConstructions.find((c) => c.id === currentBodyConstruction) ??
+    TOOLHEAD_CONSTRUCTION_OPTIONS[1];
   const currentMountMaterial: ToolheadMountMaterial =
     spec.toolhead.mount_material ?? "abs_printed";
+  const currentCarriageMountMat: string =
+    spec.toolhead.carriage_mount_material || currentMountMaterial;
+  const currentBodyMat: string =
+    spec.toolhead.body_material || currentMountMaterial;
+  const currentHotendMountMat: string =
+    spec.toolhead.hotend_mount_material || currentBodyMat;
+
+  const hotendPresets: HotendPresetItem[] =
+    catalog.hotend_presets && catalog.hotend_presets.length > 0
+      ? catalog.hotend_presets
+      : FALLBACK_HOTEND_PRESETS;
+  const currentHotendMountStyle: HotendMountStyle =
+    spec.toolhead.hotend.mount_style ?? "rigid_4bolt_m3";
+  const matchedHotendPreset = hotendPresets.find(
+    (hp) => hp.id === spec.toolhead.hotend.preset_id
+  );
+  const selectedHotendPresetVal = matchedHotendPreset ? matchedHotendPreset.id : "__custom__";
+  const hotendTier = hotendStiffnessTier(hotendStiffnessDraft);
+
+  const zRailProfileOptions =
+    catalog.z_rail_profiles && catalog.z_rail_profiles.length > 0
+      ? catalog.z_rail_profiles
+      : FALLBACK_Z_RAIL_PROFILES;
+  const currentZRailProfile: ZRailProfileType = spec.bed.z_rail_profile ?? "mgn12_rail";
+
+  const zDriveMechanismOptions: Array<{ id: string; name: string }> =
+    catalog.z_drive_mechanisms && catalog.z_drive_mechanisms.length > 0
+      ? [
+          { id: "auto", name: "Auto (Match Z Architecture)" },
+          ...catalog.z_drive_mechanisms.map((m) => ({ id: m.id, name: m.name })),
+        ]
+      : FALLBACK_Z_DRIVE_MECHANISMS;
+  const currentZLeadscrewType: ZLeadscrewType = spec.bed.z_leadscrew_type ?? "auto";
   const matchedToolheadPreset = toolheadPresets.find(
     (tp) =>
       tp.preset_id === spec.toolhead.preset_id &&
@@ -1222,13 +1858,13 @@ export const DesignPanel: React.FC<Props> = ({
       Math.round(Math.abs(tp.nozzle_offset_mm[2])) === specNozzleZAbs &&
       tp.mount_material === currentMountMaterial &&
       (tp.z_probe_type ?? "static_eddy") === currentZProbe &&
-      (tp.internal_stiffness_n_per_mm == null ||
-        Math.round(tp.internal_stiffness_n_per_mm) === specToolheadStiffness)
+      (!tp.body_construction ||
+        spec.toolhead.body_construction == null ||
+        tp.body_construction === spec.toolhead.body_construction)
   );
   const selectedToolheadPresetVal = matchedToolheadPreset
     ? matchedToolheadPreset.preset_id
     : "__custom__";
-  const stiffnessTier = toolheadStiffnessTier(toolheadStiffnessDraft);
 
   return (
     <aside className="sidebar">
@@ -1954,11 +2590,19 @@ export const DesignPanel: React.FC<Props> = ({
                     value={spec.gantry.x_beam_profile}
                     onChange={(e) => {
                       const nextVal = e.target.value;
+                      const autoMat = inferAutoXBeamMaterial(nextVal, spec.gantry.x_beam_material);
+                      const shouldPairMat =
+                        autoMat != null && autoMat !== spec.gantry.x_beam_material;
                       update(
                         (d) => {
                           d.gantry.x_beam_profile = nextVal;
+                          if (shouldPairMat && autoMat) {
+                            d.gantry.x_beam_material = autoMat;
+                          }
                         },
-                        `X Beam Profile: ${profileLabel(spec.gantry.x_beam_profile)} → ${profileLabel(nextVal)}`
+                        shouldPairMat && autoMat
+                          ? `X Beam Profile: ${profileLabel(spec.gantry.x_beam_profile)} → ${profileLabel(nextVal)} (${materialLabel(autoMat)})`
+                          : `X Beam Profile: ${profileLabel(spec.gantry.x_beam_profile)} → ${profileLabel(nextVal)}`
                       );
                     }}
                   >
@@ -1990,6 +2634,175 @@ export const DesignPanel: React.FC<Props> = ({
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div className="sub-block">
+                <div className="sub-block-title">
+                  <span>Y-Gantry Moving Hardware &amp; Weight Class</span>
+                  <span className="sub-block-tag">
+                    {matchedWeightClass ? matchedWeightClass.short_name : "Custom"} ·{" "}
+                    {Math.round(carriageMassDraft)}g
+                  </span>
+                </div>
+
+                {showHints && (
+                  <div className="hint-line">
+                    {matchedWeightClass?.notes ??
+                      "Combined mass of XY-joint blocks, idler hardware & Y-rail carriages moving on Y."}
+                  </div>
+                )}
+
+                <div className="field-row">
+                  <label>Weight Class Preset</label>
+                  <select
+                    value={matchedWeightClass ? matchedWeightClass.id : "__custom__"}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      if (nextId === "__custom__") return;
+                      const cls = gantryWeightClasses.find((c) => c.id === nextId);
+                      if (!cls) return;
+                      if (carriageMassTimerRef.current != null) {
+                        window.clearTimeout(carriageMassTimerRef.current);
+                        carriageMassTimerRef.current = null;
+                      }
+                      setCarriageMassDraft(Math.round(cls.carriage_mass_g));
+                      const nextBracketValid = gantryBrackets.some(
+                        (b) => b.id === cls.suggested_bracket_material
+                      );
+                      update(
+                        (d) => {
+                          d.gantry.carriage_mass_g = cls.carriage_mass_g;
+                          if (nextBracketValid) {
+                            d.gantry.bracket_material =
+                              cls.suggested_bracket_material as BracketMaterialType;
+                          }
+                        },
+                        `Y-Gantry Weight Class: ${matchedWeightClass ? matchedWeightClass.short_name : `Custom (${Math.round(spec.gantry.carriage_mass_g)}g)`} → ${cls.short_name} (${Math.round(cls.carriage_mass_g)}g)`
+                      );
+                    }}
+                  >
+                    {gantryWeightClasses.map((cls) => (
+                      <option key={cls.id} value={cls.id}>
+                        {cls.name}
+                      </option>
+                    ))}
+                    {!matchedWeightClass && (
+                      <option value="__custom__">
+                        Custom Weight ({Math.round(spec.gantry.carriage_mass_g)}g)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                <div className="slider-row">
+                  <label>
+                    <span>XY-Joints &amp; Y-Carriages Mass (g)</span>
+                    <span className="tension-readout">
+                      <strong>{Math.round(carriageMassDraft)} g</strong>
+                    </span>
+                  </label>
+                  <div className="tension-control-row">
+                    <input
+                      type="range"
+                      min={20}
+                      max={600}
+                      step={5}
+                      value={Math.max(20, Math.min(600, Math.round(carriageMassDraft)))}
+                      onChange={(e) => handleCarriageMassSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitCarriageMass(carriageMassDraft)}
+                      onKeyUp={() => commitCarriageMass(carriageMassDraft)}
+                    />
+                    <input
+                      type="number"
+                      className="tension-num-input"
+                      min={20}
+                      max={600}
+                      step={5}
+                      value={carriageMassDraft}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        setCarriageMassDraft(v);
+                        if (v >= 20 && v <= 600) {
+                          commitCarriageMass(v);
+                        }
+                      }}
+                      onBlur={() => commitCarriageMass(carriageMassDraft)}
+                    />
+                  </div>
+                </div>
+
+                {simMassSummary && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      gap: "4px 6px",
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      background: "rgba(13, 19, 29, 0.78)",
+                      border: "1px solid rgba(56, 189, 248, 0.22)",
+                      fontSize: 10.5,
+                      lineHeight: 1.4,
+                      color: "var(--muted)",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {simMassSummary.x_beam_mass_g != null && (
+                      <>
+                        <span>
+                          X-Beam:{" "}
+                          <strong style={{ color: "var(--text)" }}>
+                            {Math.round(simMassSummary.x_beam_mass_g)}g
+                          </strong>
+                        </span>
+                        <span style={{ opacity: 0.45 }}>·</span>
+                      </>
+                    )}
+                    {simMassSummary.x_rail_mass_g != null && (
+                      <>
+                        <span>
+                          X-Rail:{" "}
+                          <strong style={{ color: "var(--text)" }}>
+                            {Math.round(simMassSummary.x_rail_mass_g)}g
+                          </strong>
+                        </span>
+                        <span style={{ opacity: 0.45 }}>·</span>
+                      </>
+                    )}
+                    {(simMassSummary.x_backer_mass_g ?? 0) > 0 && (
+                      <>
+                        <span>
+                          Backer:{" "}
+                          <strong style={{ color: "var(--text)" }}>
+                            {Math.round(simMassSummary.x_backer_mass_g!)}g
+                          </strong>
+                        </span>
+                        <span style={{ opacity: 0.45 }}>·</span>
+                      </>
+                    )}
+                    <span>
+                      XY-Joints:{" "}
+                      <strong style={{ color: "var(--text)" }}>
+                        {Math.round(
+                          simMassSummary.y_carriage_joints_mass_g ?? spec.gantry.carriage_mass_g
+                        )}
+                        g
+                      </strong>
+                    </span>
+                    <span style={{ opacity: 0.45 }}>·</span>
+                    <span>
+                      Toolhead:{" "}
+                      <strong style={{ color: "var(--text)" }}>
+                        {Math.round(simMassSummary.x_moving_mass_g)}g
+                      </strong>
+                    </span>
+                    <span style={{ color: "var(--accent)", fontWeight: 700, marginLeft: 2 }}>
+                      → Total Y: {Math.round(simMassSummary.y_moving_mass_g)}g
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="sub-block">
@@ -2143,6 +2956,46 @@ export const DesignPanel: React.FC<Props> = ({
                     </select>
                   </div>
                   <div className="field-row">
+                    <label>Rail Quality / Grade</label>
+                    <select
+                      value={currentRailQuality}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as RailQualityType;
+                        const prevLbl = selectedRailQuality.short_name;
+                        const nextLbl =
+                          railQualityOptions.find((q) => q.id === nextVal)?.short_name ?? nextVal;
+                        update(
+                          (d) => {
+                            d.gantry.rail_quality = nextVal;
+                          },
+                          `Rail Quality: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      {railQualityOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {selectedRailQuality.notes && (
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      color: "var(--muted)",
+                      marginTop: -2,
+                      marginBottom: 6,
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {selectedRailQuality.notes}
+                  </div>
+                )}
+
+                <div className="field-grid-2">
+                  <div className="field-row">
                     <label>Carriage Block</label>
                     <select
                       value={currentRailBlock}
@@ -2167,9 +3020,6 @@ export const DesignPanel: React.FC<Props> = ({
                       ))}
                     </select>
                   </div>
-                </div>
-
-                <div className="field-grid-2">
                   <div className="field-row">
                     <label>Rail Bolt Pitch</label>
                     <select
@@ -2189,32 +3039,33 @@ export const DesignPanel: React.FC<Props> = ({
                       <option value={50}>50 mm (Every Other)</option>
                     </select>
                   </div>
-                  <div className="field-row">
-                    <label>Thermal Rail Backer</label>
-                    <select
-                      value={currentRailBacker}
-                      onChange={(e) => {
-                        const nextVal = e.target.value as RailBackerMaterialType;
-                        const prevLbl =
-                          RAIL_BACKER_OPTIONS.find((o) => o.id === currentRailBacker)?.shortLabel ??
-                          currentRailBacker;
-                        const nextLbl =
-                          RAIL_BACKER_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
-                        update(
-                          (d) => {
-                            d.gantry.rail_backer_material = nextVal;
-                          },
-                          `Rail Backer: ${prevLbl} → ${nextLbl}`
-                        );
-                      }}
-                    >
-                      {RAIL_BACKER_OPTIONS.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                </div>
+
+                <div className="field-row">
+                  <label>Thermal Rail Backer</label>
+                  <select
+                    value={currentRailBacker}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as RailBackerMaterialType;
+                      const prevLbl =
+                        RAIL_BACKER_OPTIONS.find((o) => o.id === currentRailBacker)?.shortLabel ??
+                        currentRailBacker;
+                      const nextLbl =
+                        RAIL_BACKER_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                      update(
+                        (d) => {
+                          d.gantry.rail_backer_material = nextVal;
+                        },
+                        `Rail Backer: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {RAIL_BACKER_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {simLinearRails && (
@@ -2763,7 +3614,13 @@ export const DesignPanel: React.FC<Props> = ({
             <div className="section-card">
               <div className="section-title">
                 <span>Toolhead CoG, Nozzle &amp; Mount</span>
-                <span className="sub-block-tag">{spec.toolhead.total_mass_g}g</span>
+                <span
+                  className="sub-block-tag"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                  title="Toolhead Mass (excl. hotend) + Hotend Weight"
+                >
+                  {assembledToolheadMassG}g total
+                </span>
               </div>
 
               {showHints && (
@@ -2790,6 +3647,12 @@ export const DesignPanel: React.FC<Props> = ({
                         d.toolhead.cog_offset_mm = [...chosen.cog_offset_mm];
                         d.toolhead.nozzle_offset_mm = [...chosen.nozzle_offset_mm];
                         d.toolhead.mount_material = chosen.mount_material;
+                        d.toolhead.carriage_mount_material = chosen.mount_material;
+                        d.toolhead.body_material = chosen.mount_material;
+                        d.toolhead.hotend_mount_material = chosen.mount_material;
+                        if (chosen.body_construction != null) {
+                          d.toolhead.body_construction = chosen.body_construction;
+                        }
                         d.toolhead.z_probe_type = chosen.z_probe_type ?? "static_eddy";
                         if (chosen.internal_stiffness_n_per_mm != null) {
                           d.toolhead.internal_stiffness_n_per_mm =
@@ -2865,101 +3728,323 @@ export const DesignPanel: React.FC<Props> = ({
                 )}
               </div>
 
-              <div className="field-grid-2">
-                <div className="field-row">
-                  <label>Carriage / Mount</label>
+              <div className="sub-block">
+                <div className="sub-block-title">
+                  <span>Toolhead Construction &amp; Parts</span>
+                  <span className="sub-block-tag">
+                    {toolheadPartMatShort(currentCarriageMountMat)} /{" "}
+                    {toolheadPartMatShort(currentBodyMat)} /{" "}
+                    {toolheadPartMatShort(currentHotendMountMat)}
+                  </span>
+                </div>
+                {showHints && (
+                  <div className="hint-line">
+                    Choose the structural architecture and tune material &amp; section thickness per
+                    stage — stiffness updates directly while weight stays strictly what you enter
+                    below.
+                  </div>
+                )}
+
+                {/* 0. Body Construction / Architecture */}
+                <div
+                  className="field-row"
+                  style={{
+                    marginBottom: 10,
+                    paddingBottom: 8,
+                    borderBottom: "1px dashed rgba(255, 255, 255, 0.08)",
+                  }}
+                >
+                  <label>
+                    <span>Body Construction / Architecture</span>
+                    <span className="sub-block-tag" style={{ color: "var(--accent)" }}>
+                      {selectedBodyConstruction.short_name}
+                    </span>
+                  </label>
                   <select
-                    value={currentMountMaterial}
+                    value={currentBodyConstruction}
                     onChange={(e) => {
-                      const nextMat = e.target.value as ToolheadMountMaterial;
+                      const nextVal = e.target.value as ToolheadConstructionType;
+                      const prevShort = selectedBodyConstruction.short_name;
+                      const nextItem =
+                        toolheadConstructions.find((c) => c.id === nextVal) ??
+                        selectedBodyConstruction;
                       update(
                         (d) => {
-                          d.toolhead.mount_material = nextMat;
+                          d.toolhead.body_construction = nextVal;
                           d.toolhead.preset_id = "custom";
                         },
-                        `Toolhead Mount: ${mountMaterialShort(currentMountMaterial)} → ${mountMaterialShort(
-                          nextMat
-                        )}`
+                        `Toolhead Construction: ${prevShort} → ${nextItem.short_name}`
                       );
                     }}
                   >
-                    {MOUNT_MATERIAL_OPTIONS.map((opt) => (
+                    {toolheadConstructions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div
+                    style={{
+                      marginTop: 5,
+                      fontSize: 10.5,
+                      lineHeight: 1.35,
+                      color: "var(--muted)",
+                    }}
+                  >
+                    {selectedBodyConstruction.notes}
+                  </div>
+                </div>
+
+                {/* 1. X-Carriage Backplate */}
+                <div className="field-row" style={{ marginBottom: 8 }}>
+                  <label>
+                    <span>X-Carriage Backplate</span>
+                    <span
+                      className="sub-block-tag"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {carriagePlateThickDraft.toFixed(1)} mm
+                    </span>
+                  </label>
+                  <select
+                    value={currentCarriageMountMat}
+                    onChange={(e) => {
+                      const nextMat = e.target.value;
+                      update(
+                        (d) => {
+                          d.toolhead.carriage_mount_material = nextMat;
+                          if (MOUNT_MATERIAL_OPTIONS.some((o) => o.id === nextMat)) {
+                            d.toolhead.mount_material = nextMat as ToolheadMountMaterial;
+                          }
+                          d.toolhead.preset_id = "custom";
+                        },
+                        `X-Carriage Backplate: ${toolheadPartMatShort(currentCarriageMountMat)} → ${toolheadPartMatShort(nextMat)}`
+                      );
+                    }}
+                  >
+                    {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
                       <option key={opt.id} value={opt.id}>
                         {opt.label}
                       </option>
                     ))}
                   </select>
+                  <div
+                    className="tension-control-row"
+                    style={{ marginTop: 4, alignItems: "center", gap: 6 }}
+                  >
+                    <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      Plate
+                    </span>
+                    <input
+                      type="range"
+                      min={2.0}
+                      max={15.0}
+                      step={0.5}
+                      value={carriagePlateThickDraft}
+                      onChange={(e) => handleCarriagePlateThickSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitCarriagePlateThick(carriagePlateThickDraft)}
+                      onKeyUp={() => commitCarriagePlateThick(carriagePlateThickDraft)}
+                    />
+                  </div>
                 </div>
-                <div className="field-row">
-                  <label>Toolhead Mass (g)</label>
-                  <input
-                    type="number"
-                    min={50}
-                    max={1200}
-                    step={5}
-                    value={spec.toolhead.total_mass_g}
-                    onChange={(e) =>
-                      updatePositiveNum(
-                        e.target.value,
-                        (d, v) => {
-                          d.toolhead.total_mass_g = v;
+
+                {/* 2. Toolhead / Extruder Body */}
+                <div className="field-row" style={{ marginBottom: 8 }}>
+                  <label>
+                    <span>Toolhead / Extruder Body</span>
+                    <span
+                      className="sub-block-tag"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {bodyWallThickDraft.toFixed(1)} mm
+                    </span>
+                  </label>
+                  <select
+                    value={currentBodyMat}
+                    onChange={(e) => {
+                      const nextMat = e.target.value;
+                      update(
+                        (d) => {
+                          d.toolhead.body_material = nextMat;
                           d.toolhead.preset_id = "custom";
                         },
-                        (v) => `Toolhead Mass: ${spec.toolhead.total_mass_g}g → ${v}g`
-                      )
-                    }
-                  />
+                        `Toolhead Body: ${toolheadPartMatShort(currentBodyMat)} → ${toolheadPartMatShort(nextMat)}`
+                      );
+                    }}
+                  >
+                    {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div
+                    className="tension-control-row"
+                    style={{ marginTop: 4, alignItems: "center", gap: 6 }}
+                  >
+                    <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      Wall
+                    </span>
+                    <input
+                      type="range"
+                      min={2.0}
+                      max={12.0}
+                      step={0.5}
+                      value={bodyWallThickDraft}
+                      onChange={(e) => handleBodyWallThickSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitBodyWallThick(bodyWallThickDraft)}
+                      onKeyUp={() => commitBodyWallThick(bodyWallThickDraft)}
+                    />
+                  </div>
                 </div>
+
+                {/* 3. Hotend Mount / Clamp */}
+                <div className="field-row" style={{ marginBottom: 4 }}>
+                  <label>
+                    <span>Hotend Mount / Clamp</span>
+                    <span
+                      className="sub-block-tag"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {hotendMountThickDraft.toFixed(1)} mm
+                    </span>
+                  </label>
+                  <select
+                    value={currentHotendMountMat}
+                    onChange={(e) => {
+                      const nextMat = e.target.value;
+                      update(
+                        (d) => {
+                          d.toolhead.hotend_mount_material = nextMat;
+                          d.toolhead.preset_id = "custom";
+                        },
+                        `Hotend Clamp: ${toolheadPartMatShort(currentHotendMountMat)} → ${toolheadPartMatShort(nextMat)}`
+                      );
+                    }}
+                  >
+                    {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div
+                    className="tension-control-row"
+                    style={{ marginTop: 4, alignItems: "center", gap: 6 }}
+                  >
+                    <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      Clamp
+                    </span>
+                    <input
+                      type="range"
+                      min={3.0}
+                      max={20.0}
+                      step={0.5}
+                      value={hotendMountThickDraft}
+                      onChange={(e) => handleHotendMountThickSliderChange(Number(e.target.value))}
+                      onPointerUp={() => commitHotendMountThick(hotendMountThickDraft)}
+                      onKeyUp={() => commitHotendMountThick(hotendMountThickDraft)}
+                    />
+                  </div>
+                </div>
+
+                {(() => {
+                  const stageStiff = sim?.geometry?.toolhead_structure?.stage_stiffnesses_n_per_mm;
+                  const flexBreakdown = sim?.static_fea?.toolhead_flex_breakdown;
+                  if (!stageStiff && !flexBreakdown) return null;
+                  const kRailBlock = stageStiff?.rail_carriage_n_per_mm;
+                  const kBackplate =
+                    stageStiff?.backplate_only_n_per_mm ??
+                    stageStiff?.carriage_mount_n_per_mm ??
+                    flexBreakdown?.carriage_mount_stiffness_n_per_mm;
+                  const kBody = stageStiff?.body_n_per_mm;
+                  const kHotend =
+                    stageStiff?.hotend_total_n_per_mm ?? flexBreakdown?.hotend_stiffness_n_per_mm;
+                  const kCombined =
+                    stageStiff?.combined_toolhead_n_per_mm ??
+                    flexBreakdown?.effective_tip_stiffness_n_per_mm;
+                  const fmtK = (v?: number) =>
+                    v != null && Number.isFinite(v) && v > 0
+                      ? `${Math.round(v).toLocaleString()} N/mm`
+                      : "—";
+                  return (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "3px 10px",
+                        fontSize: 10.5,
+                        color: "var(--muted)",
+                        marginTop: 6,
+                        paddingTop: 6,
+                        borderTop: "1px dashed rgba(255, 255, 255, 0.08)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      <span>
+                        Backplate:{" "}
+                        <strong style={{ color: "var(--text)" }}>{fmtK(kBackplate)}</strong>
+                      </span>
+                      <span>
+                        Body: <strong style={{ color: "var(--text)" }}>{fmtK(kBody)}</strong>
+                      </span>
+                      <span>
+                        Hotend: <strong style={{ color: "var(--text)" }}>{fmtK(kHotend)}</strong>
+                      </span>
+                      <span>
+                        Combined Tip:{" "}
+                        <strong style={{ color: "var(--accent)" }}>{fmtK(kCombined)}</strong>
+                      </span>
+                      {kRailBlock != null && Number.isFinite(kRailBlock) && kRailBlock > 0 && (
+                        <span
+                          style={{
+                            gridColumn: "1 / -1",
+                            fontSize: 10,
+                            opacity: 0.85,
+                            marginTop: 1,
+                          }}
+                        >
+                          MGN Rail ({selectedRailQuality.short_name} · {currentRailPreload}):{" "}
+                          <strong style={{ color: "var(--text)" }}>{fmtK(kRailBlock)}</strong>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
-              <div className="slider-row">
+              <div className="field-row">
                 <label>
-                  <span>Toolhead Internal Stiffness (N/mm)</span>
-                  <span className="tension-readout">
-                    <strong>{toolheadStiffnessDraft.toLocaleString()} N/mm</strong>
-                    <span className="kpi-sub" style={{ color: stiffnessTier.color }}>
-                      {stiffnessTier.label}
-                    </span>
+                  <span>Toolhead Mass (excl. Hotend, g)</span>
+                  <span
+                    className="sub-block-tag"
+                    style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}
+                    title="Assembled toolhead weight: Toolhead Mass + Hotend Weight"
+                  >
+                    + Hotend = {assembledToolheadMassG}g
                   </span>
                 </label>
-                <div className="tension-control-row">
-                  <input
-                    type="range"
-                    min={50}
-                    max={3000}
-                    step={25}
-                    value={Math.max(50, Math.min(3000, toolheadStiffnessDraft))}
-                    onChange={(e) => handleToolheadStiffnessSliderChange(Number(e.target.value))}
-                    onPointerUp={() => commitToolheadStiffness(toolheadStiffnessDraft)}
-                    onKeyUp={() => commitToolheadStiffness(toolheadStiffnessDraft)}
-                  />
-                  <input
-                    type="number"
-                    className="tension-num-input"
-                    min={25}
-                    max={20000}
-                    step={25}
-                    value={toolheadStiffnessDraft}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (!Number.isFinite(v)) return;
-                      setToolheadStiffnessDraft(v);
-                      if (v >= 25 && v <= 20000) commitToolheadStiffness(v);
-                    }}
-                    onBlur={() => {
-                      const clamped = Math.max(25, Math.min(20000, Math.round(toolheadStiffnessDraft)));
-                      setToolheadStiffnessDraft(clamped);
-                      commitToolheadStiffness(clamped);
-                    }}
-                  />
+                <input
+                  type="number"
+                  min={50}
+                  max={1200}
+                  step={5}
+                  value={spec.toolhead.total_mass_g}
+                  onChange={(e) =>
+                    updatePositiveNum(
+                      e.target.value,
+                      (d, v) => {
+                        d.toolhead.total_mass_g = v;
+                        d.toolhead.preset_id = "custom";
+                      },
+                      (v) => `Toolhead Mass: ${spec.toolhead.total_mass_g}g → ${v}g`
+                    )
+                  }
+                />
+                <div className="hint-line">
+                  Weight of body, extruder, fans &amp; probe WITHOUT hotend — Hotend Weight (
+                  {specHotendMassG}g) is added separately below.
                 </div>
-                {showHints && (
-                  <div className="hint-line">
-                    Accounts for flex inside the toolhead body &amp; hotend clamp (&lt;250 Soft
-                    Printed · 250–700 Standard Printed · 700–1500 Rigid CF-Polymer · &gt;1500 CNC
-                    Monoblock).
-                  </div>
-                )}
               </div>
 
               <div className="slider-row">
@@ -3093,13 +4178,205 @@ export const DesignPanel: React.FC<Props> = ({
             </div>
 
             <div className="section-card">
-              <div className="section-title">Hotend Thermal &amp; Cooling</div>
+              <div className="section-title">
+                <span>Hotend Stiffness, Thermal &amp; Cooling</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span className="sub-block-tag" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {specHotendMassG}g
+                  </span>
+                  <span className="sub-block-tag" style={{ color: hotendTier.color }}>
+                    {hotendStiffnessDraft} N/mm
+                  </span>
+                </span>
+              </div>
 
               {showHints && (
                 <div className="hint-line">
-                  Longer melt zone &amp; higher wattage unlock faster print flow (mm³/s)
+                  Hotend mount architecture governs nozzle-tip bending stiffness (V6 groove-mount
+                  whip vs. rigid 4-bolt standoffs or Chube 6-bolt Ti shell); melt zone &amp; wattage
+                  set max volumetric flow.
                 </div>
               )}
+
+              <div className="field-row">
+                <label>Hotend Preset</label>
+                <select
+                  value={selectedHotendPresetVal}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    const chosen = hotendPresets.find((hp) => hp.id === nextId);
+                    if (!chosen) return;
+                    const prevName = spec.toolhead.hotend.name;
+                    const chosenMassG = chosen.mass_g ?? 45;
+                    update(
+                      (d) => {
+                        d.toolhead.hotend.preset_id = chosen.id;
+                        d.toolhead.hotend.name = chosen.name;
+                        d.toolhead.hotend.mass_g = chosenMassG;
+                        d.toolhead.hotend.mount_style = chosen.mount_style as HotendMountStyle;
+                        d.toolhead.hotend.structural_stiffness_n_per_mm =
+                          chosen.structural_stiffness_n_per_mm;
+                        d.toolhead.hotend.overall_length_mm = chosen.overall_length_mm;
+                        d.toolhead.hotend.heater_power_w = chosen.heater_power_w;
+                        d.toolhead.hotend.block_material = chosen.block_material;
+                        d.toolhead.hotend.block_mass_g = chosen.block_mass_g;
+                        d.toolhead.hotend.nozzle_material = chosen.nozzle_material;
+                        d.toolhead.hotend.melt_zone_length_mm = chosen.melt_zone_length_mm;
+                        d.toolhead.hotend.heatbreak_material = chosen.heatbreak_material;
+                        d.toolhead.hotend.heatbreak_length_mm = chosen.heatbreak_length_mm;
+                        d.toolhead.hotend.heatbreak_wall_mm = chosen.heatbreak_wall_mm;
+                        d.toolhead.hotend.heatbreak_id_mm = chosen.heatbreak_id_mm;
+                        d.toolhead.hotend.heatsink_thermal_resistance_k_w =
+                          chosen.heatsink_thermal_resistance_k_w;
+                        d.toolhead.hotend.max_temp_c = chosen.max_temp_c;
+                      },
+                      `Hotend: ${prevName} → ${chosen.short_name || chosen.name} (${Math.round(chosen.structural_stiffness_n_per_mm)} N/mm · ${Math.round(chosenMassG)}g)`
+                    );
+                  }}
+                >
+                  {selectedHotendPresetVal === "__custom__" && (
+                    <option value="__custom__">
+                      {spec.toolhead.hotend.name || "Custom Hotend"} — {specHotendStiffness} N/mm ·{" "}
+                      {specHotendMassG}g (Custom)
+                    </option>
+                  )}
+                  {hotendPresets.map((hp) => {
+                    const tier = hotendStiffnessTier(hp.structural_stiffness_n_per_mm);
+                    const wtStr = hp.mass_g != null ? ` · ${Math.round(hp.mass_g)}g` : "";
+                    return (
+                      <option key={hp.id} value={hp.id}>
+                        {hp.name} — {Math.round(hp.structural_stiffness_n_per_mm)} N/mm{wtStr} (
+                        {tier.label})
+                      </option>
+                    );
+                  })}
+                </select>
+                {matchedHotendPreset?.notes && showHints && (
+                  <div className="hint-line">{matchedHotendPreset.notes}</div>
+                )}
+              </div>
+
+              <div className="field-row">
+                <label>
+                  <span>Hotend Weight (g)</span>
+                  <span
+                    className="sub-block-tag"
+                    style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}
+                    title="Added directly on top of Toolhead Mass (excl. Hotend) to form moving mass"
+                  >
+                    + {specHotendMassG}g to moving mass
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  max={400}
+                  step={1}
+                  value={hotendMassDraft}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setHotendMassDraft(raw);
+                    const v = Number(raw);
+                    if (raw.trim() !== "" && Number.isFinite(v) && v >= 5 && v <= 400) {
+                      if (hotendMassTimerRef.current != null) {
+                        window.clearTimeout(hotendMassTimerRef.current);
+                      }
+                      hotendMassTimerRef.current = window.setTimeout(() => commitHotendMass(v), 220);
+                    }
+                  }}
+                  onBlur={() => {
+                    const v = Number(hotendMassDraft);
+                    const clamped =
+                      hotendMassDraft.trim() !== "" && Number.isFinite(v)
+                        ? Math.max(5, Math.min(400, Math.round(v)))
+                        : specHotendMassG;
+                    setHotendMassDraft(String(clamped));
+                    commitHotendMass(clamped);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const v = Number(hotendMassDraft);
+                      if (hotendMassDraft.trim() !== "" && Number.isFinite(v)) {
+                        const clamped = Math.max(5, Math.min(400, Math.round(v)));
+                        setHotendMassDraft(String(clamped));
+                        commitHotendMass(clamped);
+                      }
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="field-row">
+                <label>Hotend Mount Style</label>
+                <select
+                  value={currentHotendMountStyle}
+                  onChange={(e) => {
+                    const nextStyle = e.target.value as HotendMountStyle;
+                    const prevLbl =
+                      HOTEND_MOUNT_STYLE_OPTIONS.find((o) => o.id === currentHotendMountStyle)
+                        ?.shortLabel ?? currentHotendMountStyle;
+                    const nextLbl =
+                      HOTEND_MOUNT_STYLE_OPTIONS.find((o) => o.id === nextStyle)?.shortLabel ??
+                      nextStyle;
+                    update(
+                      (d) => {
+                        d.toolhead.hotend.mount_style = nextStyle;
+                        d.toolhead.hotend.preset_id = null;
+                      },
+                      `Hotend Mount: ${prevLbl} → ${nextLbl}`
+                    );
+                  }}
+                >
+                  {HOTEND_MOUNT_STYLE_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="slider-row">
+                <label>
+                  <span>Hotend Structural Stiffness (N/mm)</span>
+                  <span className="tension-readout">
+                    <strong>{hotendStiffnessDraft.toLocaleString()} N/mm</strong>
+                    <span className="kpi-sub" style={{ color: hotendTier.color }}>
+                      {hotendTier.label}
+                    </span>
+                  </span>
+                </label>
+                <div className="tension-control-row">
+                  <input
+                    type="range"
+                    min={25}
+                    max={4000}
+                    step={25}
+                    value={Math.max(25, Math.min(4000, hotendStiffnessDraft))}
+                    onChange={(e) => handleHotendStiffnessSliderChange(Number(e.target.value))}
+                    onPointerUp={() => commitHotendStiffness(hotendStiffnessDraft)}
+                    onKeyUp={() => commitHotendStiffness(hotendStiffnessDraft)}
+                  />
+                  <input
+                    type="number"
+                    className="tension-num-input"
+                    min={25}
+                    max={4000}
+                    step={25}
+                    value={hotendStiffnessDraft}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      setHotendStiffnessDraft(v);
+                      if (v >= 25 && v <= 4000) commitHotendStiffness(v);
+                    }}
+                    onBlur={() => {
+                      const clamped = Math.max(25, Math.min(4000, Math.round(hotendStiffnessDraft)));
+                      setHotendStiffnessDraft(clamped);
+                      commitHotendStiffness(clamped);
+                    }}
+                  />
+                </div>
+              </div>
 
               <div className="field-grid-2">
                 <div className="field-row">
@@ -3210,6 +4487,61 @@ export const DesignPanel: React.FC<Props> = ({
                 <strong style={{ color: "var(--accent)" }}>{zTopoMeta.badge}</strong>
                 <span>·</span>
                 <span>{zTopoMeta.caption}</span>
+              </div>
+
+              <div className="field-grid-2">
+                <div className="field-row">
+                  <label>Z Linear Rails / Guideway</label>
+                  <select
+                    value={currentZRailProfile}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as ZRailProfileType;
+                      const prevLbl =
+                        zRailProfileOptions.find((o) => o.id === currentZRailProfile)?.name ??
+                        currentZRailProfile;
+                      const nextLbl =
+                        zRailProfileOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                      update(
+                        (d) => {
+                          d.bed.z_rail_profile = nextVal;
+                        },
+                        `Z Rails: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {zRailProfileOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field-row">
+                  <label>Z Leadscrew / Drive</label>
+                  <select
+                    value={currentZLeadscrewType}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as ZLeadscrewType;
+                      const prevLbl =
+                        zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)?.name ??
+                        currentZLeadscrewType;
+                      const nextLbl =
+                        zDriveMechanismOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                      update(
+                        (d) => {
+                          d.bed.z_leadscrew_type = nextVal;
+                        },
+                        `Z Drive: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {zDriveMechanismOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="slider-row">
@@ -3481,12 +4813,13 @@ export const DesignPanel: React.FC<Props> = ({
 
               <div className="field-row">
                 <label>Panel Shell Mesh (MITC4)</label>
-                <div className="engine-toggle engine-toggle-3">
+                <div className="engine-toggle engine-toggle-4" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
                   {(
                     [
                       [2, "2×2 Fast"],
+                      [3, "3×3 Balanced"],
                       [4, "4×4 Med"],
-                      [6, "6×6 Fine"],
+                      [8, "8×8 Max"],
                     ] as Array<[number, string]>
                   ).map(([n, label]) => (
                     <button
