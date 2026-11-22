@@ -39,7 +39,7 @@ kinematics:
     preset_id: ldo_09deg_2504
     name: NEMA17-48mm 0.9deg High-Speed
     holding_torque_nm: 0.58
-    rated_current_a: 2.2
+    rated_current_a: 2.5
     run_current_a: 1.6
     phase_resistance_ohm: 1.2
     inductance_mh: 1.4

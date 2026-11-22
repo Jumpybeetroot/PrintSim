@@ -42,8 +42,8 @@ kinematics:
     preset_id: ldo_2504ac
     name: NEMA17-48mm (LDO 42STH48-2504AC)
     holding_torque_nm: 0.55
-    rated_current_a: 2.0
-    run_current_a: 1.2
+    rated_current_a: 2.5
+    run_current_a: 1.45
     phase_resistance_ohm: 1.2
     inductance_mh: 1.5
     steps_per_rev: 200

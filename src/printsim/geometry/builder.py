@@ -121,6 +121,7 @@ class AssemblyModel:
     frame_mass_kg: float = 0.0
     panel_mass_kg: float = 0.0
     backbone_mass_kg: float = 0.0
+    backbone_cost_usd: float = 0.0
     trident_backbone_active: bool = False
     extrusion_fill_mass_kg: float = 0.0
     x_rail_ei_y_boost_pct: float = 0.0
@@ -442,7 +443,7 @@ class AssemblyModel:
                 "material_name": "3mm Powder-Coated Mild Steel (Clee)",
                 "thickness_mm": 3.0,
                 "mass_kg": round(self.backbone_mass_kg, 3),
-                "cost_usd": 65.0 if self.trident_backbone_active else 0.0,
+                "cost_usd": round(self.backbone_cost_usd, 2) if self.trident_backbone_active else 0.0,
                 "z_thrust_boost_factor": 2.4 if self.trident_backbone_active else 1.0,
                 "notes": (
                     "Unified 3mm mild-steel lower plate replacing 3 printed Z-motor mounts; "
@@ -1124,6 +1125,11 @@ def _apply_corner_joint_compliance(
     if spec.frame.bracing == "corner_gussets":
         kr_in *= 1.50
         kr_tor *= 1.40
+    backbone_lower_col_boost = (
+        spec.architecture == "corexy"
+        and bool(spec.frame.trident_backbone)
+        and not spec.is_flying_gantry
+    )
     l_col = max(col_length_m, 0.15)
     # Bolted steel Z rails stop ~10% short of each corner joint; Castigliano bending-energy
     # integral M(x)^2 over the un-railed outer 10% ends is 1 - 0.8^3 = 0.488 (~49%).
@@ -1143,9 +1149,15 @@ def _apply_corner_joint_compliance(
 
         e_pa = member.material.youngs_modulus_pa
         g_pa = member.material.effective_shear_modulus_pa
-        eta_iy = 1.0 / (1.0 + (6.0 * e_pa * iy_span) / (l_col * kr_in))
-        eta_iz = 1.0 / (1.0 + (6.0 * e_pa * iz_span) / (l_col * kr_in))
-        eta_j = 1.0 / (1.0 + (2.0 * g_pa * member.profile.j_m4) / (l_col * kr_tor))
+        kr_in_m = kr_in
+        kr_tor_m = kr_tor
+        if backbone_lower_col_boost and is_corexy_col and member.id.endswith(("_bot", "_low")):
+            # Bolted 3 mm mild-steel base plate acts as a rigid base-plane corner gusset/squaring plate
+            kr_in_m *= 1.85
+            kr_tor_m *= 1.75
+        eta_iy = 1.0 / (1.0 + (6.0 * e_pa * iy_span) / (l_col * kr_in_m))
+        eta_iz = 1.0 / (1.0 + (6.0 * e_pa * iz_span) / (l_col * kr_in_m))
+        eta_j = 1.0 / (1.0 + (2.0 * g_pa * member.profile.j_m4) / (l_col * kr_tor_m))
 
         if is_cart_col:
             # Bedslinger H-frame uprights bolt flat to base frame with tee plates
@@ -2141,25 +2153,39 @@ def _add_corexy_shell_panels(
     return shell_elements, fastener_springs, total_panel_mass_kg, rep_panel_props
 
 
+def _trident_backbone_cost_usd(spec: PrinterSpec) -> float:
+    """West3D retail price for Clee's 3 mm powder-coated mild-steel Trident Backbone by build size."""
+    max_xy_mm = max(
+        float(spec.kinematics.build_volume_mm[0]),
+        float(spec.kinematics.build_volume_mm[1]),
+    )
+    if max_xy_mm <= 275.0:
+        return 44.99
+    if max_xy_mm <= 325.0:
+        return 49.99
+    return 54.99
+
+
 def _add_trident_backbone(
     spec: PrinterSpec,
     nodes: list[StructuralNode],
     nmap: dict[str, StructuralNode],
     members: list[StructuralMember],
-) -> tuple[list[ShellPanelElement], list[FastenerSpring], float]:
-    """Add Clee Trident Backbone: 3 mm mild-steel lower-frame MITC4 shell & rear Z-wing stiffener."""
+) -> tuple[list[ShellPanelElement], list[FastenerSpring], float, float]:
+    """Add Clee Trident Backbone: solid 3 mm mild-steel lower-frame MITC4 shell & rear Z-wing stiffener."""
     w = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
     t_bb = 0.003
     e_steel = 205.0e9
     nu_steel = 0.29
     rho_steel = 7850.0
-    fill_factor = 0.42
-    membrane_eff = 0.55
+    fill_factor = 0.82
+    membrane_eff = 0.88
 
     areal_mass = fill_factor * rho_steel * t_bb
     e_mem_eff = membrane_eff * e_steel * t_bb
     backbone_mass_kg = w * d * areal_mass
+    backbone_cost_usd = _trident_backbone_cost_usd(spec)
 
     bb_mat = MaterialSpec(
         id="mild_steel_powdercoated",
@@ -2172,7 +2198,7 @@ def _add_trident_backbone(
         specific_heat_j_kgk=490.0,
         thermal_expansion_1_k=12.0e-6,
         damping_ratio=0.012,
-        cost_per_kg_usd=65.0 / max(backbone_mass_kg, 0.5),
+        cost_per_kg_usd=backbone_cost_usd / max(backbone_mass_kg, 0.5),
         color_hex="#232830",
     )
 
@@ -2316,7 +2342,7 @@ def _add_trident_backbone(
                 )
             )
 
-    return shell_elements, fastener_springs, backbone_mass_kg
+    return shell_elements, fastener_springs, backbone_mass_kg, backbone_cost_usd
 
 
 def _build_corexy(
@@ -2986,8 +3012,9 @@ def _build_corexy(
     # Enclosure / structural MITC4 shell panels + Huth CBUSH fastener springs across rear, side, and top bays
     shell_elements: list[ShellPanelElement] = []
     backbone_mass_kg = 0.0
+    backbone_cost_usd = 0.0
     if trident_backbone_active:
-        bb_shells, bb_springs, backbone_mass_kg = _add_trident_backbone(
+        bb_shells, bb_springs, backbone_mass_kg, backbone_cost_usd = _add_trident_backbone(
             spec=spec,
             nodes=nodes,
             nmap=nmap,
@@ -3066,6 +3093,7 @@ def _build_corexy(
         toolhead_moving_mass_kg=toolhead_kg,
         panel_mass_kg=total_panel_mass_kg,
         backbone_mass_kg=backbone_mass_kg,
+        backbone_cost_usd=backbone_cost_usd,
         trident_backbone_active=trident_backbone_active,
         x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
         x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,
@@ -3617,7 +3645,7 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
         pmat = get_material(model.spec.frame.panel_material)
         cost += model.panel_mass_kg * pmat.cost_per_kg_usd
     if model.trident_backbone_active:
-        cost += 65.0
+        cost += model.backbone_cost_usd
     # Add baseline estimate for motors, bed plate, rails, and hotend hardware
     bed_mat = get_material(model.spec.bed.plate_material)
     cost += bed_mass * bed_mat.cost_per_kg_usd + 140.0  # steppers/electronics/hotend baseline

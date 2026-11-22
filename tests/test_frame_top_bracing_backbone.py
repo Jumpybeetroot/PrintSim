@@ -184,7 +184,7 @@ def test_gantry_top_clearance_shifts_elevation_and_evaluates_cleanly() -> None:
 
 
 def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None:
-    """Clee Trident Backbone stiffens Z/bed/lower-frame, adds ~2.1 kg & $65, and stays inactive on V2.4."""
+    """Clee Trident Backbone stiffens Z/bed/lower-frame, adds ~4.1 kg & $44.99-$54.99, and stays inactive on V2.4."""
     base_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
     base_spec.frame.trident_backbone = False
     bb_spec = base_spec.model_copy(deep=True)
@@ -207,9 +207,9 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
 
         assert gd1["trident_backbone"]["enabled"] is True
         assert gd1["trident_backbone"]["active"] is True
-        assert gd1["trident_backbone"]["cost_usd"] == 65.0
+        assert gd1["trident_backbone"]["cost_usd"] == pytest.approx(49.99)
         assert gd1["trident_backbone"]["z_thrust_boost_factor"] == pytest.approx(2.4)
-        assert 1.5 <= gd1["trident_backbone"]["mass_kg"] <= 2.6
+        assert 3.5 <= gd1["trident_backbone"]["mass_kg"] <= 4.8
         assert any(s.bay == "backbone" for s in rep1.assembly.shell_elements)
         assert any(
             sp.bay == "backbone" and sp.frame_node_id == "b_rear_mid"
@@ -218,9 +218,19 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
 
         mass_delta = rep1.assembly.total_mass_kg - rep0.assembly.total_mass_kg
         cost_delta = rep1.assembly.estimated_material_cost_usd - rep0.assembly.estimated_material_cost_usd
-        assert 1.5 <= mass_delta <= 2.6
+        assert 3.5 <= mass_delta <= 4.8
         assert mass_delta == pytest.approx(rep1.assembly.backbone_mass_kg, rel=1e-4)
-        assert cost_delta == pytest.approx(65.0, abs=0.05)
+        assert cost_delta == pytest.approx(49.99, abs=0.05)
+
+        # Lower vertical columns receive base-plate corner-joint stiffening; upper columns keep upper-joint compliance
+        m0_map = {m.id: m for m in rep0.assembly.members}
+        m1_map = {m.id: m for m in rep1.assembly.members}
+        for lower_id in ("col_fl_bot", "col_fr_bot", "col_rl_low", "col_rr_low"):
+            assert m1_map[lower_id].profile.iy_m4 > m0_map[lower_id].profile.iy_m4
+            assert m1_map[lower_id].profile.j_m4 > m0_map[lower_id].profile.j_m4
+        for upper_id in ("col_fl_top", "col_rl_top"):
+            assert m1_map[upper_id].profile.iy_m4 == pytest.approx(m0_map[upper_id].profile.iy_m4, rel=1e-9)
+            assert m1_map[upper_id].profile.j_m4 == pytest.approx(m0_map[upper_id].profile.j_m4, rel=1e-9)
 
         # Matrix symmetry and strict positive definiteness on free DOFs
         K, M, _, nidx, free = assemble_global_matrices(rep1.assembly)
@@ -231,10 +241,14 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
         assert float(np.min(eigvalsh(K_ff))) > 0.0
         assert float(np.min(eigvalsh(M_ff))) > 0.0
 
-        # Increased Z-axis & bed vertical stiffness, and reduced b_rear_mid sag under bed load
+        # Measurable gains across f1, input shaper XY, toolhead Kxyz, bed deflection, and b_rear_mid sag
+        assert rep1.static_fea.toolhead_stiffness_x_n_per_mm > rep0.static_fea.toolhead_stiffness_x_n_per_mm
+        assert rep1.static_fea.toolhead_stiffness_y_n_per_mm > rep0.static_fea.toolhead_stiffness_y_n_per_mm
         assert rep1.static_fea.toolhead_stiffness_z_n_per_mm > rep0.static_fea.toolhead_stiffness_z_n_per_mm
-        assert rep1.static_fea.bed_deflection_um < rep0.static_fea.bed_deflection_um
-        assert rep1.modal_fea.fundamental_freq_hz >= rep0.modal_fea.fundamental_freq_hz
+        assert rep1.static_fea.bed_deflection_um < rep0.static_fea.bed_deflection_um * 0.90
+        assert rep1.modal_fea.fundamental_freq_hz > rep0.modal_fea.fundamental_freq_hz + 0.8
+        assert rep1.modal_fea.shaper_x.effective_freq_hz > rep0.modal_fea.shaper_x.effective_freq_hz
+        assert rep1.modal_fea.shaper_y.effective_freq_hz > rep0.modal_fea.shaper_y.effective_freq_hz
 
         K0, _, _, nidx0, free0 = assemble_global_matrices(rep0.assembly)
         slv0 = _build_factorized_solver(K0, free0)
@@ -246,7 +260,15 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
         u0 = slv0(f0)
         u1 = slv1(f1)
         assert abs(u1[6 * nidx["bed_surface"] + 2]) < abs(u0[6 * nidx0["bed_surface"] + 2]) * 0.90
-        assert abs(u1[6 * nidx["b_rear_mid"] + 2]) < abs(u0[6 * nidx0["b_rear_mid"] + 2]) * 0.70
+        assert abs(u1[6 * nidx["b_rear_mid"] + 2]) < abs(u0[6 * nidx0["b_rear_mid"] + 2]) * 0.65
+
+    # Tiered West3D retail pricing by Trident build size (250 / 300 / 350 mm)
+    for size_mm, expected_price in ((250.0, 44.99), (300.0, 49.99), (350.0, 54.99)):
+        s_sz = bb_spec.model_copy(deep=True)
+        s_sz.kinematics.build_volume_mm = [size_mm, size_mm, 250.0]
+        asm_sz = build_assembly(s_sz)
+        assert asm_sz.backbone_cost_usd == pytest.approx(expected_price)
+        assert asm_sz.to_geometry_dict()["trident_backbone"]["cost_usd"] == pytest.approx(expected_price)
 
     # On rubber_feet, Trident Backbone also increases frame XY & Z stiffness and fundamental frequency
     s_rf0 = base_spec.model_copy(deep=True)

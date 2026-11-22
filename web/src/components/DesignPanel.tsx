@@ -1154,7 +1154,12 @@ export const DesignPanel: React.FC<Props> = ({
         Math.min(spec.kinematics.xy_stepper.rated_current_a || 1.2, 1.2);
       setRunCurrentDraft(Number(nextA.toFixed(1)));
     }
-  }, [spec?.kinematics.xy_stepper.run_current_a, spec?.kinematics.xy_stepper.preset_id]);
+  }, [
+    spec?.kinematics.xy_stepper.run_current_a,
+    spec?.kinematics.xy_stepper.rated_current_a,
+    spec?.kinematics.xy_stepper.preset_id,
+    spec?.kinematics.xy_stepper.name,
+  ]);
 
   useEffect(() => {
     if (spec?.toolhead.cog_offset_mm) {
@@ -1336,9 +1341,12 @@ export const DesignPanel: React.FC<Props> = ({
     }, 220);
   };
 
-  const specRunCurrentA =
-    spec.kinematics.xy_stepper.run_current_a ??
-    Math.min(spec.kinematics.xy_stepper.rated_current_a || 1.2, 1.2);
+  const specRunCurrentA = Number(
+    (
+      spec.kinematics.xy_stepper.run_current_a ??
+      Math.min(spec.kinematics.xy_stepper.rated_current_a || 1.2, 1.2)
+    ).toFixed(1)
+  );
 
   const commitRunCurrent = (rawVal: number) => {
     const val = Math.max(0.4, Math.min(3.2, Math.round(rawVal * 10) / 10));
@@ -1844,11 +1852,27 @@ export const DesignPanel: React.FC<Props> = ({
     stepperCatalog.find((s) => s.preset_id === xyStepper.preset_id) ??
     stepperCatalog.find((s) => s.name === xyStepper.name);
   const selectedStepperValue = matchedStepper ? matchedStepper.preset_id : "__custom__";
-  const ratedCurrentA = Math.max(xyStepper.rated_current_a || 2.0, 0.1);
+  const ratedCurrentA =
+    typeof xyStepper.rated_current_a === "number" &&
+    Number.isFinite(xyStepper.rated_current_a) &&
+    xyStepper.rated_current_a > 0
+      ? xyStepper.rated_current_a
+      : 2.0;
   const currentPctOfRated = Math.round((runCurrentDraft / ratedCurrentA) * 100);
   const phaseResistanceOhm = xyStepper.phase_resistance_ohm ?? 1.2;
   const estMotorHeatW = 2.0 * runCurrentDraft * runCurrentDraft * phaseResistanceOhm;
-  const motorOvercurrentDraft = runCurrentDraft > ratedCurrentA + 1e-6 || Boolean(sim?.kinematics.motor_overcurrent_risk);
+  const simXyStepper = sim?.spec?.kinematics?.xy_stepper;
+  const simMatchesMotor = Boolean(
+    simXyStepper &&
+      simXyStepper.preset_id === xyStepper.preset_id &&
+      Math.abs((simXyStepper.rated_current_a ?? 0) - ratedCurrentA) < 1e-3 &&
+      Math.abs(
+        (sim?.kinematics.motor_run_current_a ?? simXyStepper.run_current_a ?? 0) - runCurrentDraft
+      ) < 0.05
+  );
+  const motorOvercurrentDraft =
+    runCurrentDraft > ratedCurrentA * 1.05 + 1e-6 ||
+    (simMatchesMotor && Boolean(sim?.kinematics.motor_overcurrent_risk));
 
   const toolheadPresets = catalog.toolhead_presets ?? [];
   const toolheadConstructions: ToolheadConstructionCatalogItem[] =
@@ -2249,22 +2273,32 @@ export const DesignPanel: React.FC<Props> = ({
                       {tridentBackboneEnabled && (
                         <div className="inline-readout-strip">
                           <strong>
-                            +{(simBackbone?.mass_kg ?? 1.9).toFixed(2)} kg steel
+                            +{(simBackbone && simBackbone.mass_kg > 0 ? simBackbone.mass_kg : 4.6).toFixed(2)} kg steel
                           </strong>
                           <span>·</span>
-                          <span>{(simBackbone?.thickness_mm ?? 3).toFixed(0)}mm plate</span>
+                          <span>
+                            {(simBackbone && simBackbone.thickness_mm > 0 ? simBackbone.thickness_mm : 3).toFixed(0)}mm solid plate
+                          </span>
+                          {sim?.static_fea?.bed_deflection_um != null && (
+                            <>
+                              <span>·</span>
+                              <span>Bed sag {sim.static_fea.bed_deflection_um.toFixed(1)} µm</span>
+                            </>
+                          )}
                           <span>·</span>
                           <span style={{ color: "var(--accent)" }}>
-                            {(simBackbone?.z_thrust_boost_factor ?? 2.4).toFixed(1)}× Z-mount stiffness
+                            {(simBackbone && simBackbone.z_thrust_boost_factor > 0 ? simBackbone.z_thrust_boost_factor : 2.4).toFixed(1)}× Z-mount
                           </span>
                           <span>·</span>
-                          <span>+${Math.round(simBackbone?.cost_usd ?? 65)}</span>
+                          <span>
+                            +${(simBackbone && simBackbone.cost_usd > 0 ? simBackbone.cost_usd : 50).toFixed(0)}
+                          </span>
                         </div>
                       )}
                       {showHints && (
                         <div className="hint-line">
-                          West3D / Clee 3mm laser-cut powder-coated mild steel plate unifying all 3
-                          bottom Z-motor mounts across the lower frame perimeter.
+                          West3D / Clee 3mm laser-cut powder-coated mild steel solid full-footprint
+                          deck plate unifying all 3 bottom Z-motor mounts across the lower frame.
                         </div>
                       )}
                     </>
@@ -2851,6 +2885,12 @@ export const DesignPanel: React.FC<Props> = ({
                       const nextId = e.target.value;
                       const chosen = stepperCatalog.find((s) => s.preset_id === nextId);
                       if (!chosen) return;
+                      if (currentTimerRef.current != null) {
+                        window.clearTimeout(currentTimerRef.current);
+                        currentTimerRef.current = null;
+                      }
+                      const nextRunA = Number(chosen.run_current_a.toFixed(1));
+                      setRunCurrentDraft(nextRunA);
                       const prevName = shortMotorName(xyStepper.name);
                       const nextName = shortMotorName(chosen.name);
                       update(
@@ -2859,7 +2899,7 @@ export const DesignPanel: React.FC<Props> = ({
                           d.kinematics.xy_stepper.name = chosen.name;
                           d.kinematics.xy_stepper.holding_torque_nm = chosen.holding_torque_nm;
                           d.kinematics.xy_stepper.rated_current_a = chosen.rated_current_a;
-                          d.kinematics.xy_stepper.run_current_a = chosen.run_current_a;
+                          d.kinematics.xy_stepper.run_current_a = nextRunA;
                           d.kinematics.xy_stepper.phase_resistance_ohm = chosen.phase_resistance_ohm;
                           d.kinematics.xy_stepper.inductance_mh = chosen.inductance_mh;
                           d.kinematics.xy_stepper.rotor_inertia_kg_m2 = chosen.rotor_inertia_kg_m2;
@@ -2892,7 +2932,12 @@ export const DesignPanel: React.FC<Props> = ({
 
                 <div className="slider-row">
                   <label>
-                    <span>Run Current (Amps)</span>
+                    <span>
+                      Run Current (Amps){" "}
+                      <span style={{ color: "var(--muted)", fontWeight: 500 }}>
+                        max {ratedCurrentA.toFixed(1)}A
+                      </span>
+                    </span>
                     <span className="tension-readout">
                       <span
                         className={`tension-hz-pill ${
