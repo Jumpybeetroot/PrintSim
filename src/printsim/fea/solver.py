@@ -280,11 +280,33 @@ def solve_static_fea(
     bed_idx = node_idx.get(assembly.bed_node_id) if assembly.bed_node_id else None
     has_bed = bed_idx is not None
     bed_dof = 6 * bed_idx if bed_idx is not None else -1
+    feet_springs = [sp for sp in assembly.fastener_springs if sp.bay == "feet"]
+    has_feet = bool(feet_springs)
+
+    nmap_fea = assembly.node_map
+    r_th = nmap_fea[assembly.toolhead_node_id].position_m
+    r_cog = nmap_fea[cog_id].position_m
+    r_noz = nmap_fea[noz_id].position_m
+    r_bed = (
+        nmap_fea[assembly.bed_node_id].position_m
+        if has_bed and assembly.bed_node_id
+        else np.zeros(3, dtype=float)
+    )
+    dr_noz_bed = r_noz - r_bed
+    dr_th_bed = r_th - r_bed
+
+    def _bed_wp_disp(u_vec: np.ndarray, dr: np.ndarray) -> np.ndarray:
+        if not has_bed:
+            return np.zeros(3, dtype=float)
+        u_b = u_vec[bed_dof : bed_dof + 3]
+        if has_feet:
+            return u_b + np.cross(u_vec[bed_dof + 3 : bed_dof + 6], dr)
+        return u_b
 
     def _rel_disp_vec(u_vec: np.ndarray) -> np.ndarray:
         u_noz = u_vec[noz_dof : noz_dof + 3]
         if has_bed:
-            return u_noz - u_vec[bed_dof : bed_dof + 3]
+            return u_noz - _bed_wp_disp(u_vec, dr_noz_bed)
         return u_noz
 
     accel_m_s2 = (
@@ -298,18 +320,13 @@ def solve_static_fea(
     grav_sag_um = abs(float(_rel_disp_vec(u_grav)[2])) * 1e6
 
     # 2. Unit load compliance probing across structural loop (+1 N nozzle / -1 N bed in X, Y, Z)
-    nmap_fea = assembly.node_map
-    r_th = nmap_fea[assembly.toolhead_node_id].position_m
-    r_cog = nmap_fea[cog_id].position_m
-    r_noz = nmap_fea[noz_id].position_m
-
     def _probe_stiffness(axis: int) -> tuple[float, tuple[float, float, float]]:
         f_unit = np.zeros(n_dof, dtype=float)
         f_unit[noz_dof + axis] = 1.0
         if has_bed:
             f_unit[bed_dof + axis] = -1.0
         u_unit = solve_rhs(f_unit)
-        u_bed = u_unit[bed_dof : bed_dof + 3] if has_bed else np.zeros(3, dtype=float)
+        u_wp_noz = _bed_wp_disp(u_unit, dr_noz_bed)
         u_th = u_unit[th_dof : th_dof + 3]
         th_th = u_unit[th_dof + 3 : th_dof + 6]
         u_cog = u_unit[cog_dof : cog_dof + 3]
@@ -319,10 +336,10 @@ def solve_static_fea(
         p_th_at_noz = u_th + np.cross(th_th, r_noz - r_th)
         p_cog_at_noz = u_cog + np.cross(th_cog, r_noz - r_cog)
 
-        d1 = max(0.0, float((p_th_at_noz - u_bed)[axis]))
+        d1 = max(0.0, float((p_th_at_noz - u_wp_noz)[axis]))
         d2 = max(0.0, float((p_cog_at_noz - p_th_at_noz)[axis]))
         d3 = max(0.0, float((u_noz - p_cog_at_noz)[axis]))
-        rel_disp = float((u_noz - u_bed)[axis])
+        rel_disp = float((u_noz - u_wp_noz)[axis])
         disp_mm = abs(rel_disp) * 1e3
         return 1.0 / max(disp_mm, 1e-9), (d1, d2, d3)
 
@@ -461,13 +478,45 @@ def solve_static_fea(
 
     combined_nozzle_um = float(np.linalg.norm(_rel_disp_vec(u_comb))) * 1e6
     u_th_rel = u_comb[th_dof : th_dof + 3] - (
-        u_comb[bed_dof : bed_dof + 3] if has_bed else 0.0
+        _bed_wp_disp(u_comb, dr_th_bed) if has_bed else 0.0
     )
     beam_center_um = float(np.linalg.norm(u_th_rel)) * 1e6
     nozzle_twist_amp_pct = ((combined_nozzle_um / max(beam_center_um, 1e-6)) - 1.0) * 100.0
     nozzle_twist_angle_mrad = float(np.hypot(u_comb[noz_dof + 3], u_comb[noz_dof + 4])) * 1e3
     nozzle_abs_um = float(np.linalg.norm(u_comb[noz_dof : noz_dof + 3])) * 1e6
-    bed_defl_um = float(np.linalg.norm(u_comb[bed_dof : bed_dof + 3])) * 1e6 if has_bed else 0.0
+    if has_bed and has_feet:
+        feet_idx_list = sorted(
+            {node_idx[sp.frame_node_id] for sp in feet_springs if sp.frame_node_id in node_idx}
+        )
+        u_bed_raw = u_comb[bed_dof : bed_dof + 3]
+        if len(feet_idx_list) >= 3:
+            p_feet = np.array([assembly.nodes[fi].position_m for fi in feet_idx_list], dtype=float)
+            p_mean = np.mean(p_feet, axis=0)
+            u_feet = np.array([u_comb[6 * fi : 6 * fi + 3] for fi in feet_idx_list], dtype=float)
+            a_rows = []
+            b_rows = []
+            for dp, uv in zip(p_feet - p_mean, u_feet):
+                dx, dy, dz = float(dp[0]), float(dp[1]), float(dp[2])
+                c_mat = np.array(
+                    [[0.0, dz, -dy], [-dz, 0.0, dx], [dy, -dx, 0.0]],
+                    dtype=float,
+                )
+                a_rows.append(np.hstack([np.eye(3, dtype=float), c_mat]))
+                b_rows.append(uv)
+            a_ls = np.vstack(a_rows)
+            b_ls = np.concatenate(b_rows)
+            rig_x, _, _, _ = np.linalg.lstsq(a_ls, b_ls, rcond=None)
+            u_bed_rigid = rig_x[:3] + np.cross(rig_x[3:], r_bed - p_mean)
+            bed_defl_um = float(np.linalg.norm(u_bed_raw - u_bed_rigid)) * 1e6
+        elif feet_idx_list:
+            u_feet_mean = np.mean(
+                [u_comb[6 * fi : 6 * fi + 3] for fi in feet_idx_list], axis=0
+            )
+            bed_defl_um = float(np.linalg.norm(u_bed_raw - u_feet_mean)) * 1e6
+        else:
+            bed_defl_um = float(np.linalg.norm(u_bed_raw)) * 1e6
+    else:
+        bed_defl_um = float(np.linalg.norm(u_comb[bed_dof : bed_dof + 3])) * 1e6 if has_bed else 0.0
 
     # Element stress recovery
     member_stresses: list[MemberStressResult] = []

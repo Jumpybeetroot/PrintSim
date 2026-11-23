@@ -409,3 +409,66 @@ def test_api_catalog_and_simulate_options() -> None:
     assert rep_15k.static_fea.accel_deflection_y_um == pytest.approx(
         3.0 * rep_5k.static_fea.accel_deflection_y_um, rel=1e-4
     )
+
+
+def test_non_bolted_feet_preserve_realistic_shaper_accel_and_bed_deflection() -> None:
+    """Benchtop isolation feet lower M1 desk sway without artificial print-accel cliffs or bed sink blowup."""
+    feet_types: tuple[FrameFeetType, ...] = (
+        "rigid_bolted",
+        "paver_on_foam",
+        "rubber_feet",
+        "anti_vib_pads",
+    )
+
+    for yaml_name in ("voron_trident_300.yaml", "corexy_voron_style.yaml", "voron_monolith_awd.yaml"):
+        base = PrinterSpec.from_yaml(EXAMPLES_DIR / yaml_name)
+        mod_map = {}
+        stat_map = {}
+        for ft in feet_types:
+            sp = base.model_copy(deep=True)
+            sp.frame.feet_type = ft
+            asm = build_assembly(sp)
+            stat = solve_static_fea(asm)
+            mod = solve_modal_fea(asm)
+            stat_map[ft] = stat
+            mod_map[ft] = mod
+
+            # Limiting modal summary and per-mode axis shares stay valid and bounded on all feet
+            lms = mod.limiting_modal_summary
+            primary_modes = [m for m in mod.modes if m.is_primary_limiting_mode]
+            assert len(primary_modes) == 1
+            assert primary_modes[0].mode_number == lms["primary_structural_mode_number"]
+            assert sum(m.x_axis_share_pct for m in mod.modes) <= 100.5
+            assert sum(m.y_axis_share_pct for m in mod.modes) <= 100.5
+            assert mod.shaper_x.structural_freq_hz <= mod_map["rigid_bolted"].shaper_x.structural_freq_hz * 1.005
+            assert mod.shaper_y.structural_freq_hz <= mod_map["rigid_bolted"].shaper_y.structural_freq_hz * 1.005
+
+            # Elastic bed deflection (after rigid-body foot-plane removal) must not explode under gravity sink
+            assert stat.bed_deflection_um <= stat_map["rigid_bolted"].bed_deflection_um + 10.0
+
+        bolted_acc = mod_map["rigid_bolted"].recommended_max_accel_mm_s2
+        for ft in ("paver_on_foam", "rubber_feet", "anti_vib_pads"):
+            ft_acc = mod_map[ft].recommended_max_accel_mm_s2
+            assert ft_acc <= bolted_acc * 1.05, f"{yaml_name} {ft} artificially beat rigid_bolted"
+            assert ft_acc >= bolted_acc * 0.70, f"{yaml_name} {ft} suffered accel cliff drop"
+        assert (
+            mod_map["paver_on_foam"].recommended_max_accel_mm_s2
+            >= mod_map["anti_vib_pads"].recommended_max_accel_mm_s2
+        )
+        assert (
+            mod_map["rubber_feet"].recommended_max_accel_mm_s2
+            >= mod_map["anti_vib_pads"].recommended_max_accel_mm_s2
+        )
+
+    # Strict voron_trident_300 check: paver ~ bolted >= rubber > anti_vib, realistic modest penalty
+    tri_base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    accs = {
+        ft: solve_modal_fea(
+            build_assembly(tri_base.model_copy(update={"frame": tri_base.frame.model_copy(update={"feet_type": ft})}))
+        ).recommended_max_accel_mm_s2
+        for ft in feet_types
+    }
+    assert accs["paver_on_foam"] >= accs["rubber_feet"] >= accs["anti_vib_pads"]
+    assert accs["rubber_feet"] >= accs["rigid_bolted"] * 0.80
+    assert accs["paver_on_foam"] >= accs["rigid_bolted"] * 0.90
+
