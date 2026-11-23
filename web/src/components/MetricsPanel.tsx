@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { AdxlCalibrationPanel } from "./AdxlCalibrationPanel";
 import {
   AccelBottleneckData,
   AccelBottleneckShares,
@@ -4273,6 +4274,15 @@ export const MetricsPanel: React.FC<Props> = ({
                   changed={modalChanged}
                   embedded
                 />
+                <details className="sub-accordion">
+                  <summary>
+                    <span>Klipper ADXL345 / Shake&amp;Tune CSV Overlay</span>
+                    <span className="sub-accordion-tag">Measured vs Sim</span>
+                  </summary>
+                  <div className="sub-accordion-body">
+                    <AdxlCalibrationPanel spec={sim.spec} />
+                  </div>
+                </details>
               </DeepDiveAccordion>
             )}
 

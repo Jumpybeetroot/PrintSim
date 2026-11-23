@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python:
+    name: Python Physics & API Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Run pytest suite
+        run: uv run pytest -v
+
+      - name: CLI evaluation smoke check
+        run: uv run printsim evaluate examples/corexy_voron_style.yaml --json --no-segments > /dev/null
+
+  web:
+    name: Web Studio TypeScript & Vite Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Build web bundle
+        run: npm run build --prefix web

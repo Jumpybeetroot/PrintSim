@@ -2,6 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  bedWarpColorInto,
+  sensitivityColorInto,
+  stressColor,
+  stressColorInto,
+} from "../viewport/colormaps";
+import {
   AdjointLens,
   BedMountType,
   FeaLoadCase,
@@ -367,73 +373,6 @@ function frameCameraToBox(
     sphere.center.z + dist * 0.68
   );
   controls.update();
-}
-
-const STRESS_STOP_0 = new THREE.Color("#2563eb");
-const STRESS_STOP_1 = new THREE.Color("#06b6d4");
-const STRESS_STOP_2 = new THREE.Color("#22c55e");
-const STRESS_STOP_3 = new THREE.Color("#eab308");
-const STRESS_STOP_4 = new THREE.Color("#ef4444");
-
-function stressColorInto(t: number, out: THREE.Color): THREE.Color {
-  const c = Math.max(0, Math.min(1, t));
-  // Scientific blue -> cyan -> green -> yellow -> red
-  if (c < 0.25) {
-    out.lerpColors(STRESS_STOP_0, STRESS_STOP_1, c / 0.25);
-  } else if (c < 0.5) {
-    out.lerpColors(STRESS_STOP_1, STRESS_STOP_2, (c - 0.25) / 0.25);
-  } else if (c < 0.75) {
-    out.lerpColors(STRESS_STOP_2, STRESS_STOP_3, (c - 0.5) / 0.25);
-  } else {
-    out.lerpColors(STRESS_STOP_3, STRESS_STOP_4, (c - 0.75) / 0.25);
-  }
-  return out;
-}
-
-function stressColor(t: number): THREE.Color {
-  return stressColorInto(t, new THREE.Color());
-}
-
-const SENS_NEG_MAX = new THREE.Color("#06b6d4"); // electric cyan (-1.0)
-const SENS_NEG_MID = new THREE.Color("#38bdf8"); // sky (-0.5)
-const SENS_NEUTRAL = new THREE.Color("#334155"); // slate (0.0)
-const SENS_POS_MID = new THREE.Color("#f59e0b"); // amber (+0.5)
-const SENS_POS_MAX = new THREE.Color("#ef4444"); // blazing crimson (+1.0)
-
-function sensitivityColorInto(score: number, out: THREE.Color): THREE.Color {
-  const s = Math.max(-1, Math.min(1, Number.isFinite(score) ? score : 0));
-  if (s >= 0) {
-    if (s < 0.5) {
-      out.lerpColors(SENS_NEUTRAL, SENS_POS_MID, s / 0.5);
-    } else {
-      out.lerpColors(SENS_POS_MID, SENS_POS_MAX, (s - 0.5) / 0.5);
-    }
-  } else {
-    const a = -s;
-    if (a < 0.5) {
-      out.lerpColors(SENS_NEUTRAL, SENS_NEG_MID, a / 0.5);
-    } else {
-      out.lerpColors(SENS_NEG_MID, SENS_NEG_MAX, (a - 0.5) / 0.5);
-    }
-  }
-  return out;
-}
-
-const BED_WARP_VALLEY = new THREE.Color("#3b82f6");
-const BED_WARP_FLAT = new THREE.Color("#10b981");
-const BED_WARP_CROWN = new THREE.Color("#f59e0b");
-const BED_WARP_SEVERE = new THREE.Color("#ef4444");
-
-function bedWarpColorInto(t: number, out: THREE.Color): THREE.Color {
-  const c = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0.5));
-  if (c < 0.42) {
-    out.lerpColors(BED_WARP_VALLEY, BED_WARP_FLAT, c / 0.42);
-  } else if (c < 0.76) {
-    out.lerpColors(BED_WARP_FLAT, BED_WARP_CROWN, (c - 0.42) / 0.34);
-  } else {
-    out.lerpColors(BED_WARP_CROWN, BED_WARP_SEVERE, (c - 0.76) / 0.24);
-  }
-  return out;
 }
 
 const INSPECT_HIGHLIGHT_COLOR = new THREE.Color("#38bdf8");

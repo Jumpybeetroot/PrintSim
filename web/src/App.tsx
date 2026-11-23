@@ -4,6 +4,17 @@ import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
 import {
+  ARCH_LABELS,
+  BELT_LABELS,
+  BRACING_LABELS,
+  Z_DRIVE_LABELS,
+} from "./constants/printerLabels";
+import {
+  buildShareUrl,
+  decodeSpecFromHash,
+  encodeSpecToHash,
+} from "./utils/shareSpec";
+import {
   AdjointLens,
   CatalogResponse,
   CompareMode,
@@ -53,42 +64,6 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   }
   return btoa(parts.join(""));
 }
-
-const BRACING_LABELS: Record<string, string> = {
-  none: "None",
-  corner_gussets: "Corner Gussets",
-  rear_cross: "Rear Cross + Top",
-  full_truss: "Full 3D Truss",
-};
-
-const BELT_LABELS: Record<string, string> = {
-  gt2_6mm: "GT2 6mm",
-  gt2_9mm: "GT2 9mm",
-  gt2_12mm: "GT2 12mm",
-  gt2_15mm: "GT2 15mm",
-  gt2_dual_9mm: "Dual 2GT 9mm (18mm)",
-  "3gt_9mm": "Gates 3GT 9mm",
-  "3gt_12mm": "Gates 3GT 12mm",
-  "3gt_15mm": "Gates 3GT 15mm",
-  at3_10mm: "AT3 10mm Steel/TPU",
-  at3_16mm: "AT3 16mm Steel/TPU",
-  at3_gen3_16mm: "AT3 Gen III 16mm",
-  htd3m_15mm: "HTD 3M 15mm Steel/TPU",
-  at5_16mm: "AT5 16mm Heavy Steel",
-};
-
-const ARCH_LABELS: Record<string, string> = {
-  corexy: "CoreXY",
-  cartesian_bedslinger: "Cartesian Bedslinger",
-  delta: "Delta",
-};
-
-const Z_DRIVE_LABELS: Record<string, string> = {
-  leadscrew_triple: "Fixed Gantry (Trident)",
-  belted_quad_z: "Flying Gantry (Voron 2.4)",
-  leadscrew_dual: "Fixed Gantry (Dual-Z)",
-  leadscrew_single: "Fixed Gantry (Single-Z)",
-};
 
 const PANEL_MATERIAL_LABELS: Record<string, string> = {
   acrylic_pmma: "Acrylic",
@@ -685,6 +660,8 @@ export default function App() {
   const [topoResult, setTopoResult] = useState<TopologyOptResponse | null>(null);
   const [topoLoading, setTopoLoading] = useState<boolean>(false);
   const [exportingStep, setExportingStep] = useState<boolean>(false);
+  const [shareCopied, setShareCopied] = useState<boolean>(false);
+  const shareTimerRef = useRef<number | null>(null);
   const [bom, setBom] = useState<PrinterBOMResponse | null>(null);
   const [bomLoading, setBomLoading] = useState<boolean>(false);
   const [stockLengthMm, setStockLengthMm] = useState<number>(1000);
@@ -1161,12 +1138,22 @@ export default function App() {
         const res = await fetch("/api/catalog");
         const data: CatalogResponse = await res.json();
         setCatalog(data);
-        const firstId =
-          data.presets.find((p) => p.id === "voron_trident_300")?.id ||
-          data.presets.find((p) => p.id === "corexy_voron_style")?.id ||
-          data.presets[0]?.id;
-        if (firstId) {
-          await loadPreset(firstId);
+        const sharedSpec = decodeSpecFromHash(window.location.hash);
+        if (sharedSpec) {
+          setSelectedPreset("");
+          setSpec(sharedSpec);
+          await runSimulate({ spec: sharedSpec }, gcodeText, undefined, {
+            isBaselineReset: true,
+            baselineName: sharedSpec.name || "Shared Build",
+          });
+        } else {
+          const firstId =
+            data.presets.find((p) => p.id === "voron_trident_300")?.id ||
+            data.presets.find((p) => p.id === "corexy_voron_style")?.id ||
+            data.presets[0]?.id;
+          if (firstId) {
+            await loadPreset(firstId);
+          }
         }
         // Preload default Curved Tet10 bracket FEA (with Hex8 fallback) so 3D Solid Part tab is instant
         const tetRes = await fetch("/api/fea/tet-part", {
@@ -1753,6 +1740,63 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (shareTimerRef.current !== null) {
+        window.clearTimeout(shareTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleShareLink = useCallback(async () => {
+    if (!spec) return;
+    const hash = encodeSpecToHash(spec);
+    const url = buildShareUrl(spec);
+    try {
+      window.history.replaceState(null, "", hash);
+    } catch {
+      // Ignore history API errors in restricted contexts
+    }
+
+    let copied = false;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+    }
+
+    if (copied) {
+      setShareCopied(true);
+      if (shareTimerRef.current !== null) {
+        window.clearTimeout(shareTimerRef.current);
+      }
+      shareTimerRef.current = window.setTimeout(() => {
+        setShareCopied(false);
+        shareTimerRef.current = null;
+      }, 2200);
+    }
+  }, [spec]);
+
   const handleInspectModalMode = useCallback((modeIndex: number) => {
     setSelectedModeIdx(modeIndex);
     setViewMode("modal");
@@ -1873,6 +1917,14 @@ export default function App() {
           </button>
           <button className="btn" disabled={!spec} onClick={handleExportBomCsv}>
             Export BOM CSV
+          </button>
+          <button
+            className={`btn ${shareCopied ? "share-copied" : ""}`}
+            disabled={!spec}
+            onClick={handleShareLink}
+            title="Copy shareable URL with this printer build encoded in the link hash"
+          >
+            {shareCopied ? "Copied Link ✓" : "Share Link"}
           </button>
           <button
             className="btn primary"

@@ -1557,3 +1557,33 @@ export interface HistorySnapshot {
   filamentId: string;
   label: string | null;
 }
+
+export interface AdxlAxisCalibrationData {
+  axis: "X" | "Y";
+  source_format: "klipper_psd_csv" | "raw_accel_csv";
+  freqs_hz: number[];
+  measured_psd_norm: number[];
+  simulated_psd_norm: number[];
+  measured_peak_hz: number;
+  simulated_peak_hz: number;
+  peak_delta_hz: number;
+  peak_error_pct: number;
+  measured_damping_ratio: number;
+  simulated_damping_ratio: number;
+  measured_shaper: string;
+  measured_shaper_freq_hz: number;
+  measured_max_accel_mm_s2: number;
+  simulated_shaper: string;
+  simulated_shaper_freq_hz: number;
+  simulated_max_accel_mm_s2: number;
+  spectral_correlation: number;
+  sample_count: number;
+  diagnostics: string[];
+}
+
+export interface AdxlCalibrationResponse {
+  printer_name: string;
+  axes: Partial<Record<"X" | "Y", AdxlAxisCalibrationData>>;
+  overall_summary: string;
+  recommended_adjustments: string[];
+}
