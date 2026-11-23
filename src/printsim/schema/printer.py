@@ -436,6 +436,13 @@ ToolheadConstructionType = Literal[
     "cnc_monoblock",
     "cantilever_bowden",
 ]
+ZDriveType = Literal[
+    "leadscrew_single",
+    "leadscrew_dual",
+    "leadscrew_dual_belt_sync",
+    "leadscrew_triple",
+    "belted_quad_z",
+]
 ZRailProfileType = Literal[
     "mgn12_rail",
     "mgn9_rail",
@@ -2066,9 +2073,7 @@ class BedSpec(BaseModel):
     plate_thickness_mm: float = Field(8.0, gt=1.0)
     heater_power_w: float = Field(600.0, gt=50.0)
     mass_g: float = Field(2400.0, gt=100.0)
-    z_drive: Literal[
-        "leadscrew_single", "leadscrew_dual", "leadscrew_triple", "belted_quad_z"
-    ] = "belted_quad_z"
+    z_drive: ZDriveType = "belted_quad_z"
     z_rail_profile: ZRailProfileType = Field(
         "mgn12_rail",
         description="Z-axis vertical guideway profile: mgn12_rail, mgn9_rail, steel_rod_8mm/10mm/12mm, or none",

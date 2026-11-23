@@ -237,3 +237,129 @@ def test_kb_noise_filtering_and_ratrig_mapping(tmp_path: Path) -> None:
     rr300 = next(r for r in ratrig_rows if r["build_name"] == "RatRig V-Core 3.1 300")
     assert abs(rr300["x_error_pct"]) < 15.0
     assert abs(rr300["y_error_pct"]) < 15.0
+
+
+# ---------------------------------------------------------------------------
+# 4. VzBot 4x10mm Belt-Synced Dual-Z, Mid-Y Continuity & Z-Motor Mass Counts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("z_drive", ["leadscrew_dual", "leadscrew_dual_belt_sync"])
+def test_dual_z_mid_y_modal_continuity_without_carriage_weld(z_drive: str) -> None:
+    """Modal frequencies vary smoothly across mid-Y (0.45..0.55) with zero carriage-to-frame weld spike."""
+    spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "vzbot_330_awd.yaml")
+    spec.bed.z_drive = z_drive  # type: ignore[assignment]
+
+    v_positions = (0.45, 0.49, 0.50, 0.51, 0.55)
+    f1_vals: list[float] = []
+    sx_vals: list[float] = []
+    sy_vals: list[float] = []
+
+    for v_rel in v_positions:
+        asm = build_assembly(spec, toolhead_rel_pos=(0.5, v_rel, 0.5))
+        # Ensure the unphysical 1e9 mid-Y carriage weld spring is completely absent
+        assert not any(sp.id.startswith("z_rail_top_tie_") for sp in asm.fastener_springs)
+        mo = solve_modal_fea(asm)
+        assert mo.shaper_x is not None and mo.shaper_y is not None
+        f1_vals.append(mo.fundamental_freq_hz)
+        sx_vals.append(mo.shaper_x.effective_freq_hz)
+        sy_vals.append(mo.shaper_y.effective_freq_hz)
+
+    # Assert smooth continuity across mid-Y: no step > 3 Hz in f1, X shaper, or Y shaper
+    for i in range(len(v_positions) - 1):
+        assert abs(f1_vals[i + 1] - f1_vals[i]) < 3.0, f"{z_drive} f1 jump: {f1_vals}"
+        assert abs(sx_vals[i + 1] - sx_vals[i]) < 3.0, f"{z_drive} shaper_x jump: {sx_vals}"
+        assert abs(sy_vals[i + 1] - sy_vals[i]) < 3.0, f"{z_drive} shaper_y jump: {sy_vals}"
+
+
+def test_vzbot_330_awd_belt_sync_4x10mm_rods_bom_and_evaluation() -> None:
+    """VzBot 330 AWD uses leadscrew_dual_belt_sync (1 Z motor, 4x10mm smooth rods, LMK10LUU, sync belt) and evaluates cleanly."""
+    spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "vzbot_330_awd.yaml")
+    assert spec.bed.z_drive == "leadscrew_dual_belt_sync"
+    assert spec.bed.z_rail_profile == "steel_rod_10mm"
+    assert spec.is_flying_gantry is False
+    assert spec.panels_bolted_to_gantry_effective is True
+
+    # Structural assembly builds 4x vertical smooth rods + 4x LMK bearing springs + 2x leadscrews
+    asm = build_assembly(spec)
+    rod_members = [m for m in asm.members if m.id.startswith("bed_rod_")]
+    assert len(rod_members) == 8  # 4 rods x (bot + top)
+    assert all(m.profile.id == "steel_rod_10mm" for m in rod_members)
+    brg_springs = [sp for sp in asm.fastener_springs if sp.id.startswith("z_rod_brg_")]
+    assert len(brg_springs) == 4
+
+    gdict = asm.to_geometry_dict()
+    assert gdict["bed_z_drive"] == "leadscrew_dual_belt_sync"
+    assert len(gdict["z_rails"]) == 4
+    assert all(r["profile_id"] == "steel_rod_10mm" for r in gdict["z_rails"])
+    assert len(gdict["z_leadscrews"]) == 2
+
+    # BOM reports 1 Z motor, 4x smooth rods + 4x LMK10LUU bearings, 2x TR8 leadscrews, 1x Z-sync belt, 3x 20T pulleys
+    bom = generate_bom(spec)
+    items_by_sku = {item.sku: item for item in bom.items}
+    assert items_by_sku["MTR-Z"].quantity == 1
+    assert items_by_sku["MOT-Z-ROD"].quantity == 4
+    assert "10mm" in items_by_sku["MOT-Z-ROD"].specification
+    assert items_by_sku["MOT-Z-BRG"].quantity == 4
+    assert "LMK10LUU" in items_by_sku["MOT-Z-BRG"].name
+    assert items_by_sku["MOT-Z-LS"].quantity == 2
+    assert items_by_sku["MOT-Z-NUT"].quantity == 2
+    assert items_by_sku["MOT-Z-SYNC-BELT"].quantity == 1
+    assert items_by_sku["MOT-Z-SYNC-PULLEY"].quantity == 3
+    assert "MOT-Z-RAIL" not in items_by_sku
+    assert all(c.role != "bed" for c in bom.cut_list)
+
+    # Full multiphysics evaluation: zero collisions and realistic community AWD frequencies
+    rep = evaluate_printer(spec, include_advanced_analysis=False)
+    assert not rep.collision.has_collision
+    assert rep.modal_fea.fundamental_freq_hz > 95.0
+    assert rep.modal_fea.shaper_x is not None and rep.modal_fea.shaper_y is not None
+    assert 100.0 <= rep.modal_fea.shaper_x.effective_freq_hz <= 155.0
+    assert 70.0 <= rep.modal_fea.shaper_y.effective_freq_hz <= 120.0
+    assert rep.modal_fea.shaper_x.effective_freq_hz > rep.modal_fea.shaper_y.effective_freq_hz
+
+
+def test_corexy_z_motor_mass_lump_counts_across_z_drives() -> None:
+    """Z-motor lumped mass and BOM counts scale accurately: quad (4) > triple (3) > dual (2) > belt_sync (1) == single (1)."""
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    base.frame.enclosed_panels = False
+    base.frame.panel_mounting = "none"
+    base.kinematics.z_stepper.motor_mass_g = 300.0
+
+    expected_counts = {
+        "belted_quad_z": 4,
+        "leadscrew_triple": 3,
+        "leadscrew_dual": 2,
+        "leadscrew_dual_belt_sync": 1,
+        "leadscrew_single": 1,
+    }
+    z_motor_total_kg: dict[str, float] = {}
+
+    for zd, expected_n in expected_counts.items():
+        s_lo = base.model_copy(deep=True)
+        s_lo.bed.z_drive = zd  # type: ignore[assignment]
+        s_lo.kinematics.z_stepper.motor_mass_g = 300.0
+
+        s_hi = s_lo.model_copy(deep=True)
+        s_hi.kinematics.z_stepper.motor_mass_g = 1300.0  # +1.0 kg per Z stepper
+
+        asm_lo = build_assembly(s_lo)
+        asm_hi = build_assembly(s_hi)
+        delta_kg = asm_hi.total_mass_kg - asm_lo.total_mass_kg
+        assert delta_kg == pytest.approx(float(expected_n), abs=1e-6), (
+            f"{zd}: expected +{expected_n} kg delta for +1kg/motor, got {delta_kg:.4f} kg"
+        )
+        z_motor_total_kg[zd] = expected_n * 0.300
+
+        # Also verify BOM motor count matches physical Z-motor count
+        bom = generate_bom(s_lo)
+        z_mtr = next(i for i in bom.items if i.sku == "MTR-Z")
+        assert z_mtr.quantity == expected_n
+
+    assert (
+        z_motor_total_kg["belted_quad_z"]
+        > z_motor_total_kg["leadscrew_triple"]
+        > z_motor_total_kg["leadscrew_dual"]
+        > z_motor_total_kg["leadscrew_dual_belt_sync"]
+    )
+    assert z_motor_total_kg["leadscrew_dual_belt_sync"] == z_motor_total_kg["leadscrew_single"]

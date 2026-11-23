@@ -1,5 +1,5 @@
 name: VzBot 330 AWD
-description: High-speed VzBot 330 AWD CoreXY with 2020 frame, rear cross bracing, 4mm bolted ACM Dibond panels, Monolith short-path 9mm fiberglass belts at 65N, high-Tg carbon fiber X-beam, 48V LDO 2804AH steppers, 225g ultra-light CPAP toolhead, and 6mm ATP-5 bed
+description: High-speed VzBot 330 AWD CoreXY with 2020 frame, rear cross bracing, 4mm bolted 5052 aluminum panels, Monolith short-path 9mm fiberglass belts at 65N, high-Tg carbon fiber X-beam, 48V LDO 2804AH steppers, 225g ultra-light CPAP toolhead, 6mm ATP-5 bed, and belt-synced dual-TR8 Z with 4x 10mm smooth rods
 architecture: corexy
 frame:
   width_mm: 480
@@ -12,7 +12,7 @@ frame:
   brace_material: aluminum_6063_t5
   enclosed_panels: true
   panel_mounting: bolted_structural
-  panel_material: acm_dibond
+  panel_material: aluminum_5052_sheet
   panel_thickness_mm: 4.0
 gantry:
   drive_mode: awd
@@ -103,7 +103,7 @@ bed:
   plate_thickness_mm: 6.0
   heater_power_w: 750
   mass_g: 2450
-  z_drive: leadscrew_dual
-  z_rail_profile: mgn12_rail
+  z_drive: leadscrew_dual_belt_sync
+  z_rail_profile: steel_rod_10mm
   z_leadscrew_type: tr8x4_pom
   mount_type: kinematic_3pt

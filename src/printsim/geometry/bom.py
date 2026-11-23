@@ -649,6 +649,8 @@ def _normalize_z_drive(z_drive: str) -> str:
         "triple_leadscrew": "leadscrew_triple",
         "leadscrew_dual": "leadscrew_dual",
         "dual_leadscrew": "leadscrew_dual",
+        "leadscrew_dual_belt_sync": "leadscrew_dual_belt_sync",
+        "dual_leadscrew_belt_sync": "leadscrew_dual_belt_sync",
         "leadscrew_single": "leadscrew_single",
         "single_leadscrew": "leadscrew_single",
     }
@@ -664,6 +666,7 @@ def _z_motor_count(architecture: str, z_drive: str) -> int:
         "belted_z": 2,
         "leadscrew_triple": 3,
         "leadscrew_dual": 2,
+        "leadscrew_dual_belt_sync": 1,
         "leadscrew_single": 1,
     }.get(norm, 2)
 
@@ -907,7 +910,47 @@ def generate_bom(
             2,
             mount_note=y_mount_note,
         )
-        _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, z_rail_qty, z_rail_len, z_rail_qty)
+        if z_norm == "leadscrew_dual_belt_sync":
+            z_rod_prof_id = (
+                spec.bed.z_rail_profile
+                if spec.bed.z_rail_profile.startswith("steel_rod")
+                else "steel_rod_10mm"
+            )
+            z_rod_prof = get_profile(z_rod_prof_id)
+            rod_diam_mm = round(z_rod_prof.width_m * 1e3)
+            z_rod_len_m = z_rail_len * 1e-3
+            rod_unit_mass_g = z_rod_prof.area_m2 * z_rod_len_m * rail_mat.density_kg_m3 * 1000.0
+            _, rod_usd_m, _, _ = _rail_hw_info(z_rod_prof_id)
+            lmk_info = {
+                8: ("LMK8LUU", 6.50, 44.0),
+                10: ("LMK10LUU", 8.50, 68.0),
+                12: ("LMK12LUU", 11.00, 96.0),
+            }.get(int(rod_diam_mm), ("LMK10LUU", 8.50, 68.0))
+            _add_bom_item(
+                items,
+                sku="MOT-Z-ROD",
+                category="motion",
+                name=f"Z-Axis Hardened Chrome Steel Smooth Rod ({z_rod_prof.name})",
+                specification=f"{rail_mat.name}, Ø{rod_diam_mm:.0f}mm h6 chrome-plated shaft, L={z_rail_len:.0f} mm",
+                quantity=4,
+                unit="pcs",
+                unit_cost_usd=z_rod_len_m * rod_usd_m + 3.0,
+                unit_mass_g=rod_unit_mass_g,
+            )
+            _add_bom_item(
+                items,
+                sku="MOT-Z-BRG",
+                category="motion",
+                name=f"Z-Axis {lmk_info[0]} Flanged Linear Bearing",
+                specification=f"Square-flanged double-length linear ball bushing for Ø{rod_diam_mm:.0f}mm smooth rod",
+                quantity=4,
+                unit="pcs",
+                unit_cost_usd=lmk_info[1],
+                unit_mass_g=lmk_info[2],
+            )
+            total_carriages += 4
+        else:
+            _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, z_rail_qty, z_rail_len, z_rail_qty)
 
     elif arch == "cartesian_bedslinger":
         x_rail_len = round(min(w - 30.0, max(bx + 60.0, w - 50.0)), 0)
@@ -1064,16 +1107,21 @@ def generate_bom(
             ls_qty = {
                 "leadscrew_triple": 3,
                 "leadscrew_dual": 2,
+                "leadscrew_dual_belt_sync": 2,
                 "leadscrew_single": 1,
             }.get(z_norm, 2)
             ls_len_mm = round(min(h - 40.0, bz + 100.0), 0)
-            ls_mass_g = (ls_len_mm * 1e-3) * 320.0  # TR8x8 stainless ~320 g/m
+            ls_mass_g = (ls_len_mm * 1e-3) * 320.0  # TR8 stainless ~320 g/m
+            z_mech_id = spec.bed.effective_z_leadscrew_type
+            is_tr8x4 = z_mech_id == "tr8x4_pom"
+            ls_label = "TR8x4" if is_tr8x4 else "TR8x8"
+            ls_starts = "2-start" if is_tr8x4 else "4-start"
             _add_bom_item(
                 items,
                 sku="MOT-Z-LS",
                 category="motion",
-                name="TR8x8 Stainless Leadscrew",
-                specification=f"8mm dia, 2mm pitch, 4-start, L={ls_len_mm:.0f} mm",
+                name=f"{ls_label} Stainless Leadscrew",
+                specification=f"8mm dia, 2mm pitch, {ls_starts}, L={ls_len_mm:.0f} mm",
                 quantity=ls_qty,
                 unit="pcs",
                 unit_cost_usd=11.00 + (ls_len_mm * 1e-3) * 14.0,
@@ -1083,13 +1131,48 @@ def generate_bom(
                 items,
                 sku="MOT-Z-NUT",
                 category="motion",
-                name="TR8x8 POM Anti-Backlash Leadscrew Nut & 5x8mm Coupler",
-                specification="Spring-loaded POM nut + flexible aluminum shaft coupler",
+                name=(
+                    f"{ls_label} POM Anti-Backlash Leadscrew Nut & Pillow-Block Bearing"
+                    if z_norm == "leadscrew_dual_belt_sync"
+                    else f"{ls_label} POM Anti-Backlash Leadscrew Nut & 5x8mm Coupler"
+                ),
+                specification=(
+                    "Spring-loaded POM nut + KFL08/608 pillow-block thrust bearings"
+                    if z_norm == "leadscrew_dual_belt_sync"
+                    else "Spring-loaded POM nut + flexible aluminum shaft coupler"
+                ),
                 quantity=ls_qty,
                 unit="sets",
                 unit_cost_usd=8.50,
                 unit_mass_g=35.0,
             )
+            if z_norm == "leadscrew_dual_belt_sync":
+                z_sync_belt_mm = round(2.0 * w + d + 200.0, 0)
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-SYNC-BELT",
+                    category="motion",
+                    name="Z-Axis Closed-Loop GT2 Z-Sync Belt",
+                    specification=(
+                        f"Closed-loop 2GT 6mm fiberglass belt, L={z_sync_belt_mm:.0f} mm "
+                        f"(syncs dual {ls_label} leadscrews to single Z stepper)"
+                    ),
+                    quantity=1,
+                    unit="pcs",
+                    unit_cost_usd=7.50,
+                    unit_mass_g=round((z_sync_belt_mm * 1e-3) * 10.0, 1),
+                )
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-SYNC-PULLEY",
+                    category="motion",
+                    name="Z-Sync GT2 20T Pulley",
+                    specification="1x 5mm bore (Z stepper) + 2x 8mm bore (TR8 leadscrews), aluminum",
+                    quantity=3,
+                    unit="pcs",
+                    unit_cost_usd=4.20,
+                    unit_mass_g=12.0,
+                )
 
     # ------------------------------------------------------------------
     # 3. MOTORS (XY/Tower steppers + Z steppers + 1x Extruder stepper)

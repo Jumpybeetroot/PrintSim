@@ -202,8 +202,15 @@ class AssemblyModel:
                 ]
             elif z_drive == "leadscrew_dual":
                 specs = [
-                    ("z_rail_left", "b_left_mid", "g_left_mid", "z_bed_l", (1.0, 0.0, 0.0)),
-                    ("z_rail_right", "b_right_mid", "g_right_mid", "z_bed_r", (-1.0, 0.0, 0.0)),
+                    ("z_rail_left", "b_left_mid", "t_left_mid", "z_bed_l", (1.0, 0.0, 0.0)),
+                    ("z_rail_right", "b_right_mid", "t_right_mid", "z_bed_r", (-1.0, 0.0, 0.0)),
+                ]
+            elif z_drive == "leadscrew_dual_belt_sync":
+                specs = [
+                    ("z_rod_lf", "b_rod_lf", "t_rod_lf", "z_rod_lf", (1.0, 0.0, 0.0)),
+                    ("z_rod_lr", "b_rod_lr", "t_rod_lr", "z_rod_lr", (1.0, 0.0, 0.0)),
+                    ("z_rod_rf", "b_rod_rf", "t_rod_rf", "z_rod_rf", (-1.0, 0.0, 0.0)),
+                    ("z_rod_rr", "b_rod_rr", "t_rod_rr", "z_rod_rr", (-1.0, 0.0, 0.0)),
                 ]
             elif z_drive == "leadscrew_single":
                 specs = [
@@ -227,6 +234,11 @@ class AssemblyModel:
                     )
                 )
 
+        vis_prof = (
+            z_prof
+            if (z_drive != "leadscrew_dual_belt_sync" or z_prof.startswith("steel_rod"))
+            else "steel_rod_10mm"
+        )
         out: list[dict] = []
         for rid, b_id, t_id, car_id, nvec in specs:
             if b_id not in nmap or t_id not in nmap:
@@ -239,7 +251,7 @@ class AssemblyModel:
                     "id": rid,
                     "start_mm": [round(float(v), 2) for v in p0],
                     "end_mm": [round(float(v), 2) for v in p1],
-                    "profile_id": z_prof,
+                    "profile_id": vis_prof,
                     "carriage_z_mm": round(car_z, 2),
                     "normal": [round(float(v), 4) for v in nvec],
                 }
@@ -270,10 +282,10 @@ class AssemblyModel:
                     ("z_drive_fr", "b_fr", "g_fr", "z_bed_fr", (-20.0, 0.0, 0.0)),
                     ("z_drive_rear", "b_rear_mid", "g_rear_mid", "z_bed_r", (0.0, -20.0, 0.0)),
                 ]
-            elif z_drive == "leadscrew_dual":
+            elif z_drive in ("leadscrew_dual", "leadscrew_dual_belt_sync"):
                 specs = [
-                    ("z_drive_left", "b_left_mid", "g_left_mid", "z_bed_l", (20.0, 0.0, 0.0)),
-                    ("z_drive_right", "b_right_mid", "g_right_mid", "z_bed_r", (-20.0, 0.0, 0.0)),
+                    ("z_drive_left", "b_left_mid", "t_left_mid", "z_bed_l", (20.0, 0.0, 0.0)),
+                    ("z_drive_right", "b_right_mid", "t_right_mid", "z_bed_r", (-20.0, 0.0, 0.0)),
                 ]
             elif z_drive == "leadscrew_single":
                 specs = [
@@ -297,6 +309,11 @@ class AssemblyModel:
                     )
                 )
 
+        shared_motor_pos = (
+            nmap["b_rear_mid"].position_m * 1000.0
+            if (z_drive == "leadscrew_dual_belt_sync" and "b_rear_mid" in nmap)
+            else None
+        )
         out: list[dict] = []
         for zid, b_id, t_id, nut_id, off_mm in specs:
             if b_id not in nmap or t_id not in nmap:
@@ -305,6 +322,7 @@ class AssemblyModel:
             p0 = nmap[b_id].position_m * 1000.0 + off
             p1 = nmap[t_id].position_m * 1000.0 + off
             nut_z = float(nmap[nut_id].position_m[2] * 1000.0) if nut_id in nmap else float(self.bed_center_m[2] * 1000.0)
+            mpos = shared_motor_pos if shared_motor_pos is not None else p0
             out.append(
                 {
                     "id": zid,
@@ -313,7 +331,7 @@ class AssemblyModel:
                     "start_mm": [round(float(v), 2) for v in p0],
                     "end_mm": [round(float(v), 2) for v in p1],
                     "nut_z_mm": round(nut_z, 2),
-                    "motor_pos_mm": [round(float(v), 2) for v in p0],
+                    "motor_pos_mm": [round(float(v), 2) for v in mpos],
                     "diameter_mm": round(diam_mm, 2),
                 }
             )
@@ -2517,16 +2535,66 @@ def _build_corexy(
             ]
         )
     elif z_drive == "leadscrew_dual":
+        # Anchor top of dual-Z side guides to top perimeter rails (t_left_mid / t_right_mid)
+        # so the moving Y carriages y_car_l/r never collide or weld to Z guide nodes at mid-Y.
         nodes.extend(
             [
                 StructuralNode("b_left_mid", np.array([0.0, y_mid, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
                 StructuralNode("b_right_mid", np.array([w, y_mid, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
-                StructuralNode("g_left_mid", np.array([0.0, y_mid, z_gantry]), role="frame"),
-                StructuralNode("g_right_mid", np.array([w, y_mid, z_gantry]), role="frame"),
+                StructuralNode("t_left_mid", np.array([0.0, y_mid, h]), role="frame"),
+                StructuralNode("t_right_mid", np.array([w, y_mid, h]), role="frame"),
                 StructuralNode("z_bed_l", np.array([0.0, y_mid, z_bed]), role="bed"),
                 StructuralNode("z_bed_r", np.array([w, y_mid, z_bed]), role="bed"),
             ]
         )
+    elif z_drive == "leadscrew_dual_belt_sync":
+        # Real VzBot 330/235 Z-architecture: 1 NEMA17 Z stepper at rear-center driving 2 belt-synced
+        # mid-side TR8 leadscrews + 4 vertical hardened smooth rods (y = 0.25d, 0.75d on left & right)
+        # anchored between base and top perimeter rails with LMK10LUU flanged linear bearings.
+        y_rod_f = d * 0.25
+        y_rod_r = d * 0.75
+        nodes.extend(
+            [
+                StructuralNode("b_rear_mid", np.array([w * 0.5, d, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
+                StructuralNode("b_left_mid", np.array([0.0, y_mid, 0.0]), role="frame"),
+                StructuralNode("b_right_mid", np.array([w, y_mid, 0.0]), role="frame"),
+                StructuralNode("t_left_mid", np.array([0.0, y_mid, h]), role="frame"),
+                StructuralNode("t_right_mid", np.array([w, y_mid, h]), role="frame"),
+                StructuralNode("z_bed_l", np.array([0.0, y_mid, z_bed]), role="bed"),
+                StructuralNode("z_bed_r", np.array([w, y_mid, z_bed]), role="bed"),
+                # 4 smooth-rod base anchors, top anchors, rod-at-bed nodes, and LMK bearing housings
+                StructuralNode("b_rod_lf", np.array([0.0, y_rod_f, 0.0]), role="frame"),
+                StructuralNode("b_rod_lr", np.array([0.0, y_rod_r, 0.0]), role="frame"),
+                StructuralNode("b_rod_rf", np.array([w, y_rod_f, 0.0]), role="frame"),
+                StructuralNode("b_rod_rr", np.array([w, y_rod_r, 0.0]), role="frame"),
+                StructuralNode("t_rod_lf", np.array([0.0, y_rod_f, h]), role="frame"),
+                StructuralNode("t_rod_lr", np.array([0.0, y_rod_r, h]), role="frame"),
+                StructuralNode("t_rod_rf", np.array([w, y_rod_f, h]), role="frame"),
+                StructuralNode("t_rod_rr", np.array([w, y_rod_r, h]), role="frame"),
+                StructuralNode("z_rod_lf", np.array([0.0, y_rod_f, z_bed]), role="bed"),
+                StructuralNode("z_rod_lr", np.array([0.0, y_rod_r, z_bed]), role="bed"),
+                StructuralNode("z_rod_rf", np.array([w, y_rod_f, z_bed]), role="bed"),
+                StructuralNode("z_rod_rr", np.array([w, y_rod_r, z_bed]), role="bed"),
+                StructuralNode("z_brg_lf", np.array([0.0, y_rod_f, z_bed]), role="bed"),
+                StructuralNode("z_brg_lr", np.array([0.0, y_rod_r, z_bed]), role="bed"),
+                StructuralNode("z_brg_rf", np.array([w, y_rod_f, z_bed]), role="bed"),
+                StructuralNode("z_brg_rr", np.array([w, y_rod_r, z_bed]), role="bed"),
+            ]
+        )
+        for tag in ("lf", "lr", "rf", "rr"):
+            fastener_springs.append(
+                FastenerSpring(
+                    id=f"z_rod_brg_{tag}",
+                    bay="z_guide",
+                    shell_node_id=f"z_rod_{tag}",
+                    frame_node_id=f"z_brg_{tag}",
+                    k_shear_n_m=1.2e7,
+                    k_normal_n_m=1.0e2,
+                    k_rot_nm_rad=5000.0,
+                    normal_vec=(0.0, 0.0, 1.0),
+                    offset_m=(0.0, 0.0, 0.0),
+                )
+            )
     elif z_drive == "leadscrew_single":
         nodes.extend(
             [
@@ -2543,9 +2611,9 @@ def _build_corexy(
     bm = spec.frame.brace_material
     members: list[StructuralMember] = []
 
-    # Base perimeter (split only where Z-rail columns anchor)
+    # Base perimeter (split only where Z-rail/rod columns or Z-motors anchor)
     _add_member(members, "base_front", "b_fl", "b_fr", fp, fm)
-    if z_drive in ("leadscrew_triple", "leadscrew_single"):
+    if z_drive in ("leadscrew_triple", "leadscrew_single", "leadscrew_dual_belt_sync"):
         _add_member(members, "base_rear_l", "b_rl", "b_rear_mid", fp, fm)
         _add_member(members, "base_rear_r", "b_rear_mid", "b_rr", fp, fm)
     else:
@@ -2556,6 +2624,15 @@ def _build_corexy(
         _add_member(members, "base_left_r", "b_left_mid", "b_rl", fp, fm)
         _add_member(members, "base_right_f", "b_fr", "b_right_mid", fp, fm)
         _add_member(members, "base_right_r", "b_right_mid", "b_rr", fp, fm)
+    elif z_drive == "leadscrew_dual_belt_sync":
+        _add_member(members, "base_left_1", "b_fl", "b_rod_lf", fp, fm)
+        _add_member(members, "base_left_2", "b_rod_lf", "b_left_mid", fp, fm)
+        _add_member(members, "base_left_3", "b_left_mid", "b_rod_lr", fp, fm)
+        _add_member(members, "base_left_4", "b_rod_lr", "b_rl", fp, fm)
+        _add_member(members, "base_right_1", "b_fr", "b_rod_rf", fp, fm)
+        _add_member(members, "base_right_2", "b_rod_rf", "b_right_mid", fp, fm)
+        _add_member(members, "base_right_3", "b_right_mid", "b_rod_rr", fp, fm)
+        _add_member(members, "base_right_4", "b_rod_rr", "b_rr", fp, fm)
     elif is_flying:
         _add_member(members, "base_left_f", "b_fl", "b_bed_fl", fp, fm)
         _add_member(members, "base_left_m", "b_bed_fl", "b_bed_rl", fp, fm)
@@ -2577,68 +2654,32 @@ def _build_corexy(
             _add_member(members, f"col_{tag}_low", f"b_{tag}", col_mid, up, fm)
         _add_member(members, f"col_{tag}_top", col_mid, f"t_{tag}", up, fm)
 
-    # Top perimeter
+    # Top perimeter (split along left/right rails where dual-Z guides / 4x smooth rods anchor)
     _add_member(members, "top_front", "t_fl", "t_fr", fp, fm)
     _add_member(members, "top_rear", "t_rl", "t_rr", fp, fm)
-    _add_member(members, "top_left", "t_fl", "t_rl", fp, fm)
-    _add_member(members, "top_right", "t_fr", "t_rr", fp, fm)
+    if z_drive == "leadscrew_dual":
+        _add_member(members, "top_left_f", "t_fl", "t_left_mid", fp, fm)
+        _add_member(members, "top_left_r", "t_left_mid", "t_rl", fp, fm)
+        _add_member(members, "top_right_f", "t_fr", "t_right_mid", fp, fm)
+        _add_member(members, "top_right_r", "t_right_mid", "t_rr", fp, fm)
+    elif z_drive == "leadscrew_dual_belt_sync":
+        _add_member(members, "top_left_1", "t_fl", "t_rod_lf", fp, fm)
+        _add_member(members, "top_left_2", "t_rod_lf", "t_left_mid", fp, fm)
+        _add_member(members, "top_left_3", "t_left_mid", "t_rod_lr", fp, fm)
+        _add_member(members, "top_left_4", "t_rod_lr", "t_rl", fp, fm)
+        _add_member(members, "top_right_1", "t_fr", "t_rod_rf", fp, fm)
+        _add_member(members, "top_right_2", "t_rod_rf", "t_right_mid", fp, fm)
+        _add_member(members, "top_right_3", "t_right_mid", "t_rod_rr", fp, fm)
+        _add_member(members, "top_right_4", "t_rod_rr", "t_rr", fp, fm)
+    else:
+        _add_member(members, "top_left", "t_fl", "t_rl", fp, fm)
+        _add_member(members, "top_right", "t_fr", "t_rr", fp, fm)
 
     # Mid gantry frame rails (left/right Y rails + rear motor bar, open front door)
-    if z_drive == "leadscrew_dual":
-        if abs(y_gantry - y_mid) >= 2e-3:
-            if y_gantry < y_mid:
-                _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
-                _add_member(members, "y_rail_l_m", "y_car_l", "g_left_mid", fp, fm, role="rail")
-                _add_member(members, "y_rail_l_r", "g_left_mid", "g_rl", fp, fm, role="rail")
-                _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
-                _add_member(members, "y_rail_r_m", "y_car_r", "g_right_mid", fp, fm, role="rail")
-                _add_member(members, "y_rail_r_r", "g_right_mid", "g_rr", fp, fm, role="rail")
-            else:
-                _add_member(members, "y_rail_l_f", "g_fl", "g_left_mid", fp, fm, role="rail")
-                _add_member(members, "y_rail_l_m", "g_left_mid", "y_car_l", fp, fm, role="rail")
-                _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
-                _add_member(members, "y_rail_r_f", "g_fr", "g_right_mid", fp, fm, role="rail")
-                _add_member(members, "y_rail_r_m", "g_right_mid", "y_car_r", fp, fm, role="rail")
-                _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
-        else:
-            _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
-            _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
-            _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
-            _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
-            nmap_tmp = {n.id: n for n in nodes}
-            off_l = nmap_tmp["g_left_mid"].position_m - nmap_tmp["y_car_l"].position_m
-            off_r = nmap_tmp["g_right_mid"].position_m - nmap_tmp["y_car_r"].position_m
-            fastener_springs.append(
-                FastenerSpring(
-                    id="z_rail_top_tie_l",
-                    bay="frame",
-                    shell_node_id="g_left_mid",
-                    frame_node_id="y_car_l",
-                    k_shear_n_m=1.0e9,
-                    k_normal_n_m=1.0e9,
-                    k_rot_nm_rad=1.0e7,
-                    normal_vec=(0.0, 0.0, 1.0),
-                    offset_m=(float(off_l[0]), float(off_l[1]), float(off_l[2])),
-                )
-            )
-            fastener_springs.append(
-                FastenerSpring(
-                    id="z_rail_top_tie_r",
-                    bay="frame",
-                    shell_node_id="g_right_mid",
-                    frame_node_id="y_car_r",
-                    k_shear_n_m=1.0e9,
-                    k_normal_n_m=1.0e9,
-                    k_rot_nm_rad=1.0e7,
-                    normal_vec=(0.0, 0.0, 1.0),
-                    offset_m=(float(off_r[0]), float(off_r[1]), float(off_r[2])),
-                )
-            )
-    else:
-        _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
-        _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
-        _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
-        _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
+    _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
+    _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
+    _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
+    _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
 
     if z_drive in ("leadscrew_triple", "leadscrew_single"):
         _add_member(members, "gantry_rear_bar_l", "g_rl", "g_rear_mid", fp, fm)
@@ -2754,14 +2795,14 @@ def _build_corexy(
                 shape="solid_bar",
                 width_m=0.012,
                 height_m=0.012,
-                area_m2=2.8e-5,
+                area_m2=8.0e-5,  # steel-equivalent TR8 axial EA in aluminum-modulus virtual material
                 iy_m4=0.22 * frame_prof.iy_m4,
                 iz_m4=0.22 * frame_prof.iz_m4,
                 j_m4=0.22 * frame_prof.j_m4,
             )
-            for side, b_nid, z_nid, g_nid in (
-                ("left", "b_left_mid", "z_bed_l", "g_left_mid"),
-                ("right", "b_right_mid", "z_bed_r", "g_right_mid"),
+            for side, b_nid, z_nid, t_nid in (
+                ("left", "b_left_mid", "z_bed_l", "t_left_mid"),
+                ("right", "b_right_mid", "z_bed_r", "t_right_mid"),
             ):
                 members.append(
                     StructuralMember(
@@ -2777,7 +2818,7 @@ def _build_corexy(
                     StructuralMember(
                         id=f"bed_{side}_z_top",
                         start_id=z_nid,
-                        end_id=g_nid,
+                        end_id=t_nid,
                         profile=z_dual_rail_prof,
                         material=z_rail_vmat,
                         role="bed",
@@ -2791,7 +2832,7 @@ def _build_corexy(
                     width_m=0.020,
                     height_m=max(0.012, 0.012 + t_mm * 1e-3),
                     area_m2=5.0e-4,
-                    iy_m4=_series_z_arm_iy(0.22 * iy_triple_arm, z_nid),
+                    iy_m4=_series_z_arm_iy(0.95 * iy_triple_arm, z_nid),
                     iz_m4=0.45 * iz_triple_arm,
                     j_m4=0.35 * j_triple_arm,
                 )
@@ -2801,6 +2842,184 @@ def _build_corexy(
                         start_id=z_nid,
                         end_id="bed_frame",
                         profile=bed_dual_prof,
+                        material=bed_vmat,
+                        role="bed",
+                    )
+                )
+        elif z_drive == "leadscrew_dual_belt_sync":
+            # 4x hardened steel smooth rods (default Ø10 mm) spanning base-to-top rails.
+            # Real VzBot 330/235 rods span the Z-travel bay (~bz + 100 mm) minus 55 mm double-length
+            # LMK10LUU flanged linear bearings and CNC aluminum top/bottom rod holders.
+            rod_prof_id = (
+                spec.bed.z_rail_profile
+                if spec.bed.z_rail_profile.startswith("steel_rod")
+                else "steel_rod_10mm"
+            )
+            rod_base_prof = get_profile(rod_prof_id)
+            rod_mat = get_material(spec.gantry.rail_material)
+            l_clear_rod = min(h - 0.10, max(bz + 0.015, 0.24))
+            sleeve_ei_mult = min(5.5, max(1.0, (h / max(l_clear_rod, 0.12)) ** 3))
+            rod_eff_prof = rod_base_prof.model_copy(
+                update={
+                    "iy_m4": rod_base_prof.iy_m4 * sleeve_ei_mult,
+                    "iz_m4": rod_base_prof.iz_m4 * sleeve_ei_mult,
+                    "j_m4": rod_base_prof.j_m4 * sleeve_ei_mult,
+                }
+            )
+            # Bottom Z-rod cross-extrusions + CNC rod-holder clamp torsional/lateral backing
+            members.append(
+                StructuralMember(
+                    id="base_z_cross_f",
+                    start_id="b_rod_lf",
+                    end_id="b_rod_rf",
+                    profile=frame_prof,
+                    material=get_material(fm),
+                    role="bed",
+                )
+            )
+            members.append(
+                StructuralMember(
+                    id="base_z_cross_r",
+                    start_id="b_rod_lr",
+                    end_id="b_rod_rr",
+                    profile=frame_prof,
+                    material=get_material(fm),
+                    role="bed",
+                )
+            )
+            for m_side in members:
+                if m_side.id.startswith(("base_left_", "base_right_")):
+                    m_side.profile = m_side.profile.model_copy(
+                        update={
+                            "iz_m4": m_side.profile.iz_m4 * 4.0,
+                            "j_m4": m_side.profile.iy_m4 * 2.5,
+                        }
+                    )
+                elif m_side.id.startswith(("top_left_", "top_right_")):
+                    m_side.profile = m_side.profile.model_copy(
+                        update={
+                            "iz_m4": m_side.profile.iz_m4 * 2.5,
+                            "j_m4": m_side.profile.iy_m4 * 2.5,
+                        }
+                    )
+            for tag in ("lf", "lr", "rf", "rr"):
+                b_nid = f"b_rod_{tag}"
+                z_nid = f"z_rod_{tag}"
+                t_nid = f"t_rod_{tag}"
+                l_bot = float(np.linalg.norm(nmap_pre[z_nid].position_m - nmap_pre[b_nid].position_m))
+                l_top = float(np.linalg.norm(nmap_pre[t_nid].position_m - nmap_pre[z_nid].position_m))
+                members.append(
+                    StructuralMember(
+                        id=f"bed_rod_{tag}_bot",
+                        start_id=b_nid,
+                        end_id=z_nid,
+                        profile=rod_eff_prof,
+                        material=rod_mat,
+                        role="bed",
+                        rail_mass_kg=rod_eff_prof.area_m2 * l_bot * rod_mat.density_kg_m3,
+                    )
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"bed_rod_{tag}_top",
+                        start_id=z_nid,
+                        end_id=t_nid,
+                        profile=rod_eff_prof,
+                        material=rod_mat,
+                        role="bed",
+                        rail_mass_kg=rod_eff_prof.area_m2 * l_top * rod_mat.density_kg_m3,
+                    )
+                )
+            # 2x mid-side belt-synced TR8 leadscrews carrying vertical Z bed load
+            ls_diam_m = float(z_mech.get("diameter_mm", 8.0)) * 1e-3
+            ls_r_m = 0.5 * ls_diam_m
+            ls_i_m4 = 0.25 * math.pi * (ls_r_m**4)
+            ls_j_m4 = 0.5 * math.pi * (ls_r_m**4)
+            ls_root_a = float(z_mech.get("root_area_m2", 2.38e-5))
+            ls_vmat = _make_bed_virtual_material(rod_mat)
+            ls_bot_prof = ProfileSpec.model_construct(
+                id="bed_sync_leadscrew_bot_profile",
+                name=f"Belt-Synced Z Leadscrew Lower ({z_mech_id})",
+                shape="rod",
+                width_m=ls_diam_m,
+                height_m=ls_diam_m,
+                area_m2=ls_root_a,
+                iy_m4=ls_i_m4 * sleeve_ei_mult,
+                iz_m4=ls_i_m4 * sleeve_ei_mult,
+                j_m4=ls_j_m4 * sleeve_ei_mult,
+            )
+            ls_top_prof = ls_bot_prof.model_copy(
+                update={
+                    "id": "bed_sync_leadscrew_top_profile",
+                    "name": f"Belt-Synced Z Leadscrew Upper ({z_mech_id})",
+                    "area_m2": 6.0e-7,  # floating upper 608 pillow block (no axial bind)
+                }
+            )
+            for side, b_nid, z_nid, t_nid in (
+                ("left", "b_left_mid", "z_bed_l", "t_left_mid"),
+                ("right", "b_right_mid", "z_bed_r", "t_right_mid"),
+            ):
+                members.append(
+                    StructuralMember(
+                        id=f"bed_{side}_z_bot",
+                        start_id=b_nid,
+                        end_id=z_nid,
+                        profile=ls_bot_prof,
+                        material=ls_vmat,
+                        role="bed",
+                    )
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"bed_{side}_z_top",
+                        start_id=z_nid,
+                        end_id=t_nid,
+                        profile=ls_top_prof,
+                        material=ls_vmat,
+                        role="bed",
+                    )
+                )
+            # 2x mid-side Z-lift bed arms + 4x rigid 2020 bed-carrier arms into LMK10LUU bearings
+            for tag, z_nid in (("l", "z_bed_l"), ("r", "z_bed_r")):
+                bed_sync_arm_prof = ProfileSpec.model_construct(
+                    id="bed_sync_dual_arm_profile",
+                    name=f"Belt-Synced Dual-Z Bed Subframe ({t_mm:.1f}mm {spec.bed.plate_material})",
+                    shape="solid_bar",
+                    width_m=0.020,
+                    height_m=max(0.014, 0.014 + t_mm * 1e-3),
+                    area_m2=6.0e-4,
+                    iy_m4=_series_z_arm_iy(0.75 * iy_triple_arm, z_nid),
+                    iz_m4=0.90 * iz_triple_arm,
+                    j_m4=0.75 * j_triple_arm,
+                )
+                members.append(
+                    StructuralMember(
+                        id=f"bed_arm_{tag}",
+                        start_id=z_nid,
+                        end_id="bed_frame",
+                        profile=bed_sync_arm_prof,
+                        material=bed_vmat,
+                        role="bed",
+                    )
+                )
+            bed_carrier_prof = ProfileSpec.model_construct(
+                id="bed_rod_carrier_arm_profile",
+                name="VzBot 2020 Bed Carrier Subframe Arm",
+                shape="solid_bar",
+                width_m=0.020,
+                height_m=0.020,
+                area_m2=6.0e-4,
+                iy_m4=2.2e-7,
+                iz_m4=2.2e-7,
+                j_m4=8.0e-8,
+            )
+            for tag in ("lf", "lr", "rf", "rr"):
+                members.append(
+                    StructuralMember(
+                        id=f"bed_carrier_{tag}",
+                        start_id=f"z_brg_{tag}",
+                        end_id="bed_frame",
+                        profile=bed_carrier_prof,
                         material=bed_vmat,
                         role="bed",
                     )
@@ -3006,12 +3225,12 @@ def _build_corexy(
                             # Keep bending EI from composite column+rail; axial Z load passes primarily
                             # through the lower leadscrew span (bed_*_z_bot) since the MGN carriage
                             # slides along the upper rail guide (bed_*_z_top) with only drag/idler coupling.
-                            m_obj.profile = m_obj.profile.model_copy(update={"area_m2": 2.8e-5})
+                            m_obj.profile = m_obj.profile.model_copy(update={"area_m2": 8.0e-5})
                             _rebalance_virtual_bed_rail_mass(m_obj, nmap, old_rho, old_rail_mass)
                             if mid.endswith("_top"):
                                 top_area = 6.0e-7
                                 m_obj.material = m_obj.material.model_copy(
-                                    update={"density_kg_m3": m_obj.material.density_kg_m3 * (2.8e-5 / top_area)}
+                                    update={"density_kg_m3": m_obj.material.density_kg_m3 * (8.0e-5 / top_area)}
                                 )
                                 m_obj.profile = m_obj.profile.model_copy(update={"area_m2": top_area})
                             continue
