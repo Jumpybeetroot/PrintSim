@@ -15,7 +15,7 @@ from rich.table import Table
 from printsim.api.session import get_live_session, request_snapshot_capture
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
-from printsim.fea.adxl_calibration import calibrate_printer_against_adxl
+from printsim.fea.adxl_calibration import calibrate_printer_against_adxl, fit_printer_to_adxl
 from printsim.geometry import (
     build_assembly,
     export_assembly_step,
@@ -157,6 +157,7 @@ def calibrate_adxl_cmd(
     x_csv: Optional[Path] = typer.Option(None, "--x-csv", "-x", exists=True, help="Klipper PSD or raw ADXL345 CSV for X axis"),
     y_csv: Optional[Path] = typer.Option(None, "--y-csv", "-y", exists=True, help="Klipper PSD or raw ADXL345 CSV for Y axis"),
     max_freq_hz: float = typer.Option(200.0, "--max-freq", min=20.0, max=500.0, help="Maximum frequency span (Hz)"),
+    fit: bool = typer.Option(False, "--fit", help="Auto-fit belt pretension and rail/joint stiffness knobs to match measured peaks"),
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON calibration report"),
 ) -> None:
     """Compare real Klipper ADXL345 / Shake&Tune CSV measurements against PrintSim modal FEA."""
@@ -166,6 +167,57 @@ def calibrate_adxl_cmd(
     spec = PrinterSpec.from_yaml(spec_path)
     axis_x_text = x_csv.read_text(encoding="utf-8", errors="replace") if x_csv is not None else None
     axis_y_text = y_csv.read_text(encoding="utf-8", errors="replace") if y_csv is not None else None
+
+    if fit:
+        fit_report = fit_printer_to_adxl(
+            spec,
+            axis_x_csv=axis_x_text,
+            axis_y_csv=axis_y_text,
+            max_freq_hz=max_freq_hz,
+        )
+        if json_out:
+            print(json.dumps(fit_report.to_dict(), indent=2))
+            return
+
+        console.print(
+            Panel.fit(
+                f"[bold cyan]{fit_report.printer_name}[/bold cyan] ({spec.architecture})\n"
+                f"Mean |Peak Error|: {fit_report.before_mean_abs_error_pct:.2f}% -> "
+                f"[bold green]{fit_report.after_mean_abs_error_pct:.2f}%[/bold green]\n"
+                f"{fit_report.summary}",
+                title="PrintSim ADXL345 Digital-Twin Auto-Fit",
+            )
+        )
+
+        ax_tbl = Table(show_header=True, header_style="bold magenta")
+        ax_tbl.add_column("Axis")
+        ax_tbl.add_column("Meas Peak", justify="right")
+        ax_tbl.add_column("Before Sim (Err%)", justify="right")
+        ax_tbl.add_column("After Sim (Err%)", justify="right")
+        for ax_key in fit_report.after_axes:
+            b_ax = fit_report.before_axes[ax_key]
+            a_ax = fit_report.after_axes[ax_key]
+            ax_tbl.add_row(
+                ax_key,
+                f"{a_ax.measured_peak_hz:.1f} Hz",
+                f"{b_ax.simulated_peak_hz:.1f} Hz ({b_ax.peak_error_pct:+.1f}%)",
+                f"{a_ax.simulated_peak_hz:.1f} Hz ({a_ax.peak_error_pct:+.1f}%)",
+            )
+        console.print(ax_tbl)
+
+        if fit_report.changes:
+            chg_tbl = Table(title="Fitted Parameter Changes", show_header=True, header_style="bold cyan")
+            chg_tbl.add_column("Field")
+            chg_tbl.add_column("Parameter")
+            chg_tbl.add_column("Before", justify="right")
+            chg_tbl.add_column("After", justify="right")
+            chg_tbl.add_column("Reason")
+            for chg in fit_report.changes:
+                chg_tbl.add_row(chg.field, chg.label, str(chg.before), str(chg.after), chg.reason)
+            console.print(chg_tbl)
+        else:
+            console.print("\n[dim]No parameter changes applied.[/dim]")
+        return
 
     report = calibrate_printer_against_adxl(
         spec,

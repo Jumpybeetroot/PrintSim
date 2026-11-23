@@ -25,7 +25,7 @@ from printsim.api.session import (
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
-from printsim.fea.adxl_calibration import calibrate_printer_against_adxl
+from printsim.fea.adxl_calibration import calibrate_printer_against_adxl, fit_printer_to_adxl
 from printsim.fea.solid_fem import (
     FaceName,
     PartPreset,
@@ -464,8 +464,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @api.post("/api/calibration/adxl")
-    def run_adxl_calibration(req: AdxlCalibrationRequest) -> dict:
+    def _resolve_adxl_request(req: AdxlCalibrationRequest) -> PrinterSpec:
         if req.spec is not None:
             try:
                 spec = PrinterSpec.model_validate(req.spec)
@@ -481,7 +480,11 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="Provide at least one measured CSV ('axis_x_csv' and/or 'axis_y_csv').",
             )
+        return spec
 
+    @api.post("/api/calibration/adxl")
+    def run_adxl_calibration(req: AdxlCalibrationRequest) -> dict:
+        spec = _resolve_adxl_request(req)
         try:
             report = calibrate_printer_against_adxl(
                 spec,
@@ -490,6 +493,22 @@ def create_app() -> FastAPI:
                 max_freq_hz=req.max_freq_hz,
             )
             return report.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/calibration/adxl/fit")
+    def run_adxl_calibration_fit(req: AdxlCalibrationRequest) -> dict:
+        spec = _resolve_adxl_request(req)
+        try:
+            fit_report = fit_printer_to_adxl(
+                spec,
+                axis_x_csv=req.axis_x_csv,
+                axis_y_csv=req.axis_y_csv,
+                max_freq_hz=req.max_freq_hz,
+            )
+            return fit_report.to_dict()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:

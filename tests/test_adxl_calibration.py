@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,9 @@ from typer.testing import CliRunner
 from printsim.api.server import create_app
 from printsim.cli import app as cli_app
 from printsim.fea import (
+    AdxlFitReport,
     calibrate_printer_against_adxl,
+    fit_printer_to_adxl,
     parse_adxl_csv,
     solve_modal_fea,
 )
@@ -338,3 +341,199 @@ def test_cli_and_mcp_adxl_calibration(tmp_path: Path) -> None:
     assert not call_resp["result"]["isError"], call_resp["result"]["content"][0]["text"]
     mcp_payload = json.loads(call_resp["result"]["content"][0]["text"])
     assert mcp_payload["axes"]["X"]["measured_peak_hz"] == pytest.approx(52.0, abs=0.1)
+
+
+def _modal_graph_to_klipper_csv(graph: object, axis_col: str) -> str:
+    """Serialize a simulated AxisShaperGraph PSD into a Klipper TEST_RESONANCES CSV."""
+    freqs = getattr(graph, "freqs_hz")
+    raw_psd = getattr(graph, "raw_psd")
+    lines = [
+        "# Klipper TEST_RESONANCES simulated twin dump",
+        f"freq,{axis_col}",
+    ]
+    for f_val, p_val in zip(freqs, raw_psd):
+        lines.append(f"{float(f_val):.2f},{float(p_val):.6f}")
+    return "\n".join(lines)
+
+
+def _build_perturbed_trident_csvs() -> tuple[PrinterSpec, str, str]:
+    """Perturb Voron Trident 300 hardware and synthesize measured X/Y Klipper PSD CSVs."""
+    stock_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    perturbed = stock_spec.model_copy(deep=True)
+    perturbed.gantry.belt.pretension_n = 16.0
+    perturbed.gantry.rail_quality = "budget_generic"
+    perturbed.gantry.rail_preload = "ZF"
+    perturbed.frame.corner_joint_type = "l_bracket"
+
+    modal_perturbed = solve_modal_fea(build_assembly(perturbed))
+    assert modal_perturbed.shaper_graph_x is not None
+    assert modal_perturbed.shaper_graph_y is not None
+
+    csv_x = _modal_graph_to_klipper_csv(modal_perturbed.shaper_graph_x, "psd_x")
+    csv_y = _modal_graph_to_klipper_csv(modal_perturbed.shaper_graph_y, "psd_y")
+    return stock_spec, csv_x, csv_y
+
+
+def test_fit_printer_to_adxl_perturbed_hardware_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inverse auto-fit recovers perturbed hardware peaks, parses CSVs once, and never degrades matched specs."""
+    import printsim.fea.adxl_calibration as adxl_mod
+
+    stock_spec, csv_x, csv_y = _build_perturbed_trident_csvs()
+
+    parse_calls = 0
+    orig_parse = adxl_mod.parse_adxl_csv
+
+    def _counting_parse(*args: object, **kwargs: object) -> object:
+        nonlocal parse_calls
+        parse_calls += 1
+        return orig_parse(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(adxl_mod, "parse_adxl_csv", _counting_parse)
+
+    t0 = time.perf_counter()
+    fit_report = fit_printer_to_adxl(stock_spec, axis_x_csv=csv_x, axis_y_csv=csv_y)
+    elapsed_s = time.perf_counter() - t0
+
+    assert isinstance(fit_report, AdxlFitReport)
+    assert parse_calls == 2  # parsed strictly once per supplied axis
+    assert elapsed_s < 4.0
+
+    payload = fit_report.to_dict()
+    assert set(payload.keys()) == {
+        "printer_name",
+        "before_mean_abs_error_pct",
+        "after_mean_abs_error_pct",
+        "before_axes",
+        "after_axes",
+        "fitted_spec",
+        "changes",
+        "summary",
+    }
+    assert payload["printer_name"] == stock_spec.name
+    assert payload["before_mean_abs_error_pct"] > 3.0
+    assert payload["after_mean_abs_error_pct"] < payload["before_mean_abs_error_pct"]
+    assert payload["after_mean_abs_error_pct"] < 6.0
+    assert len(payload["changes"]) > 0
+    for chg in payload["changes"]:
+        assert set(chg.keys()) == {"field", "label", "before", "after", "reason"}
+
+    validated = PrinterSpec.model_validate(payload["fitted_spec"])
+    assert validated.name == stock_spec.name
+
+    # Non-degradation guard: stock spec matched against its own PSD produces zero changes
+    modal_stock = solve_modal_fea(build_assembly(stock_spec))
+    assert modal_stock.shaper_graph_x is not None
+    assert modal_stock.shaper_graph_y is not None
+    stock_csv_x = _modal_graph_to_klipper_csv(modal_stock.shaper_graph_x, "psd_x")
+    stock_csv_y = _modal_graph_to_klipper_csv(modal_stock.shaper_graph_y, "psd_y")
+
+    matched_fit = fit_printer_to_adxl(stock_spec, axis_x_csv=stock_csv_x, axis_y_csv=stock_csv_y)
+    assert matched_fit.changes == []
+    assert matched_fit.after_mean_abs_error_pct == pytest.approx(matched_fit.before_mean_abs_error_pct, abs=1e-6)
+    assert "already matches" in matched_fit.summary.lower()
+
+
+def test_fastapi_adxl_fit_endpoint() -> None:
+    """FastAPI POST /api/calibration/adxl/fit returns 200 OK with exact schema and 400 on bad/missing CSVs."""
+    client = TestClient(create_app())
+    stock_spec, csv_x, csv_y = _build_perturbed_trident_csvs()
+    spec_json = stock_spec.model_dump(mode="json")
+
+    r_ok = client.post(
+        "/api/calibration/adxl/fit",
+        json={
+            "spec": spec_json,
+            "axis_x_csv": csv_x,
+            "axis_y_csv": csv_y,
+            "max_freq_hz": 200.0,
+        },
+    )
+    assert r_ok.status_code == 200, r_ok.text
+    payload = r_ok.json()
+    assert set(payload.keys()) == {
+        "printer_name",
+        "before_mean_abs_error_pct",
+        "after_mean_abs_error_pct",
+        "before_axes",
+        "after_axes",
+        "fitted_spec",
+        "changes",
+        "summary",
+    }
+    assert payload["after_mean_abs_error_pct"] < payload["before_mean_abs_error_pct"]
+    assert payload["after_mean_abs_error_pct"] < 6.0
+    assert len(payload["changes"]) > 0
+    PrinterSpec.model_validate(payload["fitted_spec"])
+
+    # 400 when both CSVs are missing
+    r_missing = client.post(
+        "/api/calibration/adxl/fit",
+        json={"spec": spec_json},
+    )
+    assert r_missing.status_code == 400
+
+    # 400 when CSV is malformed
+    r_bad = client.post(
+        "/api/calibration/adxl/fit",
+        json={"spec": spec_json, "axis_x_csv": "foo,bar\n1,2\n"},
+    )
+    assert r_bad.status_code == 400
+
+
+def test_cli_and_mcp_adxl_fit(tmp_path: Path) -> None:
+    """CLI `calibrate-adxl --fit` and MCP `calibrate_adxl_csv(fit_parameters=True)` work end-to-end."""
+    _, csv_x, csv_y = _build_perturbed_trident_csvs()
+    spec_path = EXAMPLES_DIR / "voron_trident_300.yaml"
+    x_path = tmp_path / "trident_x.csv"
+    y_path = tmp_path / "trident_y.csv"
+    x_path.write_text(csv_x, encoding="utf-8")
+    y_path.write_text(csv_y, encoding="utf-8")
+
+    runner = CliRunner()
+    res_json = runner.invoke(
+        cli_app,
+        ["calibrate-adxl", str(spec_path), "--x-csv", str(x_path), "--y-csv", str(y_path), "--fit", "--json"],
+    )
+    assert res_json.exit_code == 0, res_json.output
+    cli_payload = json.loads(res_json.output)
+    assert cli_payload["after_mean_abs_error_pct"] < cli_payload["before_mean_abs_error_pct"]
+    assert len(cli_payload["changes"]) > 0
+
+    res_table = runner.invoke(
+        cli_app,
+        ["calibrate-adxl", str(spec_path), "--x-csv", str(x_path), "--y-csv", str(y_path), "--fit"],
+    )
+    assert res_table.exit_code == 0, res_table.output
+    assert "Auto-Fit" in res_table.output
+    assert "Fitted Parameter Changes" in res_table.output
+
+    # MCP keeps exactly 20 tools and supports fit_parameters=True on calibrate_adxl_csv
+    list_resp = handle_jsonrpc_message({"jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {}})
+    assert list_resp is not None
+    tools = list_resp["result"]["tools"]
+    assert len(tools) == 20
+    cal_tool = next(t for t in tools if t["name"] == "calibrate_adxl_csv")
+    assert "fit_parameters" in cal_tool["inputSchema"]["properties"]
+
+    call_resp = handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "calibrate_adxl_csv",
+                "arguments": {
+                    "yaml_spec": spec_path.read_text(encoding="utf-8"),
+                    "axis_x_csv": csv_x,
+                    "axis_y_csv": csv_y,
+                    "fit_parameters": True,
+                },
+            },
+        }
+    )
+    assert call_resp is not None
+    assert not call_resp["result"]["isError"], call_resp["result"]["content"][0]["text"]
+    mcp_payload = json.loads(call_resp["result"]["content"][0]["text"])
+    assert mcp_payload["after_mean_abs_error_pct"] < mcp_payload["before_mean_abs_error_pct"]
+    assert len(mcp_payload["changes"]) > 0
+    PrinterSpec.model_validate(mcp_payload["fitted_spec"])

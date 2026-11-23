@@ -17,7 +17,7 @@ from printsim.api.session import (
 )
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
-from printsim.fea.adxl_calibration import calibrate_printer_against_adxl
+from printsim.fea.adxl_calibration import calibrate_printer_against_adxl, fit_printer_to_adxl
 from printsim.fea.bracket_designer import design_and_evaluate_bracket
 from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
 from printsim.fea.superelement import condense_parametric_bracket
@@ -529,7 +529,8 @@ TOOLS_SCHEMA = [
         "description": (
             "Import real Klipper TEST_RESONANCES / Shake&Tune PSD CSVs or raw ADXL345 time-series CSVs, "
             "compare measured vs simulated PrintSim modal PSDs, compute Klipper shaper/damping deltas "
-            "and spectral correlation, and return physical root-cause diagnostics."
+            "and spectral correlation, and return physical root-cause diagnostics (or auto-fit digital twin "
+            "parameters with fit_parameters=true)."
         ),
         "inputSchema": {
             "type": "object",
@@ -549,6 +550,15 @@ TOOLS_SCHEMA = [
                     "minimum": 20.0,
                     "maximum": 500.0,
                     "description": "Maximum frequency span in Hz (default 200.0)",
+                },
+                "fit_parameters": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "When true, run inverse digital-twin auto-fit calibration (fit_printer_to_adxl) "
+                        "to tune belt tension and rail/corner stiffness parameters and return before/after error, "
+                        "changes, and fitted_spec."
+                    ),
                 },
             },
             "required": ["yaml_spec"],
@@ -1111,11 +1121,22 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
     if name == "calibrate_adxl_csv":
         spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_spec"]))
+        axis_x_csv = args.get("axis_x_csv")
+        axis_y_csv = args.get("axis_y_csv")
+        max_freq_hz = float(args.get("max_freq_hz", 200.0))
+        if bool(args.get("fit_parameters", False)):
+            fit_report = fit_printer_to_adxl(
+                spec,
+                axis_x_csv=axis_x_csv,
+                axis_y_csv=axis_y_csv,
+                max_freq_hz=max_freq_hz,
+            )
+            return fit_report.to_dict()
         report = calibrate_printer_against_adxl(
             spec,
-            axis_x_csv=args.get("axis_x_csv"),
-            axis_y_csv=args.get("axis_y_csv"),
-            max_freq_hz=float(args.get("max_freq_hz", 200.0)),
+            axis_x_csv=axis_x_csv,
+            axis_y_csv=axis_y_csv,
+            max_freq_hz=max_freq_hz,
         )
         return report.to_dict()
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
+from scipy.optimize import minimize_scalar
 from scipy.signal import welch
 
 from printsim.fea.klipper_shaper import (
@@ -17,9 +18,10 @@ from printsim.fea.klipper_shaper import (
     calibrate_axis_shapers,
     estimate_psd_damping_ratio,
 )
-from printsim.fea.modal import solve_modal_fea
+from printsim.fea.modal import ModalResult, solve_modal_fea
 from printsim.geometry.builder import build_assembly
 from printsim.schema import PrinterSpec
+from printsim.schema.printer import CornerJointType, RailPreloadType, RailQualityType
 
 SourceFormat = Literal["klipper_psd_csv", "raw_accel_csv"]
 
@@ -133,6 +135,87 @@ class AdxlCalibrationReport:
             "overall_summary": self.overall_summary,
             "recommended_adjustments": list(self.recommended_adjustments),
         }
+
+
+@dataclass
+class AdxlFitChange:
+    """Single fitted hardware or belt-tension parameter delta."""
+
+    field: str
+    label: str
+    before: float | str
+    after: float | str
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field,
+            "label": self.label,
+            "before": (
+                round(float(self.before), 2)
+                if isinstance(self.before, (int, float))
+                else str(self.before)
+            ),
+            "after": (
+                round(float(self.after), 2)
+                if isinstance(self.after, (int, float))
+                else str(self.after)
+            ),
+            "reason": self.reason,
+        }
+
+
+@dataclass
+class AdxlFitReport:
+    """Result of inverse auto-fitting a PrinterSpec digital twin to measured ADXL345 PSDs."""
+
+    printer_name: str
+    before_mean_abs_error_pct: float
+    after_mean_abs_error_pct: float
+    before_axes: dict[str, AxisCalibrationResult]
+    after_axes: dict[str, AxisCalibrationResult]
+    fitted_spec: PrinterSpec
+    changes: list[AdxlFitChange]
+    summary: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "printer_name": self.printer_name,
+            "before_mean_abs_error_pct": round(float(self.before_mean_abs_error_pct), 2),
+            "after_mean_abs_error_pct": round(float(self.after_mean_abs_error_pct), 2),
+            "before_axes": {k: v.to_dict() for k, v in self.before_axes.items()},
+            "after_axes": {k: v.to_dict() for k, v in self.after_axes.items()},
+            "fitted_spec": self.fitted_spec.model_dump(mode="json"),
+            "changes": [c.to_dict() for c in self.changes],
+            "summary": self.summary,
+        }
+
+
+@dataclass
+class _MeasuredAxisContext:
+    """Pre-parsed and shaper-calibrated measured PSD context reused across fit evaluations."""
+
+    axis: str
+    parsed: ParsedAdxlData
+    meas_freqs_band: np.ndarray
+    meas_psd_band: np.ndarray
+    measured_damping: float
+    meas_graph: AxisShaperGraph
+
+
+_FIT_CORNER_JOINTS: tuple[CornerJointType, ...] = (
+    "l_bracket",
+    "blind_joint",
+    "gusset_plate",
+    "corner_cube",
+)
+_FIT_RAIL_PRELOADS: tuple[RailPreloadType, ...] = ("ZF", "Z0", "Z1", "ZA")
+_FIT_RAIL_QUALITIES: tuple[RailQualityType, ...] = (
+    "budget_generic",
+    "midgrade_matched",
+    "hiwin_genuine",
+    "precision_thk_nsk",
+)
 
 
 def _detect_delimiter(line: str) -> str:
@@ -552,13 +635,12 @@ def _build_axis_diagnostics(
     return diags, adjustments
 
 
-def _calibrate_single_axis(
+def _prepare_measured_axis(
     spec: PrinterSpec,
     axis: str,
     csv_text: str,
-    sim_graph: AxisShaperGraph,
     max_freq_hz: float,
-) -> tuple[AxisCalibrationResult, list[str]]:
+) -> _MeasuredAxisContext:
     parsed = parse_adxl_csv(csv_text, axis=axis, min_freq_hz=MIN_FREQ_HZ)
 
     band_mask = (parsed.freqs_hz >= MIN_FREQ_HZ - 1e-9) & (parsed.freqs_hz <= max_freq_hz + 1e-9)
@@ -583,75 +665,22 @@ def _calibrate_single_axis(
         freqs_hz=meas_freqs_band,
         raw_psd=meas_psd_band,
     )
-
-    sim_mask = sim_graph.freqs_hz <= max_freq_hz + 1e-9
-    grid_freqs = sim_graph.freqs_hz[sim_mask]
-    sim_psd_grid = sim_graph.raw_psd[sim_mask]
-    if grid_freqs.size < 3:
-        raise ValueError(f"max_freq_hz={max_freq_hz} yields fewer than 3 simulated frequency bins.")
-
-    meas_psd_interp = np.interp(grid_freqs, meas_freqs_band, meas_psd_band, left=0.0, right=0.0)
-    meas_peak_grid = float(np.max(meas_psd_interp))
-    sim_peak_grid = float(np.max(sim_psd_grid))
-    meas_norm = meas_psd_interp / max(meas_peak_grid, 1e-12)
-    sim_norm = sim_psd_grid / max(sim_peak_grid, 1e-12)
-
-    measured_peak_hz = float(meas_graph.peak_freq_hz)
-    simulated_peak_hz = (
-        float(sim_graph.peak_freq_hz)
-        if sim_graph.peak_freq_hz <= max_freq_hz + 1e-9
-        else float(grid_freqs[int(np.argmax(sim_psd_grid))])
-    )
-    peak_delta_hz = measured_peak_hz - simulated_peak_hz
-    peak_error_pct = (peak_delta_hz / max(simulated_peak_hz, 1e-6)) * 100.0
-    spectral_corr = _pearson_correlation(meas_norm, sim_norm)
-
-    diags, adjustments = _build_axis_diagnostics(
-        spec=spec,
+    return _MeasuredAxisContext(
         axis=axis,
-        measured_peak_hz=measured_peak_hz,
-        simulated_peak_hz=simulated_peak_hz,
-        peak_delta_hz=peak_delta_hz,
-        peak_error_pct=peak_error_pct,
+        parsed=parsed,
+        meas_freqs_band=meas_freqs_band,
+        meas_psd_band=meas_psd_band,
         measured_damping=measured_damping,
-        simulated_damping=float(sim_graph.damping_ratio),
-        measured_graph=meas_graph,
-        simulated_graph=sim_graph,
-        spectral_correlation=spectral_corr,
+        meas_graph=meas_graph,
     )
 
-    result = AxisCalibrationResult(
-        axis=axis,
-        source_format=parsed.source_format,
-        freqs_hz=[float(v) for v in grid_freqs],
-        measured_psd_norm=[float(v) for v in meas_norm],
-        simulated_psd_norm=[float(v) for v in sim_norm],
-        measured_peak_hz=measured_peak_hz,
-        simulated_peak_hz=simulated_peak_hz,
-        peak_delta_hz=peak_delta_hz,
-        peak_error_pct=peak_error_pct,
-        measured_damping_ratio=measured_damping,
-        simulated_damping_ratio=float(sim_graph.damping_ratio),
-        measured_shaper=meas_graph.recommended_shaper,
-        measured_shaper_freq_hz=float(meas_graph.recommended_freq_hz),
-        measured_max_accel_mm_s2=float(meas_graph.recommended_max_accel_mm_s2),
-        simulated_shaper=sim_graph.recommended_shaper,
-        simulated_shaper_freq_hz=float(sim_graph.recommended_freq_hz),
-        simulated_max_accel_mm_s2=float(sim_graph.recommended_max_accel_mm_s2),
-        spectral_correlation=spectral_corr,
-        sample_count=parsed.sample_count,
-        diagnostics=diags,
-    )
-    return result, adjustments
 
-
-def calibrate_printer_against_adxl(
+def _collect_measured_contexts(
     spec: PrinterSpec,
-    axis_x_csv: str | None = None,
-    axis_y_csv: str | None = None,
-    max_freq_hz: float = 200.0,
-) -> AdxlCalibrationReport:
-    """Compare real Klipper ADXL345 / Shake&Tune CSV measurements against PrintSim FEA PSDs."""
+    axis_x_csv: str | None,
+    axis_y_csv: str | None,
+    max_freq_hz: float,
+) -> dict[str, _MeasuredAxisContext]:
     has_x = bool(axis_x_csv and axis_x_csv.strip())
     has_y = bool(axis_y_csv and axis_y_csv.strip())
     if not has_x and not has_y:
@@ -659,31 +688,107 @@ def calibrate_printer_against_adxl(
     if max_freq_hz < 20.0:
         raise ValueError(f"max_freq_hz must be >= 20.0 Hz, got {max_freq_hz}")
 
-    assembly = build_assembly(spec)
-    modal_res = solve_modal_fea(assembly)
+    contexts: dict[str, _MeasuredAxisContext] = {}
+    if has_x and axis_x_csv is not None:
+        contexts["X"] = _prepare_measured_axis(spec, "X", axis_x_csv, max_freq_hz)
+    if has_y and axis_y_csv is not None:
+        contexts["Y"] = _prepare_measured_axis(spec, "Y", axis_y_csv, max_freq_hz)
+    return contexts
 
+
+def _sim_peak_within_band(
+    sim_graph: AxisShaperGraph,
+    max_freq_hz: float,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    sim_mask = sim_graph.freqs_hz <= max_freq_hz + 1e-9
+    grid_freqs = sim_graph.freqs_hz[sim_mask]
+    sim_psd_grid = sim_graph.raw_psd[sim_mask]
+    if grid_freqs.size < 3:
+        raise ValueError(f"max_freq_hz={max_freq_hz} yields fewer than 3 simulated frequency bins.")
+
+    simulated_peak_hz = (
+        float(sim_graph.peak_freq_hz)
+        if sim_graph.peak_freq_hz <= max_freq_hz + 1e-9
+        else float(grid_freqs[int(np.argmax(sim_psd_grid))])
+    )
+    return simulated_peak_hz, grid_freqs, sim_psd_grid
+
+
+def _build_axis_result_from_context(
+    spec: PrinterSpec,
+    ctx: _MeasuredAxisContext,
+    sim_graph: AxisShaperGraph,
+    max_freq_hz: float,
+) -> tuple[AxisCalibrationResult, list[str]]:
+    simulated_peak_hz, grid_freqs, sim_psd_grid = _sim_peak_within_band(sim_graph, max_freq_hz)
+
+    meas_psd_interp = np.interp(grid_freqs, ctx.meas_freqs_band, ctx.meas_psd_band, left=0.0, right=0.0)
+    meas_peak_grid = float(np.max(meas_psd_interp))
+    sim_peak_grid = float(np.max(sim_psd_grid))
+    meas_norm = meas_psd_interp / max(meas_peak_grid, 1e-12)
+    sim_norm = sim_psd_grid / max(sim_peak_grid, 1e-12)
+
+    measured_peak_hz = float(ctx.meas_graph.peak_freq_hz)
+    peak_delta_hz = measured_peak_hz - simulated_peak_hz
+    peak_error_pct = (peak_delta_hz / max(simulated_peak_hz, 1e-6)) * 100.0
+    spectral_corr = _pearson_correlation(meas_norm, sim_norm)
+
+    diags, adjustments = _build_axis_diagnostics(
+        spec=spec,
+        axis=ctx.axis,
+        measured_peak_hz=measured_peak_hz,
+        simulated_peak_hz=simulated_peak_hz,
+        peak_delta_hz=peak_delta_hz,
+        peak_error_pct=peak_error_pct,
+        measured_damping=ctx.measured_damping,
+        simulated_damping=float(sim_graph.damping_ratio),
+        measured_graph=ctx.meas_graph,
+        simulated_graph=sim_graph,
+        spectral_correlation=spectral_corr,
+    )
+
+    result = AxisCalibrationResult(
+        axis=ctx.axis,
+        source_format=ctx.parsed.source_format,
+        freqs_hz=[float(v) for v in grid_freqs],
+        measured_psd_norm=[float(v) for v in meas_norm],
+        simulated_psd_norm=[float(v) for v in sim_norm],
+        measured_peak_hz=measured_peak_hz,
+        simulated_peak_hz=simulated_peak_hz,
+        peak_delta_hz=peak_delta_hz,
+        peak_error_pct=peak_error_pct,
+        measured_damping_ratio=ctx.measured_damping,
+        simulated_damping_ratio=float(sim_graph.damping_ratio),
+        measured_shaper=ctx.meas_graph.recommended_shaper,
+        measured_shaper_freq_hz=float(ctx.meas_graph.recommended_freq_hz),
+        measured_max_accel_mm_s2=float(ctx.meas_graph.recommended_max_accel_mm_s2),
+        simulated_shaper=sim_graph.recommended_shaper,
+        simulated_shaper_freq_hz=float(sim_graph.recommended_freq_hz),
+        simulated_max_accel_mm_s2=float(sim_graph.recommended_max_accel_mm_s2),
+        spectral_correlation=spectral_corr,
+        sample_count=ctx.parsed.sample_count,
+        diagnostics=diags,
+    )
+    return result, adjustments
+
+
+def _build_report_from_contexts(
+    spec: PrinterSpec,
+    modal_res: ModalResult,
+    contexts: dict[str, _MeasuredAxisContext],
+    max_freq_hz: float,
+) -> AdxlCalibrationReport:
     axes_out: dict[str, AxisCalibrationResult] = {}
     all_adjustments: list[str] = []
 
-    if has_x and axis_x_csv is not None:
-        if modal_res.shaper_graph_x is None:
-            raise RuntimeError("Modal FEA did not produce shaper_graph_x.")
-        res_x, adj_x = _calibrate_single_axis(
-            spec, "X", axis_x_csv, modal_res.shaper_graph_x, max_freq_hz
-        )
-        axes_out["X"] = res_x
-        all_adjustments.extend(adj_x)
+    for ax_key, ctx in contexts.items():
+        sim_graph = modal_res.shaper_graph_x if ax_key == "X" else modal_res.shaper_graph_y
+        if sim_graph is None:
+            raise RuntimeError(f"Modal FEA did not produce shaper_graph_{ax_key.lower()}.")
+        res_ax, adj_ax = _build_axis_result_from_context(spec, ctx, sim_graph, max_freq_hz)
+        axes_out[ax_key] = res_ax
+        all_adjustments.extend(adj_ax)
 
-    if has_y and axis_y_csv is not None:
-        if modal_res.shaper_graph_y is None:
-            raise RuntimeError("Modal FEA did not produce shaper_graph_y.")
-        res_y, adj_y = _calibrate_single_axis(
-            spec, "Y", axis_y_csv, modal_res.shaper_graph_y, max_freq_hz
-        )
-        axes_out["Y"] = res_y
-        all_adjustments.extend(adj_y)
-
-    # Deduplicate adjustments while preserving order
     dedup_adjustments: list[str] = []
     seen: set[str] = set()
     for item in all_adjustments:
@@ -719,4 +824,257 @@ def calibrate_printer_against_adxl(
         axes=axes_out,
         overall_summary=overall_summary,
         recommended_adjustments=dedup_adjustments,
+    )
+
+
+def calibrate_printer_against_adxl(
+    spec: PrinterSpec,
+    axis_x_csv: str | None = None,
+    axis_y_csv: str | None = None,
+    max_freq_hz: float = 200.0,
+) -> AdxlCalibrationReport:
+    """Compare real Klipper ADXL345 / Shake&Tune CSV measurements against PrintSim FEA PSDs."""
+    contexts = _collect_measured_contexts(spec, axis_x_csv, axis_y_csv, max_freq_hz)
+    modal_res = solve_modal_fea(build_assembly(spec))
+    return _build_report_from_contexts(spec, modal_res, contexts, max_freq_hz)
+
+
+def _score_modal_against_contexts(
+    modal_res: ModalResult,
+    contexts: dict[str, _MeasuredAxisContext],
+    max_freq_hz: float,
+    tension_n: float,
+    orig_tension_n: float,
+) -> tuple[float, float]:
+    """Compute inverse-fit loss and mean absolute peak frequency error (%) across supplied axes."""
+    peak_errs: list[float] = []
+    shaper_errs: list[float] = []
+    for ax_key, ctx in contexts.items():
+        sim_graph = modal_res.shaper_graph_x if ax_key == "X" else modal_res.shaper_graph_y
+        if sim_graph is None:
+            raise RuntimeError(f"Modal FEA did not produce shaper_graph_{ax_key.lower()}.")
+        sim_peak_hz, _, _ = _sim_peak_within_band(sim_graph, max_freq_hz)
+        meas_peak_hz = float(ctx.meas_graph.peak_freq_hz)
+        peak_err_pct = ((meas_peak_hz - sim_peak_hz) / max(sim_peak_hz, 1e-6)) * 100.0
+
+        sim_shaper_hz = float(sim_graph.recommended_freq_hz)
+        meas_shaper_hz = float(ctx.meas_graph.recommended_freq_hz)
+        shaper_err_pct = ((meas_shaper_hz - sim_shaper_hz) / max(sim_shaper_hz, 1e-6)) * 100.0
+
+        peak_errs.append(peak_err_pct)
+        shaper_errs.append(shaper_err_pct)
+
+    n_axes = len(contexts)
+    mean_peak_sq = sum(e * e for e in peak_errs) / n_axes
+    mean_shaper_sq = sum(e * e for e in shaper_errs) / n_axes
+    reg_penalty = 0.02 * (((tension_n - orig_tension_n) / max(orig_tension_n, 10.0)) ** 2)
+    loss = mean_peak_sq + 0.25 * mean_shaper_sq + reg_penalty
+    mean_abs_err = sum(abs(e) for e in peak_errs) / n_axes
+    return loss, mean_abs_err
+
+
+def _build_fit_changes(
+    orig_spec: PrinterSpec,
+    fitted_spec: PrinterSpec,
+    axes_label: str,
+) -> list[AdxlFitChange]:
+    changes: list[AdxlFitChange] = []
+    if fitted_spec.frame.corner_joint_type != orig_spec.frame.corner_joint_type:
+        changes.append(
+            AdxlFitChange(
+                field="frame.corner_joint_type",
+                label="Frame Corner Joint",
+                before=str(orig_spec.frame.corner_joint_type),
+                after=str(fitted_spec.frame.corner_joint_type),
+                reason=f"Adjusted frame corner joint stiffness to match measured {axes_label} structural resonance",
+            )
+        )
+    if fitted_spec.gantry.rail_preload != orig_spec.gantry.rail_preload:
+        changes.append(
+            AdxlFitChange(
+                field="gantry.rail_preload",
+                label="Rail Carriage Preload",
+                before=str(orig_spec.gantry.rail_preload),
+                after=str(fitted_spec.gantry.rail_preload),
+                reason=f"Adjusted linear carriage preload class to match measured {axes_label} resonance",
+            )
+        )
+    if fitted_spec.gantry.rail_quality != orig_spec.gantry.rail_quality:
+        changes.append(
+            AdxlFitChange(
+                field="gantry.rail_quality",
+                label="Linear Rail Quality",
+                before=str(orig_spec.gantry.rail_quality),
+                after=str(fitted_spec.gantry.rail_quality),
+                reason=f"Adjusted linear rail ball-sharing stiffness grade to match measured {axes_label} resonance",
+            )
+        )
+    orig_t = float(orig_spec.gantry.belt.pretension_n)
+    fit_t = float(fitted_spec.gantry.belt.pretension_n)
+    if abs(fit_t - orig_t) >= 0.1:
+        changes.append(
+            AdxlFitChange(
+                field="gantry.belt.pretension_n",
+                label="Belt Tension (N)",
+                before=round(orig_t, 2),
+                after=round(fit_t, 2),
+                reason=f"Matched measured {axes_label} resonance peak and shaper frequency",
+            )
+        )
+    return changes
+
+
+def fit_printer_to_adxl(
+    spec: PrinterSpec,
+    axis_x_csv: str | None = None,
+    axis_y_csv: str | None = None,
+    max_freq_hz: float = 200.0,
+) -> AdxlFitReport:
+    """Auto-fit belt pretension and discrete frame/rail stiffness knobs to measured ADXL345 PSDs."""
+    contexts = _collect_measured_contexts(spec, axis_x_csv, axis_y_csv, max_freq_hz)
+    axes_label = "/".join(contexts.keys())
+
+    orig_t = float(spec.gantry.belt.pretension_n)
+    orig_rq: RailQualityType = spec.gantry.rail_quality
+    orig_rp: RailPreloadType = spec.gantry.rail_preload
+    orig_cj: CornerJointType = spec.frame.corner_joint_type
+
+    t_lo = max(12.0, 0.35 * orig_t)
+    t_hi = min(float(spec.gantry.belt.max_working_tension_n) * 0.92, 120.0)
+    if t_lo >= t_hi - 0.5:
+        t_hi = max(t_hi, 14.0)
+        t_lo = min(t_lo, max(5.0, t_hi - 1.0))
+
+    eval_cache: dict[
+        tuple[float, RailQualityType, RailPreloadType, CornerJointType],
+        tuple[float, float, ModalResult, PrinterSpec],
+    ] = {}
+    best_record: tuple[
+        float, float, ModalResult, PrinterSpec, float, RailQualityType, RailPreloadType, CornerJointType
+    ] | None = None
+
+    def _evaluate(
+        tension_n: float,
+        rail_quality: RailQualityType,
+        rail_preload: RailPreloadType,
+        corner_joint: CornerJointType,
+    ) -> tuple[float, float, ModalResult, PrinterSpec]:
+        nonlocal best_record
+        t_clean = float(tension_n)
+        key = (round(t_clean, 2), rail_quality, rail_preload, corner_joint)
+        if key in eval_cache:
+            return eval_cache[key]
+
+        cand_spec = spec.model_copy(deep=True)
+        cand_spec.gantry.belt.pretension_n = t_clean
+        cand_spec.gantry.rail_quality = rail_quality
+        cand_spec.gantry.rail_preload = rail_preload
+        cand_spec.frame.corner_joint_type = corner_joint
+        modal_res = solve_modal_fea(build_assembly(cand_spec))
+        loss, mean_err = _score_modal_against_contexts(
+            modal_res=modal_res,
+            contexts=contexts,
+            max_freq_hz=max_freq_hz,
+            tension_n=t_clean,
+            orig_tension_n=orig_t,
+        )
+        entry = (loss, mean_err, modal_res, cand_spec)
+        eval_cache[key] = entry
+        if best_record is None or loss < best_record[0] - 1e-12:
+            best_record = (loss, mean_err, modal_res, cand_spec, t_clean, rail_quality, rail_preload, corner_joint)
+        return entry
+
+    base_loss, base_err, base_modal, base_spec = _evaluate(orig_t, orig_rq, orig_rp, orig_cj)
+    before_report = _build_report_from_contexts(base_spec, base_modal, contexts, max_freq_hz)
+    before_axes = before_report.axes
+    before_mean_abs_error_pct = sum(abs(ax.peak_error_pct) for ax in before_axes.values()) / len(before_axes)
+
+    cur_rq, cur_rp, cur_cj = orig_rq, orig_rp, orig_cj
+    if before_mean_abs_error_pct > 3.0:
+        cur_loss = base_loss
+        for cand_cj in _FIT_CORNER_JOINTS:
+            if cand_cj == cur_cj:
+                continue
+            cand_loss, _, _, _ = _evaluate(orig_t, cur_rq, cur_rp, cand_cj)
+            if cand_loss < cur_loss - 1e-9:
+                cur_loss = cand_loss
+                cur_cj = cand_cj
+
+        for cand_rp in _FIT_RAIL_PRELOADS:
+            if cand_rp == cur_rp:
+                continue
+            cand_loss, _, _, _ = _evaluate(orig_t, cur_rq, cand_rp, cur_cj)
+            if cand_loss < cur_loss - 1e-9:
+                cur_loss = cand_loss
+                cur_rp = cand_rp
+
+        for cand_rq in _FIT_RAIL_QUALITIES:
+            if cand_rq == cur_rq:
+                continue
+            cand_loss, _, _, _ = _evaluate(orig_t, cand_rq, cur_rp, cur_cj)
+            if cand_loss < cur_loss - 1e-9:
+                cur_loss = cand_loss
+                cur_rq = cand_rq
+
+    opt_res = minimize_scalar(
+        lambda t_val: _evaluate(float(t_val), cur_rq, cur_rp, cur_cj)[0],
+        bounds=(t_lo, t_hi),
+        method="bounded",
+        options={"maxiter": 9, "xatol": 0.8},
+    )
+    _evaluate(float(opt_res.x), cur_rq, cur_rp, cur_cj)
+
+    # Probe endpoints if peak bins still differ by > 1% (handles discrete 2 Hz bin plateaus)
+    if best_record is not None and best_record[1] > 1.0:
+        _evaluate(t_lo, cur_rq, cur_rp, cur_cj)
+        _evaluate(t_hi, cur_rq, cur_rp, cur_cj)
+
+    assert best_record is not None
+    _, best_err, best_modal, best_spec, best_t, best_rq, best_rp, best_cj = best_record
+
+    if abs(best_t - orig_t) < 0.25:
+        final_t = orig_t
+    else:
+        rounded_t = round(best_t, 1)
+        _, rounded_err, _, _ = _evaluate(rounded_t, best_rq, best_rp, best_cj)
+        final_t = rounded_t if rounded_err <= best_err + 1e-4 else round(best_t, 2)
+
+    _, final_err, final_modal, final_spec = _evaluate(final_t, best_rq, best_rp, best_cj)
+    after_report = _build_report_from_contexts(final_spec, final_modal, contexts, max_freq_hz)
+    after_axes = after_report.axes
+    after_mean_abs_error_pct = sum(abs(ax.peak_error_pct) for ax in after_axes.values()) / len(after_axes)
+
+    changes = _build_fit_changes(spec, final_spec, axes_label)
+
+    if after_mean_abs_error_pct >= before_mean_abs_error_pct - 1e-4 or not changes:
+        return AdxlFitReport(
+            printer_name=spec.name,
+            before_mean_abs_error_pct=before_mean_abs_error_pct,
+            after_mean_abs_error_pct=before_mean_abs_error_pct,
+            before_axes=before_axes,
+            after_axes=before_axes,
+            fitted_spec=spec.model_copy(deep=True),
+            changes=[],
+            summary=(
+                f"Current model already matches measured peaks within "
+                f"{before_mean_abs_error_pct:.1f}% (no parameter changes applied)."
+            ),
+        )
+
+    change_snippets = ", ".join(f"{c.label}: {c.before} -> {c.after}" for c in changes)
+    summary = (
+        f"Auto-fitted {spec.name} digital twin ({len(changes)} change(s)): mean |err| reduced "
+        f"from {before_mean_abs_error_pct:.1f}% to {after_mean_abs_error_pct:.1f}% "
+        f"({change_snippets})."
+    )
+
+    return AdxlFitReport(
+        printer_name=spec.name,
+        before_mean_abs_error_pct=before_mean_abs_error_pct,
+        after_mean_abs_error_pct=after_mean_abs_error_pct,
+        before_axes=before_axes,
+        after_axes=after_axes,
+        fitted_spec=final_spec,
+        changes=changes,
+        summary=summary,
     )

@@ -1,8 +1,11 @@
 from .adxl_calibration import (
     AdxlCalibrationReport,
+    AdxlFitChange,
+    AdxlFitReport,
     AxisCalibrationResult,
     ParsedAdxlData,
     calibrate_printer_against_adxl,
+    fit_printer_to_adxl,
     parse_adxl_csv,
 )
 from .beam3d import assemble_global_matrices, element_internal_forces, local_beam_mass, local_beam_stiffness
@@ -85,9 +88,12 @@ from .topology import (
 
 __all__ = [
     "AdxlCalibrationReport",
+    "AdxlFitChange",
+    "AdxlFitReport",
     "AxisCalibrationResult",
     "ParsedAdxlData",
     "calibrate_printer_against_adxl",
+    "fit_printer_to_adxl",
     "parse_adxl_csv",
     "assemble_global_matrices",
     "BedPlateFEAResult",
