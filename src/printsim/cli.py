@@ -20,6 +20,7 @@ from printsim.geometry import (
     build_assembly,
     export_assembly_step,
     export_assembly_stl,
+    export_panels_dxf,
     export_part_step,
     generate_bom,
 )
@@ -377,6 +378,23 @@ def export_step_cmd(
     assembly = build_assembly(spec)
     saved = export_assembly_step(assembly, out)
     console.print(f"Exported full printer B-Rep STEP assembly to [bold green]{saved}[/bold green]")
+
+
+@app.command("export-dxf")
+def export_dxf_cmd(
+    spec_path: Path = typer.Argument(..., exists=True, help="Printer YAML spec"),
+    out: Path = typer.Option(Path("printer_plates.dxf"), "--out", "-o", help="Output 2D CNC/laser DXF path"),
+    part: str = typer.Option(
+        "all_plates",
+        "--part",
+        "-p",
+        help="Plate/kit part: all_plates | side_panel | rear_panel | top_panel | trident_backbone | corner_gusset",
+    ),
+) -> None:
+    """Export 2D CNC/laser-cut DXF panels and structural plates (R2010, mm)."""
+    spec = PrinterSpec.from_yaml(spec_path)
+    saved = export_panels_dxf(spec, out, part=part)
+    console.print(f"Exported 2D CNC/laser DXF ({part}) to [bold green]{saved}[/bold green]")
 
 
 @app.command("tet-fea")

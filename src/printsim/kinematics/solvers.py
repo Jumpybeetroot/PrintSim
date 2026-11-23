@@ -70,6 +70,8 @@ class KinematicsReport:
     belt_practical_issues: list[str] = field(default_factory=list)
     pulley_circumference_mm: float = 40.0
     vfa_belt_tooth_speed_range_mm_s: list[float] = field(default_factory=lambda: [60.0, 110.0])
+    custom_bracket_active: bool = False
+    custom_bracket_label: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -126,6 +128,8 @@ class KinematicsReport:
             "idler_shaft_deflection_um": round(self.idler_shaft_deflection_um, 2),
             "bearing_play_um": round(self.bearing_play_um, 1),
             "bracket_modulus_retention_pct": round(self.bracket_modulus_retention_pct, 1),
+            "custom_bracket_active": bool(self.custom_bracket_active),
+            "custom_bracket_label": self.custom_bracket_label,
         }
 
 
@@ -207,6 +211,9 @@ def stepper_available_torque_nm(stepper: StepperSpec, rpm: float) -> float:
 def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
     """Compute effective gantry bracket / motor-mount stiffness in series (N/m), scaled by E(T)."""
     spec = assembly.spec
+    override = spec.gantry.custom_bracket_override
+    if override is not None:
+        return float(override.stiffness_n_per_mm) * 1e3
     bkt_mat = get_material(spec.gantry.bracket_material)
     e_bkt = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
     k_ref = 5.0e5  # Base 2WD bolted ABS motor+idler+XY-joint chain (500 N/mm at 2.1 GPa; vs 1842 N/mm solid ABS mount FEA)
@@ -305,7 +312,13 @@ def compute_drive_stiffness_details_n_per_m(
         motor_factor = 1.0
 
     k_motor_axis = motor_factor * k_motor_single
-    k_bracket = compute_bracket_stiffness_n_per_m(assembly)
+    override = spec.gantry.custom_bracket_override
+    if override is not None:
+        k_bracket = float(override.stiffness_n_per_mm) * 1e3
+        bracket_retention_pct = 100.0
+    else:
+        k_bracket = compute_bracket_stiffness_n_per_m(assembly)
+        bracket_retention_pct = bkt_mat.modulus_retention_at_temp(spec.frame.chamber_temp_c) * 100.0
     k_drive = 1.0 / (
         1.0 / max(k_belt_subsystem, 1e-9)
         + 1.0 / max(k_motor_axis, 1e-9)
@@ -320,7 +333,7 @@ def compute_drive_stiffness_details_n_per_m(
         "k_bracket_n_m": k_bracket,
         "k_drive_n_m": k_drive,
         "idler_info": idler_info,
-        "bracket_retention_pct": bkt_mat.modulus_retention_at_temp(spec.frame.chamber_temp_c) * 100.0,
+        "bracket_retention_pct": bracket_retention_pct,
     }
 
 
@@ -476,6 +489,7 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         round(min(350.0, 1.15 * v_vfa_center), 1),
     ]
 
+    override = spec.gantry.custom_bracket_override
     return KinematicsReport(
         architecture=spec.architecture,
         build_volume_liters=build_l,
@@ -528,4 +542,6 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         idler_shaft_deflection_um=idler_info["idler_shaft_deflection_um"],
         bearing_play_um=idler_info["bearing_play_um"],
         bracket_modulus_retention_pct=bracket_ret_pct,
+        custom_bracket_active=override is not None,
+        custom_bracket_label=override.label if override is not None else "",
     )

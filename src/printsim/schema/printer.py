@@ -1532,6 +1532,22 @@ class BeltSpec(BaseModel):
         return (self.pulley_teeth * self.pitch_mm * 1e-3) / (2.0 * 3.141592653589793)
 
 
+class CustomBracketOverride(BaseModel):
+    """Injected stiffness & mass override from a 3D Solid/Tet10/CMS bracket evaluation."""
+
+    label: str = Field(..., min_length=1, description="Human-readable CAD bracket label")
+    stiffness_n_per_mm: float = Field(
+        ..., gt=1.0, le=500000.0, description="Condensed effective bracket stiffness (N/mm)"
+    )
+    mass_delta_g: float = Field(
+        0.0, ge=-200.0, le=500.0, description="Net moving gantry mass delta vs baseline bracket (g)"
+    )
+    source: str = Field(
+        "cms_superelement",
+        description="Origin of override: cms_superelement, tet10_fea, hex8_fea, or custom_cad",
+    )
+
+
 class GantrySpec(BaseModel):
     """X/Y gantry beam, rails, drive architecture (2WD/AWD), and belt parameters."""
 
@@ -1586,6 +1602,10 @@ class GantrySpec(BaseModel):
         140.0, ge=20.0, le=1200.0, description="Combined X/Y gantry carriages & joints (g)"
     )
     belt: BeltSpec = Field(default_factory=BeltSpec)
+    custom_bracket_override: CustomBracketOverride | None = Field(
+        None,
+        description="Optional custom CAD/CMS-condensed bracket stiffness & mass injected into full-printer FEA",
+    )
 
     @property
     def effective_x_rail_mount(self) -> XRailMountType:

@@ -23,7 +23,14 @@ from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea,
 from printsim.fea.superelement import condense_parametric_bracket
 from printsim.fea.tet_fem import solve_preset_tet_fea, solve_step_tet_fea
 from printsim.fea.topology import export_topology_stl, optimize_preset_topology
-from printsim.geometry import build_assembly, export_assembly_step, export_assembly_stl, generate_bom
+from printsim.geometry import (
+    build_assembly,
+    export_assembly_step,
+    export_assembly_stl,
+    export_panels_dxf,
+    generate_bom,
+    list_dxf_exportable_parts,
+)
 from printsim.schema import (
     BED_MOUNT_CATALOG,
     EXTRUSION_FILLINGS,
@@ -402,6 +409,41 @@ TOOLS_SCHEMA = [
                 "output_path": {"type": "string"},
             },
             "required": ["yaml_text", "output_path"],
+        },
+    },
+    {
+        "name": "export_printer_dxf",
+        "description": (
+            "Export 2D CNC/laser-cut DXF R2010 drawings (mm) with structured CUT_OUTER, HOLES, "
+            "and ANNOTATIONS layers for enclosure panels, Clee Trident backbone plates, corner gussets, "
+            "or a full 2D nested plate kit (all_plates)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_spec": {
+                    "type": "string",
+                    "description": "Declarative PrintSim YAML specification",
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Destination .dxf file path",
+                },
+                "part": {
+                    "type": "string",
+                    "enum": [
+                        "all_plates",
+                        "side_panel",
+                        "rear_panel",
+                        "top_panel",
+                        "trident_backbone",
+                        "corner_gusset",
+                    ],
+                    "default": "all_plates",
+                    "description": "Plate or nested kit selection to export (default: all_plates)",
+                },
+            },
+            "required": ["yaml_spec", "output_path"],
         },
     },
     {
@@ -963,6 +1005,20 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         asm = build_assembly(spec)
         saved = export_assembly_step(asm, args["output_path"])
         return {"saved_path": str(saved.resolve()), "bytes": saved.stat().st_size}
+
+    if name == "export_printer_dxf":
+        yaml_raw = args.get("yaml_spec") if "yaml_spec" in args else args["yaml_text"]
+        spec = PrinterSpec.model_validate(yaml.safe_load(yaml_raw))
+        part = str(args.get("part", "all_plates"))
+        saved = export_panels_dxf(spec, args["output_path"], part=part)
+        parts_meta = list_dxf_exportable_parts(spec)
+        part_info = next((p for p in parts_meta if p["part"] == part), None)
+        return {
+            "saved_path": str(saved.resolve()),
+            "bytes": saved.stat().st_size,
+            "part": part,
+            "part_info": part_info,
+        }
 
     if name == "run_tet_part_fea":
         force = tuple(args["force_n"]) if "force_n" in args and args["force_n"] else None

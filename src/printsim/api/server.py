@@ -46,6 +46,7 @@ from printsim.geometry import (
     build_assembly,
     export_assembly_step_bytes,
     export_assembly_stl,
+    export_panels_dxf_bytes,
     export_part_step_bytes,
     generate_bom,
 )
@@ -67,6 +68,7 @@ from printsim.schema import (
     Z_DRIVE_MECHANISM_CATALOG,
     Z_PROBE_CATALOG,
     Z_RAIL_PROFILES,
+    CustomBracketOverride,
     PrinterSpec,
 )
 from printsim.thermal import FILAMENT_CATALOG
@@ -183,6 +185,31 @@ class TetStepFEARequest(BaseModel):
 
 class PartStepExportRequest(BaseModel):
     preset: PartPreset = "corner_gusset"
+
+
+class DXFExportRequest(BaseModel):
+    spec: PrinterSpec | None = None
+    yaml_text: str | None = None
+    part: str = "all_plates"
+
+
+class BracketInjectEvaluateRequest(BaseModel):
+    spec: PrinterSpec | None = None
+    yaml_text: str | None = None
+    bracket_type: str = "xy_motor_mount"
+    material: str = "aluminum_6061_t6"
+    custom_stiffness_n_per_mm: float | None = Field(None, gt=1.0, le=500000.0)
+    mass_delta_g: float = Field(0.0, ge=-200.0, le=500.0)
+    label: str | None = None
+
+
+_BRACKET_TYPE_TO_CMS: dict[str, str] = {
+    "xy_motor_mount": "motor_mount",
+    "motor_mount": "motor_mount",
+    "corner_gusset": "corner_gusset",
+    "xy_joint_l_bracket": "xy_joint_l_bracket",
+    "toolhead_carriage": "xy_joint_l_bracket",
+}
 
 
 class BracketSuperelementRequest(BaseModel):
@@ -747,6 +774,135 @@ def create_app() -> FastAPI:
             media_type="model/stl",
             filename=f"{safe_name or 'printer'}.stl",
         )
+
+    @api.post("/api/export/dxf")
+    def export_dxf(req: DXFExportRequest) -> Response:
+        spec = _resolve_spec(req.spec, req.yaml_text)
+        try:
+            dxf_bytes = export_panels_dxf_bytes(spec, part=req.part)
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in spec.name.lower())
+            safe_part = "".join(c if c.isalnum() or c in "-_" else "_" for c in req.part.lower())
+            fname = f"{safe_name or 'printer'}_{safe_part or 'all_plates'}.dxf"
+            return Response(
+                content=dxf_bytes,
+                media_type="application/dxf",
+                headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/brackets/inject-evaluate")
+    def inject_and_evaluate_bracket(req: BracketInjectEvaluateRequest) -> dict:
+        base_spec = _resolve_spec(req.spec, req.yaml_text)
+        try:
+            condensed_mass_g: float | None = None
+            if req.custom_stiffness_n_per_mm is None:
+                cms_type = _BRACKET_TYPE_TO_CMS.get(req.bracket_type)
+                if cms_type is None:
+                    valid_types = ", ".join(sorted(_BRACKET_TYPE_TO_CMS))
+                    raise ValueError(
+                        f"Unknown bracket_type '{req.bracket_type}'. Available: {valid_types}"
+                    )
+                se = condense_parametric_bracket(
+                    {"bracket_type": cms_type},
+                    material_id=req.material,
+                )
+                diag = se.port_stiffness_diag
+                k_x = float(diag["k_x_n_m"])
+                k_y = float(diag["k_y_n_m"])
+                k_eff_n_m = 2.0 / (1.0 / max(k_x, 1e-6) + 1.0 / max(k_y, 1e-6))
+                k_eff_n_mm = min(500000.0, max(1.1, k_eff_n_m * 1e-3))
+                condensed_mass_g = round(float(se.mass_kg) * 1000.0, 2)
+                source = "cms_superelement"
+                default_label = f"CMS {req.bracket_type} ({req.material})"
+            else:
+                k_eff_n_mm = float(req.custom_stiffness_n_per_mm)
+                source = "custom_cad"
+                default_label = f"Custom {req.bracket_type} ({k_eff_n_mm:.0f} N/mm)"
+
+            override = CustomBracketOverride(
+                label=req.label or default_label,
+                stiffness_n_per_mm=k_eff_n_mm,
+                mass_delta_g=float(req.mass_delta_g),
+                source=source,
+            )
+            injected_spec = base_spec.model_copy(
+                update={
+                    "gantry": base_spec.gantry.model_copy(
+                        update={"custom_bracket_override": override}
+                    )
+                }
+            )
+
+            base_rep = evaluate_printer(base_spec, include_advanced_analysis=False)
+            inj_rep = evaluate_printer(injected_spec, include_advanced_analysis=False)
+
+            base_x_hz = float(
+                base_rep.modal_fea.shaper_x.effective_freq_hz
+                if base_rep.modal_fea.shaper_x
+                else base_rep.modal_fea.fundamental_freq_hz
+            )
+            base_y_hz = float(
+                base_rep.modal_fea.shaper_y.effective_freq_hz
+                if base_rep.modal_fea.shaper_y
+                else base_rep.modal_fea.fundamental_freq_hz
+            )
+            inj_x_hz = float(
+                inj_rep.modal_fea.shaper_x.effective_freq_hz
+                if inj_rep.modal_fea.shaper_x
+                else inj_rep.modal_fea.fundamental_freq_hz
+            )
+            inj_y_hz = float(
+                inj_rep.modal_fea.shaper_y.effective_freq_hz
+                if inj_rep.modal_fea.shaper_y
+                else inj_rep.modal_fea.fundamental_freq_hz
+            )
+            delta_x_hz = round(inj_x_hz - base_x_hz, 2)
+            delta_y_hz = round(inj_y_hz - base_y_hz, 2)
+
+            base_accel = float(base_rep.modal_fea.recommended_max_accel_mm_s2)
+            inj_accel = float(inj_rep.modal_fea.recommended_max_accel_mm_s2)
+
+            return {
+                "baseline_x_hz": round(base_x_hz, 2),
+                "injected_x_hz": round(inj_x_hz, 2),
+                "delta_x_hz": delta_x_hz,
+                "baseline_y_hz": round(base_y_hz, 2),
+                "injected_y_hz": round(inj_y_hz, 2),
+                "delta_y_hz": delta_y_hz,
+                "bracket_stiffness_n_per_mm": round(k_eff_n_mm, 2),
+                "injected_spec": injected_spec.model_dump(mode="json"),
+                "summary": {
+                    "label": override.label,
+                    "source": source,
+                    "bracket_type": req.bracket_type,
+                    "material": req.material,
+                    "mass_delta_g": float(req.mass_delta_g),
+                    "condensed_mass_g": condensed_mass_g,
+                    "baseline_drive_stiffness_n_per_mm": round(
+                        float(base_rep.kinematics.drive_stiffness_n_per_mm), 2
+                    ),
+                    "injected_drive_stiffness_n_per_mm": round(
+                        float(inj_rep.kinematics.drive_stiffness_n_per_mm), 2
+                    ),
+                    "baseline_bracket_stiffness_n_per_mm": round(
+                        float(base_rep.kinematics.bracket_stiffness_n_per_mm), 2
+                    ),
+                    "injected_bracket_stiffness_n_per_mm": round(
+                        float(inj_rep.kinematics.bracket_stiffness_n_per_mm), 2
+                    ),
+                    "baseline_max_accel_mm_s2": round(base_accel, 0),
+                    "injected_max_accel_mm_s2": round(inj_accel, 0),
+                    "delta_max_accel_mm_s2": round(inj_accel - base_accel, 0),
+                    "headline": (
+                        f"{override.label} ({k_eff_n_mm:.0f} N/mm): "
+                        f"X {base_x_hz:.1f} -> {inj_x_hz:.1f} Hz ({delta_x_hz:+.2f} Hz), "
+                        f"Y {base_y_hz:.1f} -> {inj_y_hz:.1f} Hz ({delta_y_hz:+.2f} Hz)"
+                    ),
+                },
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @api.get("/api/studio/state")
     def get_studio_state() -> dict:

@@ -18,6 +18,11 @@ from .cad_b3d import (
     is_cad_available,
 )
 from .cad_io import export_assembly_stl, inspect_custom_mesh
+from .dxf_export import (
+    export_panels_dxf,
+    export_panels_dxf_bytes,
+    list_dxf_exportable_parts,
+)
 
 __all__ = [
     "AssemblyModel",
@@ -33,6 +38,8 @@ __all__ = [
     "export_assembly_step",
     "export_assembly_step_bytes",
     "export_assembly_stl",
+    "export_panels_dxf",
+    "export_panels_dxf_bytes",
     "export_part_step",
     "export_part_step_bytes",
     "export_part_stl_bytes",
@@ -40,4 +47,5 @@ __all__ = [
     "get_part_default_bcs",
     "inspect_custom_mesh",
     "is_cad_available",
+    "list_dxf_exportable_parts",
 ]
