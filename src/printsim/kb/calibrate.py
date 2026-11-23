@@ -7,7 +7,12 @@ import re
 from typing import Any
 
 from printsim.engine import evaluate_printer
-from printsim.kb.extract import MAX_SHAPER_FREQ_HZ, MIN_SHAPER_FREQ_HZ, infer_preset_hint
+from printsim.kb.extract import (
+    MAX_SHAPER_FREQ_HZ,
+    MIN_SHAPER_FREQ_HZ,
+    infer_preset_hint,
+    is_malformed_build_name,
+)
 from printsim.kb.store import TouchstoneKB
 from printsim.schema import PrinterSpec
 
@@ -19,6 +24,12 @@ _UNMAPPED_OUTLIER_RE = re.compile(
 )
 _CONFIDENT_VORON_COREXY_RE = re.compile(
     r"\b(?:voron|v2\.4|2\.4|trident|vt\s*\d|monolith|doomcube|doomish|hevort|annex\s*k3|v0(?:\.\d)?)\b",
+    re.IGNORECASE,
+)
+_KNOWN_PRINTER_IDENTITY_RE = re.compile(
+    r"\b(?:voron|v2\.4|2\.4|trident|vt\s*\d|monolith|doomcube|doomish|hevort|annex\s*k3|v0(?:\.\d)?|"
+    r"vzbot|vz\s*330|vz\s*235|ratrig|v-?core|ender\s*3|prusa|mk[234]\w*|switchwire|"
+    r"flsun|doron\s*velta|kossel|delta|bedslinger|corexy)\b",
     re.IGNORECASE,
 )
 
@@ -37,6 +48,19 @@ def _valid_shaper_hz(val: Any) -> float | None:
 
 def _has_confident_preset_match(build: dict[str, Any], preset_path: Path) -> bool:
     """Return True only when a build maps confidently to a supported PrintSim reference preset."""
+    build_name = str(build.get("build_name") or "").strip()
+    if is_malformed_build_name(build_name):
+        return False
+
+    has_identity = bool(
+        str(build.get("printer_model") or "").strip()
+        or str(build.get("frame_profile") or "").strip()
+        or str(build.get("drive_mode") or "").strip()
+        or _KNOWN_PRINTER_IDENTITY_RE.search(build_name)
+    )
+    if not has_identity:
+        return False
+
     identity = " ".join(
         str(build.get(k) or "") for k in ("build_name", "printer_model")
     ).strip()
@@ -67,7 +91,22 @@ def _default_examples_dir() -> Path:
 
 def _resolve_preset_yaml(build: dict[str, Any], examples_dir: Path) -> Path | None:
     """Resolve the closest PrintSim example YAML file for a real KB build record."""
+    identity = " ".join(
+        str(build.get(k) or "") for k in ("printer_model", "build_name")
+    ).lower()
     hint = str(build.get("preset_hint") or "").strip()
+
+    # Re-map RatRig / V-Core records (including previously seeded rows hinted as hyper_corexy_carbon)
+    # to the dedicated RatRig V-Core 3.1 300 preset when present.
+    if any(tok in identity for tok in ("ratrig", "v-core", "vcore")) and hint in (
+        "",
+        "hyper_corexy_carbon",
+        "hyper_corexy_carbon.yaml",
+    ):
+        ratrig_cand = examples_dir / "ratrig_vcore31_300.yaml"
+        if ratrig_cand.exists():
+            return ratrig_cand
+
     if hint:
         cand = examples_dir / (hint if hint.endswith(".yaml") else f"{hint}.yaml")
         if cand.exists():

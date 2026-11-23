@@ -1315,6 +1315,10 @@ class FrameSpec(BaseModel):
     depth_mm: float = Field(460.0, gt=100, description="Outer frame Y span (mm)")
     height_mm: float = Field(500.0, gt=100, description="Outer frame Z height (mm)")
     profile: str = Field("extrusion_2020", description="Primary structural frame profile ID")
+    upright_profile: str | None = Field(
+        None,
+        description="Optional separate profile for vertical corner uprights/columns (e.g. extrusion_4040 uprights with extrusion_2020 horizontals on DoomCube); defaults to frame.profile",
+    )
     material: str = Field("aluminum_6063_t5", description="Primary structural frame material ID")
     bracing: BracingType = Field("corner_gussets", description="Structural triangulation strategy")
     brace_profile: str = Field("brace_rod_10mm", description="Profile for diagonal braces")
@@ -1366,6 +1370,11 @@ class FrameSpec(BaseModel):
     )
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
+
+    @property
+    def effective_upright_profile(self) -> str:
+        """Vertical corner upright/column profile ID (falls back to primary frame.profile)."""
+        return self.upright_profile or self.profile
 
 
 class BeltSpec(BaseModel):

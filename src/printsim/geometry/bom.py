@@ -1391,12 +1391,18 @@ def generate_bom(
         + 16  # toolhead, extruder, bed mounts
     )
 
+    frame_prof_label = (
+        f"{spec.frame.effective_upright_profile}+{spec.frame.profile}"
+        if spec.frame.upright_profile and spec.frame.upright_profile != spec.frame.profile
+        else spec.frame.profile
+    )
+
     _add_bom_item(
         items,
         sku="FST-CORNER",
         category="fasteners",
         name="Cast Aluminum Corner Bracket / Blind Joint",
-        specification=f"Matches {spec.frame.profile} T-slot frame junctions",
+        specification=f"Matches {frame_prof_label} T-slot frame junctions",
         quantity=corner_joints,
         unit="pcs",
         unit_cost_usd=1.35,
@@ -1418,7 +1424,7 @@ def generate_bom(
         sku="FST-M5-TNUT",
         category="fasteners",
         name="M5 Spring-Loaded Roll-In T-Nuts",
-        specification=f"Nickel-plated steel T-nuts for {spec.frame.profile}",
+        specification=f"Nickel-plated steel T-nuts for {frame_prof_label}",
         quantity=m5_tnut_qty,
         unit="pcs",
         unit_cost_usd=0.18,

@@ -830,7 +830,7 @@ def test_coverage_gaps_preset_hints_and_sanity_filters(tmp_path: Path) -> None:
     assert infer_preset_hint(printer_model="V2.4 350") == "corexy_voron_style"
     assert infer_preset_hint(printer_model="Voron Trident 300") == "voron_trident_300"
     assert infer_preset_hint(printer_model="VzBot 330 AWD", drive_mode="awd") == "vzbot_330_awd"
-    assert infer_preset_hint(printer_model="RatRig V-Core 3.1 300", frame_profile="3030", belt_width_mm=9.0) == "hyper_corexy_carbon"
+    assert infer_preset_hint(printer_model="RatRig V-Core 3.1 300", frame_profile="3030", belt_width_mm=9.0) == "ratrig_vcore31_300"
 
     # 3. Verify extract_structured_records rejects out-of-range shaper Hz (<15 or >250 Hz)
     bogus_post = (

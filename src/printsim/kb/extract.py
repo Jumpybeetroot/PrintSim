@@ -172,6 +172,27 @@ def _infer_architecture(text: str) -> str:
 MIN_SHAPER_FREQ_HZ = 15.0
 MAX_SHAPER_FREQ_HZ = 250.0
 
+_MALFORMED_BUILD_NAME_RE = re.compile(
+    r"^\s*(?:failed\s+to\b|error\b|traceback\b|exception\b|fatal\b|"
+    r"crash(?:ed|ing)?\b|warning\b|unable\s+to\b|cannot\b|can'?t\b|"
+    r"invalid\b|klippy\.log\b|shaper(?:_[xyz]|s)?\b|"
+    r"mcu\s+['\"]?\w+['\"]?\s+shutdown)"
+    r"|\b(?:failed\s+to\s+configure|traceback\s*\(most\s+recent\s+call|"
+    r"shaper_z\b|syntax\s*error|attribute\s*error|value\s*error|key\s*error|"
+    r"internal\s+error)\b",
+    re.IGNORECASE,
+)
+
+
+def is_malformed_build_name(name: str) -> bool:
+    """Return True if a candidate build name looks like an error log, traceback, or empty noise."""
+    cleaned = (name or "").strip()
+    if not cleaned or len(cleaned) < 3:
+        return True
+    if not re.search(r"[a-zA-Z]", cleaned):
+        return True
+    return bool(_MALFORMED_BUILD_NAME_RE.search(cleaned))
+
 
 def _is_valid_shaper_hz(freq_hz: float | None) -> bool:
     return freq_hz is not None and MIN_SHAPER_FREQ_HZ <= freq_hz <= MAX_SHAPER_FREQ_HZ
@@ -371,7 +392,7 @@ def infer_preset_hint(
     if "doom" in model or "4040" in prof:
         return "doomcube_4040"
     if "ratrig" in model or "v-core" in model or "vcore" in model:
-        return "hyper_corexy_carbon"
+        return "ratrig_vcore31_300"
     if drive == "awd" or "monolith" in model or (belt_width_mm is not None and belt_width_mm >= 9.0 and "3030" not in prof):
         return "voron_monolith_awd"
     if "3030" in prof:
@@ -551,41 +572,42 @@ def extract_structured_records(
         if len(build_name) > 90:
             build_name = build_name[:87] + "..."
 
-        builds.append(
-            {
-                "build_name": build_name,
-                "architecture": arch,
-                "printer_model": model,
-                "frame_profile": frame_prof,
-                "frame_size_mm": frame_size,
-                "panel_spec": panel_spec,
-                "drive_mode": drive_mode,
-                "belt_width_mm": belt_w,
-                "belt_core": belt_core,
-                "belt_pluck_hz": belt_pluck,
-                "motors": motors,
-                "voltage_v": voltage,
-                "toolhead": toolhead,
-                "hotend": hotend,
-                "x_shaper_type": x_type,
-                "x_shaper_hz": x_hz,
-                "x_max_accel": x_accel,
-                "y_shaper_type": y_type,
-                "y_shaper_hz": y_hz,
-                "y_max_accel": y_accel,
-                "x_moving_mass_g": float(x_mass_m.group(1)) if x_mass_m else None,
-                "y_moving_mass_g": float(y_mass_m.group(1)) if y_mass_m else None,
-                "preset_hint": infer_preset_hint(
-                    architecture=arch,
-                    printer_model=model,
-                    frame_profile=frame_prof,
-                    drive_mode=drive_mode,
-                    belt_width_mm=belt_w,
-                    panel_spec=panel_spec,
-                ),
-                "notes": text[:280].strip().replace("\n", " "),
-            }
-        )
+        if not is_malformed_build_name(build_name):
+            builds.append(
+                {
+                    "build_name": build_name,
+                    "architecture": arch,
+                    "printer_model": model,
+                    "frame_profile": frame_prof,
+                    "frame_size_mm": frame_size,
+                    "panel_spec": panel_spec,
+                    "drive_mode": drive_mode,
+                    "belt_width_mm": belt_w,
+                    "belt_core": belt_core,
+                    "belt_pluck_hz": belt_pluck,
+                    "motors": motors,
+                    "voltage_v": voltage,
+                    "toolhead": toolhead,
+                    "hotend": hotend,
+                    "x_shaper_type": x_type,
+                    "x_shaper_hz": x_hz,
+                    "x_max_accel": x_accel,
+                    "y_shaper_type": y_type,
+                    "y_shaper_hz": y_hz,
+                    "y_max_accel": y_accel,
+                    "x_moving_mass_g": float(x_mass_m.group(1)) if x_mass_m else None,
+                    "y_moving_mass_g": float(y_mass_m.group(1)) if y_mass_m else None,
+                    "preset_hint": infer_preset_hint(
+                        architecture=arch,
+                        printer_model=model,
+                        frame_profile=frame_prof,
+                        drive_mode=drive_mode,
+                        belt_width_mm=belt_w,
+                        panel_spec=panel_spec,
+                    ),
+                    "notes": text[:280].strip().replace("\n", " "),
+                }
+            )
 
     # 2. Component weights extraction
     seen_weights: set[tuple[str, float]] = set()

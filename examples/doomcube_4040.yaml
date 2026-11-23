@@ -1,11 +1,12 @@
 name: DoomCube 300 4040 AWD
-description: Heavy-duty 4040 extrusion DoomCube 300 CoreXY with 3-way corner cubes, 4mm bolted Aluminum 5052 structural panels, AWD Monolith short-path 9mm fiberglass belts, CNC 7075 X-beam, A4T + Static Beacon toolhead, and 10mm ATP-5 bed on Whopping Pochard kinematic mount
+description: Authentic DoomCube 300 CoreXY with 4040 vertical corner uprights, 2020 horizontal rails & gantry frame, 3-way corner cubes, 4mm bolted Aluminum 5052 structural panels, AWD Monolith short-path 9mm fiberglass belts, CNC 7075 X-beam, A4T + Static Beacon toolhead, and 10mm ATP-5 bed on Whopping Pochard kinematic mount
 architecture: corexy
 frame:
   width_mm: 500
   depth_mm: 500
   height_mm: 520
-  profile: extrusion_4040
+  profile: extrusion_2020
+  upright_profile: extrusion_4040
   material: aluminum_6063_t5
   bracing: corner_gussets
   brace_profile: brace_rod_10mm

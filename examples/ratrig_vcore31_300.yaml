@@ -1,0 +1,115 @@
+name: RatRig V-Core 3.1 300
+description: Official-spec RatRig V-Core 3.1 300 CoreXY (open 3030 Al frame with cast corner brackets & 4mm Al6061 motor/idler plates, double-shear pulleys, 2WD 9mm Gates 2GT belts, 2020 X-beam with top-mounted MGN12H rail, EVA 3 + Rapido 2 HF toolhead, triple leadscrew Z with 3-point kinematic cast aluminum bed)
+architecture: corexy
+frame:
+  width_mm: 500
+  depth_mm: 500
+  height_mm: 540
+  profile: extrusion_3030
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  brace_profile: brace_rod_10mm
+  brace_material: aluminum_6063_t5
+  enclosed_panels: false
+  panel_mounting: none
+  panel_material: polycarbonate
+  panel_thickness_mm: 3.0
+  corner_joint_type: corner_cube
+gantry:
+  drive_mode: 2wd
+  belt_routing: stock_corexy
+  double_shear_pulleys: true
+  bracket_material: aluminum_6061_t6
+  x_beam_profile: extrusion_2020
+  x_beam_material: aluminum_6063_t5
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  x_rail_mount: top
+  y_rail_mount: top
+  rail_preload: Z1
+  rail_block_type: H
+  dual_x_rails: false
+  carriage_mass_g: 180
+  belt:
+    type: gt2_9mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 40.0
+kinematics:
+  build_volume_mm: [300, 300, 300]
+  max_velocity_mm_s: 500
+  max_accel_mm_s2: 10000
+  max_z_velocity_mm_s: 15
+  max_z_accel_mm_s2: 200
+  square_corner_velocity_mm_s: 5.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ac
+    name: NEMA17-48mm (LDO 42STH48-2504AC)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.6
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+  z_stepper:
+    name: NEMA17-48mm Z (LDO 42STH48-2504AC)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.0
+    inductance_mh: 1.5
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+toolhead:
+  preset_id: custom
+  name: RatRig EVA 3 + Orbiter 2 + SuperPINDA
+  total_mass_g: 310
+  cog_offset_mm: [0, -14, -16]
+  nozzle_offset_mm: [0, -16, -50]
+  mount_material: pet_cf_printed
+  body_construction: compact_cage
+  internal_stiffness_n_per_mm: 550.0
+  z_probe_type: klicky_inductive
+  envelope_mm: [70, 74, 92]
+  hotend:
+    preset_id: phaetus_rapido_2_hf
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 500.0
+    mass_g: 50.0
+    overall_length_mm: 71.0
+    name: Phaetus Rapido 2 HF
+    heater_power_w: 85
+    block_material: copper_c110
+    block_mass_g: 14
+    nozzle_material: copper_c110
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 22.0
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 12
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 3.0
+    part_cooling_cfm: 11.0
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 7.5
+    max_push_force_n: 65
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 6.0
+  heater_power_w: 750
+  mass_g: 2700
+  z_drive: leadscrew_triple
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom
+  mount_type: kinematic_3pt

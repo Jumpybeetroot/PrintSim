@@ -1105,13 +1105,31 @@ def _apply_corner_joint_compliance(
 
     from printsim.fea.components import corner_joint_stiffness
 
-    cj = corner_joint_stiffness(spec.frame.profile, jtype)
-    bp = get_profile(spec.frame.profile)
-    # Any un-railed horizontal frame beam carries the bare frame profile (or bonded core if already applied)
+    up_prof_id = spec.frame.effective_upright_profile
+    cj_h = corner_joint_stiffness(spec.frame.profile, jtype)
+    if up_prof_id != spec.frame.profile:
+        cj_up = corner_joint_stiffness(up_prof_id, jtype)
+        cj = {
+            "k_r_inplane_nm_rad": math.sqrt(
+                cj_h["k_r_inplane_nm_rad"] * cj_up["k_r_inplane_nm_rad"]
+            ),
+            "k_r_torsion_nm_rad": math.sqrt(
+                cj_h["k_r_torsion_nm_rad"] * cj_up["k_r_torsion_nm_rad"]
+            ),
+        }
+    else:
+        cj = cj_h
+    bp = get_profile(up_prof_id)
+    # Any un-railed vertical column carries the bare upright profile (or bonded core if already applied)
     unrailed = next(
-        (m for m in members if m.role == "frame" and m.rail_mass_kg == 0.0 and m.id.startswith(("base_", "top_"))),
+        (m for m in members if m.role == "frame" and m.rail_mass_kg == 0.0 and m.id.startswith("col_")),
         None,
     )
+    if unrailed is None and up_prof_id == spec.frame.profile:
+        unrailed = next(
+            (m for m in members if m.role == "frame" and m.rail_mass_kg == 0.0 and m.id.startswith(("base_", "top_"))),
+            None,
+        )
     i_ext_y = unrailed.profile.iy_m4 if unrailed is not None else bp.iy_m4
     i_ext_z = unrailed.profile.iz_m4 if unrailed is not None else bp.iz_m4
     fill_spec = EXTRUSION_FILLINGS.get(spec.frame.extrusion_filling, EXTRUSION_FILLINGS["none"])
@@ -2519,6 +2537,7 @@ def _build_corexy(
         )
 
     fp = spec.frame.profile
+    up = spec.frame.effective_upright_profile
     fm = spec.frame.material
     bp = spec.frame.brace_profile
     bm = spec.frame.brace_material
@@ -2552,11 +2571,11 @@ def _build_corexy(
     for tag in ("fl", "fr", "rl", "rr"):
         col_mid = f"col_g_{tag}" if is_flying else f"g_{tag}"
         if z_drive == "leadscrew_triple" and tag in ("fl", "fr"):
-            _add_member(members, f"col_{tag}_bot", f"b_{tag}", f"z_bed_{tag}", fp, fm)
-            _add_member(members, f"col_{tag}_mid", f"z_bed_{tag}", col_mid, fp, fm)
+            _add_member(members, f"col_{tag}_bot", f"b_{tag}", f"z_bed_{tag}", up, fm)
+            _add_member(members, f"col_{tag}_mid", f"z_bed_{tag}", col_mid, up, fm)
         else:
-            _add_member(members, f"col_{tag}_low", f"b_{tag}", col_mid, fp, fm)
-        _add_member(members, f"col_{tag}_top", col_mid, f"t_{tag}", fp, fm)
+            _add_member(members, f"col_{tag}_low", f"b_{tag}", col_mid, up, fm)
+        _add_member(members, f"col_{tag}_top", col_mid, f"t_{tag}", up, fm)
 
     # Top perimeter
     _add_member(members, "top_front", "t_fl", "t_fr", fp, fm)
@@ -3151,6 +3170,7 @@ def _build_cartesian_bedslinger(
     ]
 
     fp = spec.frame.profile
+    up = spec.frame.effective_upright_profile
     fm = spec.frame.material
     bp = spec.frame.brace_profile
     bm = spec.frame.brace_material
@@ -3166,10 +3186,10 @@ def _build_cartesian_bedslinger(
     _add_member(members, "base_rear", "b_rl", "b_rr", fp, fm)
 
     # Vertical Z portal uprights + top bar
-    _add_member(members, "z_col_l_low", "p_bl", "z_l", fp, fm)
-    _add_member(members, "z_col_l_top", "z_l", "p_tl", fp, fm)
-    _add_member(members, "z_col_r_low", "p_br", "z_r", fp, fm)
-    _add_member(members, "z_col_r_top", "z_r", "p_tr", fp, fm)
+    _add_member(members, "z_col_l_low", "p_bl", "z_l", up, fm)
+    _add_member(members, "z_col_l_top", "z_l", "p_tl", up, fm)
+    _add_member(members, "z_col_r_low", "p_br", "z_r", up, fm)
+    _add_member(members, "z_col_r_top", "z_r", "p_tr", up, fm)
     _add_member(members, "portal_top", "p_tl", "p_tr", fp, fm)
 
     # Moving X gantry beam
@@ -3433,6 +3453,7 @@ def _build_delta(
     nodes.append(StructuralNode("toolhead", np.array([cx, cy, z_effector]), lumped_mass_kg=toolhead_kg, role="toolhead"))
 
     fp = spec.frame.profile
+    up = spec.frame.effective_upright_profile
     fm = spec.frame.material
     bp = spec.frame.brace_profile
     bm = spec.frame.brace_material
@@ -3457,8 +3478,8 @@ def _build_delta(
         j = (i + 1) % 3
         _add_member(members, f"base_{i}", f"b_{i}", f"b_{j}", fp, fm)
         _add_member(members, f"top_{i}", f"t_{i}", f"t_{j}", fp, fm)
-        _add_member(members, f"tower_{i}_low", f"b_{i}", f"c_{i}", fp, fm, role="tower")
-        _add_member(members, f"tower_{i}_top", f"c_{i}", f"t_{i}", fp, fm, role="tower")
+        _add_member(members, f"tower_{i}_low", f"b_{i}", f"c_{i}", up, fm, role="tower")
+        _add_member(members, f"tower_{i}_top", f"c_{i}", f"t_{i}", up, fm, role="tower")
         for side in ("a", "b"):
             members.append(
                 StructuralMember(
