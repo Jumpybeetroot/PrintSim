@@ -383,7 +383,20 @@ def infer_preset_hint(
     drive = (drive_mode or "").lower()
     panel = (panel_spec or "").lower()
 
-    if arch == "delta":
+    if "flsun" in model or (
+        arch == "delta"
+        and (
+            any(tok in model for tok in ("v400", "super racer", "direct-drive", "direct drive"))
+            or bool(re.search(r"\b(?:v400|sr|t1|s1)\b", model))
+            or (
+                belt_width_mm is not None
+                and belt_width_mm >= 9.0
+                and not any(tok in model for tok in ("doron", "velta", "kossel"))
+            )
+        )
+    ):
+        return "flsun_v400_delta"
+    if arch == "delta" or any(tok in model for tok in ("doron", "velta", "kossel")):
         return "delta_racer"
     if arch == "cartesian_bedslinger":
         return "cartesian_bedslinger"

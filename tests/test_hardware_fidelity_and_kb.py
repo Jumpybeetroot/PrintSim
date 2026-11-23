@@ -363,3 +363,133 @@ def test_corexy_z_motor_mass_lump_counts_across_z_drives() -> None:
         > z_motor_total_kg["leadscrew_dual_belt_sync"]
     )
     assert z_motor_total_kg["leadscrew_dual_belt_sync"] == z_motor_total_kg["leadscrew_single"]
+
+
+# ---------------------------------------------------------------------------
+# 5. FLSUN V400 Direct-Drive Delta Preset, KB Mapping, Modular Builders & CMS Mass
+# ---------------------------------------------------------------------------
+
+
+def test_flsun_v400_delta_preset_evaluates_near_community_touchstone() -> None:
+    """FLSUN V400 delta preset evaluates cleanly with zero collisions and lands within ±20% of 68/67 Hz."""
+    preset_path = EXAMPLES_DIR / "flsun_v400_delta.yaml"
+    assert preset_path.exists()
+
+    spec = PrinterSpec.from_yaml(preset_path)
+    assert spec.architecture == "delta"
+    assert spec.frame.width_mm == pytest.approx(460.0)
+    assert spec.frame.height_mm == pytest.approx(920.0)
+    assert spec.kinematics.build_volume_mm == (300.0, 300.0, 410.0)
+    assert spec.kinematics.delta_arm_length_mm == pytest.approx(350.0)
+    assert spec.kinematics.delta_radius_mm == pytest.approx(175.0)
+    assert spec.gantry.belt.type == "gt2_9mm"
+    assert spec.toolhead.extruder.type == "direct_drive"
+    assert 320.0 <= (spec.toolhead.total_mass_g + spec.toolhead.hotend.mass_g) <= 360.0
+    assert spec.kinematics.xy_stepper.supply_voltage_v == pytest.approx(24.0)
+    assert spec.kinematics.xy_stepper.steps_per_rev == 200
+    assert spec.kinematics.xy_stepper.run_current_a == pytest.approx(1.2)
+
+    rep = evaluate_printer(spec, include_advanced_analysis=False)
+    assert not rep.collision.has_collision
+    assert rep.modal_fea.shaper_x is not None
+    assert rep.modal_fea.shaper_y is not None
+
+    pred_x = rep.modal_fea.shaper_x.effective_freq_hz
+    pred_y = rep.modal_fea.shaper_y.effective_freq_hz
+    assert abs(pred_x - 68.0) / 68.0 <= 0.20, f"FLSUN V400 X={pred_x:.1f} Hz outside ±20% of 68 Hz"
+    assert abs(pred_y - 67.0) / 67.0 <= 0.20, f"FLSUN V400 Y={pred_y:.1f} Hz outside ±20% of 67 Hz"
+
+
+def test_kb_flsun_v400_and_doron_velta_delta_mapping(tmp_path: Path) -> None:
+    """infer_preset_hint and run_kb_calibration map FLSUN V400/SR to flsun_v400_delta and Doron Velta to delta_racer."""
+    assert infer_preset_hint(architecture="delta", printer_model="FLSUN V400") == "flsun_v400_delta"
+    assert infer_preset_hint(printer_model="FLSUN V400 Klipper") == "flsun_v400_delta"
+    assert infer_preset_hint(architecture="delta", printer_model="FLSUN SR") == "flsun_v400_delta"
+    assert infer_preset_hint(architecture="delta", printer_model="Custom Heavy Direct-Drive Delta", belt_width_mm=10.0) == "flsun_v400_delta"
+
+    assert infer_preset_hint(architecture="delta", printer_model="Doron Velta", belt_width_mm=6.0) == "delta_racer"
+    assert infer_preset_hint(printer_model="Doron Velta") == "delta_racer"
+    assert infer_preset_hint(architecture="delta", printer_model="Kossel Mini") == "delta_racer"
+
+    db_path = tmp_path / "kb_delta.db"
+    with TouchstoneKB(db_path) as kb:
+        seed_from_benchmark_docs(kb)
+        # Inject a legacy-hinted FLSUN V400 row to verify _resolve_preset_yaml remapping
+        kb.add_build(
+            build_name="Legacy Seeded FLSUN V400",
+            architecture="delta",
+            printer_model="FLSUN V400",
+            belt_width_mm=10.0,
+            x_shaper_hz=68.0,
+            y_shaper_hz=67.0,
+            preset_hint="delta_racer",
+        )
+        cal = run_kb_calibration(kb)
+
+    flsun_rows = [r for r in cal["results"] if "FLSUN" in r["build_name"]]
+    assert len(flsun_rows) >= 2
+    for row in flsun_rows:
+        assert row["preset_file"] == "flsun_v400_delta.yaml"
+        assert abs(row["x_error_pct"]) < 15.0
+        assert abs(row["y_error_pct"]) < 15.0
+
+    doron_row = next(r for r in cal["results"] if "Doron Velta" in r["build_name"])
+    assert doron_row["preset_file"] == "delta_racer.yaml"
+
+
+def test_builder_modular_delegation_and_custom_bracket_mass_delta() -> None:
+    """builder.py delegates cleanly to _builder_bedslinger/_builder_delta and applies custom_bracket_override.mass_delta_g."""
+    from printsim.geometry import _builder_bedslinger, _builder_delta, builder
+    from printsim.schema import CustomBracketOverride
+
+    # Clean modular delegation & backwards-compatible re-exports
+    assert builder._build_cartesian_bedslinger is _builder_bedslinger._build_cartesian_bedslinger
+    assert builder._build_delta is _builder_delta._build_delta
+
+    bs_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "cartesian_bedslinger.yaml")
+    bs_asm = build_assembly(bs_spec)
+    assert bs_asm.spec.architecture == "cartesian_bedslinger"
+    assert any(m.id.startswith("z_col_") for m in bs_asm.members)
+
+    delta_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "flsun_v400_delta.yaml")
+    delta_asm = build_assembly(delta_spec)
+    assert delta_asm.spec.architecture == "delta"
+    assert any(m.id.startswith("tower_") for m in delta_asm.members)
+
+    # Custom CAD bracket mass_delta_g flows into CoreXY carriage nodes, y_moving_mass_kg, and modal dynamics
+    base_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    base_spec.gantry.custom_bracket_override = None
+    asm_base = build_assembly(base_spec)
+    mo_base = solve_modal_fea(asm_base)
+
+    heavy_spec = base_spec.model_copy(deep=True)
+    heavy_spec.gantry.custom_bracket_override = CustomBracketOverride(
+        label="Heavy Billet XY-Joints",
+        stiffness_n_per_mm=2400.0,
+        mass_delta_g=120.0,
+        source="cms_superelement",
+    )
+    asm_heavy = build_assembly(heavy_spec)
+    mo_heavy = solve_modal_fea(asm_heavy)
+
+    light_spec = base_spec.model_copy(deep=True)
+    light_spec.gantry.custom_bracket_override = CustomBracketOverride(
+        label="Topo-Opt CF XY-Joints",
+        stiffness_n_per_mm=2400.0,
+        mass_delta_g=-40.0,
+        source="tet10_fea",
+    )
+    asm_light = build_assembly(light_spec)
+    mo_light = solve_modal_fea(asm_light)
+
+    assert asm_heavy.y_moving_mass_kg - asm_base.y_moving_mass_kg == pytest.approx(0.120, abs=1e-6)
+    assert asm_heavy.y_carriage_joints_mass_kg - asm_base.y_carriage_joints_mass_kg == pytest.approx(0.120, abs=1e-6)
+    assert asm_base.y_moving_mass_kg - asm_light.y_moving_mass_kg == pytest.approx(0.040, abs=1e-6)
+
+    # Carriage nodes receive half of the mass delta each, lowering Y modal frequency when heavier at equal stiffness
+    y_car_l_base = asm_base.node_map["y_car_l"].lumped_mass_kg
+    y_car_l_heavy = asm_heavy.node_map["y_car_l"].lumped_mass_kg
+    assert y_car_l_heavy - y_car_l_base == pytest.approx(0.060, abs=1e-6)
+    assert mo_heavy.shaper_y is not None and mo_light.shaper_y is not None and mo_base.shaper_y is not None
+    assert mo_heavy.shaper_y.effective_freq_hz < mo_light.shaper_y.effective_freq_hz
+    assert mo_heavy.shaper_y.structural_freq_hz < mo_base.shaper_y.structural_freq_hz

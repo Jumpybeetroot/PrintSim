@@ -2,15 +2,15 @@
 
 **PrintSim** is an engineering-grade 3D printer design, simulation, and AI optimization studio built for both **human mechanical engineers** and **AI design agents**. Design and test complete 3D printers — frames, trusses, bolted structural panels, extrusion fillings, composite linear rails, gantry brackets, belts, steppers, hotends, and custom CAD parts — before cutting a single aluminum extrusion or printing a bracket.
 
-## What's New in v0.8
+## What's New in v0.9.0
 
-- **Plug-and-Play AI Agent MCP Server (13 Tools) & Parametric Bracket Designer (`printsim.mcp_server`, `printsim.fea.bracket_designer`)**: Zero-setup stdio JSON-RPC 2.0 MCP server (`printsim mcp`) for **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, and **Gemini CLI**, featuring `list_catalog`, `get_preset_yaml`, `mutate_and_compare_printer` (batch dot-path comparisons with exact deltas), and `design_and_test_bracket` (parametric `corner_gusset`, `motor_mount`, and `xy_joint_l_bracket` with ~0.1s Hex8 or conformal `Tet10` FEA and STL/STEP export). See **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** and [`examples/agent_discovery_loop.py`](examples/agent_discovery_loop.py).
-- **Gantry Bracket Materials & Creep Physics (`GANTRY_BRACKET_CATALOG`)**: Models 7 bracket materials (`abs_printed`, `pet_cf_printed`, `pa12_cf_printed`, `ppa_cf_printed`, `pps_cf_printed`, `aluminum_6061_t6`, `aluminum_7075_t6`) in series with belt + motor electromagnetic stiffness, plus sustained belt-tension creep warnings, 2WD vs. 4-motor AWD CoreXY drive, and double-shear pulley supports.
-- **Frame Extrusion Cavity Fillings (`EXTRUSION_FILLINGS`)**: Models 6 cavity fillings (`none`, `pu_foam`, `silica_sand`, `lead_shot`, `epoxy_granite`, `uhpc_grout`) capturing bonded mineral-cast bending EI gains, granular friction/resin damping boosts, mass changes, and BOM cost.
-- **Composite Linear Rails & Mounting Orientation**: Transformed-section bolted steel linear rail mechanics (`mgn9_rail`, `mgn12_rail`, `mgn15_rail`) across X-rail orientations (`front`, `top`, `bottom`, `dual_top_bottom`) and Y-rail orientations (`top`, `inner`, `bottom`), updating directional $EI_y/EI_z$, rail-backer flange stiffness, and nozzle-drop lever arm.
-- **Nozzle-to-Bed Structural Loop & 6-DOF CoG Vibration**: Evaluates the complete frame → bed → Z-axis ↔ gantry → toolhead CoG → nozzle tip compliance loop at arbitrary `[rx, ry, rz]` print coordinates (`toolhead_rel_pos`), capturing pitch/twist amplification at the nozzle tip.
-- **Klipper ADXL345 PSD Shaper Calibration (`klipper_shaper.py`)**: Synthesizes realistic axis frequency-response PSDs up to 220 Hz and runs Klipper-exact `ZV`, `MZV`, `EI`, `2HUMP_EI`, and `3HUMP_EI` smoothing/residual-vibration optimization.
-- **`pymoo` NSGA-II Multi-Objective Pareto Optimizer (`pareto.py`)**: Explores the 3-objective frontier trading off **Build Cost (\$)**, **Safe Max Acceleration (`mm/s^2`)**, and **Nozzle-Tip Flex (`um`)** via `printsim pareto`, `/api/optimize/pareto`, and `optimize_printer_pareto`.
+- **21-Tool AI Agent MCP Server & Live Studio Bridge (`printsim.mcp_server`)**: Zero-setup stdio JSON-RPC 2.0 MCP server (`printsim mcp`) for **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, and **Gemini CLI**, expanded to **21 engineering tools** including `calibrate_adxl_csv`, `fit_printer_adxl`, `analyze_sensitivity_hotspots`, `condense_bracket_superelement`, `run_deep_frame_verify`, `export_printer_dxf`, `mutate_and_compare_printer`, `design_and_test_bracket`, and live 3D Studio inspection/update tools (`get_live_studio_state`, `update_live_studio`, `capture_studio_viewport`). See **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** and [`examples/agent_discovery_loop.py`](examples/agent_discovery_loop.py).
+- **Klipper ADXL345 CSV Measured-vs-Simulated Calibration & Digital-Twin Auto-Fit (`printsim calibrate-adxl --fit`)**: Upload or pass real Klipper `resonances_*.csv` / raw ADXL345 accelerometer logs to overlay measured vs. FEA PSD curves, quantify peak-frequency & damping deltas, and automatically fit belt pretension and rail/joint stiffness parameters to match your physical machine.
+- **Industrial Belt Catalog with Theoretical/Experimental Caveats (`BELT_CATALOG`)**: Expanded belt database covering `GT2` (6–15 mm & dual 9 mm), `3GT`, `AT3` / `AT3 Gen3`, `HTD 3M`, and `AT5` with datasheet tensile stiffness, minimum pulley-tooth & back-idler bend-fatigue checks, chamber-temperature modulus retention, and explicit **Validated / Theoretical / Experimental** engineering caveats.
+- **Mixed Frame Upright Profiles (`FrameSpec.upright_profile`) & VzBot 4×Ø10 mm Belt-Synced Z**: Model authentic asymmetric frames (e.g., DoomCube `4040` vertical uprights + `2020` horizontals) with separate BOM stock-bar nesting, plus VzBot 330/235 single-motor belt-synced dual-Z (`leadscrew_dual_belt_sync`) with 4×Ø10 mm hardened smooth rods and `LMK10LUU` flanged linear bearings.
+- **New Community-Calibrated Presets — RatRig V-Core 3.1 300 & FLSUN V400 Delta**: Dedicated `examples/ratrig_vcore31_300.yaml` and `examples/flsun_v400_delta.yaml` builds calibrated directly against community Klipper input-shaper touchstones, alongside automatic KB preset mapping (`printsim kb calibrate`).
+- **2D CNC/Laser DXF Export, One-Click Klipper `printer.cfg` & `#spec=` Shareable URLs**: Export manufacturable R2010 2D DXF panel/plate kits (`printsim export-dxf`, including `side_panel`, `rear_panel`, `top_panel`, `trident_backbone`, and `corner_gusset`), generate ready-to-paste Klipper `printer.cfg` `[input_shaper]` / `[printer]` / stepper config snippets in one click, and share any live printer build via compressed `#spec=` URLs in the 3D Web Studio.
+- **Full Multiphysics Hardware Fidelity**: Bolted MITC4 shell enclosure panels, `GANTRY_BRACKET_CATALOG` creep physics, `EXTRUSION_FILLINGS` mineral-cast/granular damping, transformed-section composite linear rails, 6-DOF nozzle-to-bed structural loop, Klipper-exact PSD input shaper calibration, and `pymoo` NSGA-II 3-objective Pareto optimization (`printsim pareto`).
 
 ## Core Capabilities
 
@@ -24,7 +24,7 @@
 - **Kinematics & Clearance (`printsim.kinematics`)**: CoreXY, Cartesian, and Delta exact FK/IK, stepper electromagnetic torque roll-off at high RPM (`24V`/`48V` + inductance), belt dynamic slack-side slip & overtension checks, packaging efficiency, and frame/toolhead collision detection.
 - **Hotend FVM Thermal, Multi-Filament Rheology & Cooling (`printsim.thermal`)**: 40-node 1D Finite-Volume axial temperature solver $T(z)$ (Nozzle → Heater Block → Heatbreak → Heatsink), multi-filament database (`PLA`, `PETG`, `ABS`, `ASA`, `PA12-CF`, `TPU 95A`) with shear-thinning viscosity & $T_g$ heat-creep thresholds, transient heat-up curves, and overhang/bridging cooling predictions.
 - **G-code Lookahead & Virtual Print (`printsim.gcode`)**: Parses standard Marlin/Klipper/OrcaSlicer G-code (or runs the built-in high-speed calibration cube benchmark), computes lookahead trapezoidal motion timings, and tags every toolpath segment with physical defects (`ok`, `ringing`, `underextrusion`, `step_skip`).
-- **Interactive 3D Web Studio (`web/`)**: React + Three.js studio with live 3D modes (Assembly, Frame FEA heatmap, Animated Modal Vibration, Virtual Print toolpath scrubber, **Curved Tet10 / Voxel Hex8 Solid Part FEA** with `.step`/`.stl` upload, and **3D SIMP Topology Optimization**), **Klipper PSD & Pareto Trade-Off Frontier** charts, **BOM & Cut-List inspector**, and one-click STEP/STL/CSV downloads.
+- **Interactive 3D Web Studio (`web/`)**: React + Three.js studio with live 3D modes (Assembly, Frame FEA heatmap, Animated Modal Vibration, Virtual Print toolpath scrubber, **Curved Tet10 / Voxel Hex8 Solid Part FEA** with `.step`/`.stl` upload, and **3D SIMP Topology Optimization**), **Klipper ADXL345 CSV Overlay & Auto-Fit**, **Klipper PSD & Pareto Trade-Off Frontier** charts, **BOM & Cut-List inspector**, **one-click Klipper `printer.cfg` export**, **`#spec=` shareable build URLs**, and STEP/STL/DXF/CSV downloads.
 
 ## Quickstart
 
@@ -33,11 +33,15 @@
 ```bash
 # Run full multiphysics evaluation on a preset (optionally specifying filament)
 uv run printsim evaluate examples/voron_trident_300.yaml --filament abs
+uv run printsim evaluate examples/flsun_v400_delta.yaml
+
+# Compare & auto-fit a printer spec against real Klipper ADXL345 CSV resonance measurements
+uv run printsim calibrate-adxl examples/voron_trident_300.yaml --x-csv resonances_x.csv --y-csv resonances_y.csv --fit
 
 # Run pymoo NSGA-II multi-objective Pareto optimization (Cost vs Safe Accel vs Nozzle Flex)
 uv run printsim pareto examples/voron_trident_300.yaml --pop 16 --gen 6
 
-# Run native 13-tool stdio MCP server for Claude Desktop, Cursor, Antigravity & Gemini CLI
+# Run native 21-tool stdio MCP server for Claude Desktop, Cursor, Antigravity & Gemini CLI
 uv run printsim mcp
 
 # Run autonomous 2-stage AI agent discovery & parametric bracket FEA demo
@@ -59,10 +63,11 @@ uv run printsim evaluate examples/corexy_voron_style.yaml --json --no-segments
 # Run evolutionary AI design optimization
 uv run printsim optimize examples/cartesian_bedslinger.yaml --iterations 30 --objective rigidity --out optimized.yaml
 
-# Export a 3D STL mesh or exact OpenCASCADE STEP CAD assembly
+# Export a 3D STL mesh, OpenCASCADE STEP CAD assembly, or 2D CNC/laser DXF plate kit
 uv run printsim export-stl examples/hyper_corexy_carbon.yaml --out hyper_corexy.stl
 uv run printsim export-step examples/voron_monolith_awd.yaml --out monolith_awd.step
 uv run printsim export-step --preset xy_motor_mount --out xy_motor_mount.step
+uv run printsim export-dxf examples/voron_trident_300.yaml --part all_plates --out trident_plates.dxf
 
 # Run conformal 3D Tet10 FEA (Gmsh + scikit-fem) on a B-Rep bracket or STEP file
 uv run printsim tet-fea --preset xy_motor_mount --material pa12_cf_printed --vtu motor_mount.vtu
@@ -70,7 +75,7 @@ uv run printsim tet-fea --preset xy_motor_mount --material pa12_cf_printed --vtu
 
 ### 2. AI Agent & MCP Plug-and-Play Setup
 
-Connect PrintSim directly to **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, **Gemini CLI**, or **LangGraph / OpenAI Agents** — see **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** for copy-paste config JSONs, all 13 MCP tool schemas, REST endpoints, and example engineering prompts.
+Connect PrintSim directly to **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, **Gemini CLI**, or **LangGraph / OpenAI Agents** — see **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** for copy-paste config JSONs, all 21 MCP tool schemas, REST endpoints, and example engineering prompts.
 
 ### 3. Launch the Interactive 3D Web Studio
 

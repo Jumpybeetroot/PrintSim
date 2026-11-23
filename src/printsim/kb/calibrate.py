@@ -107,6 +107,30 @@ def _resolve_preset_yaml(build: dict[str, Any], examples_dir: Path) -> Path | No
         if ratrig_cand.exists():
             return ratrig_cand
 
+    # Re-map FLSUN V400 / FLSUN SR / heavy direct-drive delta records (including previously
+    # seeded rows hinted as delta_racer) to the dedicated FLSUN V400 delta preset when present.
+    arch = str(build.get("architecture") or "").lower()
+    notes_low = str(build.get("notes") or "").lower()
+    is_light_delta = any(tok in identity for tok in ("doron", "velta", "kossel"))
+    belt_w = build.get("belt_width_mm")
+    is_heavy_delta = (
+        any(tok in identity for tok in ("flsun", "v400", "super racer"))
+        or bool(re.search(r"\b(?:flsun\s*sr|v400)\b", identity))
+        or (
+            arch == "delta"
+            and not is_light_delta
+            and (
+                "direct-drive" in notes_low
+                or "direct drive" in notes_low
+                or (belt_w is not None and float(belt_w) >= 9.0)
+            )
+        )
+    )
+    if is_heavy_delta and hint in ("", "delta_racer", "delta_racer.yaml"):
+        flsun_cand = examples_dir / "flsun_v400_delta.yaml"
+        if flsun_cand.exists():
+            return flsun_cand
+
     if hint:
         cand = examples_dir / (hint if hint.endswith(".yaml") else f"{hint}.yaml")
         if cand.exists():
