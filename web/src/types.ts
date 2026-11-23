@@ -535,6 +535,13 @@ export interface PrinterBOMResponse {
   total_extrusion_length_m: number;
 }
 
+export interface CustomBracketOverrideData {
+  label: string;
+  stiffness_n_per_mm: number;
+  mass_delta_g: number;
+  source: string;
+}
+
 export interface PrinterSpecData {
   name: string;
   description: string;
@@ -588,6 +595,7 @@ export interface PrinterSpecData {
     belt_routing?: BeltRoutingType;
     double_shear_pulleys: boolean;
     bracket_material?: BracketMaterialType;
+    custom_bracket_override?: CustomBracketOverrideData | null;
     carriage_mass_g: number;
     belt: {
       type: BeltType;
@@ -894,6 +902,7 @@ export interface ShaperData {
   recommended_shaper: string;
   max_accel_mm_s2: number;
   estimated_ringing_ratio: number;
+  klipper_graph?: AxisShaperGraph;
 }
 
 export type ShaperRecommendationData = ShaperData;
@@ -1212,6 +1221,8 @@ export interface KinematicsData {
   bracket_material?: string;
   bracket_stiffness_n_per_mm?: number;
   bracket_creep_risk?: boolean;
+  custom_bracket_active?: boolean;
+  custom_bracket_label?: string;
   drive_stiffness_n_per_mm?: number;
   motor_voltage_efficiency_pct?: number;
   motor_heat_w_each?: number;

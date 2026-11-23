@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { BaselineCompareDrawer } from "./components/BaselineCompareDrawer";
 import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
@@ -18,6 +19,7 @@ import {
   AdjointLens,
   CatalogResponse,
   CompareMode,
+  CustomBracketOverrideData,
   DeepVerifyResponse,
   FeaLoadCase,
   HistorySnapshot,
@@ -391,6 +393,20 @@ function describeSpecDiff(
       nextBracket;
     diffs.push(`Gantry Brackets: ${prevBracketLabel} → ${nextBracketLabel}`);
   }
+  const prevCustomOv = prev.gantry.custom_bracket_override ?? null;
+  const nextCustomOv = next.gantry.custom_bracket_override ?? null;
+  if (
+    (prevCustomOv?.label ?? null) !== (nextCustomOv?.label ?? null) ||
+    Math.round(prevCustomOv?.stiffness_n_per_mm ?? -1) !== Math.round(nextCustomOv?.stiffness_n_per_mm ?? -1)
+  ) {
+    diffs.push(
+      `Custom CAD Bracket: ${
+        prevCustomOv ? `${prevCustomOv.label} (${Math.round(prevCustomOv.stiffness_n_per_mm)} N/mm)` : "Off"
+      } → ${
+        nextCustomOv ? `${nextCustomOv.label} (${Math.round(nextCustomOv.stiffness_n_per_mm)} N/mm)` : "Cleared"
+      }`
+    );
+  }
   if (prev.gantry.x_beam_profile !== next.gantry.x_beam_profile) {
     diffs.push(
       `X Beam: ${shortCatalogName(prev.gantry.x_beam_profile, catalog?.profiles)} → ${shortCatalogName(
@@ -667,8 +683,12 @@ export default function App() {
   const [topoResult, setTopoResult] = useState<TopologyOptResponse | null>(null);
   const [topoLoading, setTopoLoading] = useState<boolean>(false);
   const [exportingStep, setExportingStep] = useState<boolean>(false);
+  const [exportingDxf, setExportingDxf] = useState<boolean>(false);
   const [shareCopied, setShareCopied] = useState<boolean>(false);
   const shareTimerRef = useRef<number | null>(null);
+  const [baselinePinned, setBaselinePinned] = useState<boolean>(false);
+  const pinTimerRef = useRef<number | null>(null);
+  const [compareDrawerOpen, setCompareDrawerOpen] = useState<boolean>(false);
   const [bom, setBom] = useState<PrinterBOMResponse | null>(null);
   const [bomLoading, setBomLoading] = useState<boolean>(false);
   const [stockLengthMm, setStockLengthMm] = useState<number>(1000);
@@ -1545,12 +1565,42 @@ export default function App() {
     setBaselineBom(bom);
     setBaselineSpec(spec);
     setBaselineFilamentId(filamentId);
-    setBaselineLabel("Custom Baseline");
+    setBaselineLabel(`Pinned: ${spec.name}`);
     setHistory([]);
     setLastChangeSummary(null);
     setCompareMode("last");
     setOptMessage(null);
   }, [bom, filamentId, sim, spec]);
+
+  const handlePinBaseline = useCallback(() => {
+    if (!sim || !spec) return;
+    setBaselineSim(sim);
+    setBaselineBom(bom);
+    setBaselineSpec(spec);
+    setBaselineFilamentId(filamentId);
+    setBaselineLabel(`Pinned: ${spec.name}`);
+    setBaselinePinned(true);
+    if (pinTimerRef.current !== null) {
+      window.clearTimeout(pinTimerRef.current);
+    }
+    pinTimerRef.current = window.setTimeout(() => {
+      setBaselinePinned(false);
+      pinTimerRef.current = null;
+    }, 2000);
+  }, [bom, filamentId, sim, spec]);
+
+  const handleInjectCustomBracket = useCallback(
+    (override: CustomBracketOverrideData) => {
+      if (!spec) return;
+      const clone: PrinterSpecData = JSON.parse(JSON.stringify(spec));
+      clone.gantry.custom_bracket_override = override;
+      handleSpecChange(
+        clone,
+        `Custom CAD Bracket: ${override.label} (${Math.round(override.stiffness_n_per_mm)} N/mm)`
+      );
+    },
+    [handleSpecChange, spec]
+  );
 
   const handleOptimize = async () => {
     if (!spec) return;
@@ -1722,6 +1772,39 @@ export default function App() {
     }
   };
 
+  const handleExportDxf = async () => {
+    if (!spec) return;
+    setExportingDxf(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/export/dxf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spec, part: "all_plates" }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(errBody.detail || "DXF plates export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const slug =
+        spec.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_|_$/g, "") || "printer";
+      a.href = url;
+      a.download = `${slug}_plates.dxf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExportingDxf(false);
+    }
+  };
+
   const handleExportBomCsv = async () => {
     if (!spec) return;
     setError(null);
@@ -1751,6 +1834,9 @@ export default function App() {
     return () => {
       if (shareTimerRef.current !== null) {
         window.clearTimeout(shareTimerRef.current);
+      }
+      if (pinTimerRef.current !== null) {
+        window.clearTimeout(pinTimerRef.current);
       }
     };
   }, []);
@@ -1922,9 +2008,34 @@ export default function App() {
           >
             {exportingStep ? "Exporting STEP..." : "Export STEP"}
           </button>
+          <button
+            className="btn"
+            disabled={!spec || exportingDxf}
+            onClick={handleExportDxf}
+            title="Download 2D CNC/laser-cut DXF flat plates for frame panels, gussets, and deck plates"
+          >
+            {exportingDxf ? "Exporting DXF..." : "DXF Plates"}
+          </button>
           <button className="btn" disabled={!spec} onClick={handleExportBomCsv}>
             Export BOM CSV
           </button>
+          <button
+            className={`btn ${baselinePinned ? "share-copied" : ""}`}
+            disabled={!sim || !spec}
+            onClick={handlePinBaseline}
+            title="Pin the current printer simulation as the trade-study comparison baseline"
+          >
+            {baselinePinned ? "Pinned ✓" : "Pin Baseline"}
+          </button>
+          {baselineSim && sim && (
+            <button
+              className="btn compare-btn"
+              onClick={() => setCompareDrawerOpen(true)}
+              title="Open side-by-side Baseline vs. Current trade-study comparison & Dual-PSD overlay"
+            >
+              Compare
+            </button>
+          )}
           <button
             className={`btn ${shareCopied ? "share-copied" : ""}`}
             disabled={!spec}
@@ -2037,6 +2148,7 @@ export default function App() {
           toolheadPunchIn={toolheadPunchIn}
           onToggleToolheadPunchIn={handleOpenToolheadPunchIn}
           onApplyFittedSpec={handleSpecChange}
+          onInjectCustomBracket={handleInjectCustomBracket}
           error={error}
         />
       </main>
@@ -2049,6 +2161,20 @@ export default function App() {
         onClose={() => setParetoOpen(false)}
         onRerun={runParetoFrontier}
         onApply={handleApplyParetoBuild}
+      />
+
+      <BaselineCompareDrawer
+        open={compareDrawerOpen}
+        onClose={() => setCompareDrawerOpen(false)}
+        baselineSim={baselineSim}
+        baselineSpec={baselineSpec}
+        baselineBom={baselineBom}
+        baselineLabel={baselineLabel}
+        currentSim={displaySim}
+        currentSpec={spec}
+        currentBom={bom}
+        catalog={catalog}
+        onPinCurrent={handlePinBaseline}
       />
     </div>
   );

@@ -7,6 +7,7 @@ import {
   AccelBottleneckShares,
   BedPlateFeaData,
   CompareMode,
+  CustomBracketOverrideData,
   DeepVerifyResponse,
   LimitingModalSummaryData,
   ModeShapeData,
@@ -62,6 +63,7 @@ interface Props {
   toolheadPunchIn?: boolean;
   onToggleToolheadPunchIn?: () => void;
   onApplyFittedSpec?: (fittedSpec: PrinterSpecData, changeLabel?: string) => void;
+  onInjectCustomBracket?: (override: CustomBracketOverrideData) => void;
   error: string | null;
 }
 
@@ -638,10 +640,25 @@ const TopologyOptCard: React.FC<{ topo: TopologyOptResponse }> = ({ topo }) => {
   );
 };
 
-const TetFEACard: React.FC<{ tet: TetFEAResponse }> = ({ tet }) => {
+const STOCK_PRINTED_BRACKET_MASS_G = 45;
+
+const TetFEACard: React.FC<{
+  tet: TetFEAResponse;
+  activeCustomBracket?: CustomBracketOverrideData | null;
+  onInjectCustomBracket?: (override: CustomBracketOverrideData) => void;
+}> = ({ tet, activeCustomBracket, onInjectCustomBracket }) => {
   const isSafe = tet.safety_factor >= 1.5 && tet.failure_mode === "safe";
   const backendLabel = formatBackendLabel(tet.backend);
   const elemLabel = formatElementLabel(tet.element_type);
+  const injectLabel = `${tet.part_name} (${tet.material_id})`;
+  const massDeltaG = Number((tet.mass_g - STOCK_PRINTED_BRACKET_MASS_G).toFixed(1));
+  const stiffNPerMm = Number(tet.stiffness_n_per_mm.toFixed(1));
+  const isAlreadyInjected = Boolean(
+    activeCustomBracket &&
+      activeCustomBracket.source === "tet10_fea" &&
+      activeCustomBracket.label === injectLabel &&
+      Math.abs(activeCustomBracket.stiffness_n_per_mm - stiffNPerMm) < 0.2
+  );
 
   return (
     <div className="section-card" style={{ borderColor: "rgba(56, 189, 248, 0.55)" }}>
@@ -723,50 +740,112 @@ const TetFEACard: React.FC<{ tet: TetFEAResponse }> = ({ tet }) => {
           <span style={{ color: "var(--muted)", fontWeight: 400 }}> / {tet.z_layer_strength_mpa.toFixed(0)}</span>
         </span>
       </div>
+      {onInjectCustomBracket && (
+        <div className="inject-bracket-row">
+          <button
+            type="button"
+            className={`btn inject-bracket-btn ${isAlreadyInjected ? "injected" : ""}`}
+            onClick={() =>
+              onInjectCustomBracket({
+                label: injectLabel,
+                stiffness_n_per_mm: stiffNPerMm,
+                mass_delta_g: massDeltaG,
+                source: "tet10_fea",
+              })
+            }
+            title={`Inject ${stiffNPerMm} N/mm stiffness and ${massDeltaG >= 0 ? "+" : ""}${massDeltaG}g mass delta (vs 45g stock bracket) into the full-printer FEA model`}
+          >
+            {isAlreadyInjected ? "Active in Full Printer FEA ✓" : "Inject into Full Printer FEA"}
+          </button>
+          <span className="inject-bracket-sub">
+            k = {stiffNPerMm} N/mm · Δm = {massDeltaG >= 0 ? "+" : ""}
+            {massDeltaG}g vs 45g stock
+          </span>
+        </div>
+      )}
     </div>
   );
 };
 
-const SolidHexFEACard: React.FC<{ solidFea: SolidFEAResponse }> = ({ solidFea }) => (
-  <div className="section-card" style={{ borderColor: "rgba(56,189,248,0.45)" }}>
-    <div className="section-title">
-      <span>3D Solid Hex8 Part FEA</span>
-      <span className={`badge-pill ${solidFea.safety_factor < 1.5 ? "bad" : "ok"}`}>
-        SF {solidFea.safety_factor.toFixed(2)}×
-      </span>
+const SolidHexFEACard: React.FC<{
+  solidFea: SolidFEAResponse;
+  activeCustomBracket?: CustomBracketOverrideData | null;
+  onInjectCustomBracket?: (override: CustomBracketOverrideData) => void;
+}> = ({ solidFea, activeCustomBracket, onInjectCustomBracket }) => {
+  const injectLabel = `${solidFea.part_name} (${solidFea.material_id})`;
+  const massDeltaG = Number((solidFea.mass_g - STOCK_PRINTED_BRACKET_MASS_G).toFixed(1));
+  const stiffNPerMm = Number(solidFea.stiffness_n_per_mm.toFixed(1));
+  const isAlreadyInjected = Boolean(
+    activeCustomBracket &&
+      activeCustomBracket.source === "hex8_fea" &&
+      activeCustomBracket.label === injectLabel &&
+      Math.abs(activeCustomBracket.stiffness_n_per_mm - stiffNPerMm) < 0.2
+  );
+
+  return (
+    <div className="section-card" style={{ borderColor: "rgba(56,189,248,0.45)" }}>
+      <div className="section-title">
+        <span>3D Solid Hex8 Part FEA</span>
+        <span className={`badge-pill ${solidFea.safety_factor < 1.5 ? "bad" : "ok"}`}>
+          SF {solidFea.safety_factor.toFixed(2)}×
+        </span>
+      </div>
+      <div className="metric-kv">
+        <span>Part / Material</span>
+        <span className="metric-val">
+          {solidFea.part_name} ({solidFea.is_fdm_anisotropic ? "FDM" : "ISO"})
+        </span>
+      </div>
+      <div className="metric-kv">
+        <span>Mesh / Mass</span>
+        <span className="metric-val">
+          {solidFea.num_elements} Hex8 ({solidFea.num_dofs} DOF) • {solidFea.mass_g}g
+        </span>
+      </div>
+      <div className="metric-kv">
+        <span>Max Disp / Stiffness</span>
+        <span className="metric-val">
+          {solidFea.max_displacement_um.toFixed(1)} µm • {solidFea.stiffness_n_per_mm.toFixed(0)} N/mm
+        </span>
+      </div>
+      <div className="metric-kv">
+        <span>Peak von Mises / Z-Layer</span>
+        <span className="metric-val">
+          {solidFea.max_von_mises_mpa.toFixed(2)} / {solidFea.max_z_tensile_mpa.toFixed(2)} MPa
+        </span>
+      </div>
+      <div className="metric-kv">
+        <span>Status</span>
+        <span className={`metric-val ${solidFea.failure_mode === "safe" ? "tag-ok" : "tag-bad"}`}>
+          {solidFea.failure_mode.replace(/_/g, " ")}
+        </span>
+      </div>
+      {onInjectCustomBracket && (
+        <div className="inject-bracket-row">
+          <button
+            type="button"
+            className={`btn inject-bracket-btn ${isAlreadyInjected ? "injected" : ""}`}
+            onClick={() =>
+              onInjectCustomBracket({
+                label: injectLabel,
+                stiffness_n_per_mm: stiffNPerMm,
+                mass_delta_g: massDeltaG,
+                source: "hex8_fea",
+              })
+            }
+            title={`Inject ${stiffNPerMm} N/mm stiffness and ${massDeltaG >= 0 ? "+" : ""}${massDeltaG}g mass delta (vs 45g stock bracket) into the full-printer FEA model`}
+          >
+            {isAlreadyInjected ? "Active in Full Printer FEA ✓" : "Inject into Full Printer FEA"}
+          </button>
+          <span className="inject-bracket-sub">
+            k = {stiffNPerMm} N/mm · Δm = {massDeltaG >= 0 ? "+" : ""}
+            {massDeltaG}g vs 45g stock
+          </span>
+        </div>
+      )}
     </div>
-    <div className="metric-kv">
-      <span>Part / Material</span>
-      <span className="metric-val">
-        {solidFea.part_name} ({solidFea.is_fdm_anisotropic ? "FDM" : "ISO"})
-      </span>
-    </div>
-    <div className="metric-kv">
-      <span>Mesh / Mass</span>
-      <span className="metric-val">
-        {solidFea.num_elements} Hex8 ({solidFea.num_dofs} DOF) • {solidFea.mass_g}g
-      </span>
-    </div>
-    <div className="metric-kv">
-      <span>Max Disp / Stiffness</span>
-      <span className="metric-val">
-        {solidFea.max_displacement_um.toFixed(1)} µm • {solidFea.stiffness_n_per_mm.toFixed(0)} N/mm
-      </span>
-    </div>
-    <div className="metric-kv">
-      <span>Peak von Mises / Z-Layer</span>
-      <span className="metric-val">
-        {solidFea.max_von_mises_mpa.toFixed(2)} / {solidFea.max_z_tensile_mpa.toFixed(2)} MPa
-      </span>
-    </div>
-    <div className="metric-kv">
-      <span>Status</span>
-      <span className={`metric-val ${solidFea.failure_mode === "safe" ? "tag-ok" : "tag-bad"}`}>
-        {solidFea.failure_mode.replace(/_/g, " ")}
-      </span>
-    </div>
-  </div>
-);
+  );
+};
 
 const BOTTLENECK_SOURCES: Array<{
   key: keyof AccelBottleneckShares;
@@ -1810,6 +1889,7 @@ export const MetricsPanel: React.FC<Props> = ({
   toolheadPunchIn,
   onToggleToolheadPunchIn,
   onApplyFittedSpec,
+  onInjectCustomBracket,
   error,
 }) => {
   const [rightTab, setRightTab] = useState<"simulation" | "bom">("simulation");
@@ -2244,8 +2324,20 @@ export const MetricsPanel: React.FC<Props> = ({
               />
             )}
             {viewMode === "topology" && topoResult && <TopologyOptCard topo={topoResult} />}
-            {viewMode === "solid_part" && isTetActive && tetFea && <TetFEACard tet={tetFea} />}
-            {viewMode === "solid_part" && !isTetActive && solidFea && <SolidHexFEACard solidFea={solidFea} />}
+            {viewMode === "solid_part" && isTetActive && tetFea && (
+              <TetFEACard
+                tet={tetFea}
+                activeCustomBracket={sim.spec?.gantry?.custom_bracket_override ?? null}
+                onInjectCustomBracket={onInjectCustomBracket}
+              />
+            )}
+            {viewMode === "solid_part" && !isTetActive && solidFea && (
+              <SolidHexFEACard
+                solidFea={solidFea}
+                activeCustomBracket={sim.spec?.gantry?.custom_bracket_override ?? null}
+                onInjectCustomBracket={onInjectCustomBracket}
+              />
+            )}
 
             {/* Live Impact Card (changed metrics only) OR Compact Baseline Tip */}
             {hasComparison && compareSim ? (
@@ -3208,11 +3300,21 @@ export const MetricsPanel: React.FC<Props> = ({
                       >
                         <span>
                           Bracket Stiffness
-                          {sim.geometry.gantry_brackets && (
-                            <span style={{ color: "var(--muted)", fontSize: 10.5 }}>
+                          {kin.custom_bracket_active || sim.spec?.gantry?.custom_bracket_override ? (
+                            <span style={{ color: "#22d3ee", fontSize: 10.5, fontWeight: 600 }}>
                               {" "}
-                              ({sim.geometry.gantry_brackets.short_name})
+                              (CAD:{" "}
+                              {kin.custom_bracket_label ??
+                                sim.spec?.gantry?.custom_bracket_override?.label}
+                              )
                             </span>
+                          ) : (
+                            sim.geometry.gantry_brackets && (
+                              <span style={{ color: "var(--muted)", fontSize: 10.5 }}>
+                                {" "}
+                                ({sim.geometry.gantry_brackets.short_name})
+                              </span>
+                            )
                           )}
                         </span>
                         <span
