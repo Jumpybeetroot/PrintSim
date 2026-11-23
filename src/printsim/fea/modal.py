@@ -757,10 +757,7 @@ def _build_limiting_modal_summary(
     )
 
     belt = spec.gantry.belt
-    belt_width_str = {"gt2_6mm": "6mm", "gt2_9mm": "9mm", "gt2_12mm": "12mm"}.get(
-        belt.type, belt.type
-    )
-    belt_label = f"GT2 {belt_width_str} {belt.core}"
+    belt_label = belt.label
 
     belt_sub_breakdown = {
         "belt_label": belt_label,

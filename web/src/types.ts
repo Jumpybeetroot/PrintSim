@@ -118,6 +118,45 @@ export type ZProbeType = "static_eddy" | "klicky_inductive" | "cnc_tap" | "print
 
 export type BeltRoutingType = "stock_corexy" | "monolith_short";
 
+export type BeltType =
+  | "gt2_6mm"
+  | "gt2_9mm"
+  | "gt2_12mm"
+  | "gt2_15mm"
+  | "gt2_dual_9mm"
+  | "3gt_9mm"
+  | "3gt_12mm"
+  | "3gt_15mm"
+  | "at3_10mm"
+  | "at3_16mm"
+  | "at3_gen3_16mm"
+  | "htd3m_15mm"
+  | "at5_16mm";
+
+export type BeltValidationTier = "proven" | "experimental" | "theoretical";
+
+export interface BeltCatalogItem {
+  id: BeltType;
+  label: string;
+  profile_family: string;
+  pitch_mm: number;
+  width_mm: number;
+  hardware_width_mm: number;
+  default_core: "fiberglass" | "steel" | "aramid";
+  body_material: "epdm" | "tpu";
+  ea_default_core_n: number;
+  linear_mass_kg_m: number;
+  max_working_tension_n: number;
+  tooth_shear_k_n_per_m_mm: number;
+  min_pulley_teeth: number;
+  min_back_idler_mm: number;
+  max_temp_c: number;
+  cost_usd_per_m: number;
+  validation_tier: BeltValidationTier;
+  theoretical_summary: string;
+  practical_issues: string[];
+}
+
 export type ZRailProfileType =
   | "mgn12_rail"
   | "mgn9_rail"
@@ -304,6 +343,7 @@ export interface CatalogResponse {
   bed_mounts?: BedMountCatalogItem[];
   frame_feet?: FrameFeetCatalogItem[];
   z_probes?: ZProbeCatalogItem[];
+  belts?: BeltCatalogItem[];
   belt_routings?: BeltRoutingCatalogItem[];
   hotend_presets?: HotendPresetItem[];
   z_drive_mechanisms?: ZDriveMechanismItem[];
@@ -549,13 +589,14 @@ export interface PrinterSpecData {
     bracket_material?: BracketMaterialType;
     carriage_mass_g: number;
     belt: {
-      type: "gt2_6mm" | "gt2_9mm" | "gt2_12mm";
+      type: BeltType;
       core: "fiberglass" | "steel" | "aramid";
       pulley_teeth: number;
       pitch_mm: number;
       pretension_n: number;
       wrap_angle_deg?: number;
       idler_shaft_diameter_mm?: number;
+      back_idler_diameter_mm?: number | null;
       bearing_clearance_class?: BearingClearanceClass;
     };
   };
@@ -1176,6 +1217,17 @@ export interface KinematicsData {
   bracket_modulus_retention_pct?: number;
   belt_routing?: BeltRoutingType;
   steel_core_fatigue_risk?: boolean;
+  belt_bend_fatigue_risk?: boolean;
+  belt_creep_risk?: boolean;
+  belt_min_pulley_teeth?: number;
+  belt_min_back_idler_mm?: number;
+  belt_back_idler_mm?: number;
+  belt_body_material?: string;
+  belt_thermal_retention_pct?: number;
+  belt_label?: string;
+  belt_validation_tier?: BeltValidationTier;
+  belt_theoretical_summary?: string;
+  belt_practical_issues?: string[];
   pulley_circumference_mm?: number;
   vfa_belt_tooth_speed_range_mm_s?: [number, number];
   delta_workspace_valid: boolean;

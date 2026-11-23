@@ -65,6 +65,16 @@ const BELT_LABELS: Record<string, string> = {
   gt2_6mm: "GT2 6mm",
   gt2_9mm: "GT2 9mm",
   gt2_12mm: "GT2 12mm",
+  gt2_15mm: "GT2 15mm",
+  gt2_dual_9mm: "Dual 2GT 9mm (18mm)",
+  "3gt_9mm": "Gates 3GT 9mm",
+  "3gt_12mm": "Gates 3GT 12mm",
+  "3gt_15mm": "Gates 3GT 15mm",
+  at3_10mm: "AT3 10mm Steel/TPU",
+  at3_16mm: "AT3 16mm Steel/TPU",
+  at3_gen3_16mm: "AT3 Gen III 16mm",
+  htd3m_15mm: "HTD 3M 15mm Steel/TPU",
+  at5_16mm: "AT5 16mm Heavy Steel",
 };
 
 const ARCH_LABELS: Record<string, string> = {
@@ -461,7 +471,7 @@ function describeSpecDiff(
   }
   if (prev.gantry.belt.type !== next.gantry.belt.type) {
     diffs.push(
-      `Belt Width: ${BELT_LABELS[prev.gantry.belt.type] ?? prev.gantry.belt.type} → ${
+      `Belt: ${BELT_LABELS[prev.gantry.belt.type] ?? prev.gantry.belt.type} → ${
         BELT_LABELS[next.gantry.belt.type] ?? next.gantry.belt.type
       }`
     );

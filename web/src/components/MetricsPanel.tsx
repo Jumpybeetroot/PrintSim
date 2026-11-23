@@ -4534,7 +4534,7 @@ export const MetricsPanel: React.FC<Props> = ({
                     {kin.vfa_belt_tooth_speed_range_mm_s && (
                       <div
                         className="metric-kv"
-                        title="Speed band where 2mm GT2 belt-tooth meshing excites stepper resonance (VFAs)"
+                        title="Speed band where belt-tooth meshing excites stepper resonance (VFAs)"
                       >
                         <span>VFA Tooth Band</span>
                         <span className="metric-val">
@@ -4550,15 +4550,91 @@ export const MetricsPanel: React.FC<Props> = ({
                         </span>
                       </div>
                     )}
+                    {(kin.belt_validation_tier === "theoretical" ||
+                      kin.belt_validation_tier === "experimental") && (
+                      <div
+                        className={`belt-theory-callout ${
+                          kin.belt_validation_tier === "theoretical" ? "theoretical" : "experimental"
+                        }`}
+                      >
+                        <div className="belt-theory-header">
+                          <span
+                            className={`belt-tier-badge ${
+                              kin.belt_validation_tier === "theoretical" ? "theoretical" : "experimental"
+                            }`}
+                          >
+                            {kin.belt_validation_tier === "theoretical"
+                              ? "THEORETICAL BELT MODEL"
+                              : "EXPERIMENTAL BELT"}
+                          </span>
+                          <span className="belt-theory-limits">
+                            {kin.belt_label ?? sim.spec.gantry.belt.type}
+                          </span>
+                        </div>
+                        {kin.belt_theoretical_summary && (
+                          <div className="belt-theory-summary">{kin.belt_theoretical_summary}</div>
+                        )}
+                        {kin.belt_practical_issues && kin.belt_practical_issues.length > 0 && (
+                          <ul className="belt-theory-issues">
+                            {kin.belt_practical_issues.map((issue, idx) => (
+                              <li key={idx}>{issue}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                     {(kin.motor_overcurrent_risk ||
                       kin.belt_overtension_risk ||
                       kin.shaft_bending_risk ||
                       kin.bracket_creep_risk ||
-                      kin.steel_core_fatigue_risk) && (
+                      kin.steel_core_fatigue_risk ||
+                      kin.belt_bend_fatigue_risk ||
+                      kin.belt_creep_risk) && (
                       <div className="warning-pill-stack">
                         {kin.steel_core_fatigue_risk && (
+                          <div
+                            className="warning-pill warn"
+                            title={
+                              kin.belt_min_pulley_teeth != null &&
+                              kin.belt_min_back_idler_mm != null
+                                ? `Minimum ${kin.belt_min_pulley_teeth}T pulley & ≥${Math.round(
+                                    kin.belt_min_back_idler_mm
+                                  )} mm smooth back-idler required`
+                                : undefined
+                            }
+                          >
+                            ⚠ Steel-Core Fatigue (min {kin.belt_min_pulley_teeth ?? 24}T / ≥
+                            {Math.round(kin.belt_min_back_idler_mm ?? 20)}mm idler)
+                          </div>
+                        )}
+                        {kin.belt_bend_fatigue_risk && !kin.steel_core_fatigue_risk && (
+                          <div
+                            className="warning-pill warn"
+                            title={
+                              kin.belt_back_idler_mm != null &&
+                              kin.belt_min_back_idler_mm != null
+                                ? `Back-idler ${kin.belt_back_idler_mm.toFixed(
+                                    1
+                                  )} mm vs min ${Math.round(kin.belt_min_back_idler_mm)} mm`
+                                : undefined
+                            }
+                          >
+                            ⚠ Belt Bend-Radius Risk (min {kin.belt_min_pulley_teeth ?? 16}T / ≥
+                            {Math.round(kin.belt_min_back_idler_mm ?? 12)}mm back-idler)
+                          </div>
+                        )}
+                        {kin.belt_creep_risk && (
                           <div className="warning-pill warn">
-                            ⚠ Steel-Core Fatigue on ≤20T Pulley
+                            ⚠{" "}
+                            {sim.spec.gantry.belt.core === "aramid"
+                              ? "Aramid Belt Creep Risk under sustained preload"
+                              : `TPU Belt Softening / Creep Risk${
+                                  kin.belt_thermal_retention_pct != null
+                                    ? ` (${Math.round(
+                                        kin.belt_thermal_retention_pct
+                                      )}% tooth stiffness)`
+                                    : ""
+                                }`}
                           </div>
                         )}
                         {kin.bracket_creep_risk && (

@@ -102,7 +102,40 @@ const BELT_LABELS: Record<PrinterSpecData["gantry"]["belt"]["type"], string> = {
   gt2_6mm: "GT2 6mm",
   gt2_9mm: "GT2 9mm",
   gt2_12mm: "GT2 12mm",
+  gt2_15mm: "GT2 15mm",
+  gt2_dual_9mm: "Dual 2GT 9mm (18mm)",
+  "3gt_9mm": "Gates 3GT 9mm",
+  "3gt_12mm": "Gates 3GT 12mm",
+  "3gt_15mm": "Gates 3GT 15mm",
+  at3_10mm: "AT3 10mm Steel/TPU",
+  at3_16mm: "AT3 16mm Steel/TPU",
+  at3_gen3_16mm: "AT3 Gen III 16mm",
+  htd3m_15mm: "HTD 3M 15mm Steel/TPU",
+  at5_16mm: "AT5 16mm Heavy Steel",
 };
+
+function getBeltDefaults(
+  beltType: PrinterSpecData["gantry"]["belt"]["type"]
+): { pitch_mm: number; core: PrinterSpecData["gantry"]["belt"]["core"] } {
+  if (beltType.startsWith("gt2_")) {
+    return { pitch_mm: 2.0, core: "fiberglass" };
+  }
+  if (beltType.startsWith("3gt_")) {
+    return { pitch_mm: 3.0, core: "fiberglass" };
+  }
+  if (beltType.startsWith("at5_")) {
+    return { pitch_mm: 5.0, core: "steel" };
+  }
+  // at3_* and htd3m_*
+  return { pitch_mm: 3.0, core: "steel" };
+}
+
+function getBeltTensionSliderMax(beltType: PrinterSpecData["gantry"]["belt"]["type"]): number {
+  if (beltType === "gt2_6mm" || beltType === "gt2_9mm") {
+    return 120;
+  }
+  return 250;
+}
 
 const SHAPER_LABELS: Record<PrinterSpecData["kinematics"]["input_shaper"], string> = {
   auto: "Auto (Klipper)",
@@ -1294,8 +1327,15 @@ export const DesignPanel: React.FC<Props> = ({
     update((d) => mutator(d, val), changeLabelBuilder(val));
   };
 
+  const beltTensionMax = spec
+    ? Math.max(
+        getBeltTensionSliderMax(spec.gantry.belt.type),
+        Math.min(250, Math.round(spec.gantry.belt.pretension_n))
+      )
+    : 120;
+
   const commitBeltTension = (rawVal: number) => {
-    const val = Math.max(15, Math.min(120, Math.round(rawVal)));
+    const val = Math.max(15, Math.min(beltTensionMax, Math.round(rawVal)));
     if (tensionTimerRef.current != null) {
       window.clearTimeout(tensionTimerRef.current);
       tensionTimerRef.current = null;
@@ -2767,22 +2807,43 @@ export const DesignPanel: React.FC<Props> = ({
 
               <div className="field-grid-2">
                 <div className="field-row">
-                  <label>Belt Width</label>
+                  <label>Belt Type</label>
                   <select
                     value={spec.gantry.belt.type}
                     onChange={(e) => {
                       const nextVal = e.target.value as PrinterSpecData["gantry"]["belt"]["type"];
+                      const defaults = getBeltDefaults(nextVal);
                       update(
                         (d) => {
                           d.gantry.belt.type = nextVal;
+                          d.gantry.belt.pitch_mm = defaults.pitch_mm;
+                          d.gantry.belt.core = defaults.core;
                         },
-                        `Belt Width: ${BELT_LABELS[spec.gantry.belt.type]} → ${BELT_LABELS[nextVal]}`
+                        `Belt: ${BELT_LABELS[spec.gantry.belt.type] ?? spec.gantry.belt.type} → ${BELT_LABELS[nextVal]}`
                       );
                     }}
                   >
-                    <option value="gt2_6mm">GT2 6mm</option>
-                    <option value="gt2_9mm">GT2 9mm</option>
-                    <option value="gt2_12mm">GT2 12mm</option>
+                    <optgroup label="2GT — Proven on 3D Printers (2 mm pitch)">
+                      <option value="gt2_6mm">{BELT_LABELS.gt2_6mm}</option>
+                      <option value="gt2_9mm">{BELT_LABELS.gt2_9mm}</option>
+                      <option value="gt2_12mm">{BELT_LABELS.gt2_12mm}</option>
+                    </optgroup>
+                    <optgroup label="2GT — Experimental Custom Hardware">
+                      <option value="gt2_15mm">{BELT_LABELS.gt2_15mm} (Exp.)</option>
+                      <option value="gt2_dual_9mm">{BELT_LABELS.gt2_dual_9mm} (Exp.)</option>
+                    </optgroup>
+                    <optgroup label="Gates 3GT — Theoretical / Unproven (3 mm pitch)">
+                      <option value="3gt_9mm">{BELT_LABELS["3gt_9mm"]} [Theoretical]</option>
+                      <option value="3gt_12mm">{BELT_LABELS["3gt_12mm"]} [Theoretical]</option>
+                      <option value="3gt_15mm">{BELT_LABELS["3gt_15mm"]} [Theoretical]</option>
+                    </optgroup>
+                    <optgroup label="Industrial Steel / TPU — Theoretical / Unproven (3–5 mm)">
+                      <option value="at3_10mm">{BELT_LABELS.at3_10mm} [Theoretical]</option>
+                      <option value="at3_16mm">{BELT_LABELS.at3_16mm} [Theoretical]</option>
+                      <option value="at3_gen3_16mm">{BELT_LABELS.at3_gen3_16mm} [Theoretical]</option>
+                      <option value="htd3m_15mm">{BELT_LABELS.htd3m_15mm} [Theoretical]</option>
+                      <option value="at5_16mm">{BELT_LABELS.at5_16mm} [Theoretical]</option>
+                    </optgroup>
                   </select>
                 </div>
                 <div className="field-row">
@@ -2806,6 +2867,44 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
               </div>
 
+              {(() => {
+                const beltMeta = catalog?.belts?.find((b) => b.id === spec.gantry.belt.type);
+                const tier = beltMeta?.validation_tier ?? sim?.kinematics?.belt_validation_tier ?? "proven";
+                const summary =
+                  beltMeta?.theoretical_summary ?? sim?.kinematics?.belt_theoretical_summary ?? "";
+                const issues =
+                  beltMeta?.practical_issues ?? sim?.kinematics?.belt_practical_issues ?? [];
+                if (tier === "proven" && issues.length === 0) return null;
+                const isTheoretical = tier === "theoretical";
+                const minT = beltMeta?.min_pulley_teeth ?? sim?.kinematics?.belt_min_pulley_teeth;
+                const minIdler = beltMeta?.min_back_idler_mm ?? sim?.kinematics?.belt_min_back_idler_mm;
+                const bodyMat = (beltMeta?.body_material ?? sim?.kinematics?.belt_body_material ?? "epdm").toUpperCase();
+                return (
+                  <div className={`belt-theory-callout ${isTheoretical ? "theoretical" : "experimental"}`}>
+                    <div className="belt-theory-header">
+                      <span className={`belt-tier-badge ${isTheoretical ? "theoretical" : "experimental"}`}>
+                        {isTheoretical
+                          ? "THEORETICAL — UNPROVEN ON 3D PRINTERS"
+                          : "EXPERIMENTAL — CUSTOM HARDWARE"}
+                      </span>
+                      {minT != null && minIdler != null && (
+                        <span className="belt-theory-limits">
+                          ≥{minT}T · ≥{Math.round(minIdler)}mm idler · {bodyMat}
+                        </span>
+                      )}
+                    </div>
+                    {summary && <div className="belt-theory-summary">{summary}</div>}
+                    {issues.length > 0 && (
+                      <ul className="belt-theory-issues">
+                        {issues.map((issue, idx) => (
+                          <li key={idx}>{issue}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="slider-row">
                 <label>
                   <span>Belt Tension (N)</span>
@@ -2820,9 +2919,9 @@ export const DesignPanel: React.FC<Props> = ({
                   <input
                     type="range"
                     min={15}
-                    max={120}
+                    max={beltTensionMax}
                     step={1}
-                    value={Math.max(15, Math.min(120, tensionDraft))}
+                    value={Math.max(15, Math.min(beltTensionMax, tensionDraft))}
                     onChange={(e) => handleTensionSliderChange(Number(e.target.value))}
                     onPointerUp={() => commitBeltTension(tensionDraft)}
                     onKeyUp={() => commitBeltTension(tensionDraft)}
@@ -2831,14 +2930,14 @@ export const DesignPanel: React.FC<Props> = ({
                     type="number"
                     className="tension-num-input"
                     min={15}
-                    max={120}
+                    max={beltTensionMax}
                     step={1}
                     value={tensionDraft}
                     onChange={(e) => {
                       const v = Number(e.target.value);
                       if (!Number.isFinite(v)) return;
                       setTensionDraft(v);
-                      if (v >= 15 && v <= 120) {
+                      if (v >= 15 && v <= beltTensionMax) {
                         commitBeltTension(v);
                       }
                     }}

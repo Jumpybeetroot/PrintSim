@@ -204,12 +204,12 @@ def _corexy_branch_details(
                 ea2 = belt_effective_ea_n(belt, l2)
                 kb1 = 1.0 / (
                     1.0 / (ea1 / l1)
-                    + 1.0 / gerbert_tooth_mesh_stiffness_n_m(belt, ea1)
+                    + 1.0 / gerbert_tooth_mesh_stiffness_n_m(belt, ea1, spec.frame.chamber_temp_c)
                     + 1.0 / k_idler
                 )
                 kb2 = 1.0 / (
                     1.0 / (ea2 / l2)
-                    + 1.0 / gerbert_tooth_mesh_stiffness_n_m(belt, ea2)
+                    + 1.0 / gerbert_tooth_mesh_stiffness_n_m(belt, ea2, spec.frame.chamber_temp_c)
                     + 1.0 / k_idler
                 )
                 k_sum = kb1 + kb2
@@ -239,7 +239,7 @@ def _corexy_branch_details(
             ea1 = belt_effective_ea_n(belt, l1)
             ea2 = belt_effective_ea_n(belt, l2)
             k_cord = ea1 / l1 + ea2 / l2
-            k_mesh = gerbert_tooth_mesh_stiffness_n_m(belt, 0.5 * (ea1 + ea2))
+            k_mesh = gerbert_tooth_mesh_stiffness_n_m(belt, 0.5 * (ea1 + ea2), spec.frame.chamber_temp_c)
             k_bkt_loop = 0.5 * k_bkt_total
             return 1.0 / (
                 1.0 / max(k_cord, 1e-9)
@@ -266,7 +266,7 @@ def _corexy_branch_details(
             ea1 = belt_effective_ea_n(belt, l1)
             ea2 = belt_effective_ea_n(belt, l2)
             k_cord = ea1 / l1 + ea2 / l2
-            k_mesh = gerbert_tooth_mesh_stiffness_n_m(belt, 0.5 * (ea1 + ea2))
+            k_mesh = gerbert_tooth_mesh_stiffness_n_m(belt, 0.5 * (ea1 + ea2), spec.frame.chamber_temp_c)
             return 1.0 / (
                 1.0 / max(k_cord, 1e-9)
                 + 1.0 / max(k_mesh, 1e-9)

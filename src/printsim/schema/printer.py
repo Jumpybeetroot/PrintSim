@@ -74,6 +74,357 @@ FrameFeetType = Literal["rigid_bolted", "rubber_feet", "anti_vib_pads", "paver_o
 BearingClearanceType = Literal["C2", "CN", "C3"]
 ZProbeType = Literal["static_eddy", "klicky_inductive", "cnc_tap", "printed_tap"]
 BeltRoutingType = Literal["stock_corexy", "monolith_short"]
+BeltType = Literal[
+    "gt2_6mm",
+    "gt2_9mm",
+    "gt2_12mm",
+    "gt2_15mm",
+    "gt2_dual_9mm",
+    "3gt_9mm",
+    "3gt_12mm",
+    "3gt_15mm",
+    "at3_10mm",
+    "at3_16mm",
+    "at3_gen3_16mm",
+    "htd3m_15mm",
+    "at5_16mm",
+]
+BeltBodyMaterialType = Literal["epdm", "tpu"]
+BeltValidationTierType = Literal["proven", "experimental", "theoretical"]
+
+# Commercial open-ended & linear synchronous timing belt catalog
+# Sources:
+# - Gates PowerGrip GT2/GT3 Synchronous Belt Data Summary (2M/3M/5M tensile modulus ratio 18k:30k:86k lbf/in)
+# - Elatech / SIT Type-M open-ended PU steel-cord linear catalogs (C_spez: AT3 10mm=80kN, 16mm=135kN;
+#   HTD 3M 15mm=127.5kN; AT5 16mm=280kN)
+# - ContiTech Synchroflex AT3 Gen III technical sheet (F_zul 16mm=1002N @ 0.4% -> C_spez~250kN, z_min=20, d_min=20mm)
+# - Breco / Mulco contraflexure (reverse-bend back-idler) minimum diameter guidelines
+# NOTE: 2GT 6/9/12 mm belts are empirically calibrated against community CoreXY ADXL shaper logs;
+# 2GT 15 mm / Dual 9 mm are experimental custom-hardware builds; 3GT / AT3 / HTD3M / AT5 entries are
+# THEORETICAL datasheet-extrapolated models (unproven on real CoreXY 3D printers).
+BELT_CATALOG: dict[str, dict[str, Any]] = {
+    "gt2_6mm": {
+        "id": "gt2_6mm",
+        "label": "Gates 2GT 6mm",
+        "profile_family": "2gt",
+        "pitch_mm": 2.0,
+        "width_mm": 6.0,
+        "hardware_width_mm": 6.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 50000.0,
+        "linear_mass_kg_m": 0.0083,
+        "max_working_tension_n": 58.0,
+        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 4.50,
+        "validation_tier": "proven",
+        "theoretical_summary": "Empirically calibrated against stock Voron Trident / 2.4 / bedslinger / delta ADXL shaper logs.",
+        "practical_issues": [],
+    },
+    "gt2_9mm": {
+        "id": "gt2_9mm",
+        "label": "Gates 2GT 9mm",
+        "profile_family": "2gt",
+        "pitch_mm": 2.0,
+        "width_mm": 9.0,
+        "hardware_width_mm": 9.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 75000.0,
+        "linear_mass_kg_m": 0.01245,
+        "max_working_tension_n": 92.8,
+        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 6.50,
+        "validation_tier": "proven",
+        "theoretical_summary": "Empirically calibrated against Monolith AWD, RatRig V-Core, and VzBot 330 ADXL shaper logs.",
+        "practical_issues": [],
+    },
+    "gt2_12mm": {
+        "id": "gt2_12mm",
+        "label": "Gates 2GT 12mm",
+        "profile_family": "2gt",
+        "pitch_mm": 2.0,
+        "width_mm": 12.0,
+        "hardware_width_mm": 12.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 100000.0,
+        "linear_mass_kg_m": 0.0166,
+        "max_working_tension_n": 127.6,
+        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 8.50,
+        "validation_tier": "proven",
+        "theoretical_summary": "Validated on high-tension Monolith / custom CNC AWD CoreXY builds.",
+        "practical_issues": [
+            "Requires 12 mm pulleys/idlers, double-shear motor supports, and taller XY-joint belt paths than stock 6 mm Voron kits.",
+        ],
+    },
+    "gt2_15mm": {
+        "id": "gt2_15mm",
+        "label": "Gates 2GT 15mm",
+        "profile_family": "2gt",
+        "pitch_mm": 2.0,
+        "width_mm": 15.0,
+        "hardware_width_mm": 15.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 125000.0,
+        "linear_mass_kg_m": 0.02075,
+        "max_working_tension_n": 162.0,
+        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 11.50,
+        "validation_tier": "experimental",
+        "theoretical_summary": "Experimental (extrapolated from Gates 2GT per-mm stiffness): rarely built on 3D printers due to custom wide-belt hardware.",
+        "practical_issues": [
+            "Scarce 15 mm 2GT pulleys and flanged idlers; requires custom CNC XY-joints and +6 mm taller belt stacks over 9 mm.",
+            "High radial belt loads (>80–120 N) bend standard 5 mm NEMA17 shafts and overload F695 bearings without double-shear live shafts.",
+            "Limited empirical shaper benchmarks compared to 6/9/12 mm 2GT.",
+        ],
+    },
+    "gt2_dual_9mm": {
+        "id": "gt2_dual_9mm",
+        "label": "Dual Parallel Gates 2GT 9mm (18mm eff.)",
+        "profile_family": "2gt",
+        "pitch_mm": 2.0,
+        "width_mm": 18.0,
+        "hardware_width_mm": 20.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 150000.0,
+        "linear_mass_kg_m": 0.0249,
+        "max_working_tension_n": 185.6,
+        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 13.00,
+        "validation_tier": "experimental",
+        "theoretical_summary": "Experimental parallel-belt concept (ideal 2× 9 mm load sharing assumed; real tension mismatch reduces effective stiffness).",
+        "practical_issues": [
+            "Equalizing static tension between two parallel 9 mm loops is difficult; mismatch shifts load onto one belt and causes tracking drift.",
+            "Needs ~20 mm tall stacked pulley/idler assemblies, long double-shear shafts, and custom dual-track carriage clamps.",
+            "Double belt count doubles routing complexity and axial motor/frame preload.",
+        ],
+    },
+    "3gt_9mm": {
+        "id": "3gt_9mm",
+        "label": "Gates 3GT (3MGT) 9mm",
+        "profile_family": "3gt",
+        "pitch_mm": 3.0,
+        "width_mm": 9.0,
+        "hardware_width_mm": 9.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 125000.0,
+        "linear_mass_kg_m": 0.0180,
+        "max_working_tension_n": 180.0,
+        "tooth_shear_k_n_per_m_mm": 7.8e4,
+        "min_pulley_teeth": 14,
+        "min_back_idler_mm": 20.0,
+        "max_temp_c": 100.0,
+        "cost_usd_per_m": 9.50,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical (datasheet-extrapolated from Gates 3GT tensile ratios; not empirically validated on CoreXY 3D printers).",
+        "practical_issues": [
+            "Coarser 3 mm tooth pitch increases tooth-mesh VFA ripple and chordal polygon action on small pulleys vs. 2GT.",
+            "1.5× larger pulley diameter at the same tooth count (60 mm/rev @ 20T) reduces stepper force per N·m and microstep resolution by 33%.",
+            "Requires ≥20 mm OD smooth back-idlers for reverse-bend life, forcing oversized CoreXY idler housings.",
+            "3GT pulleys, clamps, and open-ended 9 mm belts have minimal off-the-shelf 3D printer ecosystem support.",
+        ],
+    },
+    "3gt_12mm": {
+        "id": "3gt_12mm",
+        "label": "Gates 3GT (3MGT) 12mm",
+        "profile_family": "3gt",
+        "pitch_mm": 3.0,
+        "width_mm": 12.0,
+        "hardware_width_mm": 12.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 166700.0,
+        "linear_mass_kg_m": 0.0240,
+        "max_working_tension_n": 240.0,
+        "tooth_shear_k_n_per_m_mm": 7.8e4,
+        "min_pulley_teeth": 14,
+        "min_back_idler_mm": 20.0,
+        "max_temp_c": 100.0,
+        "cost_usd_per_m": 12.50,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical (datasheet-extrapolated from Gates 3GT tensile ratios; not empirically validated on CoreXY 3D printers).",
+        "practical_issues": [
+            "Coarser 3 mm tooth pitch worsens VFA surface ripple and chordal polygon excitation relative to 2GT.",
+            "Larger 3 mm-pitch pulleys (60 mm/rev @ 20T) cut motor mechanical advantage & step resolution by 1.5× without gear reduction.",
+            "Requires ≥20 mm smooth back-idlers and heavy custom CNC double-shear brackets for 12 mm-wide 3GT hardware.",
+            "Higher belt mass (24 g/m) and bending resistance add parasitic drag on NEMA17 drives.",
+        ],
+    },
+    "3gt_15mm": {
+        "id": "3gt_15mm",
+        "label": "Gates 3GT (3MGT) 15mm",
+        "profile_family": "3gt",
+        "pitch_mm": 3.0,
+        "width_mm": 15.0,
+        "hardware_width_mm": 15.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_default_core_n": 208300.0,
+        "linear_mass_kg_m": 0.0300,
+        "max_working_tension_n": 300.0,
+        "tooth_shear_k_n_per_m_mm": 7.8e4,
+        "min_pulley_teeth": 14,
+        "min_back_idler_mm": 20.0,
+        "max_temp_c": 100.0,
+        "cost_usd_per_m": 15.50,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical (datasheet-extrapolated from Gates 3GT catalogs; unproven on real CoreXY printers).",
+        "practical_issues": [
+            "3 mm tooth pitch degrades fine VFA surface quality and cuts stepper torque advantage by 1.5× vs. 20T 2GT.",
+            "Requires ≥20 mm OD back-idlers, 15 mm custom CNC pulleys/idlers, and rigid live-shaft mounts — does not fit standard Voron/VzBot frames.",
+            "Heavy 30 g/m belt mass and high bending stiffness increase bearing friction and frame preload.",
+        ],
+    },
+    "at3_10mm": {
+        "id": "at3_10mm",
+        "label": "Breco/Elatech AT3 10mm (Steel/TPU)",
+        "profile_family": "at3",
+        "pitch_mm": 3.0,
+        "width_mm": 10.0,
+        "hardware_width_mm": 10.0,
+        "default_core": "steel",
+        "body_material": "tpu",
+        "ea_default_core_n": 80000.0,
+        "linear_mass_kg_m": 0.0220,
+        "max_working_tension_n": 320.0,
+        "tooth_shear_k_n_per_m_mm": 9.5e4,
+        "min_pulley_teeth": 20,
+        "min_back_idler_mm": 20.0,
+        "max_temp_c": 80.0,
+        "cost_usd_per_m": 14.00,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical (extrapolated from Breco/Elatech linear-actuator C_spez datasheets; unproven in high-reversal CoreXY 3D printers).",
+        "practical_issues": [
+            "Steel cords suffer rapid reverse-bend (contraflexure) fatigue in CoreXY serpentine paths unless every smooth back-idler is ≥20 mm OD and pulleys ≥20T.",
+            "92 ShA TPU polyurethane softens sharply above 55 °C chamber temperature (tooth cold-flow & stiffness loss), unlike EPDM 2GT.",
+            "3 mm pitch at ≥20T gives ≥60 mm/rev (1.5× coarser than 20T 2GT), hurting VFA surface quality and reducing motor thrust per N·m by 33%.",
+            "Stiff steel-cord tracking requires precision-crowned/flanged CNC pulleys and oversized custom XY-joints.",
+        ],
+    },
+    "at3_16mm": {
+        "id": "at3_16mm",
+        "label": "Breco/Elatech AT3 16mm (Steel/TPU)",
+        "profile_family": "at3",
+        "pitch_mm": 3.0,
+        "width_mm": 16.0,
+        "hardware_width_mm": 16.0,
+        "default_core": "steel",
+        "body_material": "tpu",
+        "ea_default_core_n": 135000.0,
+        "linear_mass_kg_m": 0.0352,
+        "max_working_tension_n": 540.0,
+        "tooth_shear_k_n_per_m_mm": 9.5e4,
+        "min_pulley_teeth": 20,
+        "min_back_idler_mm": 20.0,
+        "max_temp_c": 80.0,
+        "cost_usd_per_m": 21.00,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical (extrapolated from Breco/Elatech linear-actuator C_spez datasheets; unproven in CoreXY 3D printers).",
+        "practical_issues": [
+            "Steel cords fracture under CoreXY reverse-bending unless smooth back-idlers are ≥20 mm OD and pulleys ≥20T (19.1 mm PD).",
+            "92 ShA TPU body softens above 55 °C enclosed chamber temps, losing tooth shear stiffness and creeping under preload.",
+            "16 mm belt width + ≥20 mm idlers require a ground-up CNC gantry redesign (massive stack height, 6–8 mm double-shear live shafts).",
+            "60 mm/rev @ 20T (3 mm pitch) worsens VFA ripple and reduces stepper mechanical advantage by 1.5×; heavy 35 g/m belt mass.",
+        ],
+    },
+    "at3_gen3_16mm": {
+        "id": "at3_gen3_16mm",
+        "label": "ContiTech AT3 Gen III 16mm (HD Steel/TPU)",
+        "profile_family": "at3_gen3",
+        "pitch_mm": 3.0,
+        "width_mm": 16.0,
+        "hardware_width_mm": 16.0,
+        "default_core": "steel",
+        "body_material": "tpu",
+        "ea_default_core_n": 250000.0,
+        "linear_mass_kg_m": 0.0420,
+        "max_working_tension_n": 1002.0,
+        "tooth_shear_k_n_per_m_mm": 1.15e5,
+        "min_pulley_teeth": 20,
+        "min_back_idler_mm": 20.0,
+        "max_temp_c": 80.0,
+        "cost_usd_per_m": 34.00,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical upper-bound model (extrapolated from ContiTech Synchroflex Gen III C_spez; never validated in 3D printer CoreXY motion).",
+        "practical_issues": [
+            "High-density steel cords demand ≥20 mm OD smooth back-idlers (≥25 mm recommended) and ≥20T pulleys to avoid rapid contraflexure wire fatigue.",
+            "92 ShA TPU matrix loses up to 30–65% tooth stiffness in 65–80 °C ABS/ASA chambers and can cold-flow in clamps.",
+            "3 mm pitch @ ≥20T (60 mm/rev) reduces stepper torque advantage by 33% and introduces coarser tooth-mesh VFA artifacts.",
+            "Very high bending stiffness, 42 g/m linear mass, expensive industrial pulleys/clamps, and requires CNC frame/gantry mounts capable of >150 N preload.",
+        ],
+    },
+    "htd3m_15mm": {
+        "id": "htd3m_15mm",
+        "label": "Elatech HTD 3M 15mm (Steel/TPU)",
+        "profile_family": "htd3m",
+        "pitch_mm": 3.0,
+        "width_mm": 15.0,
+        "hardware_width_mm": 15.0,
+        "default_core": "steel",
+        "body_material": "tpu",
+        "ea_default_core_n": 127500.0,
+        "linear_mass_kg_m": 0.0300,
+        "max_working_tension_n": 510.0,
+        "tooth_shear_k_n_per_m_mm": 8.5e4,
+        "min_pulley_teeth": 20,
+        "min_back_idler_mm": 30.0,
+        "max_temp_c": 80.0,
+        "cost_usd_per_m": 18.50,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical (extrapolated from Elatech HTD 3M steel/TPU industrial catalogs; unproven on 3D printers).",
+        "practical_issues": [
+            "Requires ≥30 mm OD smooth back-idlers for reverse-bend steel-cord life — practically incompatible with compact CoreXY XY-joint geometry.",
+            "HTD semicircular tooth profile has noticeably higher reversal backlash than 2GT/3GT/AT3 unless zero-clearance pulleys are custom-cut.",
+            "92 ShA TPU softens above 55 °C chamber temperatures and 60 mm/rev (20T) reduces stepper resolution & torque advantage by 1.5×.",
+        ],
+    },
+    "at5_16mm": {
+        "id": "at5_16mm",
+        "label": "Breco/Elatech AT5 16mm (Heavy Steel/TPU)",
+        "profile_family": "at5",
+        "pitch_mm": 5.0,
+        "width_mm": 16.0,
+        "hardware_width_mm": 16.0,
+        "default_core": "steel",
+        "body_material": "tpu",
+        "ea_default_core_n": 280000.0,
+        "linear_mass_kg_m": 0.0544,
+        "max_working_tension_n": 1120.0,
+        "tooth_shear_k_n_per_m_mm": 1.30e5,
+        "min_pulley_teeth": 20,
+        "min_back_idler_mm": 60.0,
+        "max_temp_c": 80.0,
+        "cost_usd_per_m": 26.00,
+        "validation_tier": "theoretical",
+        "theoretical_summary": "Theoretical CNC upper-bound benchmark only (extrapolated from heavy industrial AT5 datasheets; completely impractical on standard CoreXY printers).",
+        "practical_issues": [
+            "Requires ≥60 mm OD smooth back-idlers and ≥20T pulleys (31.8 mm PD) — impossible inside Voron/VzBot-scale CoreXY gantries.",
+            "5 mm pitch @ 20T gives 100 mm/rev (2.5× coarser than 20T 2GT), destroying step resolution and stepper torque advantage without planetary gearboxes.",
+            "Severe 5 mm tooth-pitch chordal/VFA artifacts and heavy 54.4 g/m belt mass + stiffness drag.",
+            "92 ShA TPU body softens above 55 °C enclosed chamber temperatures.",
+        ],
+    },
+}
 HotendMountStyleType = Literal[
     "groove_mount", "rigid_4bolt_m3", "dragon_4bolt_m25", "chube_6bolt_m3_18pcd"
 ]
@@ -1018,37 +1369,142 @@ class FrameSpec(BaseModel):
 
 
 class BeltSpec(BaseModel):
-    """Drive belt specification calibrated to Gates PowerGrip 2GT datasheets."""
+    """Drive belt specification calibrated to Gates PowerGrip 2GT/3GT & Breco/Elatech/ContiTech datasheets."""
 
-    type: Literal["gt2_6mm", "gt2_9mm", "gt2_12mm"] = "gt2_6mm"
+    type: BeltType = "gt2_6mm"
     core: Literal["fiberglass", "steel", "aramid"] = "fiberglass"
-    pulley_teeth: int = Field(20, ge=12, le=40)
+    pulley_teeth: int = Field(20, ge=12, le=48)
     pitch_mm: float = Field(2.0, gt=0)
-    pretension_n: float = Field(25.0, gt=0, le=200.0)
+    pretension_n: float = Field(25.0, gt=0, le=400.0)
     wrap_angle_deg: float = Field(180.0, ge=60.0, le=240.0)
-    idler_shaft_diameter_mm: float = Field(5.0, ge=3.0, le=10.0)
+    idler_shaft_diameter_mm: float = Field(5.0, ge=3.0, le=12.0)
+    back_idler_diameter_mm: float | None = Field(
+        None,
+        ge=8.0,
+        le=80.0,
+        description="Optional smooth back-side idler OD (mm) for reverse-bend fatigue check; defaults to pulley pitch diameter",
+    )
     bearing_clearance_class: BearingClearanceType = "CN"
+
+    @model_validator(mode="after")
+    def _reconcile_catalog_defaults(self) -> BeltSpec:
+        entry = BELT_CATALOG.get(self.type, BELT_CATALOG["gt2_6mm"])
+        if "pitch_mm" not in self.model_fields_set:
+            self.pitch_mm = float(entry["pitch_mm"])
+        if "core" not in self.model_fields_set:
+            self.core = entry["default_core"]
+        return self
+
+    @property
+    def catalog_entry(self) -> dict[str, Any]:
+        return BELT_CATALOG.get(self.type, BELT_CATALOG["gt2_6mm"])
+
+    @property
+    def label(self) -> str:
+        return f"{self.catalog_entry['label']} ({self.core})"
+
+    @property
+    def width_mm(self) -> float:
+        return float(self.catalog_entry["width_mm"])
+
+    @property
+    def hardware_width_mm(self) -> float:
+        return float(self.catalog_entry["hardware_width_mm"])
+
+    @property
+    def body_material(self) -> BeltBodyMaterialType:
+        return self.catalog_entry["body_material"]
+
+    @property
+    def validation_tier(self) -> BeltValidationTierType:
+        return self.catalog_entry.get("validation_tier", "proven")
+
+    @property
+    def theoretical_summary(self) -> str:
+        return str(self.catalog_entry.get("theoretical_summary", ""))
+
+    @property
+    def practical_issues(self) -> list[str]:
+        return list(self.catalog_entry.get("practical_issues", []))
+
+    @property
+    def tooth_shear_k_n_per_m_mm(self) -> float:
+        return float(self.catalog_entry["tooth_shear_k_n_per_m_mm"])
+
+    @property
+    def min_pulley_teeth(self) -> int:
+        base_min = int(self.catalog_entry["min_pulley_teeth"])
+        # Steel-core cords in 2GT pitch suffer severe flex fatigue on small <=20T pulleys
+        if self.type.startswith("gt2_") and self.core == "steel":
+            return max(base_min, 24)
+        return base_min
+
+    @property
+    def min_back_idler_diameter_mm(self) -> float:
+        base_d = float(self.catalog_entry["min_back_idler_mm"])
+        if self.type.startswith("gt2_") and self.core == "steel":
+            return max(base_d, 20.0)
+        return base_d
+
+    @property
+    def pitch_diameter_mm(self) -> float:
+        return (self.pulley_teeth * self.pitch_mm) / 3.141592653589793
+
+    @property
+    def effective_back_idler_diameter_mm(self) -> float:
+        if self.back_idler_diameter_mm is not None:
+            return float(self.back_idler_diameter_mm)
+        return self.pitch_diameter_mm
+
+    def tooth_modulus_retention(self, chamber_temp_c: float = 25.0) -> float:
+        """Elastomer tooth-shear & backing stiffness retention vs. chamber temperature.
+
+        EPDM / polychloroprene (Gates 2GT/3GT) stays stable past 100 C; 92 ShA TPU
+        (Breco/Elatech/ContiTech linear belts) softens significantly above 50-55 C.
+        """
+        t = float(chamber_temp_c)
+        if self.body_material == "tpu":
+            if t <= 45.0:
+                return 1.0
+            # ~0.72 at 65 C, ~0.50 at 80 C, floor 0.35
+            return max(0.35, 1.0 - 0.014 * (t - 45.0))
+        # EPDM / polychloroprene
+        if t <= 80.0:
+            return 1.0
+        return max(0.65, 1.0 - 0.006 * (t - 80.0))
 
     @property
     def stiffness_ea_n(self) -> float:
-        """Dynamic secant tensile modulus EA (Newtons) calibrated to Gates PowerGrip 2GT datasheets (6mm ~50 kN)."""
-        width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.5, "gt2_12mm": 2.0}[self.type]
-        core_base = {"fiberglass": 50000.0, "aramid": 72500.0, "steel": 135000.0}[self.core]
-        return core_base * width_scale
+        """Dynamic secant tensile modulus EA (Newtons) calibrated to Gates & Elatech/ContiTech datasheets."""
+        entry = self.catalog_entry
+        base_ea = float(entry["ea_default_core_n"])
+        default_core = str(entry["default_core"])
+        if self.core == default_core:
+            return base_ea
+        core_rel = {"fiberglass": 1.0, "aramid": 1.45, "steel": 2.70}
+        return base_ea * (core_rel[self.core] / core_rel[default_core])
 
     @property
     def linear_mass_kg_m(self) -> float:
-        """Belt linear mass density mu (kg/m) calibrated to Gates PowerGrip 2GT (8.3 g/m for 6mm)."""
-        width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.5, "gt2_12mm": 2.0}[self.type]
-        core_density_scale = {"fiberglass": 1.0, "aramid": 0.94, "steel": 1.35}[self.core]
-        return 0.0083 * width_scale * core_density_scale
+        """Belt linear mass density mu (kg/m) calibrated to manufacturer datasheets."""
+        entry = self.catalog_entry
+        base_mu = float(entry["linear_mass_kg_m"])
+        default_core = str(entry["default_core"])
+        if self.core == default_core:
+            return base_mu
+        core_density_rel = {"fiberglass": 1.0, "aramid": 0.94, "steel": 1.35}
+        return base_mu * (core_density_rel[self.core] / core_density_rel[default_core])
 
     @property
     def max_working_tension_n(self) -> float:
-        """Safe continuous peak working tension (N) per Gates 2GT engineering ratings."""
-        width_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.6, "gt2_12mm": 2.2}[self.type]
-        core_limit = {"fiberglass": 58.0, "aramid": 85.0, "steel": 105.0}[self.core]
-        return core_limit * width_scale
+        """Safe continuous peak working tension (N) per manufacturer engineering ratings."""
+        entry = self.catalog_entry
+        base_t = float(entry["max_working_tension_n"])
+        default_core = str(entry["default_core"])
+        if self.core == default_core:
+            return base_t
+        core_rel = {"fiberglass": 58.0, "aramid": 85.0, "steel": 105.0}
+        return base_t * (core_rel[self.core] / core_rel[default_core])
 
     def pluck_freq_hz(self, span_mm: float = 150.0) -> float:
         """Transverse acoustic belt pluck frequency at given free span (standard Voron/VzBot 150 mm)."""

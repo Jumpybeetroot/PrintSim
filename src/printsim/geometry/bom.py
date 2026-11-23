@@ -935,9 +935,12 @@ def generate_bom(
     # Drive belts, pulleys, idlers (architecture-specific exact formulas)
     belt = spec.gantry.belt
     is_awd = arch == "corexy" and spec.gantry.drive_mode == "awd"
-    belt_cost_m = _BELT_COST_USD_PER_M.get((belt.type, belt.core), 6.0)
+    belt_cost_m = _BELT_COST_USD_PER_M.get(
+        (belt.type, belt.core),
+        float(belt.catalog_entry.get("cost_usd_per_m", 6.0)),
+    )
     belt_mass_g_m = round(belt.linear_mass_kg_m * 1000.0, 2)
-    belt_width_hw_scale = {"gt2_6mm": 1.0, "gt2_9mm": 1.3, "gt2_12mm": 1.6}.get(belt.type, 1.0)
+    belt_width_hw_scale = max(1.0, round(0.7 + 0.05 * belt.hardware_width_mm, 2))
 
     if arch == "corexy":
         if is_awd:

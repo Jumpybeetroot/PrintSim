@@ -254,10 +254,14 @@ def belt_effective_ea_n(belt: BeltSpec, span_m: float) -> float:
     return (ea_crimp * ea_cat) / max(ea_crimp + ea_cat, 1e-9)
 
 
-def gerbert_tooth_mesh_stiffness_n_m(belt: BeltSpec, ea_eff_n: float) -> float:
-    """Gerbert (1972) discrete spring-chain tooth-mesh shear stiffness (N/m) for a GT2 pulley."""
-    w_mm = {"gt2_6mm": 6.0, "gt2_9mm": 9.0, "gt2_12mm": 12.0}.get(belt.type, 6.0)
-    k_t = 5.5e4  # 2GT curvilinear elastomer tooth shear stiffness per mm width [N/(m*mm)]
+def gerbert_tooth_mesh_stiffness_n_m(
+    belt: BeltSpec,
+    ea_eff_n: float,
+    chamber_temp_c: float = 25.0,
+) -> float:
+    """Gerbert (1972) discrete spring-chain tooth-mesh shear stiffness (N/m) with elastomer T(chamber) retention."""
+    w_mm = float(belt.width_mm)
+    k_t = float(belt.tooth_shear_k_n_per_m_mm) * belt.tooth_modulus_retention(chamber_temp_c)
     p_m = belt.pitch_mm * 1e-3
     z_e = max(float(belt.pulley_teeth) * (float(belt.wrap_angle_deg) / 360.0), 1.0)
     ea_safe = max(float(ea_eff_n), 100.0)
@@ -277,7 +281,7 @@ def idler_shaft_and_bearing_stiffness(
     i_shaft = math.pi * (d_m**4) / 64.0
     ei_shaft = e_steel * i_shaft
 
-    w_m = {"gt2_6mm": 0.006, "gt2_9mm": 0.009, "gt2_12mm": 0.012}.get(belt.type, 0.006)
+    w_m = float(belt.hardware_width_mm) * 1e-3
     e_bkt = max(float(bracket_e_pa), 1.0e8)
 
     if double_shear:

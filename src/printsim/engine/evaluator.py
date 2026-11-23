@@ -222,11 +222,48 @@ def _compute_scores_and_diagnostics(
             f"{spec.gantry.belt.type} ({spec.gantry.belt.core}) working tension limit."
         )
     if kinematics.steel_core_fatigue_risk or (
-        spec.gantry.belt.core == "steel" and spec.gantry.belt.pulley_teeth <= 24
+        spec.gantry.belt.type.startswith("gt2_")
+        and spec.gantry.belt.core == "steel"
+        and spec.gantry.belt.pulley_teeth <= 24
     ):
         diag.append(
-            f"Steel-core belt fatigue fracture risk: steel-core GT2 cords experience severe reverse-bend fatigue "
-            f"on small-radius {spec.gantry.belt.pulley_teeth}T pulleys (main limit: cord bend-radius fatigue life)."
+            f"Steel-core belt fatigue fracture risk ({kinematics.belt_label}): steel cords experience severe "
+            f"reverse-bend fatigue on {spec.gantry.belt.pulley_teeth}T pulleys / "
+            f"{kinematics.belt_back_idler_mm:.1f} mm back-idlers "
+            f"(min {kinematics.belt_min_pulley_teeth}T, back-idler >= {kinematics.belt_min_back_idler_mm:.0f} mm)."
+        )
+    elif kinematics.belt_bend_fatigue_risk:
+        diag.append(
+            f"Belt minimum bend-radius risk ({kinematics.belt_label}): "
+            f"{spec.gantry.belt.pulley_teeth}T pulley / {kinematics.belt_back_idler_mm:.1f} mm back-idler "
+            f"is below datasheet limit ({kinematics.belt_min_pulley_teeth}T, "
+            f"back-idler >= {kinematics.belt_min_back_idler_mm:.0f} mm)."
+        )
+    if kinematics.belt_creep_risk:
+        if spec.gantry.belt.core == "aramid":
+            diag.append(
+                f"Aramid belt cord viscoelastic relaxation risk ({spec.gantry.belt.pretension_n:.0f} N sustained preload): "
+                "aramid/Kevlar cords exhibit tension relaxation and reverse-bend kink fatigue under high preload."
+            )
+        else:
+            diag.append(
+                f"TPU belt matrix thermal softening & relaxation risk ({kinematics.belt_label} at "
+                f"{spec.frame.chamber_temp_c:.0f} C chamber, {kinematics.belt_thermal_retention_pct:.0f}% "
+                "tooth stiffness retention): 92 ShA polyurethane softens above 55 C causing tooth/clamp cold-flow."
+            )
+    if kinematics.belt_validation_tier in ("theoretical", "experimental"):
+        tier_label = (
+            "Theoretical / unproven on 3D printers"
+            if kinematics.belt_validation_tier == "theoretical"
+            else "Experimental custom-hardware belt"
+        )
+        lead_issue = (
+            f" Key real-world caveat: {kinematics.belt_practical_issues[0]}"
+            if kinematics.belt_practical_issues
+            else ""
+        )
+        diag.append(
+            f"{tier_label} ({kinematics.belt_label}): {kinematics.belt_theoretical_summary}{lead_issue}"
         )
     if kinematics.bracket_creep_risk:
         bkt_info = GANTRY_BRACKET_CATALOG.get(

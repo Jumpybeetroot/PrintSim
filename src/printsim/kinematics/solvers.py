@@ -57,6 +57,17 @@ class KinematicsReport:
     bracket_modulus_retention_pct: float = 100.0
     belt_routing: str = "stock_corexy"
     steel_core_fatigue_risk: bool = False
+    belt_bend_fatigue_risk: bool = False
+    belt_creep_risk: bool = False
+    belt_min_pulley_teeth: int = 16
+    belt_min_back_idler_mm: float = 12.0
+    belt_back_idler_mm: float = 12.7
+    belt_body_material: str = "epdm"
+    belt_thermal_retention_pct: float = 100.0
+    belt_label: str = "Gates 2GT 6mm (fiberglass)"
+    belt_validation_tier: str = "proven"
+    belt_theoretical_summary: str = ""
+    belt_practical_issues: list[str] = field(default_factory=list)
     pulley_circumference_mm: float = 40.0
     vfa_belt_tooth_speed_range_mm_s: list[float] = field(default_factory=lambda: [60.0, 110.0])
 
@@ -83,6 +94,17 @@ class KinematicsReport:
             "belt_max_working_tension_n": round(self.belt_max_working_tension_n, 2),
             "belt_overtension_risk": self.belt_overtension_risk,
             "steel_core_fatigue_risk": self.steel_core_fatigue_risk,
+            "belt_bend_fatigue_risk": self.belt_bend_fatigue_risk,
+            "belt_creep_risk": self.belt_creep_risk,
+            "belt_min_pulley_teeth": self.belt_min_pulley_teeth,
+            "belt_min_back_idler_mm": round(self.belt_min_back_idler_mm, 1),
+            "belt_back_idler_mm": round(self.belt_back_idler_mm, 1),
+            "belt_body_material": self.belt_body_material,
+            "belt_thermal_retention_pct": round(self.belt_thermal_retention_pct, 1),
+            "belt_label": self.belt_label,
+            "belt_validation_tier": self.belt_validation_tier,
+            "belt_theoretical_summary": self.belt_theoretical_summary,
+            "belt_practical_issues": list(self.belt_practical_issues),
             "pulley_circumference_mm": round(self.pulley_circumference_mm, 1),
             "vfa_belt_tooth_speed_range_mm_s": [
                 round(float(v), 1) for v in self.vfa_belt_tooth_speed_range_mm_s
@@ -247,7 +269,9 @@ def compute_drive_stiffness_details_n_per_m(
         k_belt_cord = 2.0 * ea_eff / span_len
         drive_branches = 1.0
 
-    k_tooth_mesh = drive_branches * gerbert_tooth_mesh_stiffness_n_m(belt, ea_eff)
+    k_tooth_mesh = drive_branches * gerbert_tooth_mesh_stiffness_n_m(
+        belt, ea_eff, spec.frame.chamber_temp_c
+    )
     idler_info = idler_shaft_and_bearing_stiffness(
         belt, double_shear=spec.gantry.double_shear_pulleys, bracket_e_pa=e_bkt_eff
     )
@@ -415,7 +439,26 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     motor_heat_w = stepper.power_dissipation_w
     motor_overcurrent = stepper.run_current_a > stepper.rated_current_a * 1.05
 
-    steel_core_fatigue = belt.core == "steel" and belt.pulley_teeth <= 20
+    min_pulley_t = belt.min_pulley_teeth
+    min_back_idler = belt.min_back_idler_diameter_mm
+    eff_back_idler = belt.effective_back_idler_diameter_mm
+    belt_thermal_ret_pct = belt.tooth_modulus_retention(spec.frame.chamber_temp_c) * 100.0
+    # Reverse-bend fatigue check: CoreXY uses smooth back-side idlers (contraflexure)
+    has_reverse_bend = spec.architecture == "corexy"
+    pulley_too_small = belt.pulley_teeth < min_pulley_t
+    back_idler_too_small = has_reverse_bend and (eff_back_idler + 0.25 < min_back_idler)
+    steel_core_fatigue = belt.core == "steel" and (
+        (belt.type.startswith("gt2_") and belt.pulley_teeth <= 20)
+        or pulley_too_small
+        or back_idler_too_small
+    )
+    belt_bend_fatigue = pulley_too_small or back_idler_too_small or steel_core_fatigue
+    # Creep check: aramid viscoelastic relaxation under preload OR TPU body softening > 55 C
+    belt_creep_risk = (belt.core == "aramid" and belt.pretension_n > 25.0) or (
+        belt.body_material == "tpu"
+        and spec.frame.chamber_temp_c > 55.0
+        and belt.pretension_n > 30.0
+    )
     pulley_circ_mm = float(belt.pulley_teeth) * float(belt.pitch_mm)
     m_x_eff = max(assembly.x_moving_mass_kg, 0.05)
     m_y_eff = max(assembly.y_moving_mass_kg, 0.05)
@@ -455,6 +498,17 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
         belt_max_working_tension_n=belt_max_t,
         belt_overtension_risk=belt_overtension,
         steel_core_fatigue_risk=steel_core_fatigue,
+        belt_bend_fatigue_risk=belt_bend_fatigue,
+        belt_creep_risk=belt_creep_risk,
+        belt_min_pulley_teeth=min_pulley_t,
+        belt_min_back_idler_mm=min_back_idler,
+        belt_back_idler_mm=eff_back_idler,
+        belt_body_material=belt.body_material,
+        belt_thermal_retention_pct=belt_thermal_ret_pct,
+        belt_label=belt.label,
+        belt_validation_tier=belt.validation_tier,
+        belt_theoretical_summary=belt.theoretical_summary,
+        belt_practical_issues=belt.practical_issues,
         pulley_circumference_mm=pulley_circ_mm,
         vfa_belt_tooth_speed_range_mm_s=vfa_range,
         shaft_bending_risk=shaft_bending,

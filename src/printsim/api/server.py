@@ -50,6 +50,7 @@ from printsim.geometry import (
 )
 from printsim.schema import (
     BED_MOUNT_CATALOG,
+    BELT_CATALOG,
     BELT_ROUTING_CATALOG,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
@@ -329,6 +330,7 @@ def create_app() -> FastAPI:
             "bed_mounts": list(BED_MOUNT_CATALOG.values()),
             "frame_feet": list(FRAME_FEET_CATALOG.values()),
             "z_probes": list(Z_PROBE_CATALOG.values()),
+            "belts": list(BELT_CATALOG.values()),
             "belt_routings": list(BELT_ROUTING_CATALOG.values()),
             "hotend_presets": list(HOTEND_CATALOG.values()),
             "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
