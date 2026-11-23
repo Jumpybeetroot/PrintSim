@@ -15,6 +15,7 @@ from rich.table import Table
 from printsim.api.session import get_live_session, request_snapshot_capture
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
+from printsim.fea.adxl_calibration import calibrate_printer_against_adxl
 from printsim.geometry import (
     build_assembly,
     export_assembly_step,
@@ -148,6 +149,77 @@ def verify(
     tbl.add_row("Safe Max Accel (mm/s^2)", f"{fast['recommended_max_accel_mm_s2']:.0f}", f"{deep['recommended_max_accel_mm_s2']:.0f}")
     tbl.add_row("Panel Max von Mises (MPa)", f"{fast['panel_max_von_mises_mpa']:.3f}", f"{deep['panel_max_von_mises_mpa']:.3f}")
     console.print(tbl)
+
+
+@app.command("calibrate-adxl")
+def calibrate_adxl_cmd(
+    spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
+    x_csv: Optional[Path] = typer.Option(None, "--x-csv", "-x", exists=True, help="Klipper PSD or raw ADXL345 CSV for X axis"),
+    y_csv: Optional[Path] = typer.Option(None, "--y-csv", "-y", exists=True, help="Klipper PSD or raw ADXL345 CSV for Y axis"),
+    max_freq_hz: float = typer.Option(200.0, "--max-freq", min=20.0, max=500.0, help="Maximum frequency span (Hz)"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON calibration report"),
+) -> None:
+    """Compare real Klipper ADXL345 / Shake&Tune CSV measurements against PrintSim modal FEA."""
+    if x_csv is None and y_csv is None:
+        raise typer.BadParameter("Provide at least one measured CSV (--x-csv and/or --y-csv).")
+
+    spec = PrinterSpec.from_yaml(spec_path)
+    axis_x_text = x_csv.read_text(encoding="utf-8", errors="replace") if x_csv is not None else None
+    axis_y_text = y_csv.read_text(encoding="utf-8", errors="replace") if y_csv is not None else None
+
+    report = calibrate_printer_against_adxl(
+        spec,
+        axis_x_csv=axis_x_text,
+        axis_y_csv=axis_y_text,
+        max_freq_hz=max_freq_hz,
+    )
+
+    if json_out:
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{report.printer_name}[/bold cyan] ({spec.architecture})\n"
+            f"{report.overall_summary}",
+            title="PrintSim ADXL345 Measured-vs-Simulated Calibration",
+        )
+    )
+
+    tbl = Table(show_header=True, header_style="bold magenta")
+    tbl.add_column("Axis")
+    tbl.add_column("Source Format")
+    tbl.add_column("Meas Peak", justify="right")
+    tbl.add_column("Sim Peak", justify="right")
+    tbl.add_column("Delta / Err%", justify="right")
+    tbl.add_column("Damping (Meas / Sim)", justify="right")
+    tbl.add_column("Shaper (Meas / Sim)")
+    tbl.add_column("Max Accel (Meas / Sim)", justify="right")
+    tbl.add_column("Corr (r)", justify="right")
+
+    for ax_key, ax_res in report.axes.items():
+        err_color = "green" if abs(ax_res.peak_error_pct) <= 5.0 else ("yellow" if abs(ax_res.peak_error_pct) <= 10.0 else "red")
+        tbl.add_row(
+            ax_key,
+            ax_res.source_format,
+            f"{ax_res.measured_peak_hz:.1f} Hz",
+            f"{ax_res.simulated_peak_hz:.1f} Hz",
+            f"[{err_color}]{ax_res.peak_delta_hz:+.1f} Hz ({ax_res.peak_error_pct:+.1f}%)[/{err_color}]",
+            f"{ax_res.measured_damping_ratio:.4f} / {ax_res.simulated_damping_ratio:.4f}",
+            f"{ax_res.measured_shaper}@{ax_res.measured_shaper_freq_hz:.1f} / {ax_res.simulated_shaper}@{ax_res.simulated_shaper_freq_hz:.1f}",
+            f"{ax_res.measured_max_accel_mm_s2:.0f} / {ax_res.simulated_max_accel_mm_s2:.0f}",
+            f"{ax_res.spectral_correlation:.3f}",
+        )
+    console.print(tbl)
+
+    console.print("\n[bold]Diagnostics:[/bold]")
+    for ax_res in report.axes.values():
+        for diag in ax_res.diagnostics:
+            console.print(f"  • {diag}")
+
+    console.print("\n[bold]Recommended Adjustments:[/bold]")
+    for adj in report.recommended_adjustments:
+        console.print(f"  • {adj}")
 
 
 @app.command()

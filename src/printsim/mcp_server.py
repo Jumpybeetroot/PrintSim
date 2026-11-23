@@ -17,6 +17,7 @@ from printsim.api.session import (
 )
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
+from printsim.fea.adxl_calibration import calibrate_printer_against_adxl
 from printsim.fea.bracket_designer import design_and_evaluate_bracket
 from printsim.fea.solid_fem import solve_preset_part_fea, solve_solid_voxel_fea, voxelize_stl_file
 from printsim.fea.superelement import condense_parametric_bracket
@@ -521,6 +522,36 @@ TOOLS_SCHEMA = [
                 "interface_mode": {"type": "string", "enum": ["rbe3", "rbe2"], "default": "rbe3"},
             },
             "required": [],
+        },
+    },
+    {
+        "name": "calibrate_adxl_csv",
+        "description": (
+            "Import real Klipper TEST_RESONANCES / Shake&Tune PSD CSVs or raw ADXL345 time-series CSVs, "
+            "compare measured vs simulated PrintSim modal PSDs, compute Klipper shaper/damping deltas "
+            "and spectral correlation, and return physical root-cause diagnostics."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_spec": {"type": "string", "description": "Declarative PrintSim YAML specification"},
+                "axis_x_csv": {
+                    "type": "string",
+                    "description": "Optional Klipper resonances_x.csv or raw ADXL345 time-series CSV text for X axis",
+                },
+                "axis_y_csv": {
+                    "type": "string",
+                    "description": "Optional Klipper resonances_y.csv or raw ADXL345 time-series CSV text for Y axis",
+                },
+                "max_freq_hz": {
+                    "type": "number",
+                    "default": 200.0,
+                    "minimum": 20.0,
+                    "maximum": 500.0,
+                    "description": "Maximum frequency span in Hz (default 200.0)",
+                },
+            },
+            "required": ["yaml_spec"],
         },
     },
     {
@@ -1077,6 +1108,16 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             material_id=str(args.get("material_id", "ppa_cf_printed")),
         )
         return se.to_dict()
+
+    if name == "calibrate_adxl_csv":
+        spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_spec"]))
+        report = calibrate_printer_against_adxl(
+            spec,
+            axis_x_csv=args.get("axis_x_csv"),
+            axis_y_csv=args.get("axis_y_csv"),
+            max_freq_hz=float(args.get("max_freq_hz", 200.0)),
+        )
+        return report.to_dict()
 
     if name == "get_live_studio_state":
         include_yaml = bool(args.get("include_yaml", True))

@@ -43,7 +43,7 @@ def test_mcp_server_metadata_and_enriched_list_catalog() -> None:
     tools_resp = handle_jsonrpc_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert tools_resp is not None
     tools = tools_resp["result"]["tools"]
-    assert len(tools) == 19
+    assert len(tools) == 20
     names = {t["name"] for t in tools}
     assert {
         "list_catalog",
@@ -65,6 +65,7 @@ def test_mcp_server_metadata_and_enriched_list_catalog() -> None:
         "get_live_studio_state",
         "capture_studio_viewport",
         "update_live_studio",
+        "calibrate_adxl_csv",
     } == names
 
     cat = _call_mcp("list_catalog")

@@ -25,6 +25,7 @@ from printsim.api.session import (
 
 from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
 from printsim.engine.evaluator import verify_printer_deep
+from printsim.fea.adxl_calibration import calibrate_printer_against_adxl
 from printsim.fea.solid_fem import (
     FaceName,
     PartPreset,
@@ -94,6 +95,14 @@ class DeepVerifyRequest(BaseModel):
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
     deep_mesh_n: int = Field(8, ge=4, le=10)
     deep_bed_mesh_n: int = Field(16, ge=8, le=20)
+
+
+class AdxlCalibrationRequest(BaseModel):
+    spec: dict[str, Any] | None = None
+    yaml_text: str | None = None
+    axis_x_csv: str | None = None
+    axis_y_csv: str | None = None
+    max_freq_hz: float = Field(200.0, ge=20.0, le=500.0)
 
 
 class OptimizeRequest(BaseModel):
@@ -452,6 +461,37 @@ def create_app() -> FastAPI:
                 deep_sim.setdefault("spec", spec.model_dump(mode="json"))
                 deep_sim.setdefault("yaml_text", spec.to_yaml())
             return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/calibration/adxl")
+    def run_adxl_calibration(req: AdxlCalibrationRequest) -> dict:
+        if req.spec is not None:
+            try:
+                spec = PrinterSpec.model_validate(req.spec)
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid PrinterSpec: {exc}") from exc
+        else:
+            spec = _resolve_spec(None, req.yaml_text)
+
+        if not (req.axis_x_csv and req.axis_x_csv.strip()) and not (
+            req.axis_y_csv and req.axis_y_csv.strip()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Provide at least one measured CSV ('axis_x_csv' and/or 'axis_y_csv').",
+            )
+
+        try:
+            report = calibrate_printer_against_adxl(
+                spec,
+                axis_x_csv=req.axis_x_csv,
+                axis_y_csv=req.axis_y_csv,
+                max_freq_hz=req.max_freq_hz,
+            )
+            return report.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
