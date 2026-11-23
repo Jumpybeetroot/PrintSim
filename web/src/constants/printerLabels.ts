@@ -20,6 +20,7 @@ export const Z_DRIVE_LABELS: Record<string, string> = {
   leadscrew_triple: "Fixed Gantry (Trident)",
   belted_quad_z: "Flying Gantry (Voron 2.4)",
   leadscrew_dual: "Fixed Gantry (Dual-Z)",
+  leadscrew_dual_belt_sync: "Fixed Gantry (Belt-Synced Dual-Z)",
   leadscrew_single: "Fixed Gantry (Single-Z)",
 };
 

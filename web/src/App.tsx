@@ -230,6 +230,13 @@ function describeSpecDiff(
       )}`
     );
   }
+  const prevUpright = prev.frame.upright_profile || null;
+  const nextUpright = next.frame.upright_profile || null;
+  if (prevUpright !== nextUpright) {
+    const prevLbl = prevUpright ? shortCatalogName(prevUpright, catalog?.profiles) : "Same as Frame";
+    const nextLbl = nextUpright ? shortCatalogName(nextUpright, catalog?.profiles) : "Same as Frame";
+    diffs.push(`Corner Uprights: ${prevLbl} → ${nextLbl}`);
+  }
   if (prev.frame.material !== next.frame.material) {
     diffs.push(
       `Frame Material: ${shortCatalogName(prev.frame.material, catalog?.materials)} → ${shortCatalogName(
@@ -2029,6 +2036,7 @@ export default function App() {
           onInspectBedWarp={handleInspectBedWarp}
           toolheadPunchIn={toolheadPunchIn}
           onToggleToolheadPunchIn={handleOpenToolheadPunchIn}
+          onApplyFittedSpec={handleSpecChange}
           error={error}
         />
       </main>

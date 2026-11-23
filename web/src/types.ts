@@ -544,6 +544,7 @@ export interface PrinterSpecData {
     depth_mm: number;
     height_mm: number;
     profile: string;
+    upright_profile?: string | null;
     material: string;
     bracing:
       | "none"
@@ -689,7 +690,12 @@ export interface PrinterSpecData {
     plate_thickness_mm: number;
     heater_power_w: number;
     mass_g: number;
-    z_drive: string;
+    z_drive:
+      | "leadscrew_triple"
+      | "belted_quad_z"
+      | "leadscrew_dual"
+      | "leadscrew_dual_belt_sync"
+      | "leadscrew_single";
     z_rail_profile?: ZRailProfileType;
     z_leadscrew_type?: ZLeadscrewType;
     target_temp_c?: number;
@@ -1586,4 +1592,23 @@ export interface AdxlCalibrationResponse {
   axes: Partial<Record<"X" | "Y", AdxlAxisCalibrationData>>;
   overall_summary: string;
   recommended_adjustments: string[];
+}
+
+export interface AdxlFitChange {
+  field: string;
+  label: string;
+  before: string | number | boolean | null;
+  after: string | number | boolean | null;
+  reason: string;
+}
+
+export interface AdxlFitResponse {
+  printer_name: string;
+  before_mean_abs_error_pct: number;
+  after_mean_abs_error_pct: number;
+  before_axes: Partial<Record<"X" | "Y", AdxlAxisCalibrationData>>;
+  after_axes: Partial<Record<"X" | "Y", AdxlAxisCalibrationData>>;
+  fitted_spec: PrinterSpecData;
+  changes: AdxlFitChange[];
+  summary: string;
 }

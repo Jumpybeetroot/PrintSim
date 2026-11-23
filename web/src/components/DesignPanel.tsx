@@ -972,6 +972,12 @@ function bedZTopologyMeta(arch: PrinterSpecData["architecture"], zDrive: string)
   if (zDrive === "leadscrew_dual") {
     return { badge: "2-Pt Left/Right Z", caption: "Dual left/right Z leadscrews & linear guides" };
   }
+  if (zDrive === "leadscrew_dual_belt_sync") {
+    return {
+      badge: "Belt-Synced Dual-Z",
+      caption: "VzBot style — dual Z leadscrews mechanically synced via closed-loop timing belt",
+    };
+  }
   if (zDrive === "leadscrew_single") {
     return { badge: "Cantilever Rear-Z", caption: "Single rear Z rail/screw — test front/low Z for cantilever droop" };
   }
@@ -2003,7 +2009,7 @@ export const DesignPanel: React.FC<Props> = ({
                     <select
                       value={spec.bed.z_drive}
                       onChange={(e) => {
-                        const nextZ = e.target.value;
+                        const nextZ = e.target.value as PrinterSpecData["bed"]["z_drive"];
                         const prevLabel = Z_DRIVE_LABELS[spec.bed.z_drive] ?? spec.bed.z_drive;
                         const nextLabel = Z_DRIVE_LABELS[nextZ] ?? nextZ;
                         update(
@@ -2017,6 +2023,9 @@ export const DesignPanel: React.FC<Props> = ({
                       <option value="leadscrew_triple">Fixed Gantry — Triple-Z Bed (Trident/VzBot)</option>
                       <option value="belted_quad_z">Flying Gantry — Quad-Belted Z (Voron 2.4)</option>
                       <option value="leadscrew_dual">Fixed Gantry — Dual-Z Bed</option>
+                      <option value="leadscrew_dual_belt_sync">
+                        Fixed Gantry — Belt-Synced Dual-Z (VzBot)
+                      </option>
                       {spec.bed.z_drive === "leadscrew_single" && (
                         <option value="leadscrew_single">Fixed Gantry — Single-Z Bed</option>
                       )}
@@ -2132,6 +2141,79 @@ export const DesignPanel: React.FC<Props> = ({
                   </select>
                 </div>
               </div>
+
+              {(() => {
+                const extrusionProfiles = catalog.profiles.filter((p) =>
+                  p.id.startsWith("extrusion_")
+                );
+                const fallbackUprights = [
+                  { id: "extrusion_2020", name: "2020 Aluminum Extrusion" },
+                  { id: "extrusion_2040", name: "2040 Aluminum Extrusion" },
+                  { id: "extrusion_3030", name: "3030 Aluminum Extrusion" },
+                  { id: "extrusion_4040", name: "4040 Aluminum Extrusion" },
+                ];
+                const uprightOptions =
+                  extrusionProfiles.length > 0 ? extrusionProfiles : fallbackUprights;
+                const currentUpright = spec.frame.upright_profile || "";
+                const hasCustomUpright =
+                  Boolean(currentUpright) &&
+                  !uprightOptions.some((p) => p.id === currentUpright);
+                const isMixed =
+                  Boolean(currentUpright) && currentUpright !== spec.frame.profile;
+
+                return (
+                  <div className="field-row">
+                    <label>
+                      <span>Corner Upright Profile</span>
+                      {isMixed && (
+                        <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                          Mixed Frame
+                        </span>
+                      )}
+                    </label>
+                    <select
+                      value={currentUpright}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const nextUpright = raw ? raw : null;
+                        const prevLbl = spec.frame.upright_profile
+                          ? profileLabel(spec.frame.upright_profile)
+                          : "Same as Frame";
+                        const nextLbl = nextUpright
+                          ? profileLabel(nextUpright)
+                          : "Same as Frame";
+                        update(
+                          (d) => {
+                            d.frame.upright_profile = nextUpright;
+                          },
+                          `Corner Uprights: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      <option value="">
+                        Same as Frame ({profileLabel(spec.frame.profile)})
+                      </option>
+                      {uprightOptions.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                      {hasCustomUpright && (
+                        <option value={currentUpright}>
+                          {profileLabel(currentUpright)}
+                        </option>
+                      )}
+                    </select>
+                    {showHints && (
+                      <div className="hint-line">
+                        Use heavier vertical corner columns (e.g. 4040 uprights + 2020
+                        horizontals, DoomCube style) for high frame rigidity without full-frame
+                        weight/cost.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {spec.architecture === "corexy" && (
                 <div className="slider-row">

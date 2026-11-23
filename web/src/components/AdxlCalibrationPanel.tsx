@@ -2,11 +2,22 @@ import React, { useMemo, useRef, useState } from "react";
 import {
   AdxlAxisCalibrationData,
   AdxlCalibrationResponse,
+  AdxlFitResponse,
   PrinterSpecData,
 } from "../types";
 
 interface Props {
   spec: PrinterSpecData;
+  onApplyFittedSpec?: (fittedSpec: PrinterSpecData, changeLabel?: string) => void;
+}
+
+function formatFitValue(val: string | number | boolean | null): string {
+  if (val === null || val === undefined) return "—";
+  if (typeof val === "boolean") return val ? "On" : "Off";
+  if (typeof val === "number") {
+    return Number.isInteger(val) ? String(val) : val.toFixed(2).replace(/\.?0+$/, "");
+  }
+  return val.replace(/_/g, " ");
 }
 
 /**
@@ -414,15 +425,18 @@ const AdxlAxisOverlayCard: React.FC<{ data: AdxlAxisCalibrationData }> = ({ data
   );
 };
 
-export const AdxlCalibrationPanel: React.FC<Props> = ({ spec }) => {
+export const AdxlCalibrationPanel: React.FC<Props> = ({ spec, onApplyFittedSpec }) => {
   const [xCsvText, setXCsvText] = useState<string | null>(null);
   const [xFileName, setXFileName] = useState<string | null>(null);
   const [yCsvText, setYCsvText] = useState<string | null>(null);
   const [yFileName, setYFileName] = useState<string | null>(null);
   const [dragAxis, setDragAxis] = useState<"X" | "Y" | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [fitting, setFitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AdxlCalibrationResponse | null>(null);
+  const [fitResult, setFitResult] = useState<AdxlFitResponse | null>(null);
+  const [fitApplied, setFitApplied] = useState<boolean>(false);
 
   const xInputRef = useRef<HTMLInputElement | null>(null);
   const yInputRef = useRef<HTMLInputElement | null>(null);
@@ -436,6 +450,8 @@ export const AdxlCalibrationPanel: React.FC<Props> = ({ spec }) => {
         return;
       }
       setError(null);
+      setFitResult(null);
+      setFitApplied(false);
       if (axis === "X") {
         setXCsvText(text);
         setXFileName(file.name);
@@ -458,6 +474,8 @@ export const AdxlCalibrationPanel: React.FC<Props> = ({ spec }) => {
 
   const handleLoadSample = () => {
     setError(null);
+    setFitResult(null);
+    setFitApplied(false);
     setXCsvText(buildSyntheticKlipperCsv("X", 54.0, 0.048, 108.0, 0.16));
     setXFileName("sample_resonances_x.csv");
     setYCsvText(buildSyntheticKlipperCsv("Y", 46.0, 0.055, 89.0, 0.22));
@@ -491,6 +509,43 @@ export const AdxlCalibrationPanel: React.FC<Props> = ({ spec }) => {
       setLoading(false);
     }
   };
+
+  const handleAutoFit = async () => {
+    if (!xCsvText && !yCsvText) return;
+    setFitting(true);
+    setError(null);
+    setFitApplied(false);
+    try {
+      const res = await fetch("/api/calibration/adxl/fit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spec,
+          axis_x_csv: xCsvText,
+          axis_y_csv: yCsvText,
+          max_freq_hz: 200,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(errBody.detail || "ADXL345 digital-twin auto-fit failed");
+      }
+      const data: AdxlFitResponse = await res.json();
+      setFitResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFitting(false);
+    }
+  };
+
+  const handleApplyFit = () => {
+    if (!fitResult || !onApplyFittedSpec) return;
+    onApplyFittedSpec(fitResult.fitted_spec, "ADXL Auto-Fit Calibration");
+    setFitApplied(true);
+  };
+
+  const busy = loading || fitting;
 
   const calibratedAxes = (["X", "Y"] as const)
     .map((ax) => result?.axes?.[ax])
@@ -580,7 +635,7 @@ export const AdxlCalibrationPanel: React.FC<Props> = ({ spec }) => {
           className="btn"
           style={{ padding: "5px 8px", fontSize: 11 }}
           onClick={handleLoadSample}
-          disabled={loading}
+          disabled={busy}
           title="Load realistic synthetic Klipper X (~54 Hz) & Y (~46 Hz) CSVs for quick testing"
         >
           Load Sample ADXL
@@ -590,13 +645,89 @@ export const AdxlCalibrationPanel: React.FC<Props> = ({ spec }) => {
           className="btn primary"
           style={{ padding: "5px 8px", fontSize: 11 }}
           onClick={handleCompare}
-          disabled={loading || (!xCsvText && !yCsvText)}
+          disabled={busy || (!xCsvText && !yCsvText)}
         >
           {loading ? "Comparing..." : "Compare Measured vs. Simulated"}
+        </button>
+        <button
+          type="button"
+          className="btn ai"
+          style={{ padding: "5px 8px", fontSize: 11 }}
+          onClick={handleAutoFit}
+          disabled={busy || (!xCsvText && !yCsvText)}
+          title="Optimize physical printer parameters (belt tension, joint stiffness, toolhead stiffness) to match your measured ADXL345 resonance peaks"
+        >
+          {fitting ? "Auto-Fitting..." : "Auto-Fit Model"}
         </button>
       </div>
 
       {error && <div className="diag-item bad">{error}</div>}
+
+      {fitResult && (
+        <div className="adxl-fit-card">
+          <div className="adxl-fit-header">
+            <strong className="adxl-fit-title">Digital-Twin Auto-Fit</strong>
+            <span
+              className={`badge-pill ${
+                fitResult.after_mean_abs_error_pct <= fitResult.before_mean_abs_error_pct - 0.5 ||
+                fitResult.after_mean_abs_error_pct <= 8
+                  ? "ok"
+                  : "warn"
+              }`}
+              title={`Mean peak frequency error reduced from ${fitResult.before_mean_abs_error_pct.toFixed(
+                1
+              )}% to ${fitResult.after_mean_abs_error_pct.toFixed(1)}%`}
+            >
+              Error: {fitResult.before_mean_abs_error_pct.toFixed(1)}% →{" "}
+              {fitResult.after_mean_abs_error_pct.toFixed(1)}%
+            </span>
+          </div>
+
+          {fitResult.summary && <div className="adxl-fit-summary">{fitResult.summary}</div>}
+
+          {fitResult.changes && fitResult.changes.length > 0 ? (
+            <div className="adxl-fit-table-wrap">
+              <table className="adxl-fit-table">
+                <thead>
+                  <tr>
+                    <th>Parameter</th>
+                    <th>Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fitResult.changes.map((chg) => (
+                    <tr key={chg.field} title={chg.reason}>
+                      <td>
+                        <div className="adxl-fit-param">{chg.label}</div>
+                        {chg.reason && <div className="adxl-fit-reason">{chg.reason}</div>}
+                      </td>
+                      <td className="adxl-fit-vals">
+                        <span className="adxl-fit-before">{formatFitValue(chg.before)}</span>
+                        <span className="adxl-fit-arrow">→</span>
+                        <span className="adxl-fit-after">{formatFitValue(chg.after)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="adxl-fit-summary" style={{ color: "var(--muted)" }}>
+              Model already closely matches measured peaks — no parameter updates required.
+            </div>
+          )}
+
+          {onApplyFittedSpec && (
+            <button
+              type="button"
+              className={`btn adxl-fit-apply-btn ${fitApplied ? "applied" : ""}`}
+              onClick={handleApplyFit}
+            >
+              {fitApplied ? "Fitted Model Applied ✓" : "Apply Fitted Model to Studio"}
+            </button>
+          )}
+        </div>
+      )}
 
       {result && (
         <div className="adxl-results">

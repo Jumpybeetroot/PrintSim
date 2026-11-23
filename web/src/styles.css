@@ -4861,3 +4861,196 @@ textarea.code-editor {
   letter-spacing: 0.04em;
   color: var(--accent);
 }
+
+/* One-click Klipper printer.cfg copy & expandable preview */
+.klipper-cfg-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.klipper-cfg-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.klipper-cfg-btn {
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(14, 165, 233, 0.14);
+  color: #e0f2fe;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.klipper-cfg-btn:hover {
+  background: rgba(14, 165, 233, 0.26);
+  border-color: var(--accent);
+}
+
+.klipper-cfg-btn.copied {
+  border-color: rgba(34, 197, 94, 0.65);
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+
+.klipper-cfg-preview-btn {
+  border: 1px solid var(--border);
+  background: #0d131d;
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+
+.klipper-cfg-preview-btn:hover,
+.klipper-cfg-preview-btn.active {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--text);
+  background: #141e2e;
+}
+
+.klipper-cfg-preview {
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #090e17;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ADXL Digital-Twin Auto-Fit Card */
+.adxl-fit-card {
+  background: linear-gradient(160deg, rgba(16, 185, 129, 0.09), rgba(13, 19, 29, 0.96) 58%);
+  border: 1px solid rgba(16, 185, 129, 0.42);
+  border-radius: 7px;
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.adxl-fit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.adxl-fit-title {
+  font-size: 11.5px;
+  color: #a7f3d0;
+}
+
+.adxl-fit-summary {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #cbd5e1;
+}
+
+.adxl-fit-table-wrap {
+  border-radius: 6px;
+  border: 1px solid rgba(39, 50, 71, 0.85);
+  background: rgba(11, 16, 25, 0.85);
+  overflow: hidden;
+}
+
+.adxl-fit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.adxl-fit-table th {
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(39, 50, 71, 0.9);
+}
+
+.adxl-fit-table th:last-child {
+  text-align: right;
+}
+
+.adxl-fit-table td {
+  padding: 5px 6px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+
+.adxl-fit-table tr:last-child td {
+  border-bottom: none;
+}
+
+.adxl-fit-param {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.adxl-fit-reason {
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.adxl-fit-vals {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.adxl-fit-before {
+  color: var(--muted);
+}
+
+.adxl-fit-arrow {
+  color: var(--accent);
+  margin: 0 4px;
+}
+
+.adxl-fit-after {
+  color: #6ee7b7;
+  font-weight: 700;
+}
+
+.adxl-fit-apply-btn {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(14, 165, 233, 0.24));
+  border-color: rgba(52, 211, 153, 0.6);
+  color: #ecfdf5;
+}
+
+.adxl-fit-apply-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.38), rgba(14, 165, 233, 0.36));
+  border-color: #6ee7b7;
+}
+
+.adxl-fit-apply-btn.applied {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.65);
+  color: #86efac;
+}
