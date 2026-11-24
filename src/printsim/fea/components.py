@@ -30,6 +30,7 @@ from printsim.schema.printer import BED_MOUNT_CATALOG, RAIL_QUALITY_CATALOG, Bel
 
 if TYPE_CHECKING:
     from printsim.geometry.builder import AssemblyModel
+    from printsim.schema.printer import PrinterSpec
 
 _G_ACC = 9.80665
 
@@ -372,6 +373,60 @@ class ThermalStructuralReport:
         }
 
 
+def compute_bed_thermal_bow_and_taco_um(spec: PrinterSpec) -> tuple[float, float]:
+    """Compute heated bed vertical thermal gradient bow and mount-restraint taco buckling (um).
+
+    Shared single source of truth used by both ``compute_thermal_structural_report`` and
+    ``printsim.fea.bed_plate_fem`` so ``bed_buckling_taco_um == taco_buckling_um`` identically.
+    """
+    bed_temp = float(spec.bed.target_temp_c)
+    chamber_c = float(spec.frame.chamber_temp_c)
+    bed_mat = get_material(spec.bed.plate_material)
+    frame_mat = get_material(spec.frame.material)
+    l_bed = max(float(spec.bed.size_mm[0]), float(spec.bed.size_mm[1]), 50.0) * 1e-3
+    t_bed = max(float(spec.bed.plate_thickness_mm) * 1e-3, 1e-4)
+
+    # Steady upward heat loss q_top ~ h_eff * (T_bed - T_chamber) -> z_bow = L^2 * alpha * q_top / (8 * k)
+    h_eff_bed = 12.0  # W/(m^2*K) horizontal upward convection + radiation
+    q_top = h_eff_bed * max(0.0, bed_temp - chamber_c)
+    bed_grad_bow_um = (
+        (l_bed**2)
+        * bed_mat.thermal_expansion_1_k
+        * q_top
+        / (8.0 * max(bed_mat.thermal_conductivity_w_mk, 0.1))
+        * 1e6
+    )
+
+    # Bed mounting thermal expansion & post-buckling taco bow using true mount diagonal/span
+    mount_cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
+    mount_inset_ratio = float(mount_cfg.get("mount_inset_ratio", 0.38))
+    l_mount = 2.0 * mount_inset_ratio * l_bed
+    dl_thermal = (
+        bed_mat.thermal_expansion_1_k * max(0.0, bed_temp - 25.0)
+        - frame_mat.thermal_expansion_1_k * max(0.0, chamber_c - 25.0)
+    ) * l_mount
+    dl_clearance = 0.00015  # 0.15 mm typical M4 mounting hole clearance
+    dl_excess = max(0.0, dl_thermal - dl_clearance)
+
+    k_restraint = float(mount_cfg["k_restraint_thermal"])
+    if k_restraint <= 0.0 or dl_excess <= 0.0:
+        bed_buckle_um = 0.0
+    else:
+        # Elastica arch amplitude attenuated by mounting standoff flexibility & plate flexural rigidity D
+        d_plate = (
+            bed_mat.youngs_modulus_pa
+            * (t_bed**3)
+            / (12.0 * (1.0 - bed_mat.poisson_ratio**2))
+        )
+        k_plate_taco = 48.0 * d_plate * l_bed / max(l_mount**3, 1e-9)
+        w_elastica = (2.0 / math.pi) * math.sqrt(l_mount * dl_excess)
+        # Fraction of excess shortening absorbed into out-of-plane taco arch vs standoff/frame flex
+        arch_fraction = k_restraint / (k_restraint + k_plate_taco)
+        bed_buckle_um = w_elastica * math.sqrt(arch_fraction) * 1e6
+
+    return float(bed_grad_bow_um), float(bed_buckle_um)
+
+
 def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructuralReport:
     """Compute Timoshenko bimetallic gantry bow, bed gradient/taco buckling, Z drift, & E(T) retention."""
     spec = assembly.spec
@@ -488,43 +543,8 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     # 3. Heated bed thermal gradient bow + rigid 4-pt thermal taco buckling
     bed_temp = float(spec.bed.target_temp_c)
     bed_mount = spec.bed.mount_type
-    bed_mat = get_material(spec.bed.plate_material)
     frame_mat = get_material(spec.frame.material)
-    l_bed = max(spec.bed.size_mm[0], spec.bed.size_mm[1]) * 1e-3
-    t_bed = spec.bed.plate_thickness_mm * 1e-3
-
-    # Steady upward heat loss q_top ~ h_eff * (T_bed - T_chamber) -> z_bow = L^2 * alpha * q_top / (8 * k)
-    h_eff_bed = 12.0  # W/(m^2*K) horizontal upward convection + radiation
-    q_top = h_eff_bed * max(0.0, bed_temp - chamber_c)
-    bed_grad_bow_um = (
-        (l_bed**2)
-        * bed_mat.thermal_expansion_1_k
-        * q_top
-        / (8.0 * max(bed_mat.thermal_conductivity_w_mk, 0.1))
-        * 1e6
-    )
-
-    # Bed mounting thermal expansion & post-buckling taco bow
-    l_mount = 0.85 * l_bed
-    dl_thermal = (
-        bed_mat.thermal_expansion_1_k * max(0.0, bed_temp - 25.0)
-        - frame_mat.thermal_expansion_1_k * max(0.0, chamber_c - 25.0)
-    ) * l_mount
-    dl_clearance = 0.00015  # 0.15 mm typical M4 mounting hole clearance
-    dl_excess = max(0.0, dl_thermal - dl_clearance)
-
-    mount_cfg = BED_MOUNT_CATALOG.get(bed_mount, BED_MOUNT_CATALOG["kinematic_3pt"])
-    k_restraint = float(mount_cfg["k_restraint_thermal"])
-    if k_restraint <= 0.0 or dl_excess <= 0.0:
-        bed_buckle_um = 0.0
-    else:
-        # Elastica arch amplitude attenuated by mounting standoff flexibility & plate flexural rigidity D
-        d_plate = bed_mat.youngs_modulus_pa * (t_bed**3) / (12.0 * (1.0 - bed_mat.poisson_ratio**2))
-        k_plate_taco = 48.0 * d_plate * l_bed / (l_mount**3)
-        w_elastica = (2.0 / math.pi) * math.sqrt(l_mount * dl_excess)
-        # Fraction of excess shortening absorbed into out-of-plane taco arch vs standoff/frame flex
-        arch_fraction = k_restraint / (k_restraint + k_plate_taco)
-        bed_buckle_um = w_elastica * math.sqrt(arch_fraction) * 1e6
+    bed_grad_bow_um, bed_buckle_um = compute_bed_thermal_bow_and_taco_um(spec)
 
     # 4. Vertical frame Z-drift (column CTE - Z-drive CTE) * H_active * delta_T
     if spec.bed.z_drive == "belted_quad_z":

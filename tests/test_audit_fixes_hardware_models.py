@@ -12,13 +12,13 @@ from printsim.engine import evaluate_printer
 from printsim.fea import assemble_global_matrices, solve_modal_fea, solve_static_fea
 from printsim.fea.shell_mitc4 import fastener_spring_matrices
 from printsim.geometry import build_assembly
-from printsim.schema import PrinterSpec
+from printsim.schema import BED_MOUNT_CATALOG, PrinterSpec
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 
 def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> None:
-    """F2: bed_mount_spring uses -14 mm Z offset so rigid bed pitch generates zero spurious energy."""
+    """F2: bed_mount_spring uses exact catalog standoff Z offset so rigid bed pitch generates zero spurious energy."""
     spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
     asm = build_assembly(spec)
     nmap = asm.node_map
@@ -27,9 +27,10 @@ def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> N
     assert sp.shell_node_id == "bed_frame"
     assert sp.frame_node_id == "bed_surface"
 
+    expected_dz = -float(BED_MOUNT_CATALOG[spec.bed.mount_type]["standoff_height_mm"]) * 1e-3
     dz_actual = float(nmap["bed_frame"].position_m[2] - nmap["bed_surface"].position_m[2])
-    assert dz_actual == pytest.approx(-0.014, abs=1e-9)
-    assert sp.offset_m == pytest.approx((0.0, 0.0, -0.014), abs=1e-9)
+    assert dz_actual == pytest.approx(expected_dz, abs=1e-9)
+    assert sp.offset_m == pytest.approx((0.0, 0.0, expected_dz), abs=1e-9)
 
     K_sp = fastener_spring_matrices(
         sp.k_shear_n_m,
@@ -40,12 +41,12 @@ def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> N
     )
     # Apply pure rigid-body rotation around Y (pitch theta_y) centered at bed_surface:
     # u_bed_surface = (0, 0, 0), theta_bed_surface = (0, theta_y, 0)
-    # r = p_bed_frame - p_bed_surface = (0, 0, -0.014) -> dr = theta x r = (-0.014 * theta_y, 0, 0)
+    # r = p_bed_frame - p_bed_surface = (0, 0, expected_dz) -> dr = theta x r = (expected_dz * theta_y, 0, 0)
     theta_y = 0.02  # rad
     u_rigid = np.zeros(12, dtype=float)
-    u_rigid[0] = -0.014 * theta_y  # bed_frame ux
-    u_rigid[4] = theta_y           # bed_frame ry
-    u_rigid[10] = theta_y          # bed_surface ry
+    u_rigid[0] = expected_dz * theta_y  # bed_frame ux
+    u_rigid[4] = theta_y                # bed_frame ry
+    u_rigid[10] = theta_y               # bed_surface ry
     strain_energy_j = 0.5 * float(u_rigid @ K_sp @ u_rigid)
     assert strain_energy_j == pytest.approx(0.0, abs=1e-10)
 

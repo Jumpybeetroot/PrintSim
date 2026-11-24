@@ -8,17 +8,26 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.linalg import cho_factor, cho_solve, eigh, solve
 
+from printsim.fea.components import compute_bed_thermal_bow_and_taco_um
 from printsim.fea.shell_mitc4 import mitc4_shell_matrices
-from printsim.schema import BED_MOUNT_CATALOG, PrinterSpec, get_material
+from printsim.schema import (
+    BED_MOUNT_CATALOG,
+    Z_DRIVE_MECHANISM_CATALOG,
+    PrinterSpec,
+    get_material,
+)
 
-_CARRIER_Z_STIFFNESS_N_M: dict[str, float] = {
-    "belted_quad_z": 2.0e7,
-    "leadscrew_triple": 1.6e6,
-    "leadscrew_dual": 8.0e5,
-    "leadscrew_single": 1.6e5,
-}
 _PROBE_FORCE_N = 2.0
 _ROT_REG_NM_RAD = 1e-2
+_RIGID_FLANGE_CLAMP_NM_RAD = 40.0
+_MOUNT_INSET_REL = 0.375
+_CORNER_Z_DRIVE_COUNTS: dict[str, int] = {
+    "belted_quad_z": 4,
+    "leadscrew_triple": 3,
+    "leadscrew_dual": 2,
+    "leadscrew_dual_belt_sync": 2,
+    "leadscrew_single": 1,
+}
 
 
 @dataclass
@@ -75,6 +84,49 @@ class BedPlateFEAResult:
         }
 
 
+def _compute_carrier_z_stiffness(spec: PrinterSpec) -> float:
+    """Compute effective Z-carrier vertical stiffness (N/m) from Z_DRIVE_MECHANISM_CATALOG."""
+    arch = spec.architecture
+    z_drive = spec.bed.z_drive
+    if arch == "delta":
+        return 2.0e7
+    if arch == "cartesian_bedslinger":
+        return 2.5e6
+
+    mech_id = spec.bed.effective_z_leadscrew_type
+    z_mech = Z_DRIVE_MECHANISM_CATALOG.get(mech_id, Z_DRIVE_MECHANISM_CATALOG["tr8x4_pom"])
+    if z_drive == "belted_quad_z" and str(z_mech["kind"]) == "belt":
+        # Flying-gantry CoreXY bed bolts directly to 4x 2020 base extrusions (belts lift gantry).
+        return 2.0e7
+
+    if str(z_mech["kind"]) == "belt":
+        k_col = float(z_mech["k_drive_n_per_um_per_corner"] or 0.18) * 1.0e6
+    else:
+        e_steel_z = 200.0e9
+        h_m = max(float(spec.frame.height_mm) * 1e-3, 0.25)
+        bz_m = max(float(spec.kinematics.build_volume_mm[2]) * 1e-3, 0.10)
+        top_clear_m = min(
+            float(spec.frame.gantry_top_clearance_mm) * 1e-3,
+            max(h_m - 0.16, 0.025),
+        )
+        z_gantry = h_m - top_clear_m
+        z_min = min(0.08, 0.5 * z_gantry)
+        z_max = max(z_min + 0.01, z_gantry - 0.045)
+        z_stroke = min(bz_m, max(z_gantry - 0.14, 0.02))
+        z_bed = float(np.clip(z_gantry - 0.045 - 0.5 * z_stroke, z_min, z_max))
+        l_screw_m = max(z_gantry if spec.is_flying_gantry else z_bed, 0.05)
+
+        k_shaft = e_steel_z * float(z_mech["root_area_m2"]) / l_screw_m
+        k_nut = max(float(z_mech["k_nut_n_per_um"]) * 1.0e6, 1.0e5)
+        k_thrust = max(float(z_mech["k_thrust_n_per_um"]) * 1.0e6, 1.0e5)
+        if spec.frame.trident_backbone and z_drive == "leadscrew_triple":
+            k_thrust *= 2.4
+        k_col = 1.0 / (1.0 / k_shaft + 1.0 / k_nut + 1.0 / k_thrust)
+
+    n_corners = _CORNER_Z_DRIVE_COUNTS.get(z_drive, 3)
+    return float(n_corners) * k_col
+
+
 def _resolve_mount_layout(
     spec: PrinterSpec,
     grid_x_rel: np.ndarray,
@@ -89,30 +141,78 @@ def _resolve_mount_layout(
         target_pts = [(-0.25, 0.5), (0.0, 0.5), (0.25, 0.5)]
     elif arch == "corexy" and z_drive == "leadscrew_dual":
         target_pts = [(-0.5, 0.0), (0.5, 0.0)]
-    elif mount_type in ("kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs") or arch == "delta":
-        target_pts = [(-0.5, -0.5), (0.5, -0.5), (0.0, 0.5)]
+    elif (
+        mount_type in ("kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs")
+        or arch == "delta"
+    ):
+        target_pts = [
+            (-_MOUNT_INSET_REL, -_MOUNT_INSET_REL),
+            (_MOUNT_INSET_REL, -_MOUNT_INSET_REL),
+            (0.0, _MOUNT_INSET_REL),
+        ]
     else:
-        target_pts = [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)]
+        target_pts = [
+            (-_MOUNT_INSET_REL, -_MOUNT_INSET_REL),
+            (_MOUNT_INSET_REL, -_MOUNT_INSET_REL),
+            (-_MOUNT_INSET_REL, _MOUNT_INSET_REL),
+            (_MOUNT_INSET_REL, _MOUNT_INSET_REL),
+        ]
 
     nx = len(grid_x_rel)
     anchor_ids: list[int] = []
     mount_points_rel: list[list[float]] = []
     for tx, ty in target_pts:
-        ix = int(np.argmin(np.abs(grid_x_rel - tx)))
-        iy = int(np.argmin(np.abs(grid_y_rel - ty)))
+        # Interior tie-breaker keeps coarse grids symmetric around 0 while exact 9x9 hits +-0.375 directly.
+        ix = int(np.argmin(np.abs(grid_x_rel - tx) + 1e-12 * np.abs(grid_x_rel)))
+        iy = int(np.argmin(np.abs(grid_y_rel - ty) + 1e-12 * np.abs(grid_y_rel)))
         nid = iy * nx + ix
         if nid not in anchor_ids:
             anchor_ids.append(nid)
             mount_points_rel.append([float(grid_x_rel[ix]), float(grid_y_rel[iy])])
 
-    if arch == "delta":
-        k_z_carrier = 2.0e7
-    elif arch == "cartesian_bedslinger":
-        k_z_carrier = 2.5e6
-    else:
-        k_z_carrier = _CARRIER_Z_STIFFNESS_N_M.get(z_drive, 1.6e6)
-
+    k_z_carrier = _compute_carrier_z_stiffness(spec)
     return anchor_ids, mount_points_rel, k_z_carrier
+
+
+def _anchor_inplane_stiffness_2x2(
+    idx: int,
+    n_anc: int,
+    rx: float,
+    ry: float,
+    lx_m: float,
+    ly_m: float,
+    k_xy_each: float,
+    radial_mode: str,
+    is_bracket_line: bool,
+) -> np.ndarray:
+    """Build exact 2x2 rotated in-plane anchor stiffness K_xy = k_r r r^T + k_t t t^T (N/m)."""
+    px = rx * lx_m
+    py = ry * ly_m
+    rnorm = math.hypot(px, py)
+    directional_modes = (
+        "maxwell_vgroove",
+        "radial_flexure",
+        "slotted_1fixed_3float",
+        "slotted_3pt_bakelite",
+    )
+    if is_bracket_line or rnorm <= 1e-9 or radial_mode not in directional_modes:
+        return np.diag([k_xy_each, k_xy_each])
+
+    r_hat = np.array([px / rnorm, py / rnorm], dtype=float)
+    t_hat = np.array([-r_hat[1], r_hat[0]], dtype=float)
+    if radial_mode == "maxwell_vgroove":
+        k_r, k_t = 500.0, k_xy_each
+    elif radial_mode == "radial_flexure":
+        k_r, k_t = 5000.0, k_xy_each
+    elif radial_mode == "slotted_1fixed_3float":
+        k_r, k_t = (k_xy_each, k_xy_each) if idx == 0 else (0.08 * k_xy_each, k_xy_each)
+    else:  # slotted_3pt_bakelite: rear-center anchor pinned, front two slotted
+        is_rear_center = (n_anc == 3 and abs(rx) < 1e-6 and ry > 0.0) or (
+            n_anc != 3 and idx == n_anc - 1
+        )
+        k_r, k_t = (k_xy_each, k_xy_each) if is_rear_center else (0.15 * k_xy_each, k_xy_each)
+
+    return k_r * np.outer(r_hat, r_hat) + k_t * np.outer(t_hat, t_hat)
 
 
 def _apply_mount_springs(
@@ -121,12 +221,22 @@ def _apply_mount_springs(
     anchor_ids: list[int],
     k_z_carrier: float,
     thickness_m: float,
+    mount_points_rel: list[list[float]] | None = None,
+    lx_m: float | None = None,
+    ly_m: float | None = None,
 ) -> None:
-    """Add grounded translational/rotational mount & Z-carrier springs to global K (in-place)."""
+    """Add grounded directional/rotational mount & Z-carrier springs to global K (in-place)."""
     cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
+    radial_mode = str(cfg.get("radial_dof_mode", "maxwell_vgroove"))
+    temp_soft = (
+        max(0.75, 1.0 - 0.004 * max(0.0, float(spec.bed.target_temp_c) - 70.0))
+        if radial_mode == "elastomer_shear"
+        else 1.0
+    )
+
     n_pts = float(cfg["mount_points"])
-    k_z_mount = n_pts * float(cfg["k_axial_n_per_mm"]) * 1e3
-    k_xy_mount = n_pts * float(cfg["k_lateral_n_per_mm"]) * 1e3
+    k_z_mount = n_pts * float(cfg["k_axial_n_per_mm"]) * 1e3 * temp_soft
+    k_xy_mount = n_pts * float(cfg["k_lateral_n_per_mm"]) * 1e3 * temp_soft
     k_z_eff_tot = (k_z_mount * k_z_carrier) / max(k_z_mount + k_z_carrier, 1e-9)
 
     n_anc = max(len(anchor_ids), 1)
@@ -139,14 +249,41 @@ def _apply_mount_springs(
     elif spec.architecture == "corexy" and spec.bed.z_drive == "leadscrew_dual":
         k_pitch_each = 2200.0 / n_anc
 
-    for nid in anchor_ids:
+    bed_lx_m = lx_m if lx_m is not None else max(float(spec.bed.size_mm[0]) * 1e-3, 0.05)
+    bed_ly_m = ly_m if ly_m is not None else max(float(spec.bed.size_mm[1]) * 1e-3, 0.05)
+    if mount_points_rel is None:
+        n_nodes = k_mat.shape[0] // 6
+        nx = max(int(round(math.sqrt(n_nodes))), 2)
+        gx = np.linspace(-0.5, 0.5, nx, dtype=float)
+        gy = np.linspace(-0.5, 0.5, nx, dtype=float)
+        rel_pts = [[float(gx[nid % nx]), float(gy[nid // nx])] for nid in anchor_ids]
+    else:
+        rel_pts = mount_points_rel
+
+    is_bracket_line = spec.architecture == "corexy" and spec.bed.z_drive in (
+        "leadscrew_single",
+        "leadscrew_dual",
+    )
+    k_clamp_local = _RIGID_FLANGE_CLAMP_NM_RAD if radial_mode == "rigid_all" else 0.0
+
+    for idx, (nid, (rx, ry)) in enumerate(zip(anchor_ids, rel_pts)):
         base = 6 * nid
-        k_mat[base + 0, base + 0] += k_xy_each
-        k_mat[base + 1, base + 1] += k_xy_each
+        k_xy_2x2 = _anchor_inplane_stiffness_2x2(
+            idx=idx,
+            n_anc=n_anc,
+            rx=rx,
+            ry=ry,
+            lx_m=bed_lx_m,
+            ly_m=bed_ly_m,
+            k_xy_each=k_xy_each,
+            radial_mode=radial_mode,
+            is_bracket_line=is_bracket_line,
+        )
+        k_mat[base : base + 2, base : base + 2] += k_xy_2x2
         k_mat[base + 2, base + 2] += k_z_each
-        k_mat[base + 3, base + 3] += k_pitch_each + _ROT_REG_NM_RAD
-        k_mat[base + 4, base + 4] += _ROT_REG_NM_RAD
-        k_mat[base + 5, base + 5] += _ROT_REG_NM_RAD
+        k_mat[base + 3, base + 3] += k_pitch_each + k_clamp_local + _ROT_REG_NM_RAD
+        k_mat[base + 4, base + 4] += k_clamp_local + _ROT_REG_NM_RAD
+        k_mat[base + 5, base + 5] += (0.5 * k_clamp_local if k_clamp_local > 0.0 else 0.0) + _ROT_REG_NM_RAD
 
 
 def _compute_thermal_warp_field_um(
@@ -163,42 +300,9 @@ def _compute_thermal_warp_field_um(
     Matches the thermal bow and post-buckling elastica physics in
     ``printsim.fea.components.compute_thermal_structural_report``.
     """
-    bed_mat = get_material(spec.bed.plate_material)
-    frame_mat = get_material(spec.frame.material)
-    bed_temp = float(spec.bed.target_temp_c)
-    chamber_c = float(spec.frame.chamber_temp_c)
-
+    del thickness_m
     l_bed = max(lx_m, ly_m)
-    q_top = 12.0 * max(0.0, bed_temp - chamber_c)
-    bed_grad_bow_um = (
-        (l_bed**2)
-        * bed_mat.thermal_expansion_1_k
-        * q_top
-        / (8.0 * max(bed_mat.thermal_conductivity_w_mk, 0.1))
-        * 1e6
-    )
-
-    l_mount = 0.85 * l_bed
-    dl_thermal = (
-        bed_mat.thermal_expansion_1_k * max(0.0, bed_temp - 25.0)
-        - frame_mat.thermal_expansion_1_k * max(0.0, chamber_c - 25.0)
-    ) * l_mount
-    dl_excess = max(0.0, dl_thermal - 0.00015)
-
-    mount_cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
-    k_restraint = float(mount_cfg["k_restraint_thermal"])
-    if k_restraint <= 0.0 or dl_excess <= 0.0:
-        taco_buckling_um = 0.0
-    else:
-        d_plate = (
-            bed_mat.youngs_modulus_pa
-            * (thickness_m**3)
-            / (12.0 * (1.0 - bed_mat.poisson_ratio**2))
-        )
-        k_plate_taco = 48.0 * d_plate * l_bed / max(l_mount**3, 1e-9)
-        w_elastica = (2.0 / math.pi) * math.sqrt(l_mount * dl_excess)
-        arch_fraction = k_restraint / (k_restraint + k_plate_taco)
-        taco_buckling_um = w_elastica * math.sqrt(arch_fraction) * 1e6
+    bed_grad_bow_um, taco_buckling_um = compute_bed_thermal_bow_and_taco_um(spec)
 
     rx_nodes = np.array([grid_x_rel[i] for _ in grid_y_rel for i in range(len(grid_x_rel))], dtype=float)
     ry_nodes = np.array([ry for ry in grid_y_rel for _ in grid_x_rel], dtype=float)
@@ -268,7 +372,7 @@ def _solve_plate_modes(
 ) -> tuple[list[float], np.ndarray, str]:
     """Extract first 3 out-of-plane plate eigenfrequencies, Mode 1 Z-shape, and classification."""
     n_dof = k_mat.shape[0]
-    n_req = min(10, n_dof)
+    n_req = min(12, n_dof)
     m_diag = np.diag(m_mat)
     if float(np.min(m_diag)) < 1e-14:
         m_mat = m_mat.copy()
@@ -327,7 +431,7 @@ def _solve_plate_modes(
     return plate_modes_hz, mode1_shape_z, mode_type
 
 
-def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 4) -> BedPlateFEAResult:
+def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult:
     """Solve 2D MITC4 heated bed plate static sag, thermal taco warp, probe flex, and modes."""
     n_elem = int(mesh_n)
     if n_elem < 2:
@@ -379,7 +483,16 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 4) -> BedPlateFEAResult
     anchor_ids, mount_points_rel, k_z_carrier = _resolve_mount_layout(
         spec, grid_x_rel, grid_y_rel
     )
-    _apply_mount_springs(k_glob, spec, anchor_ids, k_z_carrier, thickness_m)
+    _apply_mount_springs(
+        k_glob,
+        spec,
+        anchor_ids,
+        k_z_carrier,
+        thickness_m,
+        mount_points_rel=mount_points_rel,
+        lx_m=lx_m,
+        ly_m=ly_m,
+    )
     k_glob = 0.5 * (k_glob + k_glob.T)
     m_glob = 0.5 * (m_glob + m_glob.T)
 

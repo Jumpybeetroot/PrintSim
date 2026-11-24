@@ -10,10 +10,15 @@ import numpy as np
 import pytest
 
 from printsim.engine import evaluate_printer
-from printsim.fea import BedPlateFEAResult, solve_bed_plate_fem
+from printsim.fea import (
+    BedPlateFEAResult,
+    compute_thermal_structural_report,
+    solve_bed_plate_fem,
+)
 from printsim.fea.bed_plate_fem import _apply_mount_springs, _resolve_mount_layout
 from printsim.fea.shell_mitc4 import mitc4_shell_matrices
-from printsim.schema import PrinterSpec, get_material
+from printsim.geometry import build_assembly
+from printsim.schema import BED_MOUNT_CATALOG, PrinterSpec, get_material
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
@@ -213,16 +218,209 @@ def test_assembled_matrices_spd_and_symmetric(arch: str, z_drive: str, mount_typ
 
 
 def test_mesh_refinement_and_runtime() -> None:
-    """5x5 mesh agrees closely with refined 7x7 mesh and runs well under 100 ms."""
+    """Default 9x9 mesh lands exactly on +-0.375 inset anchors, converges vs 17x17, and runs < 15 ms."""
     spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    solve_bed_plate_fem(spec)  # warm up BLAS/NumPy paths
     t0 = time.perf_counter()
-    coarse = solve_bed_plate_fem(spec, mesh_n=4)
+    default_9x9 = solve_bed_plate_fem(spec)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    fine = solve_bed_plate_fem(spec, mesh_n=6)
+    fine_17x17 = solve_bed_plate_fem(spec, mesh_n=16)
 
-    assert elapsed_ms < 100.0
-    assert abs(coarse.plate_first_mode_hz - fine.plate_first_mode_hz) / fine.plate_first_mode_hz < 0.08
-    assert abs(coarse.probe_center_deflection_um - fine.probe_center_deflection_um) / fine.probe_center_deflection_um < 0.12
+    assert default_9x9.grid_nx == 9 and default_9x9.grid_ny == 9
+    assert default_9x9.mount_points_rel == [[-0.375, -0.375], [0.375, -0.375], [0.0, 0.375]]
+    assert fine_17x17.mount_points_rel == default_9x9.mount_points_rel
+    assert elapsed_ms < 15.0
+    assert abs(default_9x9.plate_first_mode_hz - fine_17x17.plate_first_mode_hz) / fine_17x17.plate_first_mode_hz < 0.03
+    assert abs(default_9x9.probe_center_deflection_um - fine_17x17.probe_center_deflection_um) / fine_17x17.probe_center_deflection_um < 0.05
+
+
+@pytest.mark.parametrize(
+    "mount_type",
+    ["kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs"],
+)
+def test_3pt_inset_cantilevered_rear_corners_vs_supported_front_corners(mount_type: str) -> None:
+    """3-point inset mounts give >3x higher probe deflection on cantilevered rear corners than supported front corners."""
+    spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    spec.bed.mount_type = mount_type  # type: ignore[assignment]
+
+    res = solve_bed_plate_fem(spec)
+    assert res.mount_points_rel == [[-0.375, -0.375], [0.375, -0.375], [0.0, 0.375]]
+
+    # Assemble 9x9 stiffness matrix directly to compare front vs rear corner 2N probe compliance
+    nx = ny = 9
+    lx = spec.bed.size_mm[0] * 1e-3
+    ly = spec.bed.size_mm[1] * 1e-3
+    t = spec.bed.plate_thickness_mm * 1e-3
+    mat = get_material(spec.bed.plate_material)
+    areal_mass = (spec.bed.mass_g * 1e-3) / (lx * ly)
+    gx = np.linspace(-0.5, 0.5, nx)
+    gy = np.linspace(-0.5, 0.5, ny)
+    coords = np.array([[x * lx, y * ly, 0.0] for y in gy for x in gx], dtype=float)
+    n_dof = 6 * nx * ny
+    k_mat = np.zeros((n_dof, n_dof), dtype=float)
+    ke_ref, _, _ = mitc4_shell_matrices(
+        coords[[0, 1, nx + 1, nx]], mat.youngs_modulus_pa, mat.poisson_ratio, t, areal_mass
+    )
+    for ey in range(8):
+        for ex in range(8):
+            n0 = ey * nx + ex
+            dofs = [6 * nid + d for nid in (n0, n0 + 1, n0 + nx + 1, n0 + nx) for d in range(6)]
+            k_mat[np.ix_(dofs, dofs)] += ke_ref
+
+    anc_ids, mpts, kz_c = _resolve_mount_layout(spec, gx, gy)
+    _apply_mount_springs(k_mat, spec, anc_ids, kz_c, t, mount_points_rel=mpts, lx_m=lx, ly_m=ly)
+
+    # Probe front-left (0), front-right (nx - 1), rear-left ((ny - 1) * nx), rear-right (ny * nx - 1)
+    corners = [0, nx - 1, (ny - 1) * nx, ny * nx - 1]
+    rhs = np.zeros((n_dof, len(corners)), dtype=float)
+    for col, cid in enumerate(corners):
+        rhs[6 * cid + 2, col] = -2.0
+    sol = np.linalg.solve(0.5 * (k_mat + k_mat.T), rhs)
+    fl_um, fr_um, rl_um, rr_um = [abs(float(sol[6 * cid + 2, col])) * 1e6 for col, cid in enumerate(corners)]
+
+    assert fl_um == pytest.approx(fr_um, rel=1e-6)
+    assert rl_um == pytest.approx(rr_um, rel=1e-6)
+    assert rl_um > fl_um * 3.0
+    assert rr_um > fr_um * 3.0
+    assert res.probe_corner_deflection_um == pytest.approx(max(fl_um, fr_um, rl_um, rr_um), rel=1e-5)
+
+
+def test_directional_inplane_mount_springs_rank_eigenvalues_and_silicone_temp_softening() -> None:
+    """Verify exact rotated 2x2 K_xy = k_r r r^T + k_t t t^T eigenvalues/vectors and 70A silicone softening."""
+    nx = ny = 9
+    gx = np.linspace(-0.5, 0.5, nx)
+    gy = np.linspace(-0.5, 0.5, ny)
+    n_dof = 6 * nx * ny
+
+    def _extract_mount_blocks(mount_type: str, target_temp_c: float = 60.0) -> tuple[list[np.ndarray], list[list[float]], list[int], np.ndarray]:
+        spec = PrinterSpec(architecture="corexy")
+        spec.bed.z_drive = "leadscrew_triple"
+        spec.bed.mount_type = mount_type  # type: ignore[assignment]
+        spec.bed.target_temp_c = target_temp_c
+        lx = spec.bed.size_mm[0] * 1e-3
+        ly = spec.bed.size_mm[1] * 1e-3
+        anc_ids, mpts, kz_c = _resolve_mount_layout(spec, gx, gy)
+        k_spring_only = np.zeros((n_dof, n_dof), dtype=float)
+        _apply_mount_springs(
+            k_spring_only,
+            spec,
+            anc_ids,
+            kz_c,
+            spec.bed.plate_thickness_mm * 1e-3,
+            mount_points_rel=mpts,
+            lx_m=lx,
+            ly_m=ly,
+        )
+        blocks = [k_spring_only[6 * nid : 6 * nid + 2, 6 * nid : 6 * nid + 2] for nid in anc_ids]
+        return blocks, mpts, anc_ids, k_spring_only
+
+    # 1. Maxwell V-groove (kinematic_3pt): k_r = 0.5 N/mm, k_t = 24,000 N/mm, radial eigenvector || r_hat
+    blocks_kin, mpts_kin, _, _ = _extract_mount_blocks("kinematic_3pt")
+    for k_xy, (rx, ry) in zip(blocks_kin, mpts_kin):
+        assert np.allclose(k_xy, k_xy.T, atol=1e-9)
+        evals, evecs = np.linalg.eigh(k_xy)
+        assert evals[0] == pytest.approx(500.0, rel=1e-9)
+        assert evals[1] == pytest.approx(2.4e7, rel=1e-9)
+        r_hat = np.array([rx, ry], dtype=float) / math.hypot(rx, ry)
+        assert abs(float(np.dot(evecs[:, 0], r_hat))) == pytest.approx(1.0, abs=1e-9)
+
+    # 2. Whopping Pochard flexure: k_r = 5.0 N/mm, k_t = 16,000 N/mm
+    blocks_wp, _, _, _ = _extract_mount_blocks("whopping_pochard_kinematic")
+    for k_xy in blocks_wp:
+        evals = np.linalg.eigvalsh(k_xy)
+        assert evals[0] == pytest.approx(5000.0, rel=1e-9)
+        assert evals[1] == pytest.approx(1.6e7, rel=1e-9)
+
+    # 3. Floating 4-pt: anchor #0 isotropic (6000 N/mm), anchors #1-3 slotted radial (0.08 * 6000)
+    blocks_flt, _, _, _ = _extract_mount_blocks("floating_4pt")
+    assert np.linalg.eigvalsh(blocks_flt[0]) == pytest.approx([6.0e6, 6.0e6], rel=1e-9)
+    for k_xy in blocks_flt[1:]:
+        assert np.linalg.eigvalsh(k_xy) == pytest.approx([0.08 * 6.0e6, 6.0e6], rel=1e-9)
+
+    # 4. Trident 3-pt Bakelite: front anchors slotted (0.15 * 9500), rear-center isotropic (9500)
+    blocks_tri, _, _, _ = _extract_mount_blocks("trident_3pt_standoffs")
+    for k_xy in blocks_tri[:2]:
+        assert np.linalg.eigvalsh(k_xy) == pytest.approx([0.15 * 9.5e6, 9.5e6], rel=1e-9)
+    assert np.linalg.eigvalsh(blocks_tri[2]) == pytest.approx([9.5e6, 9.5e6], rel=1e-9)
+
+    # 5. Rigid 4-pt: isotropic 40,000 N/mm + rotational bolt-flange clamping moment stiffness
+    blocks_rig, _, anc_rig, k_rig_only = _extract_mount_blocks("rigid_4pt")
+    for k_xy, nid in zip(blocks_rig, anc_rig):
+        assert np.linalg.eigvalsh(k_xy) == pytest.approx([4.0e7, 4.0e7], rel=1e-9)
+        assert k_rig_only[6 * nid + 3, 6 * nid + 3] > 10.0
+        assert k_rig_only[6 * nid + 4, 6 * nid + 4] > 10.0
+
+    # 6. Silicone 4-pt softens above 70 C (60 C -> 110 C drops stiffness by 16%)
+    s_60 = PrinterSpec(architecture="corexy")
+    s_60.bed.mount_type = "silicone_4pt"
+    s_60.bed.target_temp_c = 60.0
+    s_110 = s_60.model_copy(deep=True)
+    s_110.bed.target_temp_c = 110.0
+    r_60 = solve_bed_plate_fem(s_60)
+    r_110 = solve_bed_plate_fem(s_110)
+    assert r_110.probe_center_deflection_um > r_60.probe_center_deflection_um
+    assert r_110.plate_first_mode_hz < r_60.plate_first_mode_hz
+
+
+def test_z_drive_mechanism_coupling_and_belt_sync_layout() -> None:
+    """Upgrading tr8x8_pom -> tr8x4_pom -> tr8x8_brass -> sfu1204_bk10 stiffens bed plate FEM; belt-sync supported."""
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    screws = ("tr8x8_pom", "tr8x4_pom", "tr8x8_brass", "sfu1204_bk10")
+    res = []
+    for ls in screws:
+        s = base.model_copy(deep=True)
+        s.bed.z_leadscrew_type = ls  # type: ignore[assignment]
+        res.append(solve_bed_plate_fem(s))
+
+    for i in range(len(screws) - 1):
+        assert res[i + 1].probe_center_deflection_um < res[i].probe_center_deflection_um
+        assert res[i + 1].probe_corner_deflection_um < res[i].probe_corner_deflection_um
+        assert res[i + 1].gravity_sag_um < res[i].gravity_sag_um
+        assert res[i + 1].plate_first_mode_hz > res[i].plate_first_mode_hz
+
+    # VzBot 330 AWD (leadscrew_dual_belt_sync: 4x smooth rods + 2x synced leadscrews)
+    vz = PrinterSpec.from_yaml(EXAMPLES_DIR / "vzbot_330_awd.yaml")
+    res_vz = solve_bed_plate_fem(vz)
+    assert res_vz.mount_points_rel == [[-0.375, -0.375], [0.375, -0.375], [0.0, 0.375]]
+    assert res_vz.plate_first_mode_type == "elastic_drum"
+    assert res_vz.plate_first_mode_hz > 80.0
+
+
+def test_thermal_warp_ordering_at_100c_and_components_parity() -> None:
+    """At 100 C, kinematic == whopping < floating < trident_3pt < rigid_4pt and matches components.py."""
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    base.bed.target_temp_c = 100.0
+
+    tacos: dict[str, float] = {}
+    ptvs: dict[str, float] = {}
+    for mt in BED_MOUNT_CATALOG:
+        s = base.model_copy(deep=True)
+        s.bed.mount_type = mt  # type: ignore[assignment]
+        plate = solve_bed_plate_fem(s)
+        ts = compute_thermal_structural_report(build_assembly(s))
+        assert plate.taco_buckling_um == pytest.approx(ts.bed_buckling_taco_um, rel=1e-9, abs=1e-9)
+        tacos[mt] = plate.taco_buckling_um
+        ptvs[mt] = plate.thermal_peak_to_valley_um
+
+    assert tacos["kinematic_3pt"] == pytest.approx(0.0, abs=1e-9)
+    assert tacos["whopping_pochard_kinematic"] == pytest.approx(0.0, abs=1e-9)
+    assert (
+        tacos["kinematic_3pt"]
+        == tacos["whopping_pochard_kinematic"]
+        < tacos["floating_4pt"]
+        < tacos["trident_3pt_standoffs"]
+        < tacos["rigid_4pt"]
+    )
+    assert (
+        ptvs["kinematic_3pt"]
+        == pytest.approx(ptvs["whopping_pochard_kinematic"], rel=1e-9)
+    )
+    assert (
+        ptvs["kinematic_3pt"]
+        < ptvs["floating_4pt"]
+        < ptvs["trident_3pt_standoffs"]
+        < ptvs["rigid_4pt"]
+    )
 
 
 def test_evaluator_integration_all_example_presets_and_diagnostics() -> None:

@@ -151,34 +151,14 @@ class AssemblyModel:
     def _compute_bed_mount_points_mm(self) -> list[list[float]]:
         """Return bed-underside mounting coordinates (mm) strictly inside heated bed footprint."""
         bc = self.bed_center_m * 1000.0
-        bx = float(self.spec.bed.size_mm[0])
-        by = float(self.spec.bed.size_mm[1])
         bz = float(bc[2]) - 0.5 * float(self.spec.bed.plate_thickness_mm)
-        if self.spec.architecture == "delta":
-            r_m = 0.36 * min(bx, by)
-            return [
-                [
-                    round(float(bc[0]) + r_m * math.cos(math.radians(deg)), 2),
-                    round(float(bc[1]) + r_m * math.sin(math.radians(deg)), 2),
-                    round(bz, 2),
-                ]
-                for deg in (90.0, 210.0, 330.0)
-            ]
-        if self.spec.bed.mount_type in (
-            "kinematic_3pt",
-            "whopping_pochard_kinematic",
-            "trident_3pt_standoffs",
-        ):
-            return [
-                [round(float(bc[0]) - 0.36 * bx, 2), round(float(bc[1]) - 0.36 * by, 2), round(bz, 2)],
-                [round(float(bc[0]) + 0.36 * bx, 2), round(float(bc[1]) - 0.36 * by, 2), round(bz, 2)],
-                [round(float(bc[0]), 2), round(float(bc[1]) + 0.36 * by, 2), round(bz, 2)],
-            ]
         return [
-            [round(float(bc[0]) - 0.36 * bx, 2), round(float(bc[1]) - 0.36 * by, 2), round(bz, 2)],
-            [round(float(bc[0]) + 0.36 * bx, 2), round(float(bc[1]) - 0.36 * by, 2), round(bz, 2)],
-            [round(float(bc[0]) - 0.36 * bx, 2), round(float(bc[1]) + 0.36 * by, 2), round(bz, 2)],
-            [round(float(bc[0]) + 0.36 * bx, 2), round(float(bc[1]) + 0.36 * by, 2), round(bz, 2)],
+            [
+                round(float(bc[0]) + dx_m * 1000.0, 2),
+                round(float(bc[1]) + dy_m * 1000.0, 2),
+                round(bz, 2),
+            ]
+            for dx_m, dy_m in _compute_mount_offsets_m(self.spec)
         ]
 
     def _compute_z_rails_geometry(self) -> list[dict]:
@@ -1675,6 +1655,42 @@ def _apply_extrusion_filling(model: AssemblyModel) -> None:
     )
 
 
+def _compute_mount_offsets_m(spec: PrinterSpec) -> list[tuple[float, float]]:
+    """Return 2D (dx, dy) mount point offsets (m) relative to bed center.
+
+    Uses the 3/8-span (``0.375``) inset matching the 9x9 MITC4 bed plate FEM anchors
+    so 3D viewport mount pins and 2D plate FEM supports align to the millimeter.
+    """
+    bx_m = float(spec.bed.size_mm[0]) * 1e-3
+    by_m = float(spec.bed.size_mm[1]) * 1e-3
+    inset = 0.375
+    if spec.architecture == "delta":
+        r_m = inset * min(bx_m, by_m)
+        return [
+            (
+                r_m * math.cos(math.radians(deg)),
+                r_m * math.sin(math.radians(deg)),
+            )
+            for deg in (90.0, 210.0, 330.0)
+        ]
+    if spec.bed.mount_type in (
+        "kinematic_3pt",
+        "whopping_pochard_kinematic",
+        "trident_3pt_standoffs",
+    ):
+        return [
+            (-inset * bx_m, -inset * by_m),
+            (inset * bx_m, -inset * by_m),
+            (0.0, inset * by_m),
+        ]
+    return [
+        (-inset * bx_m, -inset * by_m),
+        (inset * bx_m, -inset * by_m),
+        (-inset * bx_m, inset * by_m),
+        (inset * bx_m, inset * by_m),
+    ]
+
+
 def _attach_bed_mount_compliance(
     nodes: list[StructuralNode],
     fastener_springs: list[FastenerSpring],
@@ -1682,12 +1698,15 @@ def _attach_bed_mount_compliance(
     bed_center_m: np.ndarray,
 ) -> None:
     """Create intermediate ``bed_frame`` node and 6-DOF ``bed_mount_spring`` to ``bed_surface``."""
+    cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
+    h_standoff_m = float(cfg.get("standoff_height_mm", 14.0)) * 1e-3
+
     bed_kg = spec.bed.mass_g * 1e-3
     bed_frame_kg = 0.0
     bed_surface_kg = bed_kg
 
     bed_frame_pos = bed_center_m.copy()
-    bed_frame_pos[2] -= 0.014
+    bed_frame_pos[2] -= h_standoff_m
     nodes.append(
         StructuralNode("bed_frame", bed_frame_pos, lumped_mass_kg=bed_frame_kg, role="bed")
     )
@@ -1697,14 +1716,27 @@ def _attach_bed_mount_compliance(
         )
     )
 
-    cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
     n_pts = int(cfg["mount_points"])
     k_axial_n_m = float(cfg["k_axial_n_per_mm"]) * 1e3
     k_lat_n_m = float(cfg["k_lateral_n_per_mm"]) * 1e3
-    bed_x_m = float(spec.bed.size_mm[0]) * 1e-3
-    bed_y_m = float(spec.bed.size_mm[1]) * 1e-3
-    r_mount = 0.42 * min(bed_x_m, bed_y_m)
-    k_rot_nm_rad = max(0.5 * n_pts * k_axial_n_m * (r_mount**2), 50.0)
+    if str(cfg.get("radial_dof_mode", "")) == "elastomer_shear":
+        temp_soft = max(0.75, 1.0 - 0.004 * max(0.0, float(spec.bed.target_temp_c) - 70.0))
+        k_axial_n_m *= temp_soft
+        k_lat_n_m *= temp_soft
+
+    pts = _compute_mount_offsets_m(spec)
+    n_eff = max(len(pts), 1)
+    x_bar = sum(x for x, _ in pts) / n_eff
+    y_bar = sum(y for _, y in pts) / n_eff
+    # Exact second moments of axial mount stiffness about the mount-pattern centroid (x_bar, y_bar):
+    # - 3-pt triangle [(-0.375 bx, -0.375 by), (+0.375 bx, -0.375 by), (0, +0.375 by)] has
+    #   centroid (0, -0.125 by) -> K_roll = 0.28125 k_z bx^2, K_pitch = 0.375 k_z by^2.
+    # - 4-pt pattern [(+-0.375 bx, +-0.375 by)] has centroid (0, 0) -> K_roll = 0.5625 k_z bx^2,
+    #   K_pitch = 0.5625 k_z by^2.
+    k_roll = sum(k_axial_n_m * ((x - x_bar) ** 2) for x, _ in pts)
+    k_pitch = sum(k_axial_n_m * ((y - y_bar) ** 2) for _, y in pts)
+    # FastenerSpring uses scalar k_rot_nm_rad; geometric mean preserves 3-pt vs 4-pt inertia scaling.
+    k_rot_nm_rad = max(math.sqrt(max(k_roll * k_pitch, 0.0)), 50.0)
 
     fastener_springs.append(
         FastenerSpring(
@@ -1716,7 +1748,7 @@ def _attach_bed_mount_compliance(
             k_normal_n_m=n_pts * k_axial_n_m,
             k_rot_nm_rad=k_rot_nm_rad,
             normal_vec=(0.0, 0.0, 1.0),
-            offset_m=(0.0, 0.0, -0.014),
+            offset_m=(0.0, 0.0, -h_standoff_m),
         )
     )
 

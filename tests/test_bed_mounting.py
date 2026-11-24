@@ -50,7 +50,7 @@ def _assert_spd_and_finite(asm) -> None:
 
 
 def test_schema_catalogs_and_defaults_backward_compatible() -> None:
-    """Verify BED_MOUNT_CATALOG (6), FRAME_FEET_CATALOG (4), and backward-compatible defaults."""
+    """Verify BED_MOUNT_CATALOG (7), FRAME_FEET_CATALOG (4), and backward-compatible defaults."""
     assert set(BED_MOUNT_CATALOG.keys()) == {
         "kinematic_3pt",
         "whopping_pochard_kinematic",
@@ -68,8 +68,43 @@ def test_schema_catalogs_and_defaults_backward_compatible() -> None:
     }
     # Verify exact thermal restraint backward compatibility
     assert BED_MOUNT_CATALOG["kinematic_3pt"]["k_restraint_thermal"] == 0.0
+    assert BED_MOUNT_CATALOG["whopping_pochard_kinematic"]["k_restraint_thermal"] == 0.0
     assert BED_MOUNT_CATALOG["floating_4pt"]["k_restraint_thermal"] == 18.0
+    assert BED_MOUNT_CATALOG["trident_3pt_standoffs"]["k_restraint_thermal"] == 22.0
     assert BED_MOUNT_CATALOG["rigid_4pt"]["k_restraint_thermal"] == 8000.0
+
+    expected_heights = {
+        "kinematic_3pt": 16.0,
+        "whopping_pochard_kinematic": 14.0,
+        "trident_3pt_standoffs": 10.0,
+        "rigid_4pt": 12.0,
+        "floating_4pt": 12.0,
+        "silicone_4pt": 16.0,
+        "springs_4pt": 20.0,
+    }
+    expected_modes = {
+        "kinematic_3pt": "maxwell_vgroove",
+        "whopping_pochard_kinematic": "radial_flexure",
+        "trident_3pt_standoffs": "slotted_3pt_bakelite",
+        "rigid_4pt": "rigid_all",
+        "floating_4pt": "slotted_1fixed_3float",
+        "silicone_4pt": "elastomer_shear",
+        "springs_4pt": "coil_spring_shear",
+    }
+    expected_tap = {
+        "kinematic_3pt": False,
+        "whopping_pochard_kinematic": True,
+        "trident_3pt_standoffs": True,
+        "rigid_4pt": True,
+        "floating_4pt": True,
+        "silicone_4pt": False,
+        "springs_4pt": False,
+    }
+    for mt, cfg in BED_MOUNT_CATALOG.items():
+        assert cfg["standoff_height_mm"] == pytest.approx(expected_heights[mt])
+        assert cfg["radial_dof_mode"] == expected_modes[mt]
+        assert cfg["tap_rated"] is expected_tap[mt]
+        assert cfg["mount_inset_ratio"] == pytest.approx(0.38)
 
     # Omitting feet_type / mount_type in spec preserves defaults
     spec_default = PrinterSpec()
@@ -472,4 +507,82 @@ def test_non_bolted_feet_preserve_realistic_shaper_accel_and_bed_deflection() ->
     assert accs["paver_on_foam"] >= accs["rubber_feet"] >= accs["anti_vib_pads"]
     assert accs["rubber_feet"] >= accs["rigid_bolted"] * 0.80
     assert accs["paver_on_foam"] >= accs["rigid_bolted"] * 0.90
+
+
+def test_bed_mount_standoff_offset_6dof_inertia_and_inset_alignment() -> None:
+    """Verify catalog standoff heights, exact 3pt/4pt rotational inertia, 0.375 inset alignment, and 100C thermal parity."""
+    from printsim.fea import solve_bed_plate_fem
+    from printsim.fea.shell_mitc4 import fastener_spring_matrices
+
+    base = _trident_base()
+    base.bed.target_temp_c = 100.0
+    bx_m = base.bed.size_mm[0] * 1e-3
+    by_m = base.bed.size_mm[1] * 1e-3
+
+    taco_map: dict[str, float] = {}
+    for mt, cfg in BED_MOUNT_CATALOG.items():
+        spec = base.model_copy(deep=True)
+        spec.bed.mount_type = mt  # type: ignore[assignment]
+        asm = build_assembly(spec)
+        nmap = asm.node_map
+        sp = next(s for s in asm.fastener_springs if s.id == "bed_mount_spring")
+
+        h_expected_m = float(cfg["standoff_height_mm"]) * 1e-3
+        dz = float(nmap["bed_frame"].position_m[2] - nmap["bed_surface"].position_m[2])
+        assert dz == pytest.approx(-h_expected_m, abs=1e-9)
+        assert sp.offset_m == pytest.approx((0.0, 0.0, -h_expected_m), abs=1e-9)
+
+        # Eccentric spring offset produces zero spurious strain energy under pure rigid pitch
+        k_sp = fastener_spring_matrices(
+            sp.k_shear_n_m,
+            sp.k_normal_n_m,
+            sp.k_rot_nm_rad,
+            np.array(sp.normal_vec, dtype=float),
+            np.array(sp.offset_m, dtype=float),
+        )
+        theta_y = 0.015
+        u_rigid = np.zeros(12, dtype=float)
+        u_rigid[0] = -h_expected_m * theta_y
+        u_rigid[4] = theta_y
+        u_rigid[10] = theta_y
+        assert 0.5 * float(u_rigid @ k_sp @ u_rigid) == pytest.approx(0.0, abs=1e-10)
+
+        # Exact geometric rotational stiffness about mount centroid
+        k_z = float(cfg["k_axial_n_per_mm"]) * 1e3
+        if cfg["radial_dof_mode"] == "elastomer_shear":
+            k_z *= max(0.75, 1.0 - 0.004 * (100.0 - 70.0))
+        if cfg["mount_points"] == 3:
+            k_roll = 0.28125 * k_z * (bx_m**2)
+            k_pitch = 0.375 * k_z * (by_m**2)
+        else:
+            k_roll = 0.5625 * k_z * (bx_m**2)
+            k_pitch = 0.5625 * k_z * (by_m**2)
+        expected_k_rot = max(math.sqrt(k_roll * k_pitch), 50.0)
+        assert sp.k_rot_nm_rad == pytest.approx(expected_k_rot, rel=1e-9)
+
+        # 3D viewport bed_mount_points_mm aligns exactly to 9x9 bed_plate_fem anchor coordinates (+-0.375)
+        gdict = asm.to_geometry_dict()
+        plate = solve_bed_plate_fem(spec)
+        bc_x, bc_y, _ = gdict["bed_center_mm"]
+        rel_3d = [
+            [(pt[0] - bc_x) / spec.bed.size_mm[0], (pt[1] - bc_y) / spec.bed.size_mm[1]]
+            for pt in gdict["bed_mount_points_mm"]
+        ]
+        assert np.allclose(rel_3d, plate.mount_points_rel, atol=1e-4)
+
+        # Exact parity between components.py and bed_plate_fem.py thermal buckling
+        ts = compute_thermal_structural_report(asm)
+        assert ts.bed_buckling_taco_um == pytest.approx(plate.taco_buckling_um, rel=1e-9, abs=1e-9)
+        taco_map[mt] = ts.bed_buckling_taco_um
+
+    assert taco_map["kinematic_3pt"] == pytest.approx(0.0, abs=1e-9)
+    assert taco_map["whopping_pochard_kinematic"] == pytest.approx(0.0, abs=1e-9)
+    assert (
+        taco_map["kinematic_3pt"]
+        == taco_map["whopping_pochard_kinematic"]
+        < taco_map["floating_4pt"]
+        < taco_map["trident_3pt_standoffs"]
+        < taco_map["rigid_4pt"]
+    )
+
 
