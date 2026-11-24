@@ -18,7 +18,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 
 def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> None:
-    """F2: bed_mount_spring uses exact catalog standoff Z offset so rigid bed pitch generates zero spurious energy."""
+    """F2: bed_mount_spring uses exact physical Z-stack offset (t_bed + standoff + half 2020) so rigid pitch has zero spurious energy."""
     spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
     asm = build_assembly(spec)
     nmap = asm.node_map
@@ -27,7 +27,10 @@ def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> N
     assert sp.shell_node_id == "bed_frame"
     assert sp.frame_node_id == "bed_surface"
 
-    expected_dz = -float(BED_MOUNT_CATALOG[spec.bed.mount_type]["standoff_height_mm"]) * 1e-3
+    t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
+    h_standoff_m = float(BED_MOUNT_CATALOG[spec.bed.mount_type]["standoff_height_mm"]) * 1e-3
+    half_subframe_m = 0.010
+    expected_dz = -(t_bed_m + h_standoff_m + half_subframe_m)
     dz_actual = float(nmap["bed_frame"].position_m[2] - nmap["bed_surface"].position_m[2])
     assert dz_actual == pytest.approx(expected_dz, abs=1e-9)
     assert sp.offset_m == pytest.approx((0.0, 0.0, expected_dz), abs=1e-9)

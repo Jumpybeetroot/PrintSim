@@ -151,7 +151,7 @@ class AssemblyModel:
     def _compute_bed_mount_points_mm(self) -> list[list[float]]:
         """Return bed-underside mounting coordinates (mm) strictly inside heated bed footprint."""
         bc = self.bed_center_m * 1000.0
-        bz = float(bc[2]) - 0.5 * float(self.spec.bed.plate_thickness_mm)
+        bz = float(bc[2]) - float(self.spec.bed.plate_thickness_mm)
         return [
             [
                 round(float(bc[0]) + dx_m * 1000.0, 2),
@@ -371,6 +371,19 @@ class AssemblyModel:
                 self.spec.frame.panel_mounting,
                 bolted_to_gantry=self.spec.panels_bolted_to_gantry_effective,
             )
+        mount_pts = self._compute_bed_mount_points_mm()
+        is_trident_3pt_subframe = (
+            self.spec.architecture == "corexy"
+            and self.spec.bed.z_drive == "leadscrew_triple"
+            and self.spec.bed.mount_type
+            in ("kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs")
+            and all(nid in nmap for nid in ("bed_t_fl", "bed_t_fr", "bed_t_rear_mount"))
+        )
+        bed_mount_anchor_nodes = (
+            ["bed_t_fl", "bed_t_fr", "bed_t_rear_mount"]
+            if is_trident_3pt_subframe
+            else (["bed_frame"] * len(mount_pts) if "bed_frame" in nmap else [])
+        )
         return {
             "architecture": self.spec.architecture,
             "drive_mode": self.spec.gantry.drive_mode,
@@ -471,12 +484,25 @@ class AssemblyModel:
             "effective_z_leadscrew_type": self.spec.bed.effective_z_leadscrew_type,
             "feet_type": self.spec.frame.feet_type,
             "bed_frame_node_id": "bed_frame" if "bed_frame" in nmap else "",
+            "bed_subframe_z_mm": (
+                round(float(nmap["bed_frame"].position_m[2] * 1000.0), 2)
+                if "bed_frame" in nmap
+                else None
+            ),
             "bed_support_points_mm": [
-                (nmap[m.start_id].position_m * 1000.0).tolist()
+                (
+                    nmap[
+                        m.end_id
+                        if (m.start_id.startswith("bed_t_") and m.end_id in nmap)
+                        else m.start_id
+                    ].position_m
+                    * 1000.0
+                ).tolist()
                 for m in self.members
                 if m.id.startswith("bed_arm_") and m.start_id in nmap
             ],
-            "bed_mount_points_mm": self._compute_bed_mount_points_mm(),
+            "bed_mount_points_mm": mount_pts,
+            "bed_mount_anchor_nodes": bed_mount_anchor_nodes,
             "z_rails": self._compute_z_rails_geometry(),
             "z_leadscrews": self._compute_z_leadscrews_geometry(),
             "toolhead_node_id": self.toolhead_node_id,
@@ -1697,16 +1723,19 @@ def _attach_bed_mount_compliance(
     spec: PrinterSpec,
     bed_center_m: np.ndarray,
 ) -> None:
-    """Create intermediate ``bed_frame`` node and 6-DOF ``bed_mount_spring`` to ``bed_surface``."""
+    """Create intermediate ``bed_frame`` node at subframe centerline and 6-DOF ``bed_mount_spring`` to ``bed_surface``."""
     cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
+    t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
     h_standoff_m = float(cfg.get("standoff_height_mm", 14.0)) * 1e-3
+    half_subframe_m = 0.010  # half of a 2020 bed subframe extrusion
 
     bed_kg = spec.bed.mass_g * 1e-3
     bed_frame_kg = 0.0
     bed_surface_kg = bed_kg
 
     bed_frame_pos = bed_center_m.copy()
-    bed_frame_pos[2] -= h_standoff_m
+    bed_frame_pos[2] -= t_bed_m + h_standoff_m + half_subframe_m
+    dz_bed_mount_m = float(bed_frame_pos[2] - bed_center_m[2])
     nodes.append(
         StructuralNode("bed_frame", bed_frame_pos, lumped_mass_kg=bed_frame_kg, role="bed")
     )
@@ -1748,7 +1777,7 @@ def _attach_bed_mount_compliance(
             k_normal_n_m=n_pts * k_axial_n_m,
             k_rot_nm_rad=k_rot_nm_rad,
             normal_vec=(0.0, 0.0, 1.0),
-            offset_m=(0.0, 0.0, -h_standoff_m),
+            offset_m=(0.0, 0.0, dz_bed_mount_m),
         )
     )
 
@@ -2514,6 +2543,10 @@ def _build_corexy(
     is_flying = spec.is_flying_gantry
     trident_backbone_active = bool(spec.frame.trident_backbone and not is_flying)
     z_drive = spec.bed.z_drive
+    bed_cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
+    t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
+    h_standoff_m = float(bed_cfg.get("standoff_height_mm", 14.0)) * 1e-3
+    half_subframe_m = 0.010
     top_clear_m = min(float(spec.frame.gantry_top_clearance_mm) * 1e-3, max(h - 0.16, 0.025))
     if is_flying:
         z_bed = orig_z
@@ -2529,10 +2562,12 @@ def _build_corexy(
     else:
         # Gantry plane near top of CoreXY frame
         z_gantry = h - top_clear_m
-        z_min = min(0.08, 0.5 * z_gantry)
+        z_min_req = max(0.08, 0.030 + t_bed_m + h_standoff_m + half_subframe_m)
+        z_min = min(z_min_req, 0.5 * z_gantry)
         z_max = max(z_min + 0.01, z_gantry - 0.045)
         z_stroke = min(bz, max(z_gantry - 0.14, 0.02))
         z_bed = float(np.clip(z_gantry - 0.045 - w_rel * z_stroke, z_min, z_max))
+    z_subframe = max(0.025, z_bed - t_bed_m - h_standoff_m - half_subframe_m)
 
     is_awd = spec.gantry.drive_mode == "awd"
     cnc_motor_mount_kg = 0.11 if bool(bkt_info["cnc_machined"]) else 0.0
@@ -2629,13 +2664,23 @@ def _build_corexy(
 
     y_mid = d * 0.5
     if z_drive == "leadscrew_triple":
+        bed_x_m = float(spec.bed.size_mm[0]) * 1e-3
+        bed_y_m = float(spec.bed.size_mm[1]) * 1e-3
+        x_fl = w * 0.5 - 0.375 * bed_x_m
+        x_fr = w * 0.5 + 0.375 * bed_x_m
+        y_f = d * 0.5 - 0.375 * bed_y_m
+        y_r = d * 0.5 + 0.375 * bed_y_m
         nodes.extend(
             [
-                StructuralNode("z_bed_fl", np.array([0.0, 0.0, z_bed]), role="frame"),
-                StructuralNode("z_bed_fr", np.array([w, 0.0, z_bed]), role="frame"),
+                StructuralNode("z_bed_fl", np.array([0.0, 0.0, z_subframe]), role="frame"),
+                StructuralNode("z_bed_fr", np.array([w, 0.0, z_subframe]), role="frame"),
                 StructuralNode("b_rear_mid", np.array([w * 0.5, d, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
                 StructuralNode("g_rear_mid", np.array([w * 0.5, d, z_gantry]), role="frame"),
-                StructuralNode("z_bed_r", np.array([w * 0.5, d, z_bed]), role="bed"),
+                StructuralNode("z_bed_r", np.array([w * 0.5, d, z_subframe]), role="bed"),
+                StructuralNode("bed_t_fl", np.array([x_fl, y_f, z_subframe]), role="bed"),
+                StructuralNode("bed_t_fr", np.array([x_fr, y_f, z_subframe]), role="bed"),
+                StructuralNode("bed_t_front", np.array([w * 0.5, y_f, z_subframe]), role="bed"),
+                StructuralNode("bed_t_rear_mount", np.array([w * 0.5, y_r, z_subframe]), role="bed"),
             ]
         )
     elif z_drive == "leadscrew_dual":
@@ -2647,8 +2692,8 @@ def _build_corexy(
                 StructuralNode("b_right_mid", np.array([w, y_mid, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
                 StructuralNode("t_left_mid", np.array([0.0, y_mid, h]), role="frame"),
                 StructuralNode("t_right_mid", np.array([w, y_mid, h]), role="frame"),
-                StructuralNode("z_bed_l", np.array([0.0, y_mid, z_bed]), role="bed"),
-                StructuralNode("z_bed_r", np.array([w, y_mid, z_bed]), role="bed"),
+                StructuralNode("z_bed_l", np.array([0.0, y_mid, z_subframe]), role="bed"),
+                StructuralNode("z_bed_r", np.array([w, y_mid, z_subframe]), role="bed"),
             ]
         )
     elif z_drive == "leadscrew_dual_belt_sync":
@@ -2664,8 +2709,8 @@ def _build_corexy(
                 StructuralNode("b_right_mid", np.array([w, y_mid, 0.0]), role="frame"),
                 StructuralNode("t_left_mid", np.array([0.0, y_mid, h]), role="frame"),
                 StructuralNode("t_right_mid", np.array([w, y_mid, h]), role="frame"),
-                StructuralNode("z_bed_l", np.array([0.0, y_mid, z_bed]), role="bed"),
-                StructuralNode("z_bed_r", np.array([w, y_mid, z_bed]), role="bed"),
+                StructuralNode("z_bed_l", np.array([0.0, y_mid, z_subframe]), role="bed"),
+                StructuralNode("z_bed_r", np.array([w, y_mid, z_subframe]), role="bed"),
                 # 4 smooth-rod base anchors, top anchors, rod-at-bed nodes, and LMK bearing housings
                 StructuralNode("b_rod_lf", np.array([0.0, y_rod_f, 0.0]), role="frame"),
                 StructuralNode("b_rod_lr", np.array([0.0, y_rod_r, 0.0]), role="frame"),
@@ -2675,14 +2720,14 @@ def _build_corexy(
                 StructuralNode("t_rod_lr", np.array([0.0, y_rod_r, h]), role="frame"),
                 StructuralNode("t_rod_rf", np.array([w, y_rod_f, h]), role="frame"),
                 StructuralNode("t_rod_rr", np.array([w, y_rod_r, h]), role="frame"),
-                StructuralNode("z_rod_lf", np.array([0.0, y_rod_f, z_bed]), role="bed"),
-                StructuralNode("z_rod_lr", np.array([0.0, y_rod_r, z_bed]), role="bed"),
-                StructuralNode("z_rod_rf", np.array([w, y_rod_f, z_bed]), role="bed"),
-                StructuralNode("z_rod_rr", np.array([w, y_rod_r, z_bed]), role="bed"),
-                StructuralNode("z_brg_lf", np.array([0.0, y_rod_f, z_bed]), role="bed"),
-                StructuralNode("z_brg_lr", np.array([0.0, y_rod_r, z_bed]), role="bed"),
-                StructuralNode("z_brg_rf", np.array([w, y_rod_f, z_bed]), role="bed"),
-                StructuralNode("z_brg_rr", np.array([w, y_rod_r, z_bed]), role="bed"),
+                StructuralNode("z_rod_lf", np.array([0.0, y_rod_f, z_subframe]), role="bed"),
+                StructuralNode("z_rod_lr", np.array([0.0, y_rod_r, z_subframe]), role="bed"),
+                StructuralNode("z_rod_rf", np.array([w, y_rod_f, z_subframe]), role="bed"),
+                StructuralNode("z_rod_rr", np.array([w, y_rod_r, z_subframe]), role="bed"),
+                StructuralNode("z_brg_lf", np.array([0.0, y_rod_f, z_subframe]), role="bed"),
+                StructuralNode("z_brg_lr", np.array([0.0, y_rod_r, z_subframe]), role="bed"),
+                StructuralNode("z_brg_rf", np.array([w, y_rod_f, z_subframe]), role="bed"),
+                StructuralNode("z_brg_rr", np.array([w, y_rod_r, z_subframe]), role="bed"),
             ]
         )
         for tag in ("lf", "lr", "rf", "rr"):
@@ -2704,7 +2749,7 @@ def _build_corexy(
             [
                 StructuralNode("b_rear_mid", np.array([w * 0.5, d, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
                 StructuralNode("g_rear_mid", np.array([w * 0.5, d, z_gantry]), role="frame"),
-                StructuralNode("z_bed_r", np.array([w * 0.5, d, z_bed]), role="bed"),
+                StructuralNode("z_bed_r", np.array([w * 0.5, d, z_subframe]), role="bed"),
             ]
         )
 
@@ -2807,7 +2852,7 @@ def _build_corexy(
             width_m=0.020,
             height_m=max(0.014, 0.012 + t_mm * 1e-3),
             area_m2=8.0e-4,
-            iy_m4=4.0e-8 + 1.2e-7 * (t_ratio**3),
+            iy_m4=8.0e-8 + 2.4e-7 * (t_ratio**3),
             iz_m4=1.6e-7,
             j_m4=6.0e-8,
         )
@@ -2838,9 +2883,11 @@ def _build_corexy(
         )
         nmap_pre = {n.id: n for n in nodes}
 
-        def _series_z_arm_iy(iy_nom: float, start_nid: str) -> float:
+        def _series_z_arm_iy(
+            iy_nom: float, start_nid: str, end_nid: str = "bed_frame"
+        ) -> float:
             l_arm = max(
-                float(np.linalg.norm(nmap_pre[start_nid].position_m - nmap_pre["bed_frame"].position_m)),
+                float(np.linalg.norm(nmap_pre[start_nid].position_m - nmap_pre[end_nid].position_m)),
                 0.05,
             )
             iy_bare = (1.40 if z_drive == "leadscrew_triple" else 1.0) * iy_nom
@@ -2870,24 +2917,71 @@ def _build_corexy(
             )
 
         if z_drive == "leadscrew_triple":
-            for tag, z_nid in (("fl", "z_bed_fl"), ("fr", "z_bed_fr"), ("r", "z_bed_r")):
+            ext_2020 = get_profile("extrusion_2020")
+            for tag, start_nid, end_nid in (
+                ("fl", "z_bed_fl", "bed_t_fl"),
+                ("fr", "z_bed_fr", "bed_t_fr"),
+                ("r", "bed_t_rear_mount", "z_bed_r"),
+            ):
                 bed_arm_prof = ProfileSpec.model_construct(
                     id="bed_trident_arm_profile",
-                    name=f"3-Point Z Bed Spider + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
-                    shape="solid_bar",
-                    width_m=0.020,
-                    height_m=max(0.012, 0.012 + t_mm * 1e-3),
-                    area_m2=6.0e-4,
-                    iy_m4=_series_z_arm_iy(iy_triple_arm, z_nid),
-                    iz_m4=iz_triple_arm,
-                    j_m4=j_triple_arm,
+                    name=f"3-Point Z Bed Arm + Carriage ({t_mm:.1f}mm {spec.bed.plate_material})",
+                    shape="extrusion",
+                    width_m=ext_2020.width_m,
+                    height_m=ext_2020.height_m,
+                    area_m2=1.4e-3,
+                    iy_m4=_series_z_arm_iy(iy_triple_arm, start_nid, end_nid),
+                    iz_m4=5.0e-7,
+                    j_m4=1.5e-7,
                 )
                 members.append(
                     StructuralMember(
                         id=f"bed_arm_{tag}",
-                        start_id=z_nid,
-                        end_id="bed_frame",
+                        start_id=start_nid,
+                        end_id=end_nid,
                         profile=bed_arm_prof,
+                        material=bed_vmat,
+                        role="bed",
+                    )
+                )
+
+            # 2020 T-subframe composite with bolted cast-Al bed plate diaphragm:
+            # - Front crossbar (X): out-of-plane composite Iy + 2020 torsion J around X.
+            # - Central spine (Y): in-plane cast-Al plate diaphragm Iz + composite Iy + 2020-scale torsion J.
+            bed_crossbar_prof = ProfileSpec.model_construct(
+                id="bed_trident_subframe_crossbar_profile",
+                name=f"2020 T-Subframe Crossbar + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
+                shape="extrusion",
+                width_m=ext_2020.width_m,
+                height_m=ext_2020.height_m,
+                area_m2=1.4e-3,
+                iy_m4=ext_2020.iy_m4 + 1.9932e-6 * (t_ratio**3),
+                iz_m4=ext_2020.iz_m4 + 2.5e-7 * t_ratio,
+                j_m4=ext_2020.j_m4 + 1.789e-7 * (t_ratio**3),
+            )
+            bed_spine_prof = ProfileSpec.model_construct(
+                id="bed_trident_subframe_spine_profile",
+                name=f"2020 T-Subframe Spine + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
+                shape="extrusion",
+                width_m=ext_2020.width_m,
+                height_m=ext_2020.height_m,
+                area_m2=1.4e-3,
+                iy_m4=ext_2020.iy_m4 + 1.9932e-6 * (t_ratio**3),
+                iz_m4=ext_2020.iz_m4 + 4.0e-6 * t_ratio,
+                j_m4=ext_2020.j_m4 + 1.489e-7 * (t_ratio**3),
+            )
+            for mid, n0, n1, prof in (
+                ("bed_subframe_fl", "bed_t_fl", "bed_t_front", bed_crossbar_prof),
+                ("bed_subframe_fr", "bed_t_front", "bed_t_fr", bed_crossbar_prof),
+                ("bed_subframe_spine_f", "bed_t_front", "bed_frame", bed_spine_prof),
+                ("bed_subframe_spine_r", "bed_frame", "bed_t_rear_mount", bed_spine_prof),
+            ):
+                members.append(
+                    StructuralMember(
+                        id=mid,
+                        start_id=n0,
+                        end_id=n1,
+                        profile=prof,
                         material=bed_vmat,
                         role="bed",
                     )

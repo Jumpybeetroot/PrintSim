@@ -264,6 +264,7 @@ def test_all_five_bed_mounts_monotonic_stiffness_and_thermal_taco_buckling() -> 
     kx_vals = []
     ky_vals = []
     kz_vals = []
+    bed_mount_kx_vals = []
     taco_um = {}
 
     for mt in mounts_ordered:
@@ -274,6 +275,13 @@ def test_all_five_bed_mounts_monotonic_stiffness_and_thermal_taco_buckling() -> 
         st = solve_static_fea(asm)
         ts = compute_thermal_structural_report(asm)
 
+        K, _, _, nidx, free = assemble_global_matrices(asm)
+        f_bx = np.zeros(K.shape[0], dtype=float)
+        f_bx[6 * nidx["bed_surface"]] = 1.0
+        u_bx = _solve_linear_system(K, f_bx, free)
+        dx_mount_mm = abs(float(u_bx[6 * nidx["bed_surface"]] - u_bx[6 * nidx["bed_frame"]])) * 1e3
+        bed_mount_kx_vals.append(1.0 / max(dx_mount_mm, 1e-12))
+
         bed_defls.append(st.bed_deflection_um)
         kx_vals.append(st.toolhead_stiffness_x_n_per_mm)
         ky_vals.append(st.toolhead_stiffness_y_n_per_mm)
@@ -281,11 +289,25 @@ def test_all_five_bed_mounts_monotonic_stiffness_and_thermal_taco_buckling() -> 
         taco_um[mt] = ts.bed_buckling_taco_um
 
     # Mechanical stiffness strictly decreases from rigid_4pt -> springs_4pt
+    # (note: on an unpaneled frame, kinematic_3pt's 16mm vs floating_4pt's 12mm standoff height shifts
+    # Z-carriage elevation by 4mm (~0.1% on frame loop kx), while mount-level kx and structural-panel kx stay strictly monotonic)
     for i in range(len(mounts_ordered) - 1):
-        assert kx_vals[i] > kx_vals[i + 1]
+        assert bed_mount_kx_vals[i] > bed_mount_kx_vals[i + 1]
         assert ky_vals[i] > ky_vals[i + 1]
         assert kz_vals[i] > kz_vals[i + 1]
         assert bed_defls[i] < bed_defls[i + 1]
+    assert kx_vals[0] > kx_vals[1] > kx_vals[3] > kx_vals[4]
+    assert kx_vals[2] > kx_vals[3] > kx_vals[4]
+
+    # With structural bolted panels bracing the columns, full-loop kx is also strictly monotonic across all 5 mounts
+    kx_paneled = []
+    for mt in mounts_ordered:
+        s_p = base.model_copy(deep=True)
+        s_p.frame.panel_mounting = "bolted_structural"
+        s_p.bed.mount_type = mt  # type: ignore[assignment]
+        kx_paneled.append(solve_static_fea(build_assembly(s_p)).toolhead_stiffness_x_n_per_mm)
+    for i in range(len(mounts_ordered) - 1):
+        assert kx_paneled[i] > kx_paneled[i + 1]
 
     # Thermal taco buckling: kinematic_3pt == 0, rigid_4pt high (>100 um), compliant 4pt near-zero
     assert taco_um["kinematic_3pt"] == 0.0
@@ -527,10 +549,12 @@ def test_bed_mount_standoff_offset_6dof_inertia_and_inset_alignment() -> None:
         nmap = asm.node_map
         sp = next(s for s in asm.fastener_springs if s.id == "bed_mount_spring")
 
-        h_expected_m = float(cfg["standoff_height_mm"]) * 1e-3
+        t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
+        h_standoff_m = float(cfg["standoff_height_mm"]) * 1e-3
+        expected_dz_m = -(t_bed_m + h_standoff_m + 0.010)
         dz = float(nmap["bed_frame"].position_m[2] - nmap["bed_surface"].position_m[2])
-        assert dz == pytest.approx(-h_expected_m, abs=1e-9)
-        assert sp.offset_m == pytest.approx((0.0, 0.0, -h_expected_m), abs=1e-9)
+        assert dz == pytest.approx(expected_dz_m, abs=1e-9)
+        assert sp.offset_m == pytest.approx((0.0, 0.0, expected_dz_m), abs=1e-9)
 
         # Eccentric spring offset produces zero spurious strain energy under pure rigid pitch
         k_sp = fastener_spring_matrices(
@@ -542,7 +566,7 @@ def test_bed_mount_standoff_offset_6dof_inertia_and_inset_alignment() -> None:
         )
         theta_y = 0.015
         u_rigid = np.zeros(12, dtype=float)
-        u_rigid[0] = -h_expected_m * theta_y
+        u_rigid[0] = expected_dz_m * theta_y
         u_rigid[4] = theta_y
         u_rigid[10] = theta_y
         assert 0.5 * float(u_rigid @ k_sp @ u_rigid) == pytest.approx(0.0, abs=1e-10)
@@ -584,5 +608,87 @@ def test_bed_mount_standoff_offset_6dof_inertia_and_inset_alignment() -> None:
         < taco_map["trident_3pt_standoffs"]
         < taco_map["rigid_4pt"]
     )
+
+
+def test_trident_2020_t_subframe_elevation_alignment_and_zero_bed_clipping() -> None:
+    """Trident builds a true 2020 T-subframe strictly underneath the bed plate & mounts with exact anchor mapping."""
+    base = _trident_base()
+    t_bed_m = float(base.bed.plate_thickness_mm) * 1e-3
+    h_standoff_m = float(BED_MOUNT_CATALOG[base.bed.mount_type]["standoff_height_mm"]) * 1e-3
+    half_subframe_m = 0.010
+
+    for w_rel in (0.05, 0.5, 0.95):
+        asm = build_assembly(base, toolhead_rel_pos=(0.5, 0.5, w_rel))
+        _assert_spd_and_finite(asm)
+        nmap = asm.node_map
+        z_bed = float(nmap["bed_surface"].position_m[2])
+        z_bed_bottom = z_bed - t_bed_m
+        z_subframe = z_bed - t_bed_m - h_standoff_m - half_subframe_m
+
+        assert z_subframe >= 0.030 - 1e-9
+        assert float(nmap["bed_frame"].position_m[2]) == pytest.approx(z_subframe, abs=1e-9)
+
+        # Every Z-carriage and T-subframe node sits coplanar at z_subframe strictly below bed plate underside
+        for nid in (
+            "z_bed_fl",
+            "z_bed_fr",
+            "z_bed_r",
+            "bed_t_fl",
+            "bed_t_fr",
+            "bed_t_front",
+            "bed_t_rear_mount",
+        ):
+            assert nid in nmap
+            z_node = float(nmap[nid].position_m[2])
+            assert z_node == pytest.approx(z_subframe, abs=1e-9)
+            assert z_node + half_subframe_m < z_bed_bottom
+
+        # Every bed_arm_* and bed_subframe_* member lies strictly horizontal at z_subframe < z_bed - t_bed_m
+        subframe_members = [
+            m for m in asm.members if m.id.startswith(("bed_arm_", "bed_subframe_"))
+        ]
+        expected_ids = {
+            "bed_arm_fl",
+            "bed_arm_fr",
+            "bed_arm_r",
+            "bed_subframe_fl",
+            "bed_subframe_fr",
+            "bed_subframe_spine_f",
+            "bed_subframe_spine_r",
+        }
+        assert {m.id for m in subframe_members} == expected_ids
+        for m in subframe_members:
+            assert m.profile.width_m == pytest.approx(0.020, abs=1e-9)
+            assert m.profile.height_m == pytest.approx(0.020, abs=1e-9)
+            assert float(nmap[m.start_id].position_m[2]) == pytest.approx(z_subframe, abs=1e-9)
+            assert float(nmap[m.end_id].position_m[2]) == pytest.approx(z_subframe, abs=1e-9)
+            assert float(nmap[m.start_id].position_m[2]) < z_bed_bottom
+
+        # Exact mount point X/Y alignment (< 0.1 mm) and underside Z
+        gdict = asm.to_geometry_dict()
+        assert gdict["bed_subframe_z_mm"] == pytest.approx(z_subframe * 1000.0, abs=0.02)
+        assert gdict["bed_mount_anchor_nodes"] == ["bed_t_fl", "bed_t_fr", "bed_t_rear_mount"]
+
+        mount_pts = gdict["bed_mount_points_mm"]
+        assert len(mount_pts) == 3
+        for anchor_id, pt_mm in zip(gdict["bed_mount_anchor_nodes"], mount_pts, strict=True):
+            anchor_mm = nmap[anchor_id].position_m * 1000.0
+            assert abs(float(anchor_mm[0]) - float(pt_mm[0])) < 0.1
+            assert abs(float(anchor_mm[1]) - float(pt_mm[1])) < 0.1
+            assert float(pt_mm[2]) == pytest.approx(z_bed_bottom * 1000.0, abs=0.02)
+
+    # Non-triple CoreXY Z-drives keep Z-carriages & bed_frame coplanar at z_subframe & fall back anchor nodes
+    for zd in ("leadscrew_dual", "leadscrew_dual_belt_sync", "leadscrew_single"):
+        spec_zd = base.model_copy(deep=True)
+        spec_zd.bed.z_drive = zd  # type: ignore[assignment]
+        asm_zd = build_assembly(spec_zd)
+        nmap_zd = asm_zd.node_map
+        z_sub_zd = float(nmap_zd["bed_frame"].position_m[2])
+        assert z_sub_zd < float(nmap_zd["bed_surface"].position_m[2]) - t_bed_m
+        for nid, node in nmap_zd.items():
+            if nid.startswith(("z_bed_", "z_rod_", "z_brg_")):
+                assert float(node.position_m[2]) == pytest.approx(z_sub_zd, abs=1e-9)
+        gd_zd = asm_zd.to_geometry_dict()
+        assert gd_zd["bed_mount_anchor_nodes"] == ["bed_frame"] * len(gd_zd["bed_mount_points_mm"])
 
 
