@@ -81,6 +81,10 @@ def _classify_sensitivity_group(
         return "frame_feet", "Machine Feet & Benchtop Pads"
     if bay == "z_joint" or mid.startswith("z_joint"):
         return "z_gantry_joints", "Z-Axis Gantry Joints"
+    if bay == "top_brace" or mid.startswith(("bay_top_brace", "top_brace")):
+        return "top_brace", "Top Open-Center Brace"
+    if bay == "front_brace" or mid.startswith(("bay_front_brace", "front_brace")):
+        return "front_brace", "Front Open-Door Brace"
     return classify_part_group(member_id, role)
 
 
@@ -219,6 +223,10 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
             return "Main limit: Y-rail beam & carriage lateral/torsional stiffness along the gantry load path."
         if group_id == "trident_backbone":
             return "Main limit: lower-frame mild-steel backbone plate shear/bending stiffness and perimeter M5 bolting."
+        if group_id == "top_brace":
+            return "Main limit: top open-center brace shear/bending stiffness and perimeter M5 bolting to top rails."
+        if group_id == "front_brace":
+            return "Main limit: front open-door brace shear/bending stiffness and perimeter M5 bolting to front columns/rails."
         if role == "panel" or group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
             return "Main limit: outer frame shear-panel in-plane stiffness and panel-to-frame coupling."
         if role == "brace" or group_id == "frame_bracing":
@@ -274,6 +282,18 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
         return (
             "Main limit: 3 mm mild-steel lower-frame backbone plate shear/flexural continuity "
             "and M5 perimeter bolting into the Z-motor mounts."
+        )
+
+    if group_id == "top_brace":
+        return (
+            "Main limit: 5 mm Al 5052 top open-center halo ring shear/flexural stiffness "
+            "and M5 perimeter bolting into the top frame rails."
+        )
+
+    if group_id == "front_brace":
+        return (
+            "Main limit: 5 mm Al 5052 front open-door portal brace shear/flexural stiffness "
+            "and M5 bolting into the front frame columns and rails."
         )
 
     if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels") or role == "panel":
@@ -345,6 +365,10 @@ def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
             )
         if group_id == "trident_backbone":
             return f"Acts as a 3 mm mild-steel lower-frame diaphragm carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "top_brace":
+            return f"Acts as a 5 mm Al top open-center brace carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "front_brace":
+            return f"Acts as a 5 mm Al front open-door brace carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
         if group_id in ("side_panels", "rear_panel", "top_panel", "enclosure_panels"):
             return f"Acts as a structural shear diaphragm carrying {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
         return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex & boosts structural resonance (+{est_hz_gain:.1f} Hz potential)"
@@ -781,7 +805,11 @@ def compute_structural_sensitivities(
     }
 
     for sh in assembly.shell_elements:
-        bay_key = sh.bay.split("_")[0]
+        bay_key = (
+            sh.bay
+            if sh.bay in ("top_brace", "front_brace", "backbone")
+            else sh.bay.split("_")[0]
+        )
         if bay_key not in bay_acc:
             bay_acc[bay_key] = {k: 0.0 for k in bay_acc["left"]}
         n_indices = [node_idx[nid] for nid in sh.node_ids]
@@ -826,7 +854,11 @@ def compute_structural_sensitivities(
     # Fastener & joint springs: fold panel bays into bay_acc, and non-panel springs into raw_members
     for sp in assembly.fastener_springs:
         bay_raw = sp.bay
-        bay_prefix = bay_raw.split("_")[0]
+        bay_prefix = (
+            bay_raw
+            if bay_raw in ("top_brace", "front_brace", "backbone")
+            else bay_raw.split("_")[0]
+        )
         i_s = node_idx[sp.shell_node_id]
         i_f = node_idx[sp.frame_node_id]
         k_sp = fastener_spring_matrices(
@@ -1219,7 +1251,7 @@ def compute_structural_sensitivities(
     for bay_key, b in bay_acc.items():
         if b["n_elements"] <= 0:
             continue
-        gid, label = _classify_sensitivity_group(f"bay_{bay_key}", "panel")
+        gid, label = _classify_sensitivity_group(f"bay_{bay_key}", "panel", bay=bay_key)
         g = group_acc.setdefault(
             gid,
             {

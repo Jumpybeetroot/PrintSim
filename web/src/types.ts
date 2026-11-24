@@ -115,6 +115,28 @@ export type FrameFeetType =
   | "anti_vib_pads"
   | "paver_on_foam";
 
+export type TopBraceType =
+  | "none"
+  | "cnc_halo_ring"
+  | "rear_v_and_front_corners"
+  | "corner_45_bars";
+
+export type FrontBraceType =
+  | "none"
+  | "cnc_portal_frame"
+  | "header_and_skirt"
+  | "corner_45_bars";
+
+export interface BraceCatalogItem {
+  id: string;
+  label: string;
+  short_label: string;
+  kind: string;
+  thickness_mm: number;
+  description: string;
+  cost_usd: number;
+}
+
 export type ZProbeType = "static_eddy" | "klicky_inductive" | "cnc_tap" | "printed_tap";
 
 export type BeltRoutingType = "stock_corexy" | "monolith_short";
@@ -349,6 +371,8 @@ export interface CatalogResponse {
   hotend_presets?: HotendPresetItem[];
   z_drive_mechanisms?: ZDriveMechanismItem[];
   z_rail_profiles?: ZRailProfileItem[];
+  top_braces?: BraceCatalogItem[];
+  front_braces?: BraceCatalogItem[];
   rail_qualities?: Array<{
     id: RailQualityType;
     name: string;
@@ -572,6 +596,8 @@ export interface PrinterSpecData {
     bolt_panels_to_gantry?: boolean;
     gantry_top_clearance_mm?: number;
     trident_backbone?: boolean;
+    top_brace?: TopBraceType;
+    front_brace?: FrontBraceType;
     extrusion_filling?: ExtrusionFillingType;
     corner_joint_type?: CornerJointType;
     feet_type?: FrameFeetType;
@@ -1112,6 +1138,32 @@ export interface GeometryData {
     cost_usd: number;
     z_thrust_boost_factor: number;
     notes: string;
+  };
+  top_brace?: {
+    id: string;
+    active: boolean;
+    label: string;
+    material_name: string;
+    thickness_mm: number;
+    flange_width_mm: number;
+    cutout_w_mm: number;
+    cutout_d_mm: number;
+    mass_kg: number;
+    cost_usd: number;
+  };
+  front_brace?: {
+    id: string;
+    active: boolean;
+    label: string;
+    material_name: string;
+    thickness_mm: number;
+    flange_width_mm: number;
+    header_height_mm: number;
+    skirt_height_mm: number;
+    cutout_w_mm: number;
+    cutout_h_mm: number;
+    mass_kg: number;
+    cost_usd: number;
   };
   frame_dims_mm: [number, number, number];
   build_volume_mm: [number, number, number];

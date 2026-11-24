@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ARCH_LABELS,
   BRACING_LABELS,
+  FRONT_BRACE_LABELS,
+  TOP_BRACE_LABELS,
   Z_DRIVE_LABELS,
 } from "../constants/printerLabels";
 import {
@@ -10,9 +12,11 @@ import {
   ExtrusionFillingInfo,
   ExtrusionFillingType,
   FrameFeetType,
+  FrontBraceType,
   PrinterSpecData,
   ProfileItem,
   SimulationResponse,
+  TopBraceType,
 } from "../types";
 
 interface FrameSizePreset {
@@ -365,6 +369,22 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
   const topPanelInstalled = spec.frame.top_panel ?? true;
   const tridentBackboneEnabled = Boolean(spec.frame.trident_backbone);
   const simBackbone = sim?.geometry.trident_backbone ?? null;
+  const currentTopBrace: TopBraceType = spec.frame.top_brace ?? "none";
+  const currentFrontBrace: FrontBraceType = spec.frame.front_brace ?? "none";
+  const simTopBrace =
+    sim?.geometry.top_brace && sim.geometry.top_brace.id === currentTopBrace
+      ? sim.geometry.top_brace
+      : null;
+  const simFrontBrace =
+    sim?.geometry.front_brace && sim.geometry.front_brace.id === currentFrontBrace
+      ? sim.geometry.front_brace
+      : null;
+  const topBraceCatalogItem = catalog.top_braces?.find((b) => b.id === currentTopBrace);
+  const frontBraceCatalogItem = catalog.front_braces?.find((b) => b.id === currentFrontBrace);
+  const hasCncOpenBracePlate =
+    currentTopBrace === "cnc_halo_ring" ||
+    currentFrontBrace === "cnc_portal_frame" ||
+    currentFrontBrace === "header_and_skirt";
   const thicknessChoices = PANEL_THICKNESS_OPTIONS.includes(currentPanelThickness)
     ? PANEL_THICKNESS_OPTIONS
     : [...PANEL_THICKNESS_OPTIONS, currentPanelThickness].sort((a, b) => a - b);
@@ -1055,6 +1075,169 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             </>
           )}
         </div>
+      )}
+
+      {spec.architecture === "corexy" && (
+        <>
+          <div className="field-row">
+            <label>
+              <span>Top Brace (Open Center)</span>
+              {currentTopBrace !== "none" && (
+                <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                  {topBraceCatalogItem?.short_label ??
+                    (currentTopBrace === "cnc_halo_ring"
+                      ? "CNC Halo"
+                      : currentTopBrace === "rear_v_and_front_corners"
+                        ? "Rear-V + Corners"
+                        : "4× Corner Bars")}
+                </span>
+              )}
+            </label>
+            <select
+              value={currentTopBrace}
+              onChange={(e) => {
+                const nextVal = e.target.value as TopBraceType;
+                update(
+                  (d) => {
+                    d.frame.top_brace = nextVal;
+                  },
+                  `Top Brace: ${TOP_BRACE_LABELS[currentTopBrace]} → ${TOP_BRACE_LABELS[nextVal]}`
+                );
+              }}
+            >
+              <option value="none">{TOP_BRACE_LABELS.none}</option>
+              <option value="cnc_halo_ring">{TOP_BRACE_LABELS.cnc_halo_ring}</option>
+              <option value="rear_v_and_front_corners">
+                {TOP_BRACE_LABELS.rear_v_and_front_corners}
+              </option>
+              <option value="corner_45_bars">{TOP_BRACE_LABELS.corner_45_bars}</option>
+            </select>
+            {currentTopBrace !== "none" && (
+              <div className="inline-readout-strip">
+                {simTopBrace && simTopBrace.cutout_w_mm > 0 && simTopBrace.cutout_d_mm > 0 ? (
+                  <strong>
+                    {Math.round(simTopBrace.cutout_w_mm)}×{Math.round(simTopBrace.cutout_d_mm)} mm
+                    open center
+                  </strong>
+                ) : (
+                  <strong>
+                    {Math.max(120, Math.round(spec.frame.width_mm - 100))}×
+                    {Math.max(120, Math.round(spec.frame.depth_mm - 100))} mm open center
+                  </strong>
+                )}
+                <span>•</span>
+                <span>
+                  +
+                  {(simTopBrace && simTopBrace.mass_kg > 0
+                    ? simTopBrace.mass_kg
+                    : currentTopBrace === "cnc_halo_ring"
+                      ? 1.18
+                      : 0.35
+                  ).toFixed(2)}{" "}
+                  kg
+                </span>
+                <span>•</span>
+                <span>
+                  ~$
+                  {Math.round(
+                    simTopBrace && simTopBrace.cost_usd > 0
+                      ? simTopBrace.cost_usd
+                      : (topBraceCatalogItem?.cost_usd ??
+                          (currentTopBrace === "cnc_halo_ring" ? 55 : 22))
+                  )}
+                </span>
+              </div>
+            )}
+            {showHints && topBraceCatalogItem?.description && currentTopBrace !== "none" && (
+              <div className="hint-line">{topBraceCatalogItem.description}</div>
+            )}
+          </div>
+
+          <div className="field-row">
+            <label>
+              <span>Front Brace (Open Door)</span>
+              {currentFrontBrace !== "none" && (
+                <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                  {frontBraceCatalogItem?.short_label ??
+                    (currentFrontBrace === "cnc_portal_frame"
+                      ? "CNC Portal"
+                      : currentFrontBrace === "header_and_skirt"
+                        ? "Header + Skirt"
+                        : "4× Corner Bars")}
+                </span>
+              )}
+            </label>
+            <select
+              value={currentFrontBrace}
+              onChange={(e) => {
+                const nextVal = e.target.value as FrontBraceType;
+                update(
+                  (d) => {
+                    d.frame.front_brace = nextVal;
+                  },
+                  `Front Brace: ${FRONT_BRACE_LABELS[currentFrontBrace]} → ${FRONT_BRACE_LABELS[nextVal]}`
+                );
+              }}
+            >
+              <option value="none">{FRONT_BRACE_LABELS.none}</option>
+              <option value="cnc_portal_frame">{FRONT_BRACE_LABELS.cnc_portal_frame}</option>
+              <option value="header_and_skirt">{FRONT_BRACE_LABELS.header_and_skirt}</option>
+              <option value="corner_45_bars">{FRONT_BRACE_LABELS.corner_45_bars}</option>
+            </select>
+            {currentFrontBrace !== "none" && (
+              <div className="inline-readout-strip">
+                {simFrontBrace && simFrontBrace.cutout_w_mm > 0 && simFrontBrace.cutout_h_mm > 0 ? (
+                  <strong>
+                    {Math.round(simFrontBrace.cutout_w_mm)}×{Math.round(simFrontBrace.cutout_h_mm)}{" "}
+                    mm clear door
+                  </strong>
+                ) : (
+                  <strong>
+                    {Math.max(120, Math.round(spec.frame.width_mm - 110))}×
+                    {Math.max(120, Math.round(spec.frame.height_mm - 110))} mm clear door
+                  </strong>
+                )}
+                <span>•</span>
+                <span>
+                  +
+                  {(simFrontBrace && simFrontBrace.mass_kg > 0
+                    ? simFrontBrace.mass_kg
+                    : currentFrontBrace === "cnc_portal_frame"
+                      ? 1.3
+                      : currentFrontBrace === "header_and_skirt"
+                        ? 0.95
+                        : 0.35
+                  ).toFixed(2)}{" "}
+                  kg
+                </span>
+                <span>•</span>
+                <span>
+                  ~$
+                  {Math.round(
+                    simFrontBrace && simFrontBrace.cost_usd > 0
+                      ? simFrontBrace.cost_usd
+                      : (frontBraceCatalogItem?.cost_usd ??
+                          (currentFrontBrace === "cnc_portal_frame"
+                            ? 60
+                            : currentFrontBrace === "header_and_skirt"
+                              ? 45
+                              : 22))
+                  )}
+                </span>
+              </div>
+            )}
+            {showHints && frontBraceCatalogItem?.description && currentFrontBrace !== "none" && (
+              <div className="hint-line">{frontBraceCatalogItem.description}</div>
+            )}
+          </div>
+
+          {hasCncOpenBracePlate && (
+            <div className="hint-line" style={{ color: "var(--accent)", marginTop: -2 }}>
+              CNC Halo / Front Portal / Header+Skirt plates are automatically included in{" "}
+              <strong>DXF Plates</strong> export.
+            </div>
+          )}
+        </>
       )}
 
       <details className="sub-accordion">

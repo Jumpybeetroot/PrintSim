@@ -54,6 +54,10 @@ def classify_part_group(member_id: str, role: str = "") -> tuple[str, str]:
         return "side_panels", "Left & Right Enclosure Panels"
     if mid.startswith("bay_rear"):
         return "rear_panel", "Rear Enclosure Panel"
+    if mid.startswith(("bay_top_brace", "top_brace")):
+        return "top_brace", "Top Open-Center Brace"
+    if mid.startswith(("bay_front_brace", "front_brace")):
+        return "front_brace", "Front Open-Door Brace"
     if mid.startswith("bay_top"):
         return "top_panel", "Top Enclosure Panel"
     if mid.startswith(("bay_backbone", "backbone")):
@@ -584,7 +588,11 @@ def solve_static_fea(
     if peak_shell is not None and (
         peak_member is None or peak_shell.von_mises_mpa > peak_member.von_mises_mpa
     ):
-        bay_base = peak_shell.bay.split("_")[0]
+        bay_base = (
+            peak_shell.bay
+            if peak_shell.bay in ("top_brace", "front_brace", "backbone")
+            else peak_shell.bay.split("_")[0]
+        )
         _, peak_stress_label = classify_part_group(f"bay_{bay_base}", "panel")
     elif peak_member is not None:
         _, peak_stress_label = classify_part_group(peak_member.member_id, peak_member.role)

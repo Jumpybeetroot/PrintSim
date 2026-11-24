@@ -201,6 +201,17 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "steel_rod_10mm": _round_rod("steel_rod_10mm", "Hardened Linear Rod 10mm", 10.0),
     "steel_rod_12mm": _round_rod("steel_rod_12mm", "Hardened Linear Rod 12mm", 12.0),
     "brace_rod_10mm": _round_rod("brace_rod_10mm", "Diagonal Brace Rod / Strut 10mm", 10.0),
+    "al_flat_bar_25x5": ProfileSpec(
+        id="al_flat_bar_25x5",
+        name="25x5mm Aluminum Flat Bar (6061-T6)",
+        shape="solid_bar",
+        width_m=0.025,
+        height_m=0.005,
+        area_m2=1.25e-4,
+        iy_m4=0.025 * (0.005**3) / 12.0,
+        iz_m4=0.005 * (0.025**3) / 12.0,
+        j_m4=0.025 * (0.005**3) / 3.0,
+    ),
 }
 
 

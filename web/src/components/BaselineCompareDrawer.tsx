@@ -3,6 +3,8 @@ import {
   ARCH_LABELS,
   BELT_LABELS,
   BRACING_LABELS,
+  FRONT_BRACE_LABELS,
+  TOP_BRACE_LABELS,
   Z_DRIVE_LABELS,
 } from "../constants/printerLabels";
 import {
@@ -165,6 +167,24 @@ function collectSpecDiffs(
       "Trident Backbone",
       base.frame.trident_backbone ? "3mm Steel" : "Off",
       cur.frame.trident_backbone ? "3mm Steel" : "Off"
+    );
+  }
+  const baseTopBrace = base.frame.top_brace ?? "none";
+  const curTopBrace = cur.frame.top_brace ?? "none";
+  if (baseTopBrace !== curTopBrace) {
+    push(
+      "Top Brace",
+      TOP_BRACE_LABELS[baseTopBrace] ?? baseTopBrace,
+      TOP_BRACE_LABELS[curTopBrace] ?? curTopBrace
+    );
+  }
+  const baseFrontBrace = base.frame.front_brace ?? "none";
+  const curFrontBrace = cur.frame.front_brace ?? "none";
+  if (baseFrontBrace !== curFrontBrace) {
+    push(
+      "Front Brace",
+      FRONT_BRACE_LABELS[baseFrontBrace] ?? baseFrontBrace,
+      FRONT_BRACE_LABELS[curFrontBrace] ?? curFrontBrace
     );
   }
   if (Math.round(base.frame.chamber_temp_c ?? 25) !== Math.round(cur.frame.chamber_temp_c ?? 25)) {

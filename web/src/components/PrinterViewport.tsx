@@ -2788,8 +2788,16 @@ export const PrinterViewport: React.FC<Props> = ({
       const isBedSubframeOrArm =
         isBedMember &&
         (m.id.startsWith("bed_subframe_") || m.id.startsWith("bed_arm_"));
-      const rawW = Math.max(m.width_mm * SCALE, isBedMember ? 0.05 : 0.06);
-      const rawH = Math.max(m.height_mm * SCALE, isBedMember ? 0.05 : 0.06);
+      const isOpenBraceBar =
+        m.id.startsWith("brace_top_open_") || m.id.startsWith("brace_front_open_");
+      const rawW = Math.max(
+        m.width_mm * SCALE,
+        isOpenBraceBar ? 0.045 : isBedMember ? 0.05 : 0.06
+      );
+      const rawH = Math.max(
+        m.height_mm * SCALE,
+        isOpenBraceBar ? 0.045 : isBedMember ? 0.05 : 0.06
+      );
       const w = isBedPost
         ? rawW
         : isBedSubframeOrArm
@@ -2870,7 +2878,9 @@ export const PrinterViewport: React.FC<Props> = ({
         }
       } else if (!useVertexColors) {
         matColor = new THREE.Color(m.color_hex);
-        if (m.role === "brace") {
+        if (isOpenBraceBar) {
+          matColor = new THREE.Color("#cbd5e1");
+        } else if (m.role === "brace") {
           matColor = new THREE.Color("#38bdf8");
         } else if (m.role === "gantry") {
           matColor = m.material.includes("carbon")
@@ -2897,17 +2907,21 @@ export const PrinterViewport: React.FC<Props> = ({
             ? 0.22
             : useVertexColors
               ? 0.25
-              : m.material.includes("carbon")
-                ? 0.15
-                : 0.55,
+              : isOpenBraceBar
+                ? 0.82
+                : m.material.includes("carbon")
+                  ? 0.15
+                  : 0.55,
         roughness:
           viewMode === "sensitivity"
             ? 0.42
             : useVertexColors
               ? 0.4
-              : m.material.includes("carbon")
-                ? 0.65
-                : 0.35,
+              : isOpenBraceBar
+                ? 0.26
+                : m.material.includes("carbon")
+                  ? 0.65
+                  : 0.35,
         transparent: memberOpacity < 1,
         opacity: memberOpacity,
         depthWrite: memberOpacity >= 0.5,
@@ -2968,6 +2982,16 @@ export const PrinterViewport: React.FC<Props> = ({
         tagInspectable(mesh, chainInspectInfo);
         group.add(mesh);
 
+        if (viewMode === "assembly" && isOpenBraceBar && !toolheadPunchIn) {
+          const barEdgesGeo = new THREE.EdgesGeometry(geo, 28);
+          const barEdgesMat = new THREE.LineBasicMaterial({
+            color: 0x64748b,
+            transparent: true,
+            opacity: memberOpacity * 0.7,
+          });
+          group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
+        }
+
         if (viewMode === "modal") {
           stateRef.current.modalMeshes.push({ mesh, startId: firstId, endId: lastId });
         }
@@ -3017,6 +3041,16 @@ export const PrinterViewport: React.FC<Props> = ({
         }
         tagInspectable(mesh, chainInspectInfo);
         group.add(mesh);
+
+        if (viewMode === "assembly" && isOpenBraceBar && !toolheadPunchIn) {
+          const barEdgesGeo = new THREE.EdgesGeometry(geo, 28);
+          const barEdgesMat = new THREE.LineBasicMaterial({
+            color: 0x64748b,
+            transparent: true,
+            opacity: memberOpacity * 0.7,
+          });
+          group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
+        }
 
         // Continuous T-slot core accent strip on filled stationary extrusions (Assembly mode only)
         if (
@@ -3326,13 +3360,16 @@ export const PrinterViewport: React.FC<Props> = ({
           shellGeo.computeVertexNormals();
 
           const isBackboneBay = bayName === "backbone";
+          const isTopBraceBay = bayName === "top_brace";
+          const isFrontBraceBay = bayName === "front_brace";
+          const isPlateBraceBay = isBackboneBay || isTopBraceBay || isFrontBraceBay;
           const shellMat = new THREE.MeshStandardMaterial({
             vertexColors: true,
             transparent: true,
             opacity,
             depthWrite: false,
-            roughness: isBackboneBay ? 0.34 : 0.36,
-            metalness: isBackboneBay ? 0.42 : 0.14,
+            roughness: isPlateBraceBay ? 0.3 : 0.36,
+            metalness: isBackboneBay ? 0.42 : isTopBraceBay || isFrontBraceBay ? 0.48 : 0.14,
             side: THREE.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: 1,
@@ -3344,21 +3381,41 @@ export const PrinterViewport: React.FC<Props> = ({
           const bayGrp = classifyPartGroup(`bay_${bayName}`, "panel");
           const baySens = sim.sensitivity?.panel_bay_sensitivities?.[bayName];
           const bayStiff = stiffenById[bayGrp.id] ?? stiffenById[`bay_${bayName}`];
+          const topBraceThickMm = panels[0]?.thickness_mm ?? geom.top_brace?.thickness_mm ?? 5;
+          const frontBraceThickMm = panels[0]?.thickness_mm ?? geom.front_brace?.thickness_mm ?? 5;
           const bayLabel = isBackboneBay
             ? "Trident Backbone (Clee, 3.18mm Mild Steel Perimeter Plate)"
-            : `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
+            : isTopBraceBay
+              ? `Top Open-Center Brace (${Math.round(topBraceThickMm)}mm Al)`
+              : isFrontBraceBay
+                ? `Front Open-Door Brace (${Math.round(frontBraceThickMm)}mm Al)`
+                : `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
           tagInspectable(shellMesh, {
-            key: isBackboneBay ? "frame:trident_backbone" : `panel:${bayName}`,
+            key: isBackboneBay
+              ? "frame:trident_backbone"
+              : isTopBraceBay
+                ? "frame:top_brace"
+                : isFrontBraceBay
+                  ? "frame:front_brace"
+                  : `panel:${bayName}`,
             name: bayLabel,
             subsystem: "frame",
             partGroupId: bayGrp.id,
             role: "panel",
             material: isBackboneBay
               ? (geom.trident_backbone?.material_name ?? "Powder-Coated Mild Steel")
-              : (geom.panels?.material_name ?? sim.spec.frame.panel_material),
+              : isTopBraceBay
+                ? (geom.top_brace?.material_name ?? "6061-T6 Aluminum")
+                : isFrontBraceBay
+                  ? (geom.front_brace?.material_name ?? "6061-T6 Aluminum")
+                  : (geom.panels?.material_name ?? sim.spec.frame.panel_material),
             profile: isBackboneBay
               ? `${(panels[0]?.thickness_mm ?? geom.trident_backbone?.thickness_mm ?? 3.18).toFixed(2)}mm perimeter steel plate (MITC4)`
-              : `${panels[0]?.thickness_mm ?? sim.spec.frame.panel_thickness_mm}mm MITC4 shell`,
+              : isTopBraceBay
+                ? `${topBraceThickMm.toFixed(1)}mm open-center brace plate (MITC4)`
+                : isFrontBraceBay
+                  ? `${frontBraceThickMm.toFixed(1)}mm open-door brace plate (MITC4)`
+                  : `${panels[0]?.thickness_mm ?? sim.spec.frame.panel_thickness_mm}mm MITC4 shell`,
             complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
             heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
             stressMpa: bayMaxVmMap[bayName] > 0 ? bayMaxVmMap[bayName] : undefined,
@@ -3406,7 +3463,7 @@ export const PrinterViewport: React.FC<Props> = ({
           const baseBayOpacity =
             bayName === "top"
               ? 0.28
-              : bayName === "backbone"
+              : bayName === "backbone" || bayName === "top_brace" || bayName === "front_brace"
                 ? viewMode === "sensitivity"
                   ? 0.85
                   : 0.88
@@ -4824,6 +4881,446 @@ export const PrinterViewport: React.FC<Props> = ({
           }
           bbBoltInst.instanceMatrix.needsUpdate = true;
           group.add(bbBoltInst);
+        }
+      }
+
+      // Helper for strictly CW rounded-rectangle cutout holes in any 2D THREE.Shape
+      const addCwRoundedRectHole2D = (
+        targetShape: THREE.Shape,
+        x0: number,
+        y0: number,
+        x1: number,
+        y1: number,
+        rRaw: number
+      ) => {
+        const w = x1 - x0;
+        const h = y1 - y0;
+        if (w <= 1e-4 || h <= 1e-4) return;
+        const r = Math.min(Math.max(rRaw, 0), w * 0.48, h * 0.48);
+        const hole = new THREE.Path();
+        hole.moveTo(x0, y0 + r);
+        hole.lineTo(x0, y1 - r);
+        hole.absarc(x0 + r, y1 - r, r, Math.PI, Math.PI * 0.5, true);
+        hole.lineTo(x1 - r, y1);
+        hole.absarc(x1 - r, y1 - r, r, Math.PI * 0.5, 0, true);
+        hole.lineTo(x1, y0 + r);
+        hole.absarc(x1 - r, y0 + r, r, 0, -Math.PI * 0.5, true);
+        hole.lineTo(x0 + r, y0);
+        hole.absarc(x0 + r, y0 + r, r, -Math.PI * 0.5, -Math.PI, true);
+        hole.closePath();
+        targetShape.holes.push(hole);
+      };
+
+      // Open-Center Top CNC Halo Ring (5mm brushed 6061 aluminum plate resting flush on top rails)
+      const topBrace = geom.top_brace;
+      if (
+        geom.architecture === "corexy" &&
+        Boolean(topBrace?.active) &&
+        topBrace?.id === "cnc_halo_ring"
+      ) {
+        const [fw, fd, fh] = geom.frame_dims_mm;
+        const frameMember = geom.members.find((m) => m.role === "frame");
+        const extWidthMm = frameMember?.width_mm ?? 20;
+        const extHalfMm = extWidthMm * 0.5;
+        const plateThickMm = topBrace.thickness_mm > 0 ? topBrace.thickness_mm : 5.0;
+        const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
+
+        const xL = -extHalfMm;
+        const xR = fw + extHalfMm;
+        const yF = -extHalfMm;
+        const yB = fd + extHalfMm;
+        const sx = (cadX: number) => (cadX - cx) * SCALE;
+        const sy = (cadY: number) => (cadY - cy) * SCALE;
+
+        const haloShape = new THREE.Shape();
+        haloShape.moveTo(sx(xL), sy(yF));
+        haloShape.lineTo(sx(xR), sy(yF));
+        haloShape.lineTo(sx(xR), sy(yB));
+        haloShape.lineTo(sx(xL), sy(yB));
+        haloShape.closePath();
+
+        const flangeMm = topBrace.flange_width_mm > 0 ? topBrace.flange_width_mm : 50.0;
+        const rawCutW =
+          topBrace.cutout_w_mm > 0 ? topBrace.cutout_w_mm : Math.max(80, fw - 2 * flangeMm);
+        const rawCutD =
+          topBrace.cutout_d_mm > 0 ? topBrace.cutout_d_mm : Math.max(80, fd - 2 * flangeMm);
+        const maxCutW = Math.max(0, xR - xL - 2 * extWidthMm - 16);
+        const maxCutD = Math.max(0, yB - yF - 2 * extWidthMm - 16);
+        const cutW = Math.min(rawCutW, maxCutW);
+        const cutD = Math.min(rawCutD, maxCutD);
+
+        if (cutW >= 24 && cutD >= 24) {
+          const midX = fw * 0.5;
+          const midY = fd * 0.5;
+          const rMm = Math.min(20.0, cutW * 0.25, cutD * 0.25);
+          addCwRoundedRectHole2D(
+            haloShape,
+            sx(midX - cutW * 0.5),
+            sy(midY - cutD * 0.5),
+            sx(midX + cutW * 0.5),
+            sy(midY + cutD * 0.5),
+            rMm * SCALE
+          );
+        }
+
+        const haloGeo = new THREE.ExtrudeGeometry(haloShape, {
+          depth: plateThickScene,
+          bevelEnabled: false,
+          curveSegments: 16,
+        });
+        haloGeo.rotateX(-Math.PI / 2);
+        haloGeo.computeVertexNormals();
+
+        const plateBaseY = toThree([0, 0, fh + extHalfMm], cx, cy).y + 0.002;
+        const plateTopY = plateBaseY + plateThickScene;
+
+        const haloMat = new THREE.MeshStandardMaterial({
+          color: 0xcbd5e1,
+          metalness: 0.84,
+          roughness: 0.25,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.16 : 1.0,
+        });
+        const haloMesh = new THREE.Mesh(haloGeo, haloMat);
+        haloMesh.position.y = plateBaseY;
+
+        const tbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["top_brace"];
+        const tbStiff = stiffenById["top_brace"] ?? stiffenById["bay_top_brace"];
+        if (!toolheadPunchIn) {
+          tagInspectable(haloMesh, {
+            key: "frame:top_brace",
+            name: `Top CNC Halo Ring (${Math.round(plateThickMm)}mm Al)`,
+            subsystem: "frame",
+            partGroupId: "top_brace",
+            role: "panel",
+            material: topBrace.material_name || "6061-T6 Aluminum",
+            profile: `${plateThickMm.toFixed(1)}mm CNC halo ring (${Math.round(cutW)}×${Math.round(cutD)}mm open center)`,
+            complianceSharePct: tbBaySens?.compliance_share_pct ?? tbStiff?.compliance_share_pct,
+            heatScore: tbBaySens ? getLensScore(tbBaySens, adjointLens) : undefined,
+            estHzGain: tbStiff?.est_hz_gain,
+            hzPer100g: tbBaySens?.hz_per_100g,
+            whyItHurts: tbStiff?.why_it_hurts,
+            actionHint: tbStiff?.action_hint,
+          });
+        }
+        group.add(haloMesh);
+
+        const haloEdgesGeo = new THREE.EdgesGeometry(haloGeo, 28);
+        const haloEdgesMat = new THREE.LineBasicMaterial({
+          color: 0x64748b,
+          transparent: true,
+          opacity: toolheadPunchIn ? 0.16 : 0.85,
+        });
+        const haloEdges = new THREE.LineSegments(haloEdgesGeo, haloEdgesMat);
+        haloEdges.position.y = plateBaseY;
+        group.add(haloEdges);
+
+        // Perimeter M5 socket-head bolts seated along top frame extrusion centerlines
+        if (!toolheadPunchIn) {
+          const steps = 5;
+          const boltCoords: THREE.Vector3[] = [];
+          const boltY = plateTopY + 0.013;
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const bx = t * fw;
+            const by = t * fd;
+            const pf = toThree([bx, 0, fh + extHalfMm + plateThickMm], cx, cy);
+            const pr = toThree([bx, fd, fh + extHalfMm + plateThickMm], cx, cy);
+            boltCoords.push(new THREE.Vector3(pf.x, boltY, pf.z));
+            boltCoords.push(new THREE.Vector3(pr.x, boltY, pr.z));
+            if (i > 0 && i < steps) {
+              const pl = toThree([0, by, fh + extHalfMm + plateThickMm], cx, cy);
+              const pri = toThree([fw, by, fh + extHalfMm + plateThickMm], cx, cy);
+              boltCoords.push(new THREE.Vector3(pl.x, boltY, pl.z));
+              boltCoords.push(new THREE.Vector3(pri.x, boltY, pri.z));
+            }
+          }
+          const boltGeo = new THREE.CylinderGeometry(0.034, 0.034, 0.026, 10);
+          const boltMat = new THREE.MeshStandardMaterial({
+            color: 0xe2e8f0,
+            metalness: 0.88,
+            roughness: 0.22,
+          });
+          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
+          const dummy = new THREE.Object3D();
+          for (let i = 0; i < boltCoords.length; i++) {
+            dummy.position.copy(boltCoords[i]);
+            dummy.updateMatrix();
+            boltInst.setMatrixAt(i, dummy.matrix);
+          }
+          boltInst.instanceMatrix.needsUpdate = true;
+          group.add(boltInst);
+        }
+      }
+
+      // Open-Door Front CNC Portal Frame (5mm brushed 6061 aluminum picture-frame plate at y = -extHalf)
+      const frontBrace = geom.front_brace;
+      if (
+        geom.architecture === "corexy" &&
+        Boolean(frontBrace?.active) &&
+        frontBrace?.id === "cnc_portal_frame"
+      ) {
+        const [fw, , fh] = geom.frame_dims_mm;
+        const frameMember = geom.members.find((m) => m.role === "frame");
+        const extWidthMm = frameMember?.width_mm ?? 20;
+        const extHalfMm = extWidthMm * 0.5;
+        const plateThickMm = frontBrace.thickness_mm > 0 ? frontBrace.thickness_mm : 5.0;
+        const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
+
+        const xL = -extHalfMm;
+        const xR = fw + extHalfMm;
+        const zB = -extHalfMm;
+        const zT = fh + extHalfMm;
+        const sx = (cadX: number) => (cadX - cx) * SCALE;
+        const sz = (cadZ: number) => cadZ * SCALE;
+
+        const portalShape = new THREE.Shape();
+        portalShape.moveTo(sx(xL), sz(zB));
+        portalShape.lineTo(sx(xR), sz(zB));
+        portalShape.lineTo(sx(xR), sz(zT));
+        portalShape.lineTo(sx(xL), sz(zT));
+        portalShape.closePath();
+
+        const flangeMm = frontBrace.flange_width_mm > 0 ? frontBrace.flange_width_mm : 55.0;
+        const rawCutW =
+          frontBrace.cutout_w_mm > 0 ? frontBrace.cutout_w_mm : Math.max(80, fw - 2 * flangeMm);
+        const rawCutH =
+          frontBrace.cutout_h_mm > 0 ? frontBrace.cutout_h_mm : Math.max(80, fh - 2 * flangeMm);
+        const maxCutW = Math.max(0, xR - xL - 2 * extWidthMm - 16);
+        const maxCutH = Math.max(0, zT - zB - 2 * extWidthMm - 16);
+        const cutW = Math.min(rawCutW, maxCutW);
+        const cutH = Math.min(rawCutH, maxCutH);
+
+        if (cutW >= 24 && cutH >= 24) {
+          const midX = fw * 0.5;
+          const midZ = fh * 0.5;
+          const rMm = Math.min(20.0, cutW * 0.25, cutH * 0.25);
+          addCwRoundedRectHole2D(
+            portalShape,
+            sx(midX - cutW * 0.5),
+            sz(midZ - cutH * 0.5),
+            sx(midX + cutW * 0.5),
+            sz(midZ + cutH * 0.5),
+            rMm * SCALE
+          );
+        }
+
+        const portalGeo = new THREE.ExtrudeGeometry(portalShape, {
+          depth: plateThickScene,
+          bevelEnabled: false,
+          curveSegments: 16,
+        });
+        portalGeo.computeVertexNormals();
+
+        // Mount flush on front outer face CAD y = -extHalfMm (Three.js +Z outward)
+        const frontOuterZ = toThree([0, -extHalfMm, 0], cx, cy).z + 0.002;
+        const frontFaceZ = frontOuterZ + plateThickScene;
+
+        const portalMat = new THREE.MeshStandardMaterial({
+          color: 0xcbd5e1,
+          metalness: 0.84,
+          roughness: 0.25,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.16 : 1.0,
+        });
+        const portalMesh = new THREE.Mesh(portalGeo, portalMat);
+        portalMesh.position.z = frontOuterZ;
+
+        const fbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["front_brace"];
+        const fbStiff = stiffenById["front_brace"] ?? stiffenById["bay_front_brace"];
+        if (!toolheadPunchIn) {
+          tagInspectable(portalMesh, {
+            key: "frame:front_brace",
+            name: `Front CNC Portal Frame (${Math.round(plateThickMm)}mm Al)`,
+            subsystem: "frame",
+            partGroupId: "front_brace",
+            role: "panel",
+            material: frontBrace.material_name || "6061-T6 Aluminum",
+            profile: `${plateThickMm.toFixed(1)}mm CNC front portal (${Math.round(cutW)}×${Math.round(cutH)}mm clear door)`,
+            complianceSharePct: fbBaySens?.compliance_share_pct ?? fbStiff?.compliance_share_pct,
+            heatScore: fbBaySens ? getLensScore(fbBaySens, adjointLens) : undefined,
+            estHzGain: fbStiff?.est_hz_gain,
+            hzPer100g: fbBaySens?.hz_per_100g,
+            whyItHurts: fbStiff?.why_it_hurts,
+            actionHint: fbStiff?.action_hint,
+          });
+        }
+        group.add(portalMesh);
+
+        const portalEdgesGeo = new THREE.EdgesGeometry(portalGeo, 28);
+        const portalEdgesMat = new THREE.LineBasicMaterial({
+          color: 0x64748b,
+          transparent: true,
+          opacity: toolheadPunchIn ? 0.16 : 0.85,
+        });
+        const portalEdges = new THREE.LineSegments(portalEdgesGeo, portalEdgesMat);
+        portalEdges.position.z = frontOuterZ;
+        group.add(portalEdges);
+
+        // Perimeter M5 socket-head bolts seated along front perimeter extrusion centerlines
+        if (!toolheadPunchIn) {
+          const steps = 5;
+          const boltCoords: THREE.Vector3[] = [];
+          const boltZ = frontFaceZ + 0.013;
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const bx = t * fw;
+            const bz = t * fh;
+            boltCoords.push(new THREE.Vector3(sx(bx), sz(0), boltZ));
+            boltCoords.push(new THREE.Vector3(sx(bx), sz(fh), boltZ));
+            if (i > 0 && i < steps) {
+              boltCoords.push(new THREE.Vector3(sx(0), sz(bz), boltZ));
+              boltCoords.push(new THREE.Vector3(sx(fw), sz(bz), boltZ));
+            }
+          }
+          const boltGeo = new THREE.CylinderGeometry(0.034, 0.034, 0.026, 10);
+          boltGeo.rotateX(Math.PI / 2);
+          const boltMat = new THREE.MeshStandardMaterial({
+            color: 0xe2e8f0,
+            metalness: 0.88,
+            roughness: 0.22,
+          });
+          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
+          const dummy = new THREE.Object3D();
+          for (let i = 0; i < boltCoords.length; i++) {
+            dummy.position.copy(boltCoords[i]);
+            dummy.updateMatrix();
+            boltInst.setMatrixAt(i, dummy.matrix);
+          }
+          boltInst.instanceMatrix.needsUpdate = true;
+          group.add(boltInst);
+        }
+      }
+
+      // Open-Door Front Upper Header + Lower Skirt (two 5mm brushed 6061 aluminum plates at y = -extHalf)
+      if (
+        geom.architecture === "corexy" &&
+        Boolean(frontBrace?.active) &&
+        frontBrace?.id === "header_and_skirt"
+      ) {
+        const [fw, , fh] = geom.frame_dims_mm;
+        const frameMember = geom.members.find((m) => m.role === "frame");
+        const extWidthMm = frameMember?.width_mm ?? 20;
+        const extHalfMm = extWidthMm * 0.5;
+        const plateThickMm = frontBrace.thickness_mm > 0 ? frontBrace.thickness_mm : 5.0;
+        const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
+
+        const xL = -extHalfMm;
+        const xR = fw + extHalfMm;
+        const sx = (cadX: number) => (cadX - cx) * SCALE;
+        const sz = (cadZ: number) => cadZ * SCALE;
+
+        const gantryTopClr = geom.gantry_top_clearance_mm ?? sim.spec.frame.gantry_top_clearance_mm ?? 55;
+        const headerHeightMm =
+          frontBrace.header_height_mm > 0 ? frontBrace.header_height_mm : gantryTopClr;
+        const skirtHeightMm =
+          frontBrace.skirt_height_mm > 0 ? frontBrace.skirt_height_mm : 65.0;
+
+        const zHeaderTop = fh + extHalfMm;
+        const zHeaderBot = Math.max(extHalfMm + 20, fh - headerHeightMm);
+        const zSkirtBot = -extHalfMm;
+        const zSkirtTop = Math.min(zHeaderBot - 20, Math.max(extWidthMm, skirtHeightMm));
+        const clearDoorH = Math.max(0, zHeaderBot - zSkirtTop);
+
+        const frontOuterZ = toThree([0, -extHalfMm, 0], cx, cy).z + 0.002;
+        const frontFaceZ = frontOuterZ + plateThickScene;
+
+        const hsMat = new THREE.MeshStandardMaterial({
+          color: 0xcbd5e1,
+          metalness: 0.84,
+          roughness: 0.25,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.16 : 1.0,
+        });
+        const hsEdgesMat = new THREE.LineBasicMaterial({
+          color: 0x64748b,
+          transparent: true,
+          opacity: toolheadPunchIn ? 0.16 : 0.85,
+        });
+
+        const fbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["front_brace"];
+        const fbStiff = stiffenById["front_brace"] ?? stiffenById["bay_front_brace"];
+        const hsInspectInfo: InspectedPartInfo = {
+          key: "frame:front_brace",
+          name: `Front Upper Header + Lower Skirt (${Math.round(plateThickMm)}mm Al)`,
+          subsystem: "frame",
+          partGroupId: "front_brace",
+          role: "panel",
+          material: frontBrace.material_name || "6061-T6 Aluminum",
+          profile: `${plateThickMm.toFixed(1)}mm CNC header (${Math.round(headerHeightMm)}mm) + skirt (${Math.round(skirtHeightMm)}mm) · ${Math.round(clearDoorH)}mm clear door`,
+          complianceSharePct: fbBaySens?.compliance_share_pct ?? fbStiff?.compliance_share_pct,
+          heatScore: fbBaySens ? getLensScore(fbBaySens, adjointLens) : undefined,
+          estHzGain: fbStiff?.est_hz_gain,
+          hzPer100g: fbBaySens?.hz_per_100g,
+          whyItHurts: fbStiff?.why_it_hurts,
+          actionHint: fbStiff?.action_hint,
+        };
+
+        const addFrontRectPlate = (z0Mm: number, z1Mm: number) => {
+          const rectShape = new THREE.Shape();
+          rectShape.moveTo(sx(xL), sz(z0Mm));
+          rectShape.lineTo(sx(xR), sz(z0Mm));
+          rectShape.lineTo(sx(xR), sz(z1Mm));
+          rectShape.lineTo(sx(xL), sz(z1Mm));
+          rectShape.closePath();
+
+          const geo = new THREE.ExtrudeGeometry(rectShape, {
+            depth: plateThickScene,
+            bevelEnabled: false,
+            curveSegments: 8,
+          });
+          geo.computeVertexNormals();
+          const mesh = new THREE.Mesh(geo, hsMat);
+          mesh.position.z = frontOuterZ;
+          if (!toolheadPunchIn) {
+            tagInspectable(mesh, hsInspectInfo);
+          }
+          group.add(mesh);
+
+          const edgesGeo = new THREE.EdgesGeometry(geo, 28);
+          const edges = new THREE.LineSegments(edgesGeo, hsEdgesMat);
+          edges.position.z = frontOuterZ;
+          group.add(edges);
+        };
+
+        addFrontRectPlate(zHeaderBot, zHeaderTop);
+        addFrontRectPlate(zSkirtBot, zSkirtTop);
+
+        // Perimeter M5 socket-head bolts along header top/sides and skirt bottom/sides
+        if (!toolheadPunchIn) {
+          const steps = 5;
+          const boltCoords: THREE.Vector3[] = [];
+          const boltZ = frontFaceZ + 0.013;
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const bx = t * fw;
+            boltCoords.push(new THREE.Vector3(sx(bx), sz(fh), boltZ));
+            boltCoords.push(new THREE.Vector3(sx(bx), sz(0), boltZ));
+          }
+          // Side column bolts near lower edge of upper header and upper edge of lower skirt
+          const headerMidZ = Math.max(zHeaderBot + 10, fh - Math.min(headerHeightMm * 0.75, headerHeightMm - 10));
+          const skirtUpperZ = Math.min(zSkirtTop - 10, Math.max(20, skirtHeightMm * 0.75));
+          boltCoords.push(new THREE.Vector3(sx(0), sz(headerMidZ), boltZ));
+          boltCoords.push(new THREE.Vector3(sx(fw), sz(headerMidZ), boltZ));
+          boltCoords.push(new THREE.Vector3(sx(0), sz(skirtUpperZ), boltZ));
+          boltCoords.push(new THREE.Vector3(sx(fw), sz(skirtUpperZ), boltZ));
+
+          const boltGeo = new THREE.CylinderGeometry(0.034, 0.034, 0.026, 10);
+          boltGeo.rotateX(Math.PI / 2);
+          const boltMat = new THREE.MeshStandardMaterial({
+            color: 0xe2e8f0,
+            metalness: 0.88,
+            roughness: 0.22,
+          });
+          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
+          const dummy = new THREE.Object3D();
+          for (let i = 0; i < boltCoords.length; i++) {
+            dummy.position.copy(boltCoords[i]);
+            dummy.updateMatrix();
+            boltInst.setMatrixAt(i, dummy.matrix);
+          }
+          boltInst.instanceMatrix.needsUpdate = true;
+          group.add(boltInst);
         }
       }
     }

@@ -8,6 +8,8 @@ import {
   ARCH_LABELS,
   BELT_LABELS,
   BRACING_LABELS,
+  FRONT_BRACE_LABELS,
+  TOP_BRACE_LABELS,
   Z_DRIVE_LABELS,
 } from "./constants/printerLabels";
 import {
@@ -252,6 +254,24 @@ function describeSpecDiff(
     diffs.push(
       `Bracing: ${BRACING_LABELS[prev.frame.bracing] ?? prev.frame.bracing} → ${
         BRACING_LABELS[next.frame.bracing] ?? next.frame.bracing
+      }`
+    );
+  }
+  const prevTopBrace = prev.frame.top_brace ?? "none";
+  const nextTopBrace = next.frame.top_brace ?? "none";
+  if (prevTopBrace !== nextTopBrace) {
+    diffs.push(
+      `Top Brace: ${TOP_BRACE_LABELS[prevTopBrace] ?? prevTopBrace} → ${
+        TOP_BRACE_LABELS[nextTopBrace] ?? nextTopBrace
+      }`
+    );
+  }
+  const prevFrontBrace = prev.frame.front_brace ?? "none";
+  const nextFrontBrace = next.frame.front_brace ?? "none";
+  if (prevFrontBrace !== nextFrontBrace) {
+    diffs.push(
+      `Front Brace: ${FRONT_BRACE_LABELS[prevFrontBrace] ?? prevFrontBrace} → ${
+        FRONT_BRACE_LABELS[nextFrontBrace] ?? nextFrontBrace
       }`
     );
   }
@@ -2035,7 +2055,7 @@ export default function App() {
             className="btn"
             disabled={!spec || exportingDxf}
             onClick={handleExportDxf}
-            title="Download 2D CNC/laser-cut DXF flat plates for frame panels, gussets, and deck plates"
+            title="Download 2D CNC/laser-cut DXF flat plates for frame panels, gussets, deck plates, Top CNC Halo Ring, and Front Portal / Header+Skirt plates"
           >
             {exportingDxf ? "Exporting DXF..." : "DXF Plates"}
           </button>

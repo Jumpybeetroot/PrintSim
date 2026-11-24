@@ -1,4 +1,4 @@
-import { PrinterSpecData } from "../types";
+import { FrontBraceType, PrinterSpecData, TopBraceType } from "../types";
 
 export const BRACING_LABELS: Record<PrinterSpecData["frame"]["bracing"], string> = {
   none: "None (Open Frame)",
@@ -8,6 +8,20 @@ export const BRACING_LABELS: Record<PrinterSpecData["frame"]["bracing"], string>
   side_cross: "Side X-Braces (Left/Right)",
   rear_and_sides: "Rear + Side X-Braces (Open Top)",
   full_truss: "Full 3D Truss (All Faces)",
+};
+
+export const TOP_BRACE_LABELS: Record<TopBraceType, string> = {
+  none: "None (Open Top)",
+  cnc_halo_ring: "CNC Halo Ring (5mm Al, 50mm flange)",
+  rear_v_and_front_corners: "Rear-V + Front Corners (25×5mm Bar)",
+  corner_45_bars: "4× Top Corner 45° Bars (25×5mm)",
+};
+
+export const FRONT_BRACE_LABELS: Record<FrontBraceType, string> = {
+  none: "None (Open Front Door)",
+  cnc_portal_frame: "CNC Portal Frame (5mm Al, 55mm border)",
+  header_and_skirt: "Upper Header + Lower Skirt (5mm Al)",
+  corner_45_bars: "4× Front Corner 45° Bars (25×5mm)",
 };
 
 export const ARCH_LABELS: Record<PrinterSpecData["architecture"], string> = {

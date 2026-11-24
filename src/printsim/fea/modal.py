@@ -439,6 +439,12 @@ def _classify_mode_diagnosis(
     )
 
 
+def _canonical_bay_key(bay: str) -> str:
+    if bay in ("top_brace", "front_brace", "backbone"):
+        return bay
+    return bay.split("_")[0]
+
+
 def _classify_modal_group(member_id: str, role: str = "", bay: str = "") -> tuple[str, str]:
     """Map member/spring/bay IDs to canonical physical part groups (matching sensitivity.py)."""
     mid = member_id.strip()
@@ -446,6 +452,10 @@ def _classify_modal_group(member_id: str, role: str = "", bay: str = "") -> tupl
         return "frame_feet", "Machine Feet & Benchtop Pads"
     if bay == "z_joint" or mid.startswith("z_joint"):
         return "z_gantry_joints", "Z-Axis Gantry Joints"
+    if bay == "top_brace" or mid.startswith(("bay_top_brace", "top_brace")):
+        return "top_brace", "Top Open-Center Brace"
+    if bay == "front_brace" or mid.startswith(("bay_front_brace", "front_brace")):
+        return "front_brace", "Front Open-Door Brace"
     return classify_part_group(member_id, role)
 
 
@@ -545,8 +555,8 @@ def _precompute_modal_element_blocks(
             e_mem_h_n_m=sh.e_mem_h_n_m,
         )
         dofs = [6 * ni + d for ni in n_indices for d in range(6)]
-        bay_prefix = sh.bay.split("_")[0]
-        gid, label = _classify_modal_group(f"bay_{bay_prefix}", "panel")
+        bay_key = _canonical_bay_key(sh.bay)
+        gid, label = _classify_modal_group(f"bay_{bay_key}", "panel", bay=sh.bay)
         elem_blocks.append((gid, label, "frame", dofs, k_sh, m_sh))
 
     for sp in assembly.fastener_springs:
@@ -561,15 +571,17 @@ def _precompute_modal_element_blocks(
         )
         dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
         bay_raw = sp.bay
-        bay_prefix = bay_raw.split("_")[0]
+        bay_prefix = _canonical_bay_key(bay_raw)
         if bay_raw not in ("bed_mount", "toolhead", "feet", "z_joint") and bay_prefix in (
             "left",
             "right",
             "rear",
             "top",
             "backbone",
+            "top_brace",
+            "front_brace",
         ):
-            gid, label = _classify_modal_group(f"bay_{bay_prefix}", "panel")
+            gid, label = _classify_modal_group(f"bay_{bay_prefix}", "panel", bay=bay_raw)
             subsys = "frame"
         else:
             sp_role = (
@@ -655,7 +667,15 @@ def _compute_mode_root_causes(
         share_pct = round(100.0 * u_val / u_norm_denom, 1)
         est_hz = round(0.5 * u_val / denom_fk, 2)
         hz_s = _fmt_hz_gain(est_hz)
-        if gid in ("side_panels", "rear_panel", "top_panel", "enclosure_panels", "trident_backbone"):
+        if gid in (
+            "side_panels",
+            "rear_panel",
+            "top_panel",
+            "enclosure_panels",
+            "trident_backbone",
+            "top_brace",
+            "front_brace",
+        ):
             detail = f"{share_pct:.0f}% of mode shear/panel flex (+{hz_s} Hz if +50% stiffer)"
         elif gid == "frame_feet":
             detail = f"{share_pct:.0f}% of mode anchor flex (+{hz_s} Hz if +50% stiffer)"

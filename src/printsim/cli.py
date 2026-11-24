@@ -388,7 +388,7 @@ def export_dxf_cmd(
         "all_plates",
         "--part",
         "-p",
-        help="Plate/kit part: all_plates | side_panel | rear_panel | top_panel | trident_backbone | corner_gusset",
+        help="Plate/kit part: all_plates | side_panel | rear_panel | top_panel | trident_backbone | top_halo_ring | front_portal_frame | front_header_skirt | corner_gusset",
     ),
 ) -> None:
     """Export 2D CNC/laser-cut DXF panels and structural plates (R2010, mm)."""

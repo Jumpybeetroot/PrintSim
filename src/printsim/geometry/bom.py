@@ -10,10 +10,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from printsim.geometry.builder import AssemblyModel, build_assembly, panel_mechanical_properties
+from printsim.geometry.builder import (
+    AssemblyModel,
+    build_assembly,
+    front_brace_dimensions_mm,
+    panel_mechanical_properties,
+    top_brace_dimensions_mm,
+)
 from printsim.schema import (
     EXTRUSION_FILLINGS,
+    FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
+    TOP_BRACE_CATALOG,
     PrinterSpec,
     get_material,
     get_profile,
@@ -394,6 +402,7 @@ def _merge_collinear_members(assembly: AssemblyModel) -> list[_MergedSegment]:
             or m.id.startswith("panel_shear_")
             or m.id.startswith("x_rail_aux_")
             or m.id.startswith(("toolhead_", "nozzle_"))
+            or m.id.startswith(("brace_top_open_", "brace_front_open_"))
         ):
             continue
         length_m = m.length_m(nmap)
@@ -787,6 +796,52 @@ def generate_bom(
             unit="kg",
             unit_cost_usd=fill_cost_per_kg,
             unit_mass_g=1000.0,
+        )
+
+    if arch == "corexy" and spec.frame.top_brace != "none" and assembly.top_brace_active:
+        tb_id = spec.frame.top_brace
+        tb_info = TOP_BRACE_CATALOG.get(tb_id, TOP_BRACE_CATALOG["none"])
+        tb_dims = top_brace_dimensions_mm(spec)
+        tb_mat = (
+            "5.0 mm Al 5052-H32 CNC plate"
+            if tb_info.get("kind") == "cnc_plate"
+            else "25x5 mm Al 6061-T6 flat bar kit"
+        )
+        _add_bom_item(
+            items,
+            sku=f"FRM-TOP-{tb_id.upper().replace('_', '-')}",
+            category="frame",
+            name=f"Top Frame Brace — {tb_info['label']}",
+            specification=(
+                f"{tb_mat}, {tb_dims['cutout_w_mm']:.0f}x{tb_dims['cutout_d_mm']:.0f} mm open center"
+            ),
+            quantity=1,
+            unit="pcs" if tb_info.get("kind") == "cnc_plate" else "kit",
+            unit_cost_usd=float(assembly.top_brace_cost_usd),
+            unit_mass_g=float(assembly.top_brace_mass_kg) * 1000.0,
+        )
+
+    if arch == "corexy" and spec.frame.front_brace != "none" and assembly.front_brace_active:
+        fb_id = spec.frame.front_brace
+        fb_info = FRONT_BRACE_CATALOG.get(fb_id, FRONT_BRACE_CATALOG["none"])
+        fb_dims = front_brace_dimensions_mm(spec)
+        fb_mat = (
+            "5.0 mm Al 5052-H32 CNC plate"
+            if fb_info.get("kind") == "cnc_plate"
+            else "25x5 mm Al 6061-T6 flat bar kit"
+        )
+        _add_bom_item(
+            items,
+            sku=f"FRM-FRONT-{fb_id.upper().replace('_', '-')}",
+            category="frame",
+            name=f"Front Frame Brace — {fb_info['label']}",
+            specification=(
+                f"{fb_mat}, {fb_dims['cutout_w_mm']:.0f}x{fb_dims['cutout_h_mm']:.0f} mm open door"
+            ),
+            quantity=1,
+            unit="pcs" if fb_id == "cnc_portal_frame" else "kit",
+            unit_cost_usd=float(assembly.front_brace_cost_usd),
+            unit_mass_g=float(assembly.front_brace_mass_kg) * 1000.0,
         )
 
     bkt_id = spec.gantry.bracket_material

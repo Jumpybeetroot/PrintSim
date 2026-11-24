@@ -18,6 +18,18 @@ BracingType = Literal[
     "rear_and_sides",
     "full_truss",
 ]
+TopBraceType = Literal[
+    "none",
+    "cnc_halo_ring",
+    "rear_v_and_front_corners",
+    "corner_45_bars",
+]
+FrontBraceType = Literal[
+    "none",
+    "cnc_portal_frame",
+    "header_and_skirt",
+    "corner_45_bars",
+]
 PanelMountingType = Literal["none", "clip_enclosure", "bolted_structural"]
 ExtrusionFillingType = Literal[
     "none",
@@ -1330,6 +1342,86 @@ RAIL_QUALITY_CATALOG: dict[str, dict] = {
 }
 
 
+# Non-blocking open-center CoreXY top bracing & open-door front bracing catalogs
+TOP_BRACE_CATALOG: dict[str, dict[str, Any]] = {
+    "none": {
+        "id": "none",
+        "label": "None (Open Top)",
+        "short_label": "None",
+        "kind": "none",
+        "thickness_mm": 0.0,
+        "description": "Unbraced open top frame perimeter (baseline).",
+        "cost_usd": 0.0,
+    },
+    "cnc_halo_ring": {
+        "id": "cnc_halo_ring",
+        "label": "CNC 5mm Al 5052 Halo Ring Plate",
+        "short_label": "CNC Halo",
+        "kind": "cnc_plate",
+        "thickness_mm": 5.0,
+        "description": "5.0 mm CNC-routed 5052-H32 aluminum open-center perimeter halo ring bolted to top frame rails with R20 inner fillets (full build-volume overhead access).",
+        "cost_usd": 65.0,
+    },
+    "rear_v_and_front_corners": {
+        "id": "rear_v_and_front_corners",
+        "label": "Rear V + Front 45° Corner Bars (25x5mm Al)",
+        "short_label": "Rear-V + Corners",
+        "kind": "flat_bar",
+        "thickness_mm": 5.0,
+        "description": "25x5 mm 6061-T6 aluminum flat-bar kit forming a rear V-truss into the side rails plus two front 45° corner braces while keeping the top center open.",
+        "cost_usd": 28.0,
+    },
+    "corner_45_bars": {
+        "id": "corner_45_bars",
+        "label": "4x Top 45° Corner Bars (25x5mm Al)",
+        "short_label": "4x Corner Bars",
+        "kind": "flat_bar",
+        "thickness_mm": 5.0,
+        "description": "Four 25x5 mm 6061-T6 aluminum 45° corner brace bars bolted across all four top frame corners with full open-top access.",
+        "cost_usd": 24.0,
+    },
+}
+
+FRONT_BRACE_CATALOG: dict[str, dict[str, Any]] = {
+    "none": {
+        "id": "none",
+        "label": "None (Open Front Door)",
+        "short_label": "None",
+        "kind": "none",
+        "thickness_mm": 0.0,
+        "description": "Unbraced open front door portal (baseline).",
+        "cost_usd": 0.0,
+    },
+    "cnc_portal_frame": {
+        "id": "cnc_portal_frame",
+        "label": "CNC 5mm Al 5052 Open-Door Portal Frame",
+        "short_label": "CNC Portal",
+        "kind": "cnc_plate",
+        "thickness_mm": 5.0,
+        "description": "5.0 mm CNC-routed 5052-H32 aluminum perimeter portal frame bolted around the front uprights and horizontal rails with R20 inner fillets and full open door.",
+        "cost_usd": 78.0,
+    },
+    "header_and_skirt": {
+        "id": "header_and_skirt",
+        "label": "CNC 5mm Al 5052 Header + Lower Skirt",
+        "short_label": "Header + Skirt",
+        "kind": "cnc_plate",
+        "thickness_mm": 5.0,
+        "description": "Twin 5.0 mm CNC 5052 aluminum plates: upper gantry-clearance header + 90 mm lower front electronics skirt, leaving full-width front door access.",
+        "cost_usd": 46.0,
+    },
+    "corner_45_bars": {
+        "id": "corner_45_bars",
+        "label": "4x Front 45° Corner Bars (25x5mm Al)",
+        "short_label": "4x Corner Bars",
+        "kind": "flat_bar",
+        "thickness_mm": 5.0,
+        "description": "Four 25x5 mm 6061-T6 aluminum 45° corner brace bars bolted across all four front portal corners without obstructing front door access.",
+        "cost_usd": 24.0,
+    },
+}
+
+
 class FrameNodeSpec(BaseModel):
     """Explicit 3D structural joint node (coordinates in mm)."""
 
@@ -1408,6 +1500,14 @@ class FrameSpec(BaseModel):
     trident_backbone: bool = Field(
         False,
         description="Clee Trident Backbone (West3D/KB-3D): 3 mm powder-coated mild steel lower-frame plate unifying all 3 Z-motor mounts & stiffening the bottom perimeter (fixed-gantry CoreXY / Voron Trident)",
+    )
+    top_brace: TopBraceType = Field(
+        "none",
+        description="Non-blocking open-center CoreXY top frame bracing: none, cnc_halo_ring (5mm Al 5052 perimeter ring), rear_v_and_front_corners (25x5mm Al bars), or corner_45_bars (4x 25x5mm Al 45-deg corner bars)",
+    )
+    front_brace: FrontBraceType = Field(
+        "none",
+        description="Non-blocking open-door CoreXY front portal bracing: none, cnc_portal_frame (5mm Al 5052 full perimeter door frame), header_and_skirt (5mm Al 5052 upper header + lower skirt), or corner_45_bars (4x 25x5mm Al 45-deg corner bars)",
     )
     extrusion_filling: ExtrusionFillingType = Field(
         "none",

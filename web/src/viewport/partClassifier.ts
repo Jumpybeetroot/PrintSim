@@ -58,6 +58,35 @@ export function classifyPartGroup(memberId: string, role = ""): PartGroupClassif
       subsystem: "frame",
     };
   }
+  if (
+    mid === "top_brace" ||
+    mid === "bay_top_brace" ||
+    mid === "top_halo_ring" ||
+    mid.startsWith("brace_top_open_")
+  ) {
+    return {
+      id: "top_brace",
+      label: mid.startsWith("brace_top_open_")
+        ? "Top Open-Center Brace Bars (25×5mm Al)"
+        : "Top Open-Center Brace",
+      subsystem: "frame",
+    };
+  }
+  if (
+    mid === "front_brace" ||
+    mid === "bay_front_brace" ||
+    mid === "front_portal_frame" ||
+    mid === "front_header_skirt" ||
+    mid.startsWith("brace_front_open_")
+  ) {
+    return {
+      id: "front_brace",
+      label: mid.startsWith("brace_front_open_")
+        ? "Front Open-Door Brace Bars (25×5mm Al)"
+        : "Front Open-Door Brace",
+      subsystem: "frame",
+    };
+  }
   if (mid.startsWith("panel_shear_") || mid.startsWith("bay_") || role === "panel") {
     if (mid.includes("left") || mid.includes("right")) {
       return { id: "side_panels", label: "Left & Right Enclosure Panels", subsystem: "frame" };

@@ -10,7 +10,11 @@ from typing import Any
 
 import ezdxf
 
-from printsim.geometry.builder import trident_backbone_dimensions_mm
+from printsim.geometry.builder import (
+    front_brace_dimensions_mm,
+    top_brace_dimensions_mm,
+    trident_backbone_dimensions_mm,
+)
 from printsim.schema import PrinterSpec, get_material, get_profile
 
 DXF_SPACING_MM = 30.0
@@ -20,6 +24,9 @@ VALID_DXF_PARTS: tuple[str, ...] = (
     "rear_panel",
     "top_panel",
     "trident_backbone",
+    "top_halo_ring",
+    "front_portal_frame",
+    "front_header_skirt",
     "corner_gusset",
     "all_plates",
 )
@@ -433,6 +440,133 @@ def _build_trident_backbone(spec: PrinterSpec) -> _Plate2D:
     )
 
 
+def _build_top_halo_ring(spec: PrinterSpec) -> _Plate2D:
+    ext_w = _ext_width_mm(spec)
+    dims = top_brace_dimensions_mm(spec, variant="cnc_halo_ring")
+    w = dims["width_mm"]
+    d = dims["depth_mm"]
+    flange = dims["flange_width_mm"]
+    cutout_w = dims["cutout_w_mm"]
+    cutout_d = dims["cutout_d_mm"]
+
+    outer: list[_ContourPt] = [(0.0, 0.0), (w, 0.0), (w, d), (0.0, d)]
+    x0 = 0.5 * (w - cutout_w)
+    x1 = 0.5 * (w + cutout_w)
+    y0 = 0.5 * (d - cutout_d)
+    y1 = 0.5 * (d + cutout_d)
+    r_fillet = min(20.0, 0.25 * min(cutout_w, cutout_d))
+    inner_cutout = _rounded_rect_contour(x0, y0, x1, y1, radius_mm=r_fillet)
+
+    inset = min(0.5 * ext_w, 0.45 * flange)
+    holes = _perimeter_holes(w, d, inset_mm=inset, diameter_mm=5.5, target_pitch_mm=75.0)
+    return _Plate2D(
+        part_id="top_halo_ring",
+        title="Top CNC Halo Ring Brace",
+        width_mm=w,
+        height_mm=d,
+        thickness_mm=5.0,
+        material_label=_safe_material_name("aluminum_5052_sheet"),
+        contours=[outer],
+        holes=holes,
+        hole_contours=[inner_cutout],
+        description=(
+            f"5.0 mm Al 5052 open-center top halo ring ({w:.0f}x{d:.0f} mm outer, "
+            f"{cutout_w:.0f}x{cutout_d:.0f} mm R{r_fillet:.0f} cutout, {flange:.0f} mm flange, "
+            f"{len(holes)}x M5 Ø5.5 mm holes)"
+        ),
+    )
+
+
+def _build_front_portal_frame(spec: PrinterSpec) -> _Plate2D:
+    ext_w = _ext_width_mm(spec)
+    dims = front_brace_dimensions_mm(spec, variant="cnc_portal_frame")
+    w = dims["width_mm"]
+    h = dims["height_mm"]
+    border = dims["flange_width_mm"]
+    cutout_w = dims["cutout_w_mm"]
+    cutout_h = dims["cutout_h_mm"]
+
+    outer: list[_ContourPt] = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+    x0 = 0.5 * (w - cutout_w)
+    x1 = 0.5 * (w + cutout_w)
+    y0 = 0.5 * (h - cutout_h)
+    y1 = 0.5 * (h + cutout_h)
+    r_fillet = min(20.0, 0.25 * min(cutout_w, cutout_h))
+    inner_cutout = _rounded_rect_contour(x0, y0, x1, y1, radius_mm=r_fillet)
+
+    inset = min(0.5 * ext_w, 0.45 * border)
+    holes = _perimeter_holes(w, h, inset_mm=inset, diameter_mm=5.5, target_pitch_mm=75.0)
+    return _Plate2D(
+        part_id="front_portal_frame",
+        title="Front CNC Portal Frame Brace",
+        width_mm=w,
+        height_mm=h,
+        thickness_mm=5.0,
+        material_label=_safe_material_name("aluminum_5052_sheet"),
+        contours=[outer],
+        holes=holes,
+        hole_contours=[inner_cutout],
+        description=(
+            f"5.0 mm Al 5052 open-door front portal frame ({w:.0f}x{h:.0f} mm outer, "
+            f"{cutout_w:.0f}x{cutout_h:.0f} mm R{r_fillet:.0f} cutout, {border:.0f} mm border, "
+            f"{len(holes)}x M5 Ø5.5 mm holes)"
+        ),
+    )
+
+
+def _build_front_header_skirt(spec: PrinterSpec) -> list[_Plate2D]:
+    ext_w = _ext_width_mm(spec)
+    dims = front_brace_dimensions_mm(spec, variant="header_and_skirt")
+    w = dims["width_mm"]
+    hdr_h = dims["header_height_mm"]
+    skr_h = dims["skirt_height_mm"]
+    mat_label = _safe_material_name("aluminum_5052_sheet")
+
+    inset_hdr = min(0.5 * ext_w, 0.35 * hdr_h)
+    nx = max(2, int(round((w - 2.0 * inset_hdr) / 75.0)) + 1)
+    xs_hdr = [inset_hdr + (w - 2.0 * inset_hdr) * i / (nx - 1) for i in range(nx)]
+    hdr_holes: list[tuple[float, float, float]] = [(x, hdr_h - inset_hdr, 5.5) for x in xs_hdr]
+    ny_hdr = max(2, int(round((hdr_h - 2.0 * inset_hdr) / 75.0)) + 1)
+    ys_hdr = [inset_hdr + (hdr_h - 2.0 * inset_hdr) * j / (ny_hdr - 1) for j in range(ny_hdr)]
+    for y in ys_hdr[:-1]:
+        hdr_holes.append((inset_hdr, y, 5.5))
+        hdr_holes.append((w - inset_hdr, y, 5.5))
+
+    hdr_plate = _Plate2D(
+        part_id="front_header_skirt",
+        title="Front Upper Header Plate",
+        width_mm=w,
+        height_mm=hdr_h,
+        thickness_mm=5.0,
+        material_label=mat_label,
+        contours=[[(0.0, 0.0), (w, 0.0), (w, hdr_h), (0.0, hdr_h)]],
+        holes=hdr_holes,
+        description=f"Upper portal header ({w:.0f}x{hdr_h:.0f} mm, {len(hdr_holes)}x M5 Ø5.5 mm holes)",
+    )
+
+    inset_skr = min(0.5 * ext_w, 0.35 * skr_h)
+    xs_skr = [inset_skr + (w - 2.0 * inset_skr) * i / (nx - 1) for i in range(nx)]
+    skr_holes: list[tuple[float, float, float]] = [(x, inset_skr, 5.5) for x in xs_skr]
+    ny_skr = max(2, int(round((skr_h - 2.0 * inset_skr) / 75.0)) + 1)
+    ys_skr = [inset_skr + (skr_h - 2.0 * inset_skr) * j / (ny_skr - 1) for j in range(ny_skr)]
+    for y in ys_skr[1:]:
+        skr_holes.append((inset_skr, y, 5.5))
+        skr_holes.append((w - inset_skr, y, 5.5))
+
+    skr_plate = _Plate2D(
+        part_id="front_header_skirt",
+        title="Front Lower Skirt Plate",
+        width_mm=w,
+        height_mm=skr_h,
+        thickness_mm=5.0,
+        material_label=mat_label,
+        contours=[[(0.0, 0.0), (w, 0.0), (w, skr_h), (0.0, skr_h)]],
+        holes=skr_holes,
+        description=f"Lower frame skirt ({w:.0f}x{skr_h:.0f} mm, {len(skr_holes)}x M5 Ø5.5 mm holes)",
+    )
+    return [hdr_plate, skr_plate]
+
+
 def _build_corner_gusset(spec: PrinterSpec, idx: int | None = None) -> _Plate2D:
     ext_w = _ext_width_mm(spec)
     arm_mm = max(40.0, 2.0 * ext_w)
@@ -475,6 +609,13 @@ def _select_kit_plates(spec: PrinterSpec) -> list[_Plate2D]:
             plates.append(_build_top_panel(spec))
     if spec.frame.trident_backbone and not spec.is_flying_gantry:
         plates.append(_build_trident_backbone(spec))
+    if spec.architecture == "corexy":
+        if spec.frame.top_brace == "cnc_halo_ring":
+            plates.append(_build_top_halo_ring(spec))
+        if spec.frame.front_brace == "cnc_portal_frame":
+            plates.append(_build_front_portal_frame(spec))
+        elif spec.frame.front_brace == "header_and_skirt":
+            plates.extend(_build_front_header_skirt(spec))
     if spec.frame.bracing == "corner_gussets" or spec.frame.corner_joint_type in (
         "gusset_plate",
         "l_bracket",
@@ -500,6 +641,12 @@ def _build_plates_for_part(spec: PrinterSpec, part: str) -> list[_Plate2D]:
         return [_build_top_panel(spec)]
     if key == "trident_backbone":
         return [_build_trident_backbone(spec)]
+    if key == "top_halo_ring":
+        return [_build_top_halo_ring(spec)]
+    if key == "front_portal_frame":
+        return [_build_front_portal_frame(spec)]
+    if key == "front_header_skirt":
+        return _build_front_header_skirt(spec)
     if key == "corner_gusset":
         return [_build_corner_gusset(spec)]
     return _select_kit_plates(spec)
@@ -513,6 +660,9 @@ def list_dxf_exportable_parts(spec: PrinterSpec) -> list[dict[str, Any]]:
         spec.frame.bracing == "corner_gussets"
         or spec.frame.corner_joint_type in ("gusset_plate", "l_bracket")
     )
+    halo_active = spec.architecture == "corexy" and spec.frame.top_brace == "cnc_halo_ring"
+    portal_active = spec.architecture == "corexy" and spec.frame.front_brace == "cnc_portal_frame"
+    hdr_skr_active = spec.architecture == "corexy" and spec.frame.front_brace == "header_and_skirt"
 
     side = _build_side_panel(spec)
     rear = _build_rear_panel(spec)
@@ -545,6 +695,55 @@ def list_dxf_exportable_parts(spec: PrinterSpec) -> list[dict[str, Any]]:
             }
         )
 
+    if halo_active:
+        halo = _build_top_halo_ring(spec)
+        catalog.append(
+            {
+                "part": "top_halo_ring",
+                "label": halo.title,
+                "width_mm": round(halo.width_mm, 1),
+                "height_mm": round(halo.height_mm, 1),
+                "thickness_mm": round(halo.thickness_mm, 2),
+                "material": halo.material_label,
+                "quantity": 1,
+                "hole_count": len(halo.holes) + len(halo.hole_contours),
+                "applicable": True,
+                "description": halo.description,
+            }
+        )
+    if portal_active:
+        portal = _build_front_portal_frame(spec)
+        catalog.append(
+            {
+                "part": "front_portal_frame",
+                "label": portal.title,
+                "width_mm": round(portal.width_mm, 1),
+                "height_mm": round(portal.height_mm, 1),
+                "thickness_mm": round(portal.thickness_mm, 2),
+                "material": portal.material_label,
+                "quantity": 1,
+                "hole_count": len(portal.holes) + len(portal.hole_contours),
+                "applicable": True,
+                "description": portal.description,
+            }
+        )
+    if hdr_skr_active:
+        hdr, skr = _build_front_header_skirt(spec)
+        catalog.append(
+            {
+                "part": "front_header_skirt",
+                "label": "Front Upper Header + Lower Skirt",
+                "width_mm": round(hdr.width_mm, 1),
+                "height_mm": round(hdr.height_mm + skr.height_mm, 1),
+                "thickness_mm": round(hdr.thickness_mm, 2),
+                "material": hdr.material_label,
+                "quantity": 2,
+                "hole_count": len(hdr.holes) + len(skr.holes),
+                "applicable": True,
+                "description": f"{hdr.description}; {skr.description}",
+            }
+        )
+
     total_w = sum(p.width_mm for p in kit) + DXF_SPACING_MM * max(len(kit) - 1, 0)
     max_h = max((p.height_mm for p in kit), default=0.0)
     catalog.append(
@@ -562,6 +761,9 @@ def list_dxf_exportable_parts(spec: PrinterSpec) -> list[dict[str, Any]]:
         }
     )
     return catalog
+
+
+list_dxf_parts = list_dxf_exportable_parts
 
 
 def _emit_lwpolyline(

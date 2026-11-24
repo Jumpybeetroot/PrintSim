@@ -11,10 +11,12 @@ from printsim.schema import (
     BED_MOUNT_CATALOG,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
+    FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
     HOTEND_CATALOG,
     PROFILE_CATALOG,
     TOOLHEAD_CONSTRUCTION_CATALOG,
+    TOP_BRACE_CATALOG,
     Z_DRIVE_MECHANISM_CATALOG,
     Z_PROBE_CATALOG,
     Z_RAIL_PROFILES,
@@ -123,6 +125,14 @@ class AssemblyModel:
     backbone_mass_kg: float = 0.0
     backbone_cost_usd: float = 0.0
     trident_backbone_active: bool = False
+    top_brace_mass_kg: float = 0.0
+    top_brace_cost_usd: float = 0.0
+    top_brace_active: bool = False
+    top_brace_is_shell: bool = False
+    front_brace_mass_kg: float = 0.0
+    front_brace_cost_usd: float = 0.0
+    front_brace_active: bool = False
+    front_brace_is_shell: bool = False
     extrusion_fill_mass_kg: float = 0.0
     x_rail_ei_y_boost_pct: float = 0.0
     x_rail_ei_z_boost_pct: float = 0.0
@@ -341,6 +351,54 @@ class AssemblyModel:
             ),
         }
 
+    def _build_top_brace_dict(self) -> dict:
+        mode = self.spec.frame.top_brace
+        entry = TOP_BRACE_CATALOG.get(mode, TOP_BRACE_CATALOG["none"])
+        dims = top_brace_dimensions_mm(self.spec)
+        if not self.top_brace_active:
+            mat_name = "None"
+        elif entry.get("kind") == "cnc_plate":
+            mat_name = get_material("aluminum_5052_sheet").name
+        else:
+            mat_name = get_material("aluminum_6061_t6").name
+        return {
+            "id": mode,
+            "active": bool(self.top_brace_active),
+            "label": str(entry.get("label", "None (Open Top)")),
+            "material_name": mat_name,
+            "thickness_mm": round(dims["thickness_mm"], 2) if self.top_brace_active else 0.0,
+            "flange_width_mm": round(dims["flange_width_mm"], 1) if self.top_brace_active else 0.0,
+            "cutout_w_mm": round(dims["cutout_w_mm"], 1),
+            "cutout_d_mm": round(dims["cutout_d_mm"], 1),
+            "mass_kg": round(self.top_brace_mass_kg, 3) if self.top_brace_active else 0.0,
+            "cost_usd": round(self.top_brace_cost_usd, 2) if self.top_brace_active else 0.0,
+        }
+
+    def _build_front_brace_dict(self) -> dict:
+        mode = self.spec.frame.front_brace
+        entry = FRONT_BRACE_CATALOG.get(mode, FRONT_BRACE_CATALOG["none"])
+        dims = front_brace_dimensions_mm(self.spec)
+        if not self.front_brace_active:
+            mat_name = "None"
+        elif entry.get("kind") == "cnc_plate":
+            mat_name = get_material("aluminum_5052_sheet").name
+        else:
+            mat_name = get_material("aluminum_6061_t6").name
+        return {
+            "id": mode,
+            "active": bool(self.front_brace_active),
+            "label": str(entry.get("label", "None (Open Front Door)")),
+            "material_name": mat_name,
+            "thickness_mm": round(dims["thickness_mm"], 2) if self.front_brace_active else 0.0,
+            "flange_width_mm": round(dims["flange_width_mm"], 1) if self.front_brace_active else 0.0,
+            "header_height_mm": round(dims["header_height_mm"], 1) if self.front_brace_active else 0.0,
+            "skirt_height_mm": round(dims["skirt_height_mm"], 1) if self.front_brace_active else 0.0,
+            "cutout_w_mm": round(dims["cutout_w_mm"], 1),
+            "cutout_h_mm": round(dims["cutout_h_mm"], 1),
+            "mass_kg": round(self.front_brace_mass_kg, 3) if self.front_brace_active else 0.0,
+            "cost_usd": round(self.front_brace_cost_usd, 2) if self.front_brace_active else 0.0,
+        }
+
     def to_geometry_dict(self) -> dict:
         """Serialize assembly geometry (mm) for the 3D web viewer and AI tools."""
         nmap = self.node_map
@@ -473,6 +531,8 @@ class AssemblyModel:
             ],
             "gantry_top_clearance_mm": round(float(self.spec.frame.gantry_top_clearance_mm), 1),
             "trident_backbone": self._build_trident_backbone_dict(),
+            "top_brace": self._build_top_brace_dict(),
+            "front_brace": self._build_front_brace_dict(),
             "build_volume_mm": list(self.spec.kinematics.build_volume_mm),
             "build_origin_mm": (self.build_origin_m * 1000.0).tolist(),
             "bed_size_mm": list(self.spec.bed.size_mm),
@@ -2577,6 +2637,615 @@ def _add_trident_backbone(
     return shell_elements, fastener_springs, backbone_mass_kg, backbone_cost_usd
 
 
+def top_brace_dimensions_mm(spec: PrinterSpec, variant: str | None = None) -> dict[str, float]:
+    """Compute open-center CoreXY top brace plate or flat-bar dimensions (mm)."""
+    fw = max(float(spec.frame.width_mm), 120.0)
+    fd = max(float(spec.frame.depth_mm), 120.0)
+    min_dim = min(fw, fd)
+    mode = spec.frame.top_brace if variant is None else variant
+    if mode == "cnc_halo_ring":
+        flange = min(50.0, 0.28 * min_dim)
+        cutout_w = max(40.0, fw - 2.0 * flange)
+        cutout_d = max(40.0, fd - 2.0 * flange)
+        fillet = min(20.0, 0.25 * min(cutout_w, cutout_d))
+        return {
+            "width_mm": fw,
+            "depth_mm": fd,
+            "thickness_mm": 5.0,
+            "flange_width_mm": flange,
+            "cutout_w_mm": cutout_w,
+            "cutout_d_mm": cutout_d,
+            "fillet_radius_mm": fillet,
+            "arm_length_mm": 0.0,
+        }
+    if mode in ("rear_v_and_front_corners", "corner_45_bars"):
+        arm_mm = min(130.0, 0.28 * min_dim)
+        bar_w = 25.0
+        return {
+            "width_mm": fw,
+            "depth_mm": fd,
+            "thickness_mm": 5.0,
+            "flange_width_mm": bar_w,
+            "cutout_w_mm": max(40.0, fw - 2.0 * bar_w),
+            "cutout_d_mm": max(40.0, fd - 2.0 * bar_w),
+            "fillet_radius_mm": 0.0,
+            "arm_length_mm": arm_mm,
+        }
+    return {
+        "width_mm": fw,
+        "depth_mm": fd,
+        "thickness_mm": 0.0,
+        "flange_width_mm": 0.0,
+        "cutout_w_mm": fw,
+        "cutout_d_mm": fd,
+        "fillet_radius_mm": 0.0,
+        "arm_length_mm": 0.0,
+    }
+
+
+def front_brace_dimensions_mm(spec: PrinterSpec, variant: str | None = None) -> dict[str, float]:
+    """Compute open-door CoreXY front brace plate or flat-bar dimensions (mm)."""
+    fw = max(float(spec.frame.width_mm), 120.0)
+    fh = max(float(spec.frame.height_mm), 120.0)
+    min_dim = min(fw, fh)
+    mode = spec.frame.front_brace if variant is None else variant
+    try:
+        ext_w = float(get_profile(spec.frame.effective_upright_profile).width_m) * 1000.0
+    except KeyError:
+        ext_w = 20.0
+
+    if mode == "cnc_portal_frame":
+        border = min(55.0, 0.28 * min_dim)
+        cutout_w = max(40.0, fw - 2.0 * border)
+        cutout_h = max(40.0, fh - 2.0 * border)
+        fillet = min(20.0, 0.25 * min(cutout_w, cutout_h))
+        return {
+            "width_mm": fw,
+            "height_mm": fh,
+            "thickness_mm": 5.0,
+            "flange_width_mm": border,
+            "header_height_mm": 0.0,
+            "skirt_height_mm": 0.0,
+            "cutout_w_mm": cutout_w,
+            "cutout_h_mm": cutout_h,
+            "fillet_radius_mm": fillet,
+            "arm_length_mm": 0.0,
+        }
+    if mode == "header_and_skirt":
+        top_clear_mm = min(float(spec.frame.gantry_top_clearance_mm), max(fh - 160.0, 25.0))
+        z_gantry_mm = max(80.0, fh - top_clear_mm)
+        header_h = max(20.0, fh - z_gantry_mm)
+        skirt_h = min(90.0, 0.25 * z_gantry_mm)
+        cutout_w = max(40.0, fw - 2.0 * ext_w)
+        cutout_h = max(40.0, z_gantry_mm - skirt_h)
+        return {
+            "width_mm": fw,
+            "height_mm": fh,
+            "thickness_mm": 5.0,
+            "flange_width_mm": ext_w,
+            "header_height_mm": header_h,
+            "skirt_height_mm": skirt_h,
+            "cutout_w_mm": cutout_w,
+            "cutout_h_mm": cutout_h,
+            "fillet_radius_mm": 0.0,
+            "arm_length_mm": 0.0,
+        }
+    if mode == "corner_45_bars":
+        arm_mm = min(120.0, 0.26 * min_dim)
+        bar_w = 25.0
+        return {
+            "width_mm": fw,
+            "height_mm": fh,
+            "thickness_mm": 5.0,
+            "flange_width_mm": bar_w,
+            "header_height_mm": 0.0,
+            "skirt_height_mm": 0.0,
+            "cutout_w_mm": max(40.0, fw - 2.0 * bar_w),
+            "cutout_h_mm": max(40.0, fh - 2.0 * bar_w),
+            "fillet_radius_mm": 0.0,
+            "arm_length_mm": arm_mm,
+        }
+    return {
+        "width_mm": fw,
+        "height_mm": fh,
+        "thickness_mm": 0.0,
+        "flange_width_mm": 0.0,
+        "header_height_mm": 0.0,
+        "skirt_height_mm": 0.0,
+        "cutout_w_mm": fw,
+        "cutout_h_mm": fh,
+        "fillet_radius_mm": 0.0,
+        "arm_length_mm": 0.0,
+    }
+
+
+def _point_to_segment_dist_m(pt: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    len_sq = float(np.dot(ab, ab))
+    if len_sq < 1e-12:
+        return float(np.linalg.norm(pt - a))
+    t = max(0.0, min(1.0, float(np.dot(pt - a, ab) / len_sq)))
+    proj = a + t * ab
+    return float(np.linalg.norm(pt - proj))
+
+
+def _add_open_ring_shell_plate(
+    *,
+    bay: str,
+    node_prefix: str,
+    shell_prefix: str,
+    cbush_prefix: str,
+    p00: np.ndarray,
+    p10: np.ndarray,
+    p01: np.ndarray,
+    p11: np.ndarray,
+    cutout_w_m: float,
+    cutout_h_m: float,
+    n_tup: tuple[float, float, float],
+    d_c: float,
+    t_plate_m: float,
+    mat: MaterialSpec,
+    areal_mass: float,
+    e_mem_eff: float,
+    k_shear_per_m: float,
+    k_normal_per_m: float,
+    k_rot_per_m: float,
+    nodes: list[StructuralNode],
+    nmap: dict[str, StructuralNode],
+    members: list[StructuralMember],
+    allow_gantry: bool,
+) -> tuple[list[ShellPanelElement], list[FastenerSpring], float]:
+    """Generate a 12-quad open-center MITC4 ring (4x4 grid omitting center 2x2) + perimeter CBUSH springs."""
+    bw = float(np.linalg.norm(p10 - p00))
+    bh = float(np.linalg.norm(p01 - p00))
+    x_cut0_m = 0.5 * (bw - cutout_w_m)
+    x_cut1_m = 0.5 * (bw + cutout_w_m)
+    y_cut0_m = 0.5 * (bh - cutout_h_m)
+    y_cut1_m = 0.5 * (bh + cutout_h_m)
+
+    u1 = max(0.05, min(0.45, x_cut0_m / max(bw, 1e-6)))
+    u3 = min(0.95, max(0.55, x_cut1_m / max(bw, 1e-6)))
+    u_stops = (0.0, u1, 0.5, u3, 1.0)
+
+    v1 = max(0.05, min(0.45, y_cut0_m / max(bh, 1e-6)))
+    v3 = min(0.95, max(0.55, y_cut1_m / max(bh, 1e-6)))
+    v_stops = (0.0, v1, 0.5, v3, 1.0)
+
+    nx_g = len(u_stops) - 1  # 4
+    ny_g = len(v_stops) - 1  # 4
+    xs_m = [u * bw for u in u_stops]
+    ys_m = [v * bh for v in v_stops]
+    nvec = np.asarray(n_tup, dtype=float)
+    off_nominal = d_c * nvec
+
+    grid = np.empty((ny_g + 1, nx_g + 1), dtype=object)
+    shells: list[ShellPanelElement] = []
+    springs: list[FastenerSpring] = []
+    for j in range(ny_g + 1):
+        eta = v_stops[j]
+        for i in range(nx_g + 1):
+            if i == 2 and j == 2:
+                continue
+            xi = u_stops[i]
+            p_frame = (
+                (1.0 - xi) * (1.0 - eta) * p00
+                + xi * (1.0 - eta) * p10
+                + xi * eta * p11
+                + (1.0 - xi) * eta * p01
+            )
+            p_shell = p_frame + off_nominal
+            sid = f"{node_prefix}_{j}_{i}"
+            node = StructuralNode(id=sid, position_m=p_shell, role="panel")
+            nodes.append(node)
+            nmap[sid] = node
+            grid[j, i] = sid
+
+            if i in (0, nx_g) or j in (0, ny_g):
+                fid = _find_or_split_frame_node(
+                    nodes, nmap, members, p_frame, allow_gantry=allow_gantry
+                )
+                ds = 0.0
+                if j in (0, ny_g):
+                    if i > 0:
+                        ds += 0.5 * (xs_m[i] - xs_m[i - 1])
+                    if i < nx_g:
+                        ds += 0.5 * (xs_m[i + 1] - xs_m[i])
+                if i in (0, nx_g):
+                    if j > 0:
+                        ds += 0.5 * (ys_m[j] - ys_m[j - 1])
+                    if j < ny_g:
+                        ds += 0.5 * (ys_m[j + 1] - ys_m[j])
+                actual_off = p_shell - nmap[fid].position_m
+                springs.append(
+                    FastenerSpring(
+                        id=f"{cbush_prefix}_{j}_{i}",
+                        bay=bay,
+                        shell_node_id=sid,
+                        frame_node_id=fid,
+                        k_shear_n_m=k_shear_per_m * ds,
+                        k_normal_n_m=k_normal_per_m * ds,
+                        k_rot_nm_rad=k_rot_per_m * ds,
+                        normal_vec=n_tup,
+                        offset_m=(
+                            float(actual_off[0]),
+                            float(actual_off[1]),
+                            float(actual_off[2]),
+                        ),
+                    )
+                )
+
+    for j in range(ny_g):
+        for i in range(nx_g):
+            if i not in (0, nx_g - 1) and j not in (0, ny_g - 1):
+                continue
+            n0 = str(grid[j, i])
+            n1 = str(grid[j, i + 1])
+            n2 = str(grid[j + 1, i + 1])
+            n3 = str(grid[j + 1, i])
+            c3 = np.array([nmap[nid].position_m for nid in (n0, n1, n2, n3)])
+            if float(np.dot(np.cross(c3[2] - c3[0], c3[3] - c3[1]), nvec)) < 0.0:
+                nids = (n0, n3, n2, n1)
+            else:
+                nids = (n0, n1, n2, n3)
+            shells.append(
+                ShellPanelElement(
+                    id=f"{shell_prefix}_{j}_{i}",
+                    bay=bay,
+                    node_ids=nids,
+                    material=mat,
+                    thickness_m=t_plate_m,
+                    areal_mass_kg_m2=areal_mass,
+                    e_mem_h_n_m=e_mem_eff,
+                    normal_vec=n_tup,
+                )
+            )
+
+    actual_area_m2 = max(bw * bh * (1.0 - (u3 - u1) * (v3 - v1)), 1e-4)
+    return shells, springs, actual_area_m2 * areal_mass
+
+
+def _add_flat_bar_brace_kit(
+    *,
+    id_prefix: str,
+    endpoints_m: list[tuple[tuple[float, float, float], tuple[float, float, float]]],
+    nodes: list[StructuralNode],
+    nmap: dict[str, StructuralNode],
+    members: list[StructuralMember],
+    allow_gantry: bool,
+) -> float:
+    """Attach 25x5 mm Al 6061-T6 flat-bar brace beams directly into frame nodes/rails."""
+    bar_prof = get_profile("al_flat_bar_25x5")
+    bar_mat = get_material("aluminum_6061_t6")
+    total_mass_kg = 0.0
+    for idx, (p0_tup, p1_tup) in enumerate(endpoints_m):
+        p0 = np.asarray(p0_tup, dtype=float)
+        p1 = np.asarray(p1_tup, dtype=float)
+        n0 = _find_or_split_frame_node(nodes, nmap, members, p0, allow_gantry=allow_gantry)
+        n1 = _find_or_split_frame_node(nodes, nmap, members, p1, allow_gantry=allow_gantry)
+        if n0 == n1:
+            continue
+        mem = StructuralMember(
+            id=f"{id_prefix}_{idx}",
+            start_id=n0,
+            end_id=n1,
+            profile=bar_prof,
+            material=bar_mat,
+            role="brace",
+            is_truss=False,
+        )
+        members.append(mem)
+        total_mass_kg += mem.mass_kg(nmap)
+    return total_mass_kg
+
+
+def _add_top_and_front_braces(
+    *,
+    spec: PrinterSpec,
+    nodes: list[StructuralNode],
+    nmap: dict[str, StructuralNode],
+    members: list[StructuralMember],
+    panel_mesh_n: int,
+) -> dict[str, Any]:
+    """Build CoreXY non-blocking open-center Top Braces and open-door Front Braces."""
+    w = spec.frame.width_mm * 1e-3
+    d = spec.frame.depth_mm * 1e-3
+    h = spec.frame.height_mm * 1e-3
+    allow_gantry = not spec.is_flying_gantry
+
+    shells: list[ShellPanelElement] = []
+    springs: list[FastenerSpring] = []
+    top_mode = spec.frame.top_brace
+    front_mode = spec.frame.front_brace
+
+    al5052 = get_material("aluminum_5052_sheet")
+    t_plate = 0.005
+    areal_mass_5052 = al5052.density_kg_m3 * t_plate
+    frame_prof = get_profile(spec.frame.profile)
+
+    def _plate_coupling_params(span_w_m: float, span_h_m: float) -> tuple[float, float, float, float]:
+        props = panel_mechanical_properties(al5052, t_plate, span_w_m, span_h_m, "bolted_structural")
+        n_edge_w = max(3.0, round(span_w_m / 0.085) + 1.0)
+        k_mount_edge = n_edge_w * (props["k_mount_n_m"] / (0.5 * n_edge_w))
+        k_shear_per_m = k_mount_edge / max(span_w_m, 0.04)
+        k_normal_per_m = max(1.0e6, 2.0 * k_shear_per_m)
+        k_rot_per_m = 450.0
+        e_mem_eff = 0.92 * al5052.youngs_modulus_pa * t_plate
+        return e_mem_eff, k_shear_per_m, k_normal_per_m, k_rot_per_m
+
+    # 1. Open-center Top Brace
+    top_mass_kg = 0.0
+    top_cost_usd = 0.0
+    top_active = top_mode != "none"
+    top_is_shell = False
+    if top_active:
+        top_entry = TOP_BRACE_CATALOG.get(top_mode, TOP_BRACE_CATALOG["none"])
+        top_cost_usd = float(top_entry.get("cost_usd", 0.0))
+        if top_mode == "cnc_halo_ring":
+            dims_t = top_brace_dimensions_mm(spec, variant="cnc_halo_ring")
+            e_mem_eff, k_shear_per_m, k_normal_per_m, k_rot_per_m = _plate_coupling_params(w, d)
+            d_c = 0.5 * frame_prof.height_m + 0.5 * t_plate
+            t_shells, t_springs, top_mass_kg = _add_open_ring_shell_plate(
+                bay="top_brace",
+                node_prefix="pan_top_brace",
+                shell_prefix="shell_top_brace",
+                cbush_prefix="cbush_top_brace",
+                p00=nmap["t_fl"].position_m,
+                p10=nmap["t_fr"].position_m,
+                p01=nmap["t_rl"].position_m,
+                p11=nmap["t_rr"].position_m,
+                cutout_w_m=dims_t["cutout_w_mm"] * 1e-3,
+                cutout_h_m=dims_t["cutout_d_mm"] * 1e-3,
+                n_tup=(0.0, 0.0, 1.0),
+                d_c=d_c,
+                t_plate_m=t_plate,
+                mat=al5052,
+                areal_mass=areal_mass_5052,
+                e_mem_eff=e_mem_eff,
+                k_shear_per_m=k_shear_per_m,
+                k_normal_per_m=k_normal_per_m,
+                k_rot_per_m=k_rot_per_m,
+                nodes=nodes,
+                nmap=nmap,
+                members=members,
+                allow_gantry=allow_gantry,
+            )
+            shells.extend(t_shells)
+            springs.extend(t_springs)
+            top_is_shell = True
+        elif top_mode == "rear_v_and_front_corners":
+            l_arm = min(0.130, 0.28 * min(w, d))
+            top_mass_kg = _add_flat_bar_brace_kit(
+                id_prefix="brace_top_open",
+                endpoints_m=[
+                    ((0.5 * w, d, h), (0.0, 0.5 * d, h)),
+                    ((0.5 * w, d, h), (w, 0.5 * d, h)),
+                    ((l_arm, 0.0, h), (0.0, l_arm, h)),
+                    ((w - l_arm, 0.0, h), (w, l_arm, h)),
+                ],
+                nodes=nodes,
+                nmap=nmap,
+                members=members,
+                allow_gantry=allow_gantry,
+            )
+        elif top_mode == "corner_45_bars":
+            l_arm = min(0.130, 0.28 * min(w, d))
+            top_mass_kg = _add_flat_bar_brace_kit(
+                id_prefix="brace_top_open",
+                endpoints_m=[
+                    ((l_arm, 0.0, h), (0.0, l_arm, h)),
+                    ((w - l_arm, 0.0, h), (w, l_arm, h)),
+                    ((l_arm, d, h), (0.0, d - l_arm, h)),
+                    ((w - l_arm, d, h), (w, d - l_arm, h)),
+                ],
+                nodes=nodes,
+                nmap=nmap,
+                members=members,
+                allow_gantry=allow_gantry,
+            )
+
+    # 2. Open-door Front Brace
+    front_mass_kg = 0.0
+    front_cost_usd = 0.0
+    front_active = front_mode != "none"
+    front_is_shell = False
+    if front_active:
+        front_entry = FRONT_BRACE_CATALOG.get(front_mode, FRONT_BRACE_CATALOG["none"])
+        front_cost_usd = float(front_entry.get("cost_usd", 0.0))
+        if front_mode == "cnc_portal_frame":
+            dims_f = front_brace_dimensions_mm(spec, variant="cnc_portal_frame")
+            e_mem_eff, k_shear_per_m, k_normal_per_m, k_rot_per_m = _plate_coupling_params(w, h)
+            d_c = 0.5 * frame_prof.width_m + 0.5 * t_plate
+            f_shells, f_springs, front_mass_kg = _add_open_ring_shell_plate(
+                bay="front_brace",
+                node_prefix="pan_front_brace",
+                shell_prefix="shell_front_brace",
+                cbush_prefix="cbush_front_brace",
+                p00=nmap["b_fl"].position_m,
+                p10=nmap["b_fr"].position_m,
+                p01=nmap["t_fl"].position_m,
+                p11=nmap["t_fr"].position_m,
+                cutout_w_m=dims_f["cutout_w_mm"] * 1e-3,
+                cutout_h_m=dims_f["cutout_h_mm"] * 1e-3,
+                n_tup=(0.0, -1.0, 0.0),
+                d_c=d_c,
+                t_plate_m=t_plate,
+                mat=al5052,
+                areal_mass=areal_mass_5052,
+                e_mem_eff=e_mem_eff,
+                k_shear_per_m=k_shear_per_m,
+                k_normal_per_m=k_normal_per_m,
+                k_rot_per_m=k_rot_per_m,
+                nodes=nodes,
+                nmap=nmap,
+                members=members,
+                allow_gantry=allow_gantry,
+            )
+            shells.extend(f_shells)
+            springs.extend(f_springs)
+            front_is_shell = True
+        elif front_mode == "header_and_skirt":
+            dims_f = front_brace_dimensions_mm(spec, variant="header_and_skirt")
+            hdr_h_m = dims_f["header_height_mm"] * 1e-3
+            skr_h_m = dims_f["skirt_height_mm"] * 1e-3
+            e_mem_eff, k_shear_per_m, k_normal_per_m, k_rot_per_m = _plate_coupling_params(w, h)
+            d_c = 0.5 * frame_prof.width_m + 0.5 * t_plate
+            n_tup = (0.0, -1.0, 0.0)
+            nvec = np.asarray(n_tup, dtype=float)
+            off_nominal = d_c * nvec
+
+            p_bfl = nmap["b_fl"].position_m
+            p_bfr = nmap["b_fr"].position_m
+            p_tfl = nmap["t_fl"].position_m
+            p_tfr = nmap["t_fr"].position_m
+            front_rails = (
+                (p_bfl, p_bfr),
+                (p_tfl, p_tfr),
+                (p_bfl, p_tfl),
+                (p_bfr, p_tfr),
+            )
+            nx_strip = max(4, panel_mesh_n)
+
+            def _build_front_strip(
+                *,
+                node_prefix: str,
+                shell_prefix: str,
+                cbush_prefix: str,
+                z0_m: float,
+                z1_m: float,
+                is_header: bool,
+            ) -> float:
+                bh = max(z1_m - z0_m, 1e-4)
+                ny_strip = 1 if bh < 0.075 else 2
+                p00 = np.array([0.0, 0.0, z0_m], dtype=float)
+                p10 = np.array([w, 0.0, z0_m], dtype=float)
+                p01 = np.array([0.0, 0.0, z1_m], dtype=float)
+                p11 = np.array([w, 0.0, z1_m], dtype=float)
+
+                grid = np.empty((ny_strip + 1, nx_strip + 1), dtype=object)
+                for j in range(ny_strip + 1):
+                    eta = j / ny_strip
+                    for i in range(nx_strip + 1):
+                        xi = i / nx_strip
+                        p_frame = (
+                            (1.0 - xi) * (1.0 - eta) * p00
+                            + xi * (1.0 - eta) * p10
+                            + xi * eta * p11
+                            + (1.0 - xi) * eta * p01
+                        )
+                        p_shell = p_frame + off_nominal
+                        sid = f"{node_prefix}_{j}_{i}"
+                        node = StructuralNode(id=sid, position_m=p_shell, role="panel")
+                        nodes.append(node)
+                        nmap[sid] = node
+                        grid[j, i] = sid
+
+                        is_perim = i in (0, nx_strip) or j in (0, ny_strip)
+                        if is_perim:
+                            rail_dist = min(
+                                _point_to_segment_dist_m(p_frame, ra, rb) for ra, rb in front_rails
+                            )
+                            if rail_dist <= 0.005:
+                                fid = _find_or_split_frame_node(
+                                    nodes, nmap, members, p_frame, allow_gantry=allow_gantry
+                                )
+                                ds = 0.0
+                                attached_horiz = (j == ny_strip) if is_header else (j == 0)
+                                if attached_horiz:
+                                    ds += (w / nx_strip) * (0.5 if i in (0, nx_strip) else 1.0)
+                                if i in (0, nx_strip):
+                                    ds += (bh / ny_strip) * (0.5 if j in (0, ny_strip) else 1.0)
+                                actual_off = p_shell - nmap[fid].position_m
+                                springs.append(
+                                    FastenerSpring(
+                                        id=f"{cbush_prefix}_{j}_{i}",
+                                        bay="front_brace",
+                                        shell_node_id=sid,
+                                        frame_node_id=fid,
+                                        k_shear_n_m=k_shear_per_m * ds,
+                                        k_normal_n_m=k_normal_per_m * ds,
+                                        k_rot_nm_rad=k_rot_per_m * ds,
+                                        normal_vec=n_tup,
+                                        offset_m=(
+                                            float(actual_off[0]),
+                                            float(actual_off[1]),
+                                            float(actual_off[2]),
+                                        ),
+                                    )
+                                )
+
+                for j in range(ny_strip):
+                    for i in range(nx_strip):
+                        n0 = str(grid[j, i])
+                        n1 = str(grid[j, i + 1])
+                        n2 = str(grid[j + 1, i + 1])
+                        n3 = str(grid[j + 1, i])
+                        c3 = np.array([nmap[nid].position_m for nid in (n0, n1, n2, n3)])
+                        if float(np.dot(np.cross(c3[2] - c3[0], c3[3] - c3[1]), nvec)) < 0.0:
+                            nids = (n0, n3, n2, n1)
+                        else:
+                            nids = (n0, n1, n2, n3)
+                        shells.append(
+                            ShellPanelElement(
+                                id=f"{shell_prefix}_{j}_{i}",
+                                bay="front_brace",
+                                node_ids=nids,
+                                material=al5052,
+                                thickness_m=t_plate,
+                                areal_mass_kg_m2=areal_mass_5052,
+                                e_mem_h_n_m=e_mem_eff,
+                                normal_vec=n_tup,
+                            )
+                        )
+                return w * bh * areal_mass_5052
+
+            hdr_mass = _build_front_strip(
+                node_prefix="pan_front_hdr",
+                shell_prefix="shell_front_hdr",
+                cbush_prefix="cbush_front_hdr",
+                z0_m=h - hdr_h_m,
+                z1_m=h,
+                is_header=True,
+            )
+            skr_mass = _build_front_strip(
+                node_prefix="pan_front_skr",
+                shell_prefix="shell_front_skr",
+                cbush_prefix="cbush_front_skr",
+                z0_m=0.0,
+                z1_m=skr_h_m,
+                is_header=False,
+            )
+            front_mass_kg = hdr_mass + skr_mass
+            front_is_shell = True
+        elif front_mode == "corner_45_bars":
+            l_arm = min(0.120, 0.26 * min(w, h))
+            front_mass_kg = _add_flat_bar_brace_kit(
+                id_prefix="brace_front_open",
+                endpoints_m=[
+                    ((l_arm, 0.0, 0.0), (0.0, 0.0, l_arm)),
+                    ((w - l_arm, 0.0, 0.0), (w, 0.0, l_arm)),
+                    ((l_arm, 0.0, h), (0.0, 0.0, h - l_arm)),
+                    ((w - l_arm, 0.0, h), (w, 0.0, h - l_arm)),
+                ],
+                nodes=nodes,
+                nmap=nmap,
+                members=members,
+                allow_gantry=allow_gantry,
+            )
+
+    return {
+        "shells": shells,
+        "springs": springs,
+        "top_brace_mass_kg": top_mass_kg,
+        "top_brace_cost_usd": top_cost_usd,
+        "top_brace_active": top_active,
+        "top_brace_is_shell": top_is_shell,
+        "front_brace_mass_kg": front_mass_kg,
+        "front_brace_cost_usd": front_cost_usd,
+        "front_brace_active": front_active,
+        "front_brace_is_shell": front_is_shell,
+    }
+
+
 def _build_corexy(
     spec: PrinterSpec,
     toolhead_rel_pos: tuple[float, float, float],
@@ -3548,6 +4217,16 @@ def _build_corexy(
         shell_elements.extend(pan_shells)
         fastener_springs.extend(panel_springs)
 
+    brace_res = _add_top_and_front_braces(
+        spec=spec,
+        nodes=nodes,
+        nmap=nmap,
+        members=members,
+        panel_mesh_n=panel_mesh_n,
+    )
+    shell_elements.extend(brace_res["shells"])
+    fastener_springs.extend(brace_res["springs"])
+
     # Calculate moving masses (strip composite rail & backer mass from gantry beam before adding x_rail_mass)
     x_beam_mass = sum(
         max(m.mass_kg(nmap) - m.rail_mass_kg - m.backer_mass_kg - m.fill_mass_kg, 0.0)
@@ -3598,6 +4277,14 @@ def _build_corexy(
         backbone_mass_kg=backbone_mass_kg,
         backbone_cost_usd=backbone_cost_usd,
         trident_backbone_active=trident_backbone_active,
+        top_brace_mass_kg=float(brace_res["top_brace_mass_kg"]),
+        top_brace_cost_usd=float(brace_res["top_brace_cost_usd"]),
+        top_brace_active=bool(brace_res["top_brace_active"]),
+        top_brace_is_shell=bool(brace_res["top_brace_is_shell"]),
+        front_brace_mass_kg=float(brace_res["front_brace_mass_kg"]),
+        front_brace_cost_usd=float(brace_res["front_brace_cost_usd"]),
+        front_brace_active=bool(brace_res["front_brace_active"]),
+        front_brace_is_shell=bool(brace_res["front_brace_is_shell"]),
         x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
         x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,
         y_rail_ei_x_boost_pct=y_rail_ei_x_boost_pct,
@@ -3621,6 +4308,8 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     for m in model.members:
         mk = m.mass_kg(nmap)
         frame_mass += mk
+        if m.id.startswith(("brace_top_open_", "brace_front_open_")):
+            continue
         base_mk = max(mk - m.fill_mass_kg - m.rail_mass_kg - m.backer_mass_kg, 0.0)
         cost += base_mk * m.material.cost_per_kg_usd
         if m.rail_mass_kg > 0.0:
@@ -3647,9 +4336,13 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     bed_frame_mass = nmap["bed_frame"].lumped_mass_kg if "bed_frame" in nmap else 0.0
     bed_node_mass = (nmap[model.bed_node_id].lumped_mass_kg if has_bed_node else 0.0) + bed_frame_mass
     model.frame_mass_kg = frame_mass
-    # Shell elements carry their physical panel/backbone mass via MITC4 element mass matrices (not node lumps)
+    # Shell elements carry their physical panel/backbone/CNC-brace mass via MITC4 element mass matrices (not node lumps)
+    top_shell_mass = model.top_brace_mass_kg if model.top_brace_is_shell else 0.0
+    front_shell_mass = model.front_brace_mass_kg if model.front_brace_is_shell else 0.0
     shell_panel_mass = (
-        (model.panel_mass_kg + model.backbone_mass_kg) if model.shell_elements else 0.0
+        (model.panel_mass_kg + model.backbone_mass_kg + top_shell_mass + front_shell_mass)
+        if model.shell_elements
+        else 0.0
     )
     model.total_mass_kg = (
         frame_mass + lumped_mass + shell_panel_mass + max(bed_mass - bed_node_mass, 0.0)
@@ -3659,6 +4352,10 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
         cost += model.panel_mass_kg * pmat.cost_per_kg_usd
     if model.trident_backbone_active:
         cost += model.backbone_cost_usd
+    if model.top_brace_active:
+        cost += model.top_brace_cost_usd
+    if model.front_brace_active:
+        cost += model.front_brace_cost_usd
     # Add baseline estimate for motors, bed plate, rails, and hotend hardware
     bed_mat = get_material(model.spec.bed.plate_material)
     cost += bed_mass * bed_mat.cost_per_kg_usd + 140.0  # steppers/electronics/hotend baseline
