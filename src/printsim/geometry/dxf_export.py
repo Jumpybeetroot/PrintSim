@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import ezdxf
 
+from printsim.geometry.builder import trident_backbone_dimensions_mm
 from printsim.schema import PrinterSpec, get_material, get_profile
 
 DXF_SPACING_MM = 30.0
@@ -22,6 +24,8 @@ VALID_DXF_PARTS: tuple[str, ...] = (
     "all_plates",
 )
 
+_ContourPt = tuple[float, float] | tuple[float, float, float]
+
 
 @dataclass
 class _Plate2D:
@@ -33,9 +37,10 @@ class _Plate2D:
     height_mm: float
     thickness_mm: float
     material_label: str
-    contours: list[list[tuple[float, float]]]
+    contours: list[list[_ContourPt]]
     holes: list[tuple[float, float, float]]  # (cx_mm, cy_mm, diameter_mm)
     description: str
+    hole_contours: list[list[_ContourPt]] = field(default_factory=list)
 
 
 def _safe_material_name(material_id: str) -> str:
@@ -224,63 +229,206 @@ def _build_top_panel(spec: PrinterSpec) -> _Plate2D:
     )
 
 
+def _rounded_rect_contour(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    radius_mm: float,
+) -> list[_ContourPt]:
+    """Build a closed CCW rectangular contour with corner fillets via DXF arc bulges."""
+    r = min(max(float(radius_mm), 0.0), 0.45 * min(x1 - x0, y1 - y0))
+    if r <= 1e-6:
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    b = math.tan(math.pi / 8.0)
+    return [
+        (x0 + r, y0, 0.0),
+        (x1 - r, y0, b),
+        (x1, y0 + r, 0.0),
+        (x1, y1 - r, b),
+        (x1 - r, y1, 0.0),
+        (x0 + r, y1, b),
+        (x0, y1 - r, 0.0),
+        (x0, y0 + r, b),
+    ]
+
+
+def _obround_slot_contour(
+    cx: float,
+    cy: float,
+    length_mm: float,
+    width_mm: float,
+    *,
+    horizontal: bool,
+) -> list[_ContourPt]:
+    """Build a closed CCW stadium/obround slot contour using 180-deg semicircular DXF bulges."""
+    r = 0.5 * width_mm
+    half_straight = max(0.0, 0.5 * length_mm - r)
+    if horizontal:
+        return [
+            (cx - half_straight, cy - r, 0.0),
+            (cx + half_straight, cy - r, 1.0),
+            (cx + half_straight, cy + r, 0.0),
+            (cx - half_straight, cy + r, 1.0),
+        ]
+    return [
+        (cx + r, cy - half_straight, 0.0),
+        (cx + r, cy + half_straight, 1.0),
+        (cx - r, cy + half_straight, 0.0),
+        (cx - r, cy - half_straight, 1.0),
+    ]
+
+
 def _build_trident_backbone(spec: PrinterSpec) -> _Plate2D:
     ext_w = _ext_width_mm(spec)
+    dims = trident_backbone_dimensions_mm(spec)
     w = float(spec.frame.width_mm)
     d = float(spec.frame.depth_mm)
-    outer = [(0.0, 0.0), (w, 0.0), (w, d), (0.0, d)]
-    contours: list[list[tuple[float, float]]] = [outer]
+    flange = dims["flange_width_mm"]
+    cutout_w = dims["cutout_w_mm"]
+    cutout_d = dims["cutout_d_mm"]
+    recess = dims["rear_recess_mm"]
 
-    # 3x NEMA17 Z-motor mounts: front-left, front-right, rear-center
-    off = min(0.22 * w, 0.22 * d, ext_w + 24.0)
+    # Inner open cutout bounds with R10 mm corner fillets
+    x0 = 0.5 * (w - cutout_w)
+    x1 = 0.5 * (w + cutout_w)
+    y0 = min(flange, 0.5 * (d - cutout_d))
+    y1 = y0 + cutout_d
+
+    # Outer contour features:
+    # - 2x front 20x20 mm vertical-post reliefs
+    # - Rear edge recessed 20 mm inward on left/right wings with 86.1 x 20 mm protruding Z-motor tab
+    # - 20.4 x 20.1 mm U-shaped rear Z-rail clearance notch centered in the rear tab
+    # - 25 x 8 mm rear Z-chain wiring notch left of the rear tab
+    corner_cut = min(20.0, max(10.0, 0.25 * flange))
+    y_wing = d - recess
+    tab_w = min(86.1, max(44.0, 0.35 * cutout_w))
+    tab_x0 = 0.5 * w - 0.5 * tab_w
+    tab_x1 = 0.5 * w + 0.5 * tab_w
+    rail_notch_w = min(20.4, 0.30 * tab_w)
+    rail_notch_d = min(20.1, recess + 0.1) if recess > 0.0 else 12.0
+    rail_x0 = 0.5 * w - 0.5 * rail_notch_w
+    rail_x1 = 0.5 * w + 0.5 * rail_notch_w
+    y_rail_bot = d - rail_notch_d
+
+    wire_notch_w = min(25.0, max(12.0, 0.25 * max(tab_x0 - x0, 20.0)))
+    wire_notch_d = min(8.0, 0.15 * flange)
+    wire_gap = min(12.0, max(4.0, 0.12 * max(tab_x0 - x0, 20.0)))
+    wire_x1 = max(x0 + wire_notch_w + 4.0, tab_x0 - wire_gap)
+    wire_x0 = wire_x1 - wire_notch_w
+    y_wire_bot = y_wing - wire_notch_d
+
+    outer: list[_ContourPt] = [
+        (corner_cut, 0.0),
+        (w - corner_cut, 0.0),
+        (w - corner_cut, corner_cut),
+        (w, corner_cut),
+        (w, y_wing),
+        (tab_x1, y_wing),
+        (tab_x1, d),
+        (rail_x1, d),
+        (rail_x1, y_rail_bot),
+        (rail_x0, y_rail_bot),
+        (rail_x0, d),
+        (tab_x0, d),
+        (tab_x0, y_wing),
+        (wire_x1, y_wing),
+        (wire_x1, y_wire_bot),
+        (wire_x0, y_wire_bot),
+        (wire_x0, y_wing),
+        (0.0, y_wing),
+        (0.0, corner_cut),
+        (corner_cut, corner_cut),
+    ]
+    inner_cutout = _rounded_rect_contour(x0, y0, x1, y1, radius_mm=min(10.0, 0.2 * min(cutout_w, cutout_d)))
+    contours: list[list[_ContourPt]] = [outer, inner_cutout]
+
+    # 3x Z-motor mounts: FL (41.8, 41.8), FR (w - 41.8, 41.8), Rear-Center (w/2, d - 49.9)
+    # Each has 1x Ø26.0 mm pilot/leadscrew bore + 4x Ø3.5 mm M3 holes on a 31.0 x 31.0 mm square
+    front_off = 41.8 if flange >= 72.0 else max(22.0, 0.52 * flange)
+    rear_flange_span = d - y1 - recess
+    rear_off = 49.9 if rear_flange_span >= 72.0 else max(26.0, recess + 0.37 * max(rear_flange_span, 30.0))
     motor_centers = [
-        (off, off),
-        (w - off, off),
-        (0.5 * w, d - off),
+        (front_off, front_off),
+        (w - front_off, front_off),
+        (0.5 * w, d - rear_off),
     ]
     holes: list[tuple[float, float, float]] = []
     for mx, my in motor_centers:
-        # NEMA17 Ø22.5 mm pilot bore + TR8 leadscrew clearance
-        holes.append((mx, my, 22.5))
-        # 4x NEMA17 M3 holes on 31 x 31 mm square
+        holes.append((mx, my, 26.0))
         for dx in (-15.5, 15.5):
             for dy in (-15.5, 15.5):
-                holes.append((mx + dx, my + dy, 3.4))
+                holes.append((mx + dx, my + dy, 3.5))
 
-    # Perimeter M5 frame mounting holes along bottom extrusion centerlines
-    holes.extend(_perimeter_holes(w, d, inset_mm=0.5 * ext_w, diameter_mm=5.5, target_pitch_mm=90.0))
+    # 10x Ø5.4 mm M5 frame-mounting holes: 4 FL, 4 FR, 2 Rear-Center tab
+    t_cl = min(10.0, 0.5 * ext_w)
+    m5_a = corner_cut + 15.0
+    m5_b = min(flange - 10.0, corner_cut + 50.0)
+    if m5_b <= m5_a + 12.0:
+        m5_a = corner_cut + 10.0
+        m5_b = max(m5_a + 14.0, flange - 8.0)
+    tab_m5_dx = 0.5 * (0.5 * rail_notch_w + 0.5 * tab_w)
+    tab_m5_y = d - min(10.0, 0.5 * max(recess, 12.0))
+    m5_coords = [
+        # 4x FL
+        (t_cl, m5_a),
+        (t_cl, m5_b),
+        (m5_a, t_cl),
+        (m5_b, t_cl),
+        # 4x FR
+        (w - t_cl, m5_a),
+        (w - t_cl, m5_b),
+        (w - m5_a, t_cl),
+        (w - m5_b, t_cl),
+        # 2x Rear-Center tab
+        (0.5 * w - tab_m5_dx, tab_m5_y),
+        (0.5 * w + tab_m5_dx, tab_m5_y),
+    ]
+    for hx, hy in m5_coords:
+        holes.append((hx, hy, 5.4))
 
-    # Large central chamfered weight-relief cutout clearing the 3 motor pads
-    margin = off + 30.0
-    x0, x1 = margin, w - margin
-    y0, y1 = margin, d - margin
-    if (x1 - x0) >= 30.0 and (y1 - y0) >= 30.0:
-        ch = min(15.0, 0.15 * min(x1 - x0, y1 - y0))
-        contours.append(
-            [
-                (x0 + ch, y0),
-                (x1 - ch, y0),
-                (x1, y0 + ch),
-                (x1, y1 - ch),
-                (x1 - ch, y1),
-                (x0 + ch, y1),
-                (x0, y1 - ch),
-                (x0, y0 + ch),
-            ]
-        )
+    # 8x 3.6 mm narrow DIN/accessory slots:
+    # - 4x 50 mm vertical on left/right flanges
+    # - 4x 40 mm horizontal on front/rear flanges
+    slot_w = 3.6
+    slot_v_len = min(50.0, max(20.0, 0.40 * cutout_d))
+    slot_h_len = min(40.0, max(16.0, 0.30 * cutout_w))
+    x_side_slot = 0.5 * (corner_cut + x0)
+    y_side_1 = y0 + 0.25 * cutout_d
+    y_side_2 = y0 + 0.75 * cutout_d
+    y_front_slot = 0.5 * (corner_cut + y0)
+    x_front_1 = x0 + 0.25 * cutout_w
+    x_front_2 = x0 + 0.75 * cutout_w
+    y_rear_slot = 0.5 * (y1 + y_wire_bot)
+    x_rear_1 = 0.5 * (x0 + (0.5 * w - 20.0))
+    x_rear_2 = w - x_rear_1
+
+    hole_contours: list[list[_ContourPt]] = [
+        _obround_slot_contour(x_side_slot, y_side_1, slot_v_len, slot_w, horizontal=False),
+        _obround_slot_contour(x_side_slot, y_side_2, slot_v_len, slot_w, horizontal=False),
+        _obround_slot_contour(w - x_side_slot, y_side_1, slot_v_len, slot_w, horizontal=False),
+        _obround_slot_contour(w - x_side_slot, y_side_2, slot_v_len, slot_w, horizontal=False),
+        _obround_slot_contour(x_front_1, y_front_slot, slot_h_len, slot_w, horizontal=True),
+        _obround_slot_contour(x_front_2, y_front_slot, slot_h_len, slot_w, horizontal=True),
+        _obround_slot_contour(x_rear_1, y_rear_slot, slot_h_len, slot_w, horizontal=True),
+        _obround_slot_contour(x_rear_2, y_rear_slot, slot_h_len, slot_w, horizontal=True),
+    ]
 
     return _Plate2D(
         part_id="trident_backbone",
         title="Trident Backbone Plate",
         width_mm=w,
         height_mm=d,
-        thickness_mm=3.0,
-        material_label="3mm Mild Steel (Powder-Coated)",
+        thickness_mm=3.18,
+        material_label='3.18mm (1/8") Mild Steel (Powder-Coated)',
         contours=contours,
         holes=holes,
+        hole_contours=hole_contours,
         description=(
-            "Clee-style 3mm steel bottom stiffener plate with 3x NEMA17 Z-motor patterns "
-            "(31x31mm M3 + Ø22.5mm pilot bores) and central weight-relief cutout"
+            f'Clee Trident Backbone 3.18mm (1/8") mild-steel open perimeter frame '
+            f'({cutout_w:.0f}x{cutout_d:.0f}mm R10 cutout, {flange:.0f}mm flanges): '
+            "3x Z-motor mounts (Ø26mm pilot + 31x31mm Ø3.5mm M3), 10x Ø5.4mm M5 frame holes, "
+            "8x 3.6mm DIN slots, rear Z-motor tab + Z-rail/wiring notches"
         ),
     )
 
@@ -388,10 +536,10 @@ def list_dxf_exportable_parts(spec: PrinterSpec) -> list[dict[str, Any]]:
                 "label": plate.title,
                 "width_mm": round(plate.width_mm, 1),
                 "height_mm": round(plate.height_mm, 1),
-                "thickness_mm": round(plate.thickness_mm, 1),
+                "thickness_mm": round(plate.thickness_mm, 2),
                 "material": plate.material_label,
                 "quantity": qty,
-                "hole_count": len(plate.holes),
+                "hole_count": len(plate.holes) + len(plate.hole_contours),
                 "applicable": applicable,
                 "description": plate.description,
             }
@@ -405,15 +553,34 @@ def list_dxf_exportable_parts(spec: PrinterSpec) -> list[dict[str, Any]]:
             "label": "All Applicable Plates (Nested Kit)",
             "width_mm": round(total_w, 1),
             "height_mm": round(max_h, 1),
-            "thickness_mm": round(float(spec.frame.panel_thickness_mm), 1),
+            "thickness_mm": round(float(spec.frame.panel_thickness_mm), 2),
             "material": "Mixed Kit",
             "quantity": len(kit),
-            "hole_count": sum(len(p.holes) for p in kit),
+            "hole_count": sum(len(p.holes) + len(p.hole_contours) for p in kit),
             "applicable": True,
             "description": f"2D nested kit layout ({len(kit)} plates, {DXF_SPACING_MM:.0f}mm spacing)",
         }
     )
     return catalog
+
+
+def _emit_lwpolyline(
+    msp: Any,
+    ox: float,
+    oy: float,
+    pts: list[_ContourPt],
+    layer: str,
+) -> None:
+    has_bulge = any(len(p) > 2 and abs(float(p[2])) > 1e-9 for p in pts)
+    if has_bulge:
+        xyb = [
+            (ox + float(p[0]), oy + float(p[1]), float(p[2]) if len(p) > 2 else 0.0)
+            for p in pts
+        ]
+        msp.add_lwpolyline(xyb, format="xyb", close=True, dxfattribs={"layer": layer})
+    else:
+        xy = [(ox + float(p[0]), oy + float(p[1])) for p in pts]
+        msp.add_lwpolyline(xy, close=True, dxfattribs={"layer": layer})
 
 
 def export_panels_dxf_bytes(spec: PrinterSpec, part: str = "all_plates") -> bytes:
@@ -433,8 +600,10 @@ def export_panels_dxf_bytes(spec: PrinterSpec, part: str = "all_plates") -> byte
         oy = 0.0
 
         for contour in plate.contours:
-            pts = [(ox + x, oy + y) for x, y in contour]
-            msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "CUT_OUTER"})
+            _emit_lwpolyline(msp, ox, oy, contour, layer="CUT_OUTER")
+
+        for slot_contour in plate.hole_contours:
+            _emit_lwpolyline(msp, ox, oy, slot_contour, layer="HOLES")
 
         for cx, cy, diam in plate.holes:
             msp.add_circle(
@@ -444,10 +613,16 @@ def export_panels_dxf_bytes(spec: PrinterSpec, part: str = "all_plates") -> byte
             )
 
         text_h = max(2.2, min(8.0, plate.width_mm * 0.022))
+        t_str = (
+            f"{plate.thickness_mm:.2f}"
+            if abs(plate.thickness_mm - round(plate.thickness_mm, 1)) > 1e-4
+            else f"{plate.thickness_mm:.1f}"
+        )
+        slot_suffix = f", {len(plate.hole_contours)} slots" if plate.hole_contours else ""
         line1 = f"{plate.title} ({plate.width_mm:.1f} x {plate.height_mm:.1f} mm)"
         line2 = (
-            f"{plate.material_label} | t={plate.thickness_mm:.1f} mm | "
-            f"{len(plate.holes)} holes"
+            f"{plate.material_label} | t={t_str} mm | "
+            f"{len(plate.holes)} holes{slot_suffix}"
         )
         if plate.width_mm < 100.0:
             tx = ox

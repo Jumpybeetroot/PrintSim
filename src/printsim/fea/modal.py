@@ -2041,7 +2041,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
                     nozzle_twist_fallback_freq = freq_hz
                 if (
                     nozzle_twist_freq is None
-                    and float(c["th_ke_share"]) >= 0.18
+                    and float(c["th_ke_share"]) >= 0.15
                     and float(c["noz_th_diff_norm"]) >= 0.25
                     and (float(c["frame_ke_share"]) + float(c["bed_ke_share"])) < 0.55
                 ):

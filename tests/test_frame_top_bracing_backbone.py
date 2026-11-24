@@ -184,7 +184,7 @@ def test_gantry_top_clearance_shifts_elevation_and_evaluates_cleanly() -> None:
 
 
 def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None:
-    """Clee Trident Backbone stiffens Z/bed/lower-frame, adds ~4.1 kg & $44.99-$54.99, and stays inactive on V2.4."""
+    """Clee Trident Backbone (3.18 mm open-perimeter steel ring) stiffens Z/bed/lower-frame and stays inactive on V2.4."""
     base_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
     base_spec.frame.trident_backbone = False
     bb_spec = base_spec.model_copy(deep=True)
@@ -207,10 +207,37 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
 
         assert gd1["trident_backbone"]["enabled"] is True
         assert gd1["trident_backbone"]["active"] is True
+        assert gd1["trident_backbone"]["geometry_kind"] == "open_perimeter_frame"
+        assert gd1["trident_backbone"]["thickness_mm"] == pytest.approx(3.18)
+        assert gd1["trident_backbone"]["flange_width_mm"] == pytest.approx(80.0)
+        assert gd1["trident_backbone"]["cutout_w_mm"] == pytest.approx(300.0)
+        assert gd1["trident_backbone"]["cutout_d_mm"] == pytest.approx(280.0)
         assert gd1["trident_backbone"]["cost_usd"] == pytest.approx(49.99)
         assert gd1["trident_backbone"]["z_thrust_boost_factor"] == pytest.approx(2.4)
-        assert 3.5 <= gd1["trident_backbone"]["mass_kg"] <= 4.8
-        assert any(s.bay == "backbone" for s in rep1.assembly.shell_elements)
+        assert 2.6 <= gd1["trident_backbone"]["mass_kg"] <= 3.6
+
+        # MITC4 shell forms a true 12-quad open-center perimeter ring with no quads or orphan nodes inside cutout
+        bb_shells = [s for s in rep1.assembly.shell_elements if s.bay == "backbone"]
+        assert len(bb_shells) == 12
+        nmap1 = rep1.assembly.node_map
+        bb_node_ids = {n.id for n in rep1.assembly.nodes if n.role == "backbone"}
+        used_bb_node_ids = {nid for sh in bb_shells for nid in sh.node_ids}
+        assert bb_node_ids == used_bb_node_ids
+        assert len(bb_node_ids) == 24
+        w_m = s1.frame.width_mm * 1e-3
+        d_m = s1.frame.depth_mm * 1e-3
+        fl_m = gd1["trident_backbone"]["flange_width_mm"] * 1e-3
+        cw_m = gd1["trident_backbone"]["cutout_w_mm"] * 1e-3
+        cd_m = gd1["trident_backbone"]["cutout_d_mm"] * 1e-3
+        x_cut0_m = 0.5 * (w_m - cw_m)
+        x_cut1_m = 0.5 * (w_m + cw_m)
+        y_cut0_m = min(fl_m, 0.5 * (d_m - cd_m))
+        y_cut1_m = y_cut0_m + cd_m
+        for sh in bb_shells:
+            centroid = np.mean([nmap1[nid].position_m for nid in sh.node_ids], axis=0)
+            in_cutout = (x_cut0_m < centroid[0] < x_cut1_m) and (y_cut0_m < centroid[1] < y_cut1_m)
+            assert not in_cutout
+
         assert any(
             sp.bay == "backbone" and sp.frame_node_id == "b_rear_mid"
             for sp in rep1.assembly.fastener_springs
@@ -218,7 +245,7 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
 
         mass_delta = rep1.assembly.total_mass_kg - rep0.assembly.total_mass_kg
         cost_delta = rep1.assembly.estimated_material_cost_usd - rep0.assembly.estimated_material_cost_usd
-        assert 3.5 <= mass_delta <= 4.8
+        assert 2.6 <= mass_delta <= 3.6
         assert mass_delta == pytest.approx(rep1.assembly.backbone_mass_kg, rel=1e-4)
         assert cost_delta == pytest.approx(49.99, abs=0.05)
 
@@ -262,13 +289,23 @@ def test_trident_backbone_physics_mass_cost_stiffness_and_flying_guard() -> None
         assert abs(u1[6 * nidx["bed_surface"] + 2]) < abs(u0[6 * nidx0["bed_surface"] + 2]) * 0.90
         assert abs(u1[6 * nidx["b_rear_mid"] + 2]) < abs(u0[6 * nidx0["b_rear_mid"] + 2]) * 0.65
 
-    # Tiered West3D retail pricing by Trident build size (250 / 300 / 350 mm)
-    for size_mm, expected_price in ((250.0, 44.99), (300.0, 49.99), (350.0, 54.99)):
+    # Tiered West3D retail pricing & Clee cutout dimensions by Trident build size (250 / 300 / 350 mm)
+    for size_mm, frame_mm, cw_mm, cd_mm, expected_price in (
+        (250.0, 410.0, 250.0, 230.0, 44.99),
+        (300.0, 460.0, 300.0, 280.0, 49.99),
+        (350.0, 510.0, 350.0, 330.0, 54.99),
+    ):
         s_sz = bb_spec.model_copy(deep=True)
         s_sz.kinematics.build_volume_mm = [size_mm, size_mm, 250.0]
+        s_sz.frame.width_mm = frame_mm
+        s_sz.frame.depth_mm = frame_mm
         asm_sz = build_assembly(s_sz)
+        gd_sz = asm_sz.to_geometry_dict()["trident_backbone"]
         assert asm_sz.backbone_cost_usd == pytest.approx(expected_price)
-        assert asm_sz.to_geometry_dict()["trident_backbone"]["cost_usd"] == pytest.approx(expected_price)
+        assert gd_sz["cost_usd"] == pytest.approx(expected_price)
+        assert gd_sz["cutout_w_mm"] == pytest.approx(cw_mm)
+        assert gd_sz["cutout_d_mm"] == pytest.approx(cd_mm)
+        assert gd_sz["flange_width_mm"] == pytest.approx(80.0)
 
     # On rubber_feet, Trident Backbone also increases frame XY & Z stiffness and fundamental frequency
     s_rf0 = base_spec.model_copy(deep=True)

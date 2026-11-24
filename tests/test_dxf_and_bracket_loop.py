@@ -91,15 +91,19 @@ def test_dxf_export_layers_entities_and_parts(tmp_path: Path) -> None:
     doc_rear = _parse_dxf_bytes(export_panels_dxf_bytes(bolted_bb_spec, part="rear_panel"))
     assert len(list(doc_rear.modelspace().query('LWPOLYLINE[layer=="CUT_OUTER"]'))) == 2
 
-    # Trident backbone: central weight-relief cutout + 3x Ø22.5 mm pilot bores + 12x NEMA17 M3 holes
+    # Trident backbone (Clee): open R10 central cutout + 3x Ø26.0 mm pilot bores + 12x Ø3.5 mm M3 + 10x Ø5.4 mm M5 + 8x 3.6 mm DIN slots
     doc_bb = _parse_dxf_bytes(export_panels_dxf_bytes(bolted_bb_spec, part="trident_backbone"))
     bb_polys = list(doc_bb.modelspace().query('LWPOLYLINE[layer=="CUT_OUTER"]'))
+    bb_slot_polys = list(doc_bb.modelspace().query('LWPOLYLINE[layer=="HOLES"]'))
     bb_circles = list(doc_bb.modelspace().query('CIRCLE[layer=="HOLES"]'))
     assert len(bb_polys) == 2
-    pilot_bores = [c for c in bb_circles if c.dxf.radius == pytest.approx(11.25, abs=0.05)]
-    nema_m3_holes = [c for c in bb_circles if c.dxf.radius == pytest.approx(1.7, abs=0.05)]
+    assert len(bb_slot_polys) == 8
+    pilot_bores = [c for c in bb_circles if c.dxf.radius == pytest.approx(13.0, abs=0.05)]
+    nema_m3_holes = [c for c in bb_circles if c.dxf.radius == pytest.approx(1.75, abs=0.05)]
+    m5_frame_holes = [c for c in bb_circles if c.dxf.radius == pytest.approx(2.7, abs=0.05)]
     assert len(pilot_bores) == 3
     assert len(nema_m3_holes) == 12
+    assert len(m5_frame_holes) == 10
 
     # Corner gusset scales with frame.profile width (2020 -> 40x40, 3030 -> 60x60) with 4x M5 holes
     doc_g20 = _parse_dxf_bytes(export_panels_dxf_bytes(base_spec, part="corner_gusset"))

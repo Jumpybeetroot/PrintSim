@@ -54,6 +54,7 @@ def test_schema_catalogs_and_defaults_backward_compatible() -> None:
     assert set(BED_MOUNT_CATALOG.keys()) == {
         "kinematic_3pt",
         "whopping_pochard_kinematic",
+        "trident_3pt_standoffs",
         "rigid_4pt",
         "floating_4pt",
         "silicone_4pt",

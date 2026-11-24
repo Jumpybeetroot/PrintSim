@@ -132,7 +132,10 @@ def test_bracket_carriage_mass_delta_across_architectures() -> None:
 
     assert (asm_ppa.y_moving_mass_kg - asm_abs.y_moving_mass_kg) == pytest.approx(delta_ppa_kg, rel=1e-9)
     assert (asm_cnc.y_moving_mass_kg - asm_abs.y_moving_mass_kg) == pytest.approx(delta_cnc_kg, rel=1e-9)
-    assert (asm_cnc.total_mass_kg - asm_abs.total_mass_kg) == pytest.approx(delta_cnc_kg, rel=1e-9)
+    # Total mass includes both moving carriage delta and stationary CNC motor mounts (2 x 0.11 kg on 2WD)
+    assert (asm_cnc.total_mass_kg - asm_abs.total_mass_kg) == pytest.approx(
+        delta_cnc_kg + 0.22, rel=1e-9
+    )
 
     for nid in ("y_car_l", "y_car_r"):
         assert (

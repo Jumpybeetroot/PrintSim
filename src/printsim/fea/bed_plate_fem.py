@@ -89,7 +89,7 @@ def _resolve_mount_layout(
         target_pts = [(-0.25, 0.5), (0.0, 0.5), (0.25, 0.5)]
     elif arch == "corexy" and z_drive == "leadscrew_dual":
         target_pts = [(-0.5, 0.0), (0.5, 0.0)]
-    elif mount_type in ("kinematic_3pt", "whopping_pochard_kinematic") or arch == "delta":
+    elif mount_type in ("kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs") or arch == "delta":
         target_pts = [(-0.5, -0.5), (0.5, -0.5), (0.0, 0.5)]
     else:
         target_pts = [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)]

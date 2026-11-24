@@ -493,3 +493,98 @@ def test_builder_modular_delegation_and_custom_bracket_mass_delta() -> None:
     assert mo_heavy.shaper_y is not None and mo_light.shaper_y is not None and mo_base.shaper_y is not None
     assert mo_heavy.shaper_y.effective_freq_hz < mo_light.shaper_y.effective_freq_hz
     assert mo_heavy.shaper_y.structural_freq_hz < mo_base.shaper_y.structural_freq_hz
+
+
+# ---------------------------------------------------------------------------
+# 6. Stock Trident 3-Point Bakelite Standoffs & Calibrated Monolith CNC AWD Weights
+# ---------------------------------------------------------------------------
+
+
+def test_trident_3pt_standoffs_geometry_and_thermal_warp_ordering() -> None:
+    """trident_3pt_standoffs yields 3 mount points and thermally warps strictly between kinematic_3pt and rigid_4pt at 100 C."""
+    from printsim.fea import compute_thermal_structural_report, solve_bed_plate_fem
+    from printsim.schema import BED_MOUNT_CATALOG
+
+    cfg = BED_MOUNT_CATALOG["trident_3pt_standoffs"]
+    assert cfg["mount_points"] == 3
+    assert cfg["k_axial_n_per_mm"] == pytest.approx(18000.0)
+    assert cfg["k_lateral_n_per_mm"] == pytest.approx(9500.0)
+    assert cfg["k_restraint_thermal"] == pytest.approx(22.0)
+    assert cfg["damping_delta"] == pytest.approx(0.003)
+    assert cfg["cost_usd"] == pytest.approx(16.0)
+
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    base.bed.target_temp_c = 100.0
+
+    spec_kin = base.model_copy(deep=True)
+    spec_kin.bed.mount_type = "kinematic_3pt"
+
+    spec_tri = base.model_copy(deep=True)
+    spec_tri.bed.mount_type = "trident_3pt_standoffs"
+
+    spec_rig = base.model_copy(deep=True)
+    spec_rig.bed.mount_type = "rigid_4pt"
+
+    asm_kin = build_assembly(spec_kin)
+    asm_tri = build_assembly(spec_tri)
+    asm_rig = build_assembly(spec_rig)
+
+    # Geometry dict and bed-plate FEM both expose 3-point triangle layout
+    gdict_tri = asm_tri.to_geometry_dict()
+    assert gdict_tri["bed_mount_type"] == "trident_3pt_standoffs"
+    assert len(gdict_tri["bed_mount_points_mm"]) == 3
+    assert gdict_tri["bed_mount_points_mm"] == asm_kin.to_geometry_dict()["bed_mount_points_mm"]
+
+    plate_kin = solve_bed_plate_fem(spec_kin)
+    plate_tri = solve_bed_plate_fem(spec_tri)
+    plate_rig = solve_bed_plate_fem(spec_rig)
+
+    assert len(plate_tri.mount_points_rel) == 3
+    assert plate_tri.mount_points_rel == plate_kin.mount_points_rel
+
+    # Thermal taco buckling & thermal PTV strictly between kinematic_3pt (lowest) and rigid_4pt (highest)
+    assert plate_kin.taco_buckling_um == pytest.approx(0.0, abs=1e-9)
+    assert plate_kin.taco_buckling_um < plate_tri.taco_buckling_um < plate_rig.taco_buckling_um
+    assert plate_kin.thermal_peak_to_valley_um < plate_tri.thermal_peak_to_valley_um < plate_rig.thermal_peak_to_valley_um
+
+    ts_kin = compute_thermal_structural_report(asm_kin)
+    ts_tri = compute_thermal_structural_report(asm_tri)
+    ts_rig = compute_thermal_structural_report(asm_rig)
+    assert ts_kin.bed_buckling_taco_um < ts_tri.bed_buckling_taco_um < ts_rig.bed_buckling_taco_um
+
+
+def test_monolith_cnc_awd_weight_class_and_stationary_motor_mount_mass() -> None:
+    """monolith_cnc_awd + aluminum_6061_t6 yields exact 256 g moving Y-carriages (CloakedWayne scale-weighed) and +0.44 kg stationary AWD billet mounts."""
+    from printsim.schema import GANTRY_WEIGHT_CLASSES
+
+    wc = GANTRY_WEIGHT_CLASSES["monolith_cnc_awd"]
+    assert wc["carriage_mass_g"] == pytest.approx(214.0)
+    assert wc["suggested_bracket_material"] == "aluminum_6061_t6"
+
+    spec_mono = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
+    assert spec_mono.gantry.carriage_mass_g == pytest.approx(214.0)
+    assert spec_mono.gantry.bracket_material == "aluminum_6061_t6"
+
+    asm_mono = build_assembly(spec_mono)
+    assert asm_mono.y_carriage_joints_mass_kg == pytest.approx(0.256, abs=1e-9)
+    assert asm_mono.to_geometry_dict()["mass_summary"]["y_carriage_joints_mass_g"] == pytest.approx(
+        256.0, abs=1e-6
+    )
+
+    # Stationary CNC billet motor mounts add +0.11 kg per XY motor corner (+0.44 kg total on AWD)
+    # without inflating moving Y mass beyond the +42 g carriage bracket delta
+    spec_abs = spec_mono.model_copy(deep=True)
+    spec_abs.gantry.bracket_material = "abs_printed"
+    asm_abs = build_assembly(spec_abs)
+
+    assert (asm_mono.y_moving_mass_kg - asm_abs.y_moving_mass_kg) == pytest.approx(0.042, abs=1e-9)
+    for nid in ("g_fl", "g_fr", "g_rl", "g_rr"):
+        assert (
+            asm_mono.node_map[nid].lumped_mass_kg - asm_abs.node_map[nid].lumped_mass_kg
+        ) == pytest.approx(0.110, abs=1e-9)
+    assert (asm_mono.total_mass_kg - asm_abs.total_mass_kg) == pytest.approx(0.042 + 0.440, abs=1e-6)
+
+    rep = evaluate_printer(spec_mono, include_advanced_analysis=False)
+    assert not rep.collision.has_collision
+    assert rep.modal_fea.shaper_x is not None and rep.modal_fea.shaper_y is not None
+    assert rep.modal_fea.shaper_x.effective_freq_hz > rep.modal_fea.shaper_y.effective_freq_hz

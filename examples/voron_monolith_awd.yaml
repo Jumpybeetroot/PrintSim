@@ -25,7 +25,9 @@ gantry:
   y_rail_profile: mgn12_rail
   rail_material: steel_4140
   dual_x_rails: false
-  carriage_mass_g: 200
+  # Scale-weighed LDO Monolith CNC 6061 AWD dressed XY-joints (CloakedWayne #updates):
+  # 214 g + 42 g Al 6061 bracket delta = 256 g (2x 75.9 g LDO CNC XY-joints + 2x 48.3 g LDO MGN12H + ~7.6 g fasteners)
+  carriage_mass_g: 214.0
   belt:
     type: gt2_9mm
     core: fiberglass

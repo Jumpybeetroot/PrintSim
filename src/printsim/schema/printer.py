@@ -65,6 +65,7 @@ RailBackerMaterialType = Literal["none", "steel_4140", "titanium_grade5"]
 BedMountType = Literal[
     "kinematic_3pt",
     "whopping_pochard_kinematic",
+    "trident_3pt_standoffs",
     "rigid_4pt",
     "floating_4pt",
     "silicone_4pt",
@@ -938,6 +939,18 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "cost_usd": 65.0,
         "notes": "Preloaded spring-steel leaf kinematic mount: zero thermal taco bow and rated for Voron Tap probing loads",
     },
+    "trident_3pt_standoffs": {
+        "id": "trident_3pt_standoffs",
+        "name": "3-Point Trident Bakelite Standoffs + GE5C",
+        "short_name": "Trident 3-Pt Bakelite",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 18000.0,
+        "k_lateral_n_per_mm": 9500.0,
+        "k_restraint_thermal": 22.0,
+        "damping_delta": 0.003,
+        "cost_usd": 16.0,
+        "notes": "Stock Voron/Siboor Trident 3-point Bakelite thermal-isolation standoffs on 2020 T-subframe with GE5C spherical Z-joints",
+    },
     "rigid_4pt": {
         "id": "rigid_4pt",
         "name": "4-Point Rigid Hard-Bolted Standoffs",
@@ -1227,6 +1240,14 @@ GANTRY_WEIGHT_CLASSES: dict[str, dict] = {
         "carriage_mass_g": 210.0,
         "suggested_bracket_material": "aluminum_6061_t6",
         "notes": "Pocketed billet CNC 6061 XY-joints (ChaoticLab/Vitalii/Funssor lightweight style) with zero creep.",
+    },
+    "monolith_cnc_awd": {
+        "id": "monolith_cnc_awd",
+        "name": "LDO Monolith CNC 6061 AWD (Scale-Weighed)",
+        "short_name": "Monolith CNC AWD",
+        "carriage_mass_g": 214.0,
+        "suggested_bracket_material": "aluminum_6061_t6",
+        "notes": "Scale-weighed LDO Monolith CNC 6061 AWD (CloakedWayne #updates): 2x 75.9 g assembled CNC XY-joints (151.8 g) + 2x 48.3 g LDO MGN12H blocks (96.6 g) + ~7.6 g X-beam fasteners = 256 g dressed (214 g base + 42 g Al delta; MGN9H builds save ~46 g -> ~210 g dressed).",
     },
     "cnc_aluminum_hd": {
         "id": "cnc_aluminum_hd",
@@ -2107,7 +2128,7 @@ class BedSpec(BaseModel):
         "kinematic_3pt",
         description=(
             "Bed frame attachment constraint: kinematic_3pt (Maxwell), whopping_pochard_kinematic, "
-            "rigid_4pt, floating_4pt, silicone_4pt, or springs_4pt"
+            "trident_3pt_standoffs, rigid_4pt, floating_4pt, silicone_4pt, or springs_4pt"
         ),
     )
 

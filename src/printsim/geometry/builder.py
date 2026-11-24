@@ -164,7 +164,11 @@ class AssemblyModel:
                 ]
                 for deg in (90.0, 210.0, 330.0)
             ]
-        if self.spec.bed.mount_type in ("kinematic_3pt", "whopping_pochard_kinematic"):
+        if self.spec.bed.mount_type in (
+            "kinematic_3pt",
+            "whopping_pochard_kinematic",
+            "trident_3pt_standoffs",
+        ):
             return [
                 [round(float(bc[0]) - 0.36 * bx, 2), round(float(bc[1]) - 0.36 * by, 2), round(bz, 2)],
                 [round(float(bc[0]) + 0.36 * bx, 2), round(float(bc[1]) - 0.36 * by, 2), round(bz, 2)],
@@ -337,6 +341,26 @@ class AssemblyModel:
             )
         return out
 
+    def _build_trident_backbone_dict(self) -> dict:
+        dims = trident_backbone_dimensions_mm(self.spec)
+        return {
+            "enabled": bool(self.spec.frame.trident_backbone),
+            "active": bool(self.trident_backbone_active),
+            "geometry_kind": "open_perimeter_frame",
+            "material_name": '3.18mm (1/8") Powder-Coated Mild Steel (Clee)',
+            "thickness_mm": 3.18,
+            "flange_width_mm": round(dims["flange_width_mm"], 1),
+            "cutout_w_mm": round(dims["cutout_w_mm"], 1),
+            "cutout_d_mm": round(dims["cutout_d_mm"], 1),
+            "mass_kg": round(self.backbone_mass_kg, 3),
+            "cost_usd": round(self.backbone_cost_usd, 2) if self.trident_backbone_active else 0.0,
+            "z_thrust_boost_factor": 2.4 if self.trident_backbone_active else 1.0,
+            "notes": (
+                'Unified 3.18mm (1/8") mild-steel open perimeter backbone plate replacing 3 printed Z-motor mounts; '
+                "keeps Z0/Z1/Z2 coplanar, eliminates rear-Z sag, and lowers CoG."
+            ),
+        }
+
     def to_geometry_dict(self) -> dict:
         """Serialize assembly geometry (mm) for the 3D web viewer and AI tools."""
         nmap = self.node_map
@@ -455,19 +479,7 @@ class AssemblyModel:
                 self.spec.frame.height_mm,
             ],
             "gantry_top_clearance_mm": round(float(self.spec.frame.gantry_top_clearance_mm), 1),
-            "trident_backbone": {
-                "enabled": bool(self.spec.frame.trident_backbone),
-                "active": bool(self.trident_backbone_active),
-                "material_name": "3mm Powder-Coated Mild Steel (Clee)",
-                "thickness_mm": 3.0,
-                "mass_kg": round(self.backbone_mass_kg, 3),
-                "cost_usd": round(self.backbone_cost_usd, 2) if self.trident_backbone_active else 0.0,
-                "z_thrust_boost_factor": 2.4 if self.trident_backbone_active else 1.0,
-                "notes": (
-                    "Unified 3mm mild-steel lower plate replacing 3 printed Z-motor mounts; "
-                    "keeps Z0/Z1/Z2 coplanar, eliminates rear-Z sag, and lowers CoG."
-                ),
-            },
+            "trident_backbone": self._build_trident_backbone_dict(),
             "build_volume_mm": list(self.spec.kinematics.build_volume_mm),
             "build_origin_mm": (self.build_origin_m * 1000.0).tolist(),
             "bed_size_mm": list(self.spec.bed.size_mm),
@@ -2189,8 +2201,28 @@ def _add_corexy_shell_panels(
     return shell_elements, fastener_springs, total_panel_mass_kg, rep_panel_props
 
 
+def trident_backbone_dimensions_mm(spec: PrinterSpec) -> dict[str, float]:
+    """Compute Clee Trident Backbone perimeter flange & open central cutout dimensions (mm)."""
+    fw = max(float(spec.frame.width_mm), 120.0)
+    fd = max(float(spec.frame.depth_mm), 120.0)
+    min_dim = min(fw, fd)
+    flange = min(80.0, max(min(55.0, 0.30 * min_dim), min_dim * 0.24))
+    cutout_w = max(min(80.0, 0.30 * fw), fw - 2.0 * flange)
+    cutout_d = max(min(80.0, 0.30 * fd), fd - 2.0 * flange - 20.0)
+    recess = min(20.0, max(0.0, fd - 2.0 * flange - cutout_d))
+    return {
+        "width_mm": fw,
+        "depth_mm": fd,
+        "thickness_mm": 3.18,
+        "flange_width_mm": flange,
+        "cutout_w_mm": cutout_w,
+        "cutout_d_mm": cutout_d,
+        "rear_recess_mm": recess,
+    }
+
+
 def _trident_backbone_cost_usd(spec: PrinterSpec) -> float:
-    """West3D retail price for Clee's 3 mm powder-coated mild-steel Trident Backbone by build size."""
+    """West3D retail price for Clee's 3.18 mm (1/8") powder-coated mild-steel Trident Backbone."""
     max_xy_mm = max(
         float(spec.kinematics.build_volume_mm[0]),
         float(spec.kinematics.build_volume_mm[1]),
@@ -2208,24 +2240,30 @@ def _add_trident_backbone(
     nmap: dict[str, StructuralNode],
     members: list[StructuralMember],
 ) -> tuple[list[ShellPanelElement], list[FastenerSpring], float, float]:
-    """Add Clee Trident Backbone: solid 3 mm mild-steel lower-frame MITC4 shell & rear Z-wing stiffener."""
+    """Add Clee Trident Backbone: 3.18 mm mild-steel open-perimeter MITC4 ring & rear Z-wing stiffener."""
     w = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
-    t_bb = 0.003
+    dims = trident_backbone_dimensions_mm(spec)
+    flange_m = dims["flange_width_mm"] * 1e-3
+    cutout_w_m = dims["cutout_w_mm"] * 1e-3
+    cutout_d_m = dims["cutout_d_mm"] * 1e-3
+
+    t_bb = 0.00318
     e_steel = 205.0e9
     nu_steel = 0.29
     rho_steel = 7850.0
-    fill_factor = 0.82
-    membrane_eff = 0.88
+    fill_factor = 0.94
+    membrane_eff = 0.92
 
+    ring_area_m2 = max(w * d - cutout_w_m * cutout_d_m, 1e-4)
     areal_mass = fill_factor * rho_steel * t_bb
     e_mem_eff = membrane_eff * e_steel * t_bb
-    backbone_mass_kg = w * d * areal_mass
+    backbone_mass_kg = ring_area_m2 * areal_mass
     backbone_cost_usd = _trident_backbone_cost_usd(spec)
 
     bb_mat = MaterialSpec(
         id="mild_steel_powdercoated",
-        name="3mm Powder-Coated Mild Steel (Clee)",
+        name='3.18mm (1/8") Powder-Coated Mild Steel (Clee)',
         youngs_modulus_pa=e_steel,
         poisson_ratio=nu_steel,
         density_kg_m3=rho_steel,
@@ -2245,7 +2283,7 @@ def _add_trident_backbone(
     off_nominal = d_c * nvec
 
     # Stiffen lower perimeter extrusions (especially rear Z-motor wing) via Newmark partial-composite
-    # 3 mm mild-steel bottom flange without adding duplicate mass (mass lives on MITC4 shell).
+    # 3.18 mm mild-steel bottom flange without adding duplicate mass (mass lives on MITC4 shell).
     from printsim.fea.components import newmark_rail_composite_gamma
 
     g_steel = bb_mat.effective_shear_modulus_pa
@@ -2289,7 +2327,7 @@ def _add_trident_backbone(
             }
         )
 
-    # Bolted M5 steel-to-extrusion Huth CBUSH fastener springs around bottom perimeter (nx=2, ny=2)
+    # Bolted M5 steel-to-extrusion Huth CBUSH fastener springs around bottom perimeter
     props = panel_mechanical_properties(bb_mat, t_bb, w, d, "bolted_structural")
     n_edge_w = max(3.0, round(w / 0.085) + 1.0)
     k_mount_edge = n_edge_w * (props["k_mount_n_m"] / (0.5 * n_edge_w))
@@ -2303,16 +2341,37 @@ def _add_trident_backbone(
     p11 = nmap["b_rr"].position_m
     bw = float(np.linalg.norm(p10 - p00))
     bh = float(np.linalg.norm(p01 - p00))
-    nx_g = 2
-    ny_g = 2
+
+    # Open-center 4x4 perimeter ring aligned to real ~80 mm flanges (skipping 4 center quads & center node)
+    x_cut0_m = 0.5 * (w - cutout_w_m)
+    x_cut1_m = 0.5 * (w + cutout_w_m)
+    y_cut0_m = min(flange_m, 0.5 * (d - cutout_d_m))
+    y_cut1_m = y_cut0_m + cutout_d_m
+
+    u1 = max(0.05, min(0.45, x_cut0_m / max(w, 1e-6)))
+    u3 = min(0.95, max(0.55, x_cut1_m / max(w, 1e-6)))
+    u_stops = (0.0, u1, 0.5, u3, 1.0)
+
+    v1 = max(0.05, min(0.45, y_cut0_m / max(d, 1e-6)))
+    v3 = min(0.95, max(v1 + 0.10, y_cut1_m / max(d, 1e-6)))
+    v2 = 0.5 if (v1 + 0.05 < 0.5 < v3 - 0.05) else 0.5 * (v1 + v3)
+    v_stops = (0.0, v1, v2, v3, 1.0)
+
+    nx_g = len(u_stops) - 1  # 4
+    ny_g = len(v_stops) - 1  # 4
+    xs_m = [u * bw for u in u_stops]
+    ys_m = [v * bh for v in v_stops]
 
     grid = np.empty((ny_g + 1, nx_g + 1), dtype=object)
     shell_elements: list[ShellPanelElement] = []
     fastener_springs: list[FastenerSpring] = []
     for j in range(ny_g + 1):
-        eta = j / ny_g
+        eta = v_stops[j]
         for i in range(nx_g + 1):
-            xi = i / nx_g
+            if i == 2 and j == 2:
+                # Center point lies inside open central cutout; omit to avoid an unattached orphan node
+                continue
+            xi = u_stops[i]
             p_frame = (
                 (1.0 - xi) * (1.0 - eta) * p00
                 + xi * (1.0 - eta) * p10
@@ -2332,9 +2391,15 @@ def _add_trident_backbone(
                 )
                 ds = 0.0
                 if j in (0, ny_g):
-                    ds += (bw / nx_g) * (0.5 if i in (0, nx_g) else 1.0)
+                    if i > 0:
+                        ds += 0.5 * (xs_m[i] - xs_m[i - 1])
+                    if i < nx_g:
+                        ds += 0.5 * (xs_m[i + 1] - xs_m[i])
                 if i in (0, nx_g):
-                    ds += (bh / ny_g) * (0.5 if j in (0, ny_g) else 1.0)
+                    if j > 0:
+                        ds += 0.5 * (ys_m[j] - ys_m[j - 1])
+                    if j < ny_g:
+                        ds += 0.5 * (ys_m[j + 1] - ys_m[j])
                 actual_off = p_shell - nmap[fid].position_m
                 fastener_springs.append(
                     FastenerSpring(
@@ -2356,6 +2421,8 @@ def _add_trident_backbone(
 
     for j in range(ny_g):
         for i in range(nx_g):
+            if i not in (0, nx_g - 1) and j not in (0, ny_g - 1):
+                continue
             n0 = str(grid[j, i])
             n1 = str(grid[j, i + 1])
             n2 = str(grid[j + 1, i + 1])
@@ -2436,7 +2503,9 @@ def _build_corexy(
         z_bed = float(np.clip(z_gantry - 0.045 - w_rel * z_stroke, z_min, z_max))
 
     is_awd = spec.gantry.drive_mode == "awd"
-    front_motor_kg = (xy_motor_kg + 0.03) if is_awd else 0.0
+    cnc_motor_mount_kg = 0.11 if bool(bkt_info["cnc_machined"]) else 0.0
+    rear_motor_kg = xy_motor_kg + cnc_motor_mount_kg
+    front_motor_kg = (xy_motor_kg + 0.03 + cnc_motor_mount_kg) if is_awd else 0.0
     front_role = "mount" if is_awd else "frame"
     bed_center = np.array([w * 0.5, d * 0.5, z_bed])
     fastener_springs: list[FastenerSpring] = []
@@ -2478,8 +2547,8 @@ def _build_corexy(
                 StructuralNode("col_g_rr", np.array([w, d, z_gantry]), role="frame"),
                 StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role if is_awd else "gantry"),
                 StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role if is_awd else "gantry"),
-                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="gantry"),
-                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="gantry"),
+                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="gantry"),
+                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="gantry"),
                 StructuralNode("b_bed_fl", np.array([0.0, y_bed_f, 0.0]), role="frame"),
                 StructuralNode("b_bed_rl", np.array([0.0, y_bed_r, 0.0]), role="frame"),
                 StructuralNode("b_bed_fr", np.array([w, y_bed_f, 0.0]), role="frame"),
@@ -2506,8 +2575,8 @@ def _build_corexy(
                 # Fixed-gantry elevation nodes directly on the 4 vertical columns
                 StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
                 StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
-                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
-                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=xy_motor_kg, role="mount"),
+                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="mount"),
+                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="mount"),
             ]
         )
     nodes.extend(

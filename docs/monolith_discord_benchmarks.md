@@ -42,3 +42,18 @@ Read-only community test data compiled from the **Monolith** Discord server (`#p
 | **dderg** (VT 300 AWD) | 4040 Trident 300 | AWD, 12 mm, 48V 5160Plus | K3Z SLM milled gantry | `smooth_mzv` @ **186 Hz** (50k) | `smooth_zv` @ **122 Hz** (50k) |
 
 **Key Calibration Rule of Thumb:** Across real CoreXY builds, **X resonance is consistently ~1.4×–1.6× higher than Y resonance** (toolhead-only mass vs full X-beam + rail + carriage mass), and **side structural panels (4–5 mm Al 5052 or 3 mm steel)** provide ~+16–19% real-world IS frequency gain.
+
+## 5. Scale-Measured CNC AWD XY-Joint & Moving Mass Benchmarks (0.1 g Scale)
+Source: `#updates` — *"The XY-Joint Weigh-In - The Road to 50k"* & *"A 750g Comparison"* (`CloakedWayne`, `#ldo-gantry-kits`, `#monolith-builds`):
+
+| Component / Assembly | Configuration | Each (g) | Pair (g) |
+| :--- | :--- | :---: | :---: |
+| **LDO MGN9H carriage** | Bare block (no fasteners) | 25.2 | 50.4 |
+| **LDO MGN12H carriage** | Bare block (no fasteners) | 48.3 | 96.6 |
+| **LDO Monolith CNC 6061 XY-Joint** | Assembled w/ stock live-shaft idlers (minus X-beam fasteners) | 75.9 | **151.8** |
+| **LDO CNC XY-Joint + MGN9H** | Dressed pair (add ~8 g X-beam fasteners → ~210 g) | 101.1 | **202.2** |
+| **LDO CNC XY-Joint + MGN12H** | Dressed pair (add ~8 g X-beam fasteners → **~256 g**) | 124.2 | **248.4** |
+| **SLM Al MGN12H XY-Joint + MGN12H** | Steel hardware (minus X-beam fasteners) | 96.2 | **192.4** |
+| **dderg Lightweight Milled + MGN9H** | Ti hardware + hollow Ti live-shaft (−67.6 g/pair vs. LDO) | 67.3 | **134.6** |
+| **Carbonara 350 mm CF X-Beam** | Bare 350 mm CF beam (`Eric Zimmerman`, 0.01 g scale) | 84.3 | — |
+| **Complete LDO CNC AWD Moving Y-Gantry** | 300 mm AWD, LDO CNC + Carbonara + Monolith TH (`CloakedWayne`) | **~750 g** | *(~682 g w/ dderg XY-joints)* |

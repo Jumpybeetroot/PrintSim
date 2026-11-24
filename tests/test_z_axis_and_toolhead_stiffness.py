@@ -926,6 +926,7 @@ def test_gantry_weight_classes_catalog_and_validation() -> None:
         ("standard_printed", 140.0, "abs_printed"),
         ("stiffness_opt_printed", 185.0, "pet_cf_printed"),
         ("cnc_aluminum_light", 210.0, "aluminum_6061_t6"),
+        ("monolith_cnc_awd", 214.0, "aluminum_6061_t6"),
         ("cnc_aluminum_hd", 280.0, "aluminum_6061_t6"),
     ]
     assert list(GANTRY_WEIGHT_CLASSES.keys()) == [cid for cid, _, _ in expected_classes]
