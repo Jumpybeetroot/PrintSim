@@ -209,6 +209,15 @@ const FALLBACK_GANTRY_WEIGHT_CLASSES: GantryWeightClassItem[] = [
     notes: "Pocketed CNC 6061-T6 XY joints & lightweight machined Y-carriages.",
   },
   {
+    id: "monolith_cnc_awd",
+    name: "LDO Monolith CNC 6061 AWD (Scale-Weighed)",
+    short_name: "Monolith CNC AWD",
+    carriage_mass_g: 214,
+    suggested_bracket_material: "aluminum_6061_t6",
+    notes:
+      "Scale-weighed LDO Monolith CNC 6061 AWD (CloakedWayne): 2× 75.9 g CNC XY-joints + 2× 48.3 g LDO MGN12H + fasteners = 256 g dressed (214 g base + 42 g Al; MGN9H ~210 g).",
+  },
+  {
     id: "cnc_al_heavy",
     name: "CNC Aluminum Heavy-Duty (280g)",
     short_name: "CNC Al Heavy",
@@ -1308,6 +1317,16 @@ export const DesignPanel: React.FC<Props> = ({
     gantryWeightClasses.find(
       (cls) => Math.abs(cls.carriage_mass_g - spec.gantry.carriage_mass_g) < 0.5
     ) ?? null;
+  const bracketDeltaG = customBracketOverride
+    ? Math.round(customBracketOverride.mass_delta_g ?? 0)
+    : Math.round(selectedBracket.carriage_mass_delta_g ?? 0);
+  const bracketDeltaShortLabel = customBracketOverride
+    ? "CAD"
+    : selectedBracket.cnc_machined
+      ? "Al"
+      : selectedBracket.short_name.replace(/^Printed\s+/i, "");
+  const baseCarriageMassG = Math.round(carriageMassDraft);
+  const dressedMovingXYJointsG = baseCarriageMassG + bracketDeltaG;
   const simMassSummary = sim?.geometry?.mass_summary ?? null;
 
   const xRailMounts: RailMountOption<XRailMountType>[] =
@@ -2041,7 +2060,7 @@ export const DesignPanel: React.FC<Props> = ({
                   <span>Gantry Hardware &amp; Brackets</span>
                   <span className="sub-accordion-tag">
                     {customBracketOverride ? "Custom CAD" : selectedBracket.short_name} ·{" "}
-                    {Math.round(carriageMassDraft)}g
+                    {dressedMovingXYJointsG}g
                   </span>
                 </summary>
                 <div className="sub-accordion-body">
@@ -2279,6 +2298,14 @@ export const DesignPanel: React.FC<Props> = ({
                         }}
                         onBlur={() => commitCarriageMass(carriageMassDraft)}
                       />
+                    </div>
+                    <div
+                      className="dressed-mass-note"
+                      title="Moving XY-joint & Y-carriage total sent to FEA (bracket material mass delta is added automatically — no need to double-count it in the slider)"
+                    >
+                      {baseCarriageMassG}g base {bracketDeltaG >= 0 ? "+" : "−"}{" "}
+                      {Math.abs(bracketDeltaG)}g {bracketDeltaShortLabel} ={" "}
+                      <strong>{dressedMovingXYJointsG}g</strong> dressed moving XY-joints
                     </div>
                   </div>
 

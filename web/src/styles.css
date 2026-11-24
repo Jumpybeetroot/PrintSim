@@ -5454,3 +5454,105 @@ textarea.code-editor {
   color: var(--muted);
   padding: 6px 2px;
 }
+
+/* Custom Frame Sizes, Outer Footprint & Build Volume Sync */
+.frame-size-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.frame-size-pill {
+  flex: 1 1 auto;
+  min-width: 48px;
+  background: #0d131d;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 4px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.frame-size-pill:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.frame-size-pill.active {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.frame-footprint-note {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  background: rgba(13, 19, 29, 0.72);
+  border: 1px solid rgba(39, 50, 71, 0.85);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.frame-footprint-note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.frame-build-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.frame-build-title {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.frame-sync-btn {
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: var(--accent);
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.frame-sync-btn:hover {
+  background: rgba(14, 165, 233, 0.24);
+  border-color: var(--accent);
+  color: #e0f2fe;
+}
+
+.dressed-mass-note {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  background: rgba(13, 19, 29, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 6px;
+  padding: 4px 7px;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dressed-mass-note strong {
+  color: var(--accent);
+  font-weight: 700;
+}

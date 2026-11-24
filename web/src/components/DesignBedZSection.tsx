@@ -39,6 +39,12 @@ const BED_MOUNT_OPTIONS: Array<{
     hint: "Zero thermal taco buckling at high bed temps with high axial/lateral stiffness.",
   },
   {
+    id: "trident_3pt_standoffs",
+    label: "3-Pt Trident Bakelite Standoffs + GE5C",
+    shortLabel: "Trident 3-Pt Bakelite",
+    hint: "Stock Voron/Siboor Trident 3-point Bakelite thermal standoffs on 2020 T-subframe with GE5C spherical Z-joints.",
+  },
+  {
     id: "whopping_pochard_kinematic",
     label: "Whopping Pochard Leaf-Spring (Tap-Rated)",
     shortLabel: "Whopping Pochard",
@@ -152,15 +158,77 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
   );
   const bedTempTimerRef = useRef<number | null>(null);
 
+  const [bedWidthDraft, setBedWidthDraft] = useState<string>(
+    String(Math.round(spec.bed.size_mm[0]))
+  );
+  const [bedDepthDraft, setBedDepthDraft] = useState<string>(
+    String(Math.round(spec.bed.size_mm[1]))
+  );
+  const [bedHeaterDraft, setBedHeaterDraft] = useState<string>(
+    String(Math.round(spec.bed.heater_power_w))
+  );
+
   useEffect(() => {
     setBedTempDraft(Math.round(spec.bed.target_temp_c ?? 60));
   }, [spec.bed.target_temp_c]);
+
+  useEffect(() => {
+    setBedWidthDraft(String(Math.round(spec.bed.size_mm[0])));
+  }, [spec.bed.size_mm[0]]);
+
+  useEffect(() => {
+    setBedDepthDraft(String(Math.round(spec.bed.size_mm[1])));
+  }, [spec.bed.size_mm[1]]);
+
+  useEffect(() => {
+    setBedHeaterDraft(String(Math.round(spec.bed.heater_power_w)));
+  }, [spec.bed.heater_power_w]);
 
   useEffect(() => {
     return () => {
       if (bedTempTimerRef.current != null) window.clearTimeout(bedTempTimerRef.current);
     };
   }, []);
+
+  const commitBedSizeAxis = (axis: 0 | 1, raw: string) => {
+    const current = Math.round(spec.bed.size_mm[axis]);
+    const parsed = Number(raw);
+    const setDraft = axis === 0 ? setBedWidthDraft : setBedDepthDraft;
+    if (raw.trim() === "" || !Number.isFinite(parsed)) {
+      setDraft(String(current));
+      return;
+    }
+    const clamped = Math.max(80, Math.min(1300, Math.round(parsed)));
+    setDraft(String(clamped));
+    if (clamped === current) return;
+    const axisLabel = axis === 0 ? "Bed Width" : "Bed Depth";
+    update(
+      (d) => {
+        const nextSize: [number, number] = [d.bed.size_mm[0], d.bed.size_mm[1]];
+        nextSize[axis] = clamped;
+        d.bed.size_mm = nextSize;
+      },
+      `${axisLabel}: ${current} → ${clamped} mm`
+    );
+  };
+
+  const commitBedHeaterW = (raw: string) => {
+    const current = Math.round(spec.bed.heater_power_w);
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) {
+      setBedHeaterDraft(String(current));
+      return;
+    }
+    const clamped = Math.max(50, Math.min(3000, Math.round(parsed)));
+    setBedHeaterDraft(String(clamped));
+    if (clamped === current) return;
+    update(
+      (d) => {
+        d.bed.heater_power_w = clamped;
+      },
+      `Bed Heater: ${current}W → ${clamped}W`
+    );
+  };
 
   const specBedTempC = Math.round(spec.bed.target_temp_c ?? 60);
   const commitBedTemp = (rawVal: number) => {
@@ -308,6 +376,72 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             {bedMountCatalogEntry?.notes || bedMountOptionMeta.hint}
           </div>
         )}
+      </div>
+
+      <div className="field-grid-3">
+        <div className="field-row">
+          <label title="Build Plate Width (mm)">Bed W mm</label>
+          <input
+            type="number"
+            min={80}
+            max={1300}
+            step={10}
+            value={bedWidthDraft}
+            onChange={(e) => setBedWidthDraft(e.target.value)}
+            onBlur={() => commitBedSizeAxis(0, bedWidthDraft)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitBedSizeAxis(0, bedWidthDraft);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setBedWidthDraft(String(Math.round(spec.bed.size_mm[0])));
+                e.currentTarget.blur();
+              }
+            }}
+          />
+        </div>
+        <div className="field-row">
+          <label title="Build Plate Depth (mm)">Bed D mm</label>
+          <input
+            type="number"
+            min={80}
+            max={1300}
+            step={10}
+            value={bedDepthDraft}
+            onChange={(e) => setBedDepthDraft(e.target.value)}
+            onBlur={() => commitBedSizeAxis(1, bedDepthDraft)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitBedSizeAxis(1, bedDepthDraft);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setBedDepthDraft(String(Math.round(spec.bed.size_mm[1])));
+                e.currentTarget.blur();
+              }
+            }}
+          />
+        </div>
+        <div className="field-row">
+          <label title="Bed Heater Wattage (W)">Heater W</label>
+          <input
+            type="number"
+            min={50}
+            max={3000}
+            step={25}
+            value={bedHeaterDraft}
+            onChange={(e) => setBedHeaterDraft(e.target.value)}
+            onBlur={() => commitBedHeaterW(bedHeaterDraft)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitBedHeaterW(bedHeaterDraft);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setBedHeaterDraft(String(Math.round(spec.bed.heater_power_w)));
+                e.currentTarget.blur();
+              }
+            }}
+          />
+        </div>
       </div>
 
       <div className="field-grid-2">

@@ -11,8 +11,49 @@ import {
   ExtrusionFillingType,
   FrameFeetType,
   PrinterSpecData,
+  ProfileItem,
   SimulationResponse,
 } from "../types";
+
+interface FrameSizePreset {
+  id: string;
+  label: string;
+  frame: [number, number, number];
+  build: [number, number, number];
+  bed: [number, number];
+}
+
+const COREXY_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
+  { id: "250", label: "250 mm", frame: [440, 440, 450], build: [250, 250, 230], bed: [250, 250] },
+  { id: "300", label: "300 mm", frame: [490, 490, 500], build: [300, 300, 250], bed: [300, 300] },
+  { id: "350", label: "350 mm", frame: [540, 540, 550], build: [350, 350, 300], bed: [350, 350] },
+  { id: "400", label: "400 mm", frame: [590, 590, 600], build: [400, 400, 350], bed: [400, 400] },
+];
+
+const BEDSLINGER_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
+  { id: "250", label: "250 mm", frame: [390, 410, 450], build: [250, 250, 260], bed: [250, 250] },
+  { id: "300", label: "300 mm", frame: [440, 460, 500], build: [300, 300, 300], bed: [300, 300] },
+  { id: "350", label: "350 mm", frame: [490, 510, 550], build: [350, 350, 350], bed: [350, 350] },
+  { id: "400", label: "400 mm", frame: [540, 560, 600], build: [400, 400, 400], bed: [400, 400] },
+];
+
+function inferProfileOuterWidthMm(profileId: string, profiles: ProfileItem[]): number {
+  if (profileId.includes("4040")) return 40;
+  if (profileId.includes("3030")) return 30;
+  if (profileId.includes("2040") || profileId.includes("2020")) return 20;
+  const found = profiles.find((p) => p.id === profileId);
+  if (found && Number.isFinite(found.width_m) && found.width_m > 0) {
+    return Math.round(found.width_m * 1000);
+  }
+  return 20;
+}
+
+function shortProfileCode(profileId: string, profileLabelFn: (id: string) => string): string {
+  if (profileId.startsWith("extrusion_")) {
+    return profileId.replace(/^extrusion_/, "");
+  }
+  return profileLabelFn(profileId).split(" ")[0] || profileId;
+}
 
 const FALLBACK_EXTRUSION_FILLINGS: ExtrusionFillingInfo[] = [
   {
@@ -190,7 +231,6 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
   sim,
   showHints,
   update,
-  updatePositiveNum,
   profileLabel,
   materialLabel,
 }) => {
@@ -204,6 +244,27 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
   );
   const gantryClearanceTimerRef = useRef<number | null>(null);
 
+  const [frameWidthDraft, setFrameWidthDraft] = useState<string>(
+    String(Math.round(spec.frame.width_mm))
+  );
+  const [frameDepthDraft, setFrameDepthDraft] = useState<string>(
+    String(Math.round(spec.frame.depth_mm))
+  );
+  const [frameHeightDraft, setFrameHeightDraft] = useState<string>(
+    String(Math.round(spec.frame.height_mm))
+  );
+  const frameWidthInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [buildXDraft, setBuildXDraft] = useState<string>(
+    String(Math.round(spec.kinematics.build_volume_mm[0]))
+  );
+  const [buildYDraft, setBuildYDraft] = useState<string>(
+    String(Math.round(spec.kinematics.build_volume_mm[1]))
+  );
+  const [buildZDraft, setBuildZDraft] = useState<string>(
+    String(Math.round(spec.kinematics.build_volume_mm[2]))
+  );
+
   useEffect(() => {
     setChamberTempDraft(Math.round(spec.frame.chamber_temp_c ?? 25));
   }, [spec.frame.chamber_temp_c]);
@@ -211,6 +272,30 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
   useEffect(() => {
     setGantryClearanceDraft(Math.round(spec.frame.gantry_top_clearance_mm ?? 55));
   }, [spec.frame.gantry_top_clearance_mm]);
+
+  useEffect(() => {
+    setFrameWidthDraft(String(Math.round(spec.frame.width_mm)));
+  }, [spec.frame.width_mm]);
+
+  useEffect(() => {
+    setFrameDepthDraft(String(Math.round(spec.frame.depth_mm)));
+  }, [spec.frame.depth_mm]);
+
+  useEffect(() => {
+    setFrameHeightDraft(String(Math.round(spec.frame.height_mm)));
+  }, [spec.frame.height_mm]);
+
+  useEffect(() => {
+    setBuildXDraft(String(Math.round(spec.kinematics.build_volume_mm[0])));
+  }, [spec.kinematics.build_volume_mm[0]]);
+
+  useEffect(() => {
+    setBuildYDraft(String(Math.round(spec.kinematics.build_volume_mm[1])));
+  }, [spec.kinematics.build_volume_mm[1]]);
+
+  useEffect(() => {
+    setBuildZDraft(String(Math.round(spec.kinematics.build_volume_mm[2])));
+  }, [spec.kinematics.build_volume_mm[2]]);
 
   useEffect(() => {
     return () => {
@@ -301,6 +386,150 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
     sim?.modal_fea.frame_damping_ratio ??
     0.042 + (selectedFilling?.damping_boost ?? 0);
 
+  const sizePresets: FrameSizePreset[] | null =
+    spec.architecture === "corexy"
+      ? COREXY_FRAME_SIZE_PRESETS
+      : spec.architecture === "cartesian_bedslinger"
+        ? BEDSLINGER_FRAME_SIZE_PRESETS
+        : null;
+
+  const activeSizePresetId: string | null = sizePresets
+    ? (sizePresets.find(
+        (p) =>
+          Math.round(spec.frame.width_mm) === p.frame[0] &&
+          Math.round(spec.frame.depth_mm) === p.frame[1] &&
+          Math.round(spec.frame.height_mm) === p.frame[2] &&
+          Math.round(spec.kinematics.build_volume_mm[0]) === p.build[0] &&
+          Math.round(spec.kinematics.build_volume_mm[1]) === p.build[1] &&
+          Math.round(spec.kinematics.build_volume_mm[2]) === p.build[2] &&
+          Math.round(spec.bed.size_mm[0]) === p.bed[0] &&
+          Math.round(spec.bed.size_mm[1]) === p.bed[1]
+      )?.id ?? null)
+    : null;
+
+  const commitFrameDimension = (
+    axis: "width_mm" | "depth_mm" | "height_mm",
+    raw: string
+  ) => {
+    const current = Math.round(spec.frame[axis]);
+    const setDraft =
+      axis === "width_mm"
+        ? setFrameWidthDraft
+        : axis === "depth_mm"
+          ? setFrameDepthDraft
+          : setFrameHeightDraft;
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) {
+      setDraft(String(current));
+      return;
+    }
+    const clamped = Math.max(200, Math.min(1500, Math.round(parsed)));
+    setDraft(String(clamped));
+    if (clamped === current) return;
+    const label =
+      axis === "width_mm"
+        ? "Frame Width"
+        : axis === "depth_mm"
+          ? "Frame Depth"
+          : "Frame Height";
+    update(
+      (d) => {
+        d.frame[axis] = clamped;
+      },
+      `${label}: ${current} → ${clamped} mm`
+    );
+  };
+
+  const commitBuildDim = (axis: 0 | 1 | 2, raw: string) => {
+    const current = Math.round(spec.kinematics.build_volume_mm[axis]);
+    const setDraft =
+      axis === 0 ? setBuildXDraft : axis === 1 ? setBuildYDraft : setBuildZDraft;
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) {
+      setDraft(String(current));
+      return;
+    }
+    const clamped = Math.max(80, Math.min(1300, Math.round(parsed)));
+    setDraft(String(clamped));
+    if (clamped === current) return;
+    const axisName = axis === 0 ? "X" : axis === 1 ? "Y" : "Z";
+    update(
+      (d) => {
+        const nextVol: [number, number, number] = [
+          d.kinematics.build_volume_mm[0],
+          d.kinematics.build_volume_mm[1],
+          d.kinematics.build_volume_mm[2],
+        ];
+        nextVol[axis] = clamped;
+        d.kinematics.build_volume_mm = nextVol;
+      },
+      `Build Volume ${axisName}: ${current} → ${clamped} mm`
+    );
+  };
+
+  const handleApplyFramePreset = (preset: FrameSizePreset) => {
+    setFrameWidthDraft(String(preset.frame[0]));
+    setFrameDepthDraft(String(preset.frame[1]));
+    setFrameHeightDraft(String(preset.frame[2]));
+    setBuildXDraft(String(preset.build[0]));
+    setBuildYDraft(String(preset.build[1]));
+    setBuildZDraft(String(preset.build[2]));
+    update(
+      (d) => {
+        d.frame.width_mm = preset.frame[0];
+        d.frame.depth_mm = preset.frame[1];
+        d.frame.height_mm = preset.frame[2];
+        d.kinematics.build_volume_mm = [...preset.build] as [number, number, number];
+        d.bed.size_mm = [...preset.bed] as [number, number];
+      },
+      `Frame Size Preset: ${preset.label} (${preset.frame.join("×")} mm)`
+    );
+  };
+
+  const handleFitBedAndBuildToFrame = () => {
+    const parseOrCurrent = (raw: string, fallback: number) => {
+      const n = Number(raw);
+      return raw.trim() !== "" && Number.isFinite(n)
+        ? Math.max(200, Math.min(1500, Math.round(n)))
+        : Math.round(fallback);
+    };
+    const fw = parseOrCurrent(frameWidthDraft, spec.frame.width_mm);
+    const fd = parseOrCurrent(frameDepthDraft, spec.frame.depth_mm);
+    const fh = parseOrCurrent(frameHeightDraft, spec.frame.height_mm);
+    const bx = Math.max(120, fw - 190);
+    const by = Math.max(120, fd - 190);
+    const bz = Math.max(120, fh - 240);
+    setFrameWidthDraft(String(fw));
+    setFrameDepthDraft(String(fd));
+    setFrameHeightDraft(String(fh));
+    setBuildXDraft(String(bx));
+    setBuildYDraft(String(by));
+    setBuildZDraft(String(bz));
+    update(
+      (d) => {
+        d.frame.width_mm = fw;
+        d.frame.depth_mm = fd;
+        d.frame.height_mm = fh;
+        d.kinematics.build_volume_mm = [bx, by, bz];
+        d.bed.size_mm = [bx, by];
+      },
+      `Fit Bed & Build to Frame: ${bx}×${by}×${bz} mm`
+    );
+  };
+
+  const frameProfileWidthMm = inferProfileOuterWidthMm(spec.frame.profile, catalog.profiles);
+  const uprightProfileId = spec.frame.upright_profile || spec.frame.profile;
+  const uprightProfileWidthMm = inferProfileOuterWidthMm(uprightProfileId, catalog.profiles);
+  const outerWidthMm = Math.round(spec.frame.width_mm) + uprightProfileWidthMm;
+  const outerDepthMm = Math.round(spec.frame.depth_mm) + uprightProfileWidthMm;
+  const outerHeightMm = Math.round(spec.frame.height_mm) + frameProfileWidthMm;
+  const frameProfileCode = shortProfileCode(spec.frame.profile, profileLabel);
+  const uprightProfileCode = shortProfileCode(uprightProfileId, profileLabel);
+  const footprintDetail =
+    uprightProfileWidthMm !== frameProfileWidthMm
+      ? `${uprightProfileCode} uprights + ${frameProfileCode} rails`
+      : `${frameProfileCode} centerlines + ${frameProfileWidthMm} mm`;
+
   return (
     <div className="section-card">
       <div className="section-title">Frame &amp; Structure (FEA)</div>
@@ -373,54 +602,192 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         </div>
       )}
 
+      {sizePresets && (
+        <div className="field-row">
+          <label>
+            <span>Quick Frame Size</span>
+            <span style={{ fontSize: 10, color: "var(--muted)" }}>
+              {activeSizePresetId ? `${activeSizePresetId} Class` : "Custom"}
+            </span>
+          </label>
+          <div className="frame-size-presets">
+            {sizePresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`frame-size-pill ${activeSizePresetId === preset.id ? "active" : ""}`}
+                title={`Set frame ${preset.frame.join("×")} mm, build ${preset.build.join("×")} mm, bed ${preset.bed.join("×")} mm`}
+                onClick={() => handleApplyFramePreset(preset)}
+              >
+                {preset.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`frame-size-pill ${activeSizePresetId === null ? "active" : ""}`}
+              title="Enter custom frame centerline dimensions below"
+              onClick={() => {
+                frameWidthInputRef.current?.focus();
+                frameWidthInputRef.current?.select();
+              }}
+            >
+              Custom
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="field-grid-3">
         <div className="field-row">
           <label>Width mm</label>
           <input
+            ref={frameWidthInputRef}
             type="number"
-            value={spec.frame.width_mm}
-            onChange={(e) =>
-              updatePositiveNum(
-                e.target.value,
-                (d, v) => {
-                  d.frame.width_mm = v;
-                },
-                (v) => `Frame Width: ${spec.frame.width_mm} → ${v} mm`
-              )
-            }
+            min={200}
+            max={1500}
+            step={10}
+            value={frameWidthDraft}
+            onChange={(e) => setFrameWidthDraft(e.target.value)}
+            onBlur={() => commitFrameDimension("width_mm", frameWidthDraft)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitFrameDimension("width_mm", frameWidthDraft);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setFrameWidthDraft(String(Math.round(spec.frame.width_mm)));
+                e.currentTarget.blur();
+              }
+            }}
           />
         </div>
         <div className="field-row">
           <label>Depth mm</label>
           <input
             type="number"
-            value={spec.frame.depth_mm}
-            onChange={(e) =>
-              updatePositiveNum(
-                e.target.value,
-                (d, v) => {
-                  d.frame.depth_mm = v;
-                },
-                (v) => `Frame Depth: ${spec.frame.depth_mm} → ${v} mm`
-              )
-            }
+            min={200}
+            max={1500}
+            step={10}
+            value={frameDepthDraft}
+            onChange={(e) => setFrameDepthDraft(e.target.value)}
+            onBlur={() => commitFrameDimension("depth_mm", frameDepthDraft)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitFrameDimension("depth_mm", frameDepthDraft);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setFrameDepthDraft(String(Math.round(spec.frame.depth_mm)));
+                e.currentTarget.blur();
+              }
+            }}
           />
         </div>
         <div className="field-row">
           <label>Height mm</label>
           <input
             type="number"
-            value={spec.frame.height_mm}
-            onChange={(e) =>
-              updatePositiveNum(
-                e.target.value,
-                (d, v) => {
-                  d.frame.height_mm = v;
-                },
-                (v) => `Frame Height: ${spec.frame.height_mm} → ${v} mm`
-              )
-            }
+            min={200}
+            max={1500}
+            step={10}
+            value={frameHeightDraft}
+            onChange={(e) => setFrameHeightDraft(e.target.value)}
+            onBlur={() => commitFrameDimension("height_mm", frameHeightDraft)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitFrameDimension("height_mm", frameHeightDraft);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setFrameHeightDraft(String(Math.round(spec.frame.height_mm)));
+                e.currentTarget.blur();
+              }
+            }}
           />
+        </div>
+      </div>
+
+      <div className="frame-footprint-note">
+        Outer footprint:{" "}
+        <strong>
+          {outerWidthMm} × {outerDepthMm} × {outerHeightMm} mm
+        </strong>{" "}
+        ({footprintDetail})
+      </div>
+
+      <div className="field-row">
+        <div className="frame-build-header">
+          <span className="frame-build-title">Build Volume X / Y / Z (mm)</span>
+          <button
+            type="button"
+            className="frame-sync-btn"
+            title="Resize build volume & bed plate to safely fit inside the current frame dimensions"
+            onClick={handleFitBedAndBuildToFrame}
+          >
+            Fit Bed &amp; Build to Frame
+          </button>
+        </div>
+        <div className="field-grid-3">
+          <div className="field-row">
+            <label>Build X mm</label>
+            <input
+              type="number"
+              min={80}
+              max={1300}
+              step={10}
+              value={buildXDraft}
+              onChange={(e) => setBuildXDraft(e.target.value)}
+              onBlur={() => commitBuildDim(0, buildXDraft)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  commitBuildDim(0, buildXDraft);
+                  e.currentTarget.blur();
+                } else if (e.key === "Escape") {
+                  setBuildXDraft(String(Math.round(spec.kinematics.build_volume_mm[0])));
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </div>
+          <div className="field-row">
+            <label>Build Y mm</label>
+            <input
+              type="number"
+              min={80}
+              max={1300}
+              step={10}
+              value={buildYDraft}
+              onChange={(e) => setBuildYDraft(e.target.value)}
+              onBlur={() => commitBuildDim(1, buildYDraft)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  commitBuildDim(1, buildYDraft);
+                  e.currentTarget.blur();
+                } else if (e.key === "Escape") {
+                  setBuildYDraft(String(Math.round(spec.kinematics.build_volume_mm[1])));
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </div>
+          <div className="field-row">
+            <label>Build Z mm</label>
+            <input
+              type="number"
+              min={80}
+              max={1300}
+              step={10}
+              value={buildZDraft}
+              onChange={(e) => setBuildZDraft(e.target.value)}
+              onBlur={() => commitBuildDim(2, buildZDraft)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  commitBuildDim(2, buildZDraft);
+                  e.currentTarget.blur();
+                } else if (e.key === "Escape") {
+                  setBuildZDraft(String(Math.round(spec.kinematics.build_volume_mm[2])));
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </div>
         </div>
       </div>
 

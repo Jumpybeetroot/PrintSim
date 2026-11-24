@@ -102,6 +102,7 @@ export type BearingClearanceClass = "C2" | "CN" | "C3";
 
 export type BedMountType =
   | "kinematic_3pt"
+  | "trident_3pt_standoffs"
   | "whopping_pochard_kinematic"
   | "rigid_4pt"
   | "floating_4pt"

@@ -153,6 +153,7 @@ const DRIVE_TYPE_LABELS: Record<string, string> = {
 
 const BED_MOUNT_LABELS: Record<string, string> = {
   kinematic_3pt: "3-Pt Kinematic",
+  trident_3pt_standoffs: "Trident 3-Pt Bakelite",
   whopping_pochard_kinematic: "Whopping Pochard Leaf-Spring",
   rigid_4pt: "4-Pt Rigid",
   floating_4pt: "4-Pt Floating",
@@ -298,6 +299,28 @@ function describeSpecDiff(
       `Bed Mount: ${BED_MOUNT_LABELS[prevBedMount] ?? prevBedMount} → ${
         BED_MOUNT_LABELS[nextBedMount] ?? nextBedMount
       }`
+    );
+  }
+  if (
+    prev.kinematics.build_volume_mm[0] !== next.kinematics.build_volume_mm[0] ||
+    prev.kinematics.build_volume_mm[1] !== next.kinematics.build_volume_mm[1] ||
+    prev.kinematics.build_volume_mm[2] !== next.kinematics.build_volume_mm[2]
+  ) {
+    diffs.push(
+      `Build Volume: ${prev.kinematics.build_volume_mm.join("×")} → ${next.kinematics.build_volume_mm.join("×")} mm`
+    );
+  }
+  if (
+    prev.bed.size_mm[0] !== next.bed.size_mm[0] ||
+    prev.bed.size_mm[1] !== next.bed.size_mm[1]
+  ) {
+    diffs.push(
+      `Bed Size: ${prev.bed.size_mm[0]}×${prev.bed.size_mm[1]} → ${next.bed.size_mm[0]}×${next.bed.size_mm[1]} mm`
+    );
+  }
+  if (Math.round(prev.bed.heater_power_w) !== Math.round(next.bed.heater_power_w)) {
+    diffs.push(
+      `Bed Heater: ${Math.round(prev.bed.heater_power_w)}W → ${Math.round(next.bed.heater_power_w)}W`
     );
   }
   if (prev.bed.plate_thickness_mm !== next.bed.plate_thickness_mm) {

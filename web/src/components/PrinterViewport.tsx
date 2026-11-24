@@ -3165,7 +3165,7 @@ export const PrinterViewport: React.FC<Props> = ({
           const baySens = sim.sensitivity?.panel_bay_sensitivities?.[bayName];
           const bayStiff = stiffenById[bayGrp.id] ?? stiffenById[`bay_${bayName}`];
           const bayLabel = isBackboneBay
-            ? "Trident Backbone (Clee 3mm Steel, MITC4)"
+            ? "Trident Backbone (Clee, 3.18mm Mild Steel Perimeter Plate)"
             : `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
           tagInspectable(shellMesh, {
             key: isBackboneBay ? "frame:trident_backbone" : `panel:${bayName}`,
@@ -3177,7 +3177,7 @@ export const PrinterViewport: React.FC<Props> = ({
               ? (geom.trident_backbone?.material_name ?? "Powder-Coated Mild Steel")
               : (geom.panels?.material_name ?? sim.spec.frame.panel_material),
             profile: isBackboneBay
-              ? `${panels[0]?.thickness_mm ?? geom.trident_backbone?.thickness_mm ?? 3}mm steel plate (MITC4)`
+              ? `${(panels[0]?.thickness_mm ?? geom.trident_backbone?.thickness_mm ?? 3.18).toFixed(2)}mm perimeter steel plate (MITC4)`
               : `${panels[0]?.thickness_mm ?? sim.spec.frame.panel_thickness_mm}mm MITC4 shell`,
             complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
             heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
@@ -4263,7 +4263,11 @@ export const PrinterViewport: React.FC<Props> = ({
         }
       }
 
-      // Trident Backbone by Clee: solid full-footprint 3mm laser-cut powder-coated mild steel lower deck plate
+      // Trident Backbone by Clee (github.com/clee/TridentBackbone):
+      // Authentic 3.18mm (1/8") laser-cut mild steel open-center perimeter plate with
+      // front 20x20 corner post reliefs, recessed rear wings + rear corner ears,
+      // 86x20mm split rear Z-motor tab with 20.4x20.1mm U-notch, 25x8mm rear wiring notch,
+      // R10mm central cutout, 3x Ø26mm Z-motor bores, and 8x 3.6mm DIN/accessory slots.
       const showTridentBackbone =
         geom.architecture === "corexy" &&
         (Boolean(geom.trident_backbone?.active) ||
@@ -4273,38 +4277,250 @@ export const PrinterViewport: React.FC<Props> = ({
       if (showTridentBackbone) {
         const [fw, fd] = geom.frame_dims_mm;
         const frameMember = geom.members.find((m) => m.role === "frame");
-        const extHalfMm = (frameMember?.width_mm ?? 20) * 0.5;
-        const plateThickMm = geom.trident_backbone?.thickness_mm ?? 3.0;
+        const extWidthMm = frameMember?.width_mm ?? 20;
+        const extHalfMm = extWidthMm * 0.5;
+        const bbExtra = geom.trident_backbone as
+          | (NonNullable<typeof geom.trident_backbone> & {
+              cutout_w_mm?: number;
+              cutout_d_mm?: number;
+            })
+          | undefined;
+        const plateThickMm = bbExtra?.thickness_mm ?? 3.18;
         const plateThickScene = Math.max(plateThickMm * SCALE, 0.026);
 
         const xL = -extHalfMm;
         const xR = fw + extHalfMm;
         const yF = -extHalfMm;
         const yB = fd + extHalfMm;
+        const midX = fw * 0.5;
 
-        // Small rear-center Z-rail clearance notch on the back edge
-        const notchHalfW = Math.min(18, Math.max(10, fw * 0.04));
-        const notchDepth = Math.min(extHalfMm + 10, Math.max(12, fd * 0.04));
+        // Outer contour features matching clee/TridentBackbone backbone-300.dxf
+        const cornerRelief = extWidthMm; // 20x20mm front corner post reliefs for 2020 extrusions
+        const rearRecess = extWidthMm; // 20mm recessed rear wings for rear extrusion/wiring clearance
+        const yRearWing = yB - rearRecess;
+
+        // Small rear corner ears inboard of rear vertical posts
+        const rearEarWidth = Math.min(14.0, Math.max(6.0, fw * 0.035));
+        const rearEarDepth = Math.min(7.0, Math.max(3.5, rearRecess * 0.35));
+
+        // Integral protruding rear-center Z-motor tab (86mm wide x 20mm deep)
+        const rearTabHalfW = Math.min(
+          43.0,
+          Math.max(24.0, (fw - 2 * cornerRelief - 2 * rearEarWidth - 36) * 0.35)
+        );
+        const rearTabL = midX - rearTabHalfW;
+        const rearTabR = midX + rearTabHalfW;
+
+        // 20.4 x 20.1mm U-shaped rear Z-rail clearance notch splitting the rear tab
+        const zRailNotchHalfW = Math.min(rearTabHalfW - 8.0, Math.max(10.2, extHalfMm + 0.2));
+        const zRailNotchDepth = Math.max(20.1, extWidthMm + 0.1);
+
+        // 25 x 8mm rear wiring relief notch on the left side of the rear Z-motor tab
+        const wireNotchAvailW = rearTabL - (xL + cornerRelief + rearEarWidth) - 8.0;
+        const wireNotchW = Math.min(25.0, Math.max(0.0, wireNotchAvailW));
+        const wireNotchDepth = wireNotchW > 4.0 ? 8.0 : 0.0;
 
         // 2D shape in (sx, sy) mapped via rotateX(-PI/2) -> (sx, sz, -sy) matching toThree
         const sx = (cadX: number) => (cadX - cx) * SCALE;
         const sy = (cadY: number) => (cadY - cy) * SCALE;
 
+        // Outer perimeter polygon traced strictly CCW in (sx, sy)
         const bbShape = new THREE.Shape();
-        bbShape.moveTo(sx(xL), sy(yF));
-        bbShape.lineTo(sx(xR), sy(yF));
-        bbShape.lineTo(sx(xR), sy(yB));
-        bbShape.lineTo(sx(fw * 0.5 + notchHalfW), sy(yB));
-        bbShape.lineTo(sx(fw * 0.5 + notchHalfW), sy(yB - notchDepth));
-        bbShape.lineTo(sx(fw * 0.5 - notchHalfW), sy(yB - notchDepth));
-        bbShape.lineTo(sx(fw * 0.5 - notchHalfW), sy(yB));
-        bbShape.lineTo(sx(xL), sy(yB));
+        bbShape.moveTo(sx(xL + cornerRelief), sy(yF));
+        bbShape.lineTo(sx(xR - cornerRelief), sy(yF));
+        // Front-Right 20x20 corner post relief
+        bbShape.lineTo(sx(xR - cornerRelief), sy(yF + cornerRelief));
+        bbShape.lineTo(sx(xR), sy(yF + cornerRelief));
+        // Right edge up to recessed rear-right corner
+        bbShape.lineTo(sx(xR), sy(yRearWing));
+        bbShape.lineTo(sx(xR - cornerRelief), sy(yRearWing));
+        // Rear-Right small corner ear near RR vertical post
+        bbShape.lineTo(sx(xR - cornerRelief), sy(yRearWing + rearEarDepth));
+        bbShape.lineTo(sx(xR - cornerRelief - rearEarWidth), sy(yRearWing + rearEarDepth));
+        bbShape.lineTo(sx(xR - cornerRelief - rearEarWidth), sy(yRearWing));
+        // Recessed rear-right wing -> protruding rear-center Z-motor tab
+        bbShape.lineTo(sx(rearTabR), sy(yRearWing));
+        bbShape.lineTo(sx(rearTabR), sy(yB));
+        // 20.4 x 20.1mm U-shaped rear Z-rail clearance notch
+        bbShape.lineTo(sx(midX + zRailNotchHalfW), sy(yB));
+        bbShape.lineTo(sx(midX + zRailNotchHalfW), sy(yB - zRailNotchDepth));
+        bbShape.lineTo(sx(midX - zRailNotchHalfW), sy(yB - zRailNotchDepth));
+        bbShape.lineTo(sx(midX - zRailNotchHalfW), sy(yB));
+        // Left half of rear-center Z-motor tab
+        bbShape.lineTo(sx(rearTabL), sy(yB));
+        // 25 x 8mm rear wiring relief notch on the left side of the rear Z-motor tab
+        if (wireNotchW > 4.0) {
+          bbShape.lineTo(sx(rearTabL), sy(yRearWing - wireNotchDepth));
+          bbShape.lineTo(sx(rearTabL - wireNotchW), sy(yRearWing - wireNotchDepth));
+          bbShape.lineTo(sx(rearTabL - wireNotchW), sy(yRearWing));
+        } else {
+          bbShape.lineTo(sx(rearTabL), sy(yRearWing));
+        }
+        // Recessed rear-left wing -> small rear-left corner ear near RL vertical post
+        bbShape.lineTo(sx(xL + cornerRelief + rearEarWidth), sy(yRearWing));
+        bbShape.lineTo(sx(xL + cornerRelief + rearEarWidth), sy(yRearWing + rearEarDepth));
+        bbShape.lineTo(sx(xL + cornerRelief), sy(yRearWing + rearEarDepth));
+        bbShape.lineTo(sx(xL + cornerRelief), sy(yRearWing));
+        bbShape.lineTo(sx(xL), sy(yRearWing));
+        // Left edge down to Front-Left 20x20 corner post relief
+        bbShape.lineTo(sx(xL), sy(yF + cornerRelief));
+        bbShape.lineTo(sx(xL + cornerRelief), sy(yF + cornerRelief));
         bbShape.closePath();
+
+        // Helper for strictly CW rounded-rectangle / stadium-slot holes in (sx, sy)
+        const addCwRoundedRectHole = (
+          x0Mm: number,
+          y0Mm: number,
+          x1Mm: number,
+          y1Mm: number,
+          radiusMm: number
+        ) => {
+          const x0 = sx(x0Mm);
+          const x1 = sx(x1Mm);
+          const y0 = sy(y0Mm);
+          const y1 = sy(y1Mm);
+          const w = x1 - x0;
+          const h = y1 - y0;
+          if (w <= 1e-4 || h <= 1e-4) return;
+          const r = Math.min(radiusMm * SCALE, w * 0.48, h * 0.48);
+          const hole = new THREE.Path();
+          hole.moveTo(x0, y0 + r);
+          hole.lineTo(x0, y1 - r);
+          hole.absarc(x0 + r, y1 - r, r, Math.PI, Math.PI * 0.5, true);
+          hole.lineTo(x1 - r, y1);
+          hole.absarc(x1 - r, y1 - r, r, Math.PI * 0.5, 0, true);
+          hole.lineTo(x1, y0 + r);
+          hole.absarc(x1 - r, y0 + r, r, 0, -Math.PI * 0.5, true);
+          hole.lineTo(x0 + r, y0);
+          hole.absarc(x0 + r, y0 + r, r, -Math.PI * 0.5, -Math.PI, true);
+          hole.closePath();
+          bbShape.holes.push(hole);
+        };
+
+        // 3x Ø26.0mm Z-motor pilot/leadscrew bore positions (exact DXF offsets for 2020; clears thicker posts too)
+        const boreFrontOffsetMm = Math.max(41.8, cornerRelief + 21.8);
+        const boreRearOffsetMm = Math.max(49.9, zRailNotchDepth + 29.8);
+        const boreRadiusMm = 13.0; // Ø26.0mm
+        const zMotorBoresMm: Array<[number, number]> = [
+          [xL + boreFrontOffsetMm, yF + boreFrontOffsetMm],
+          [xR - boreFrontOffsetMm, yF + boreFrontOffsetMm],
+          [midX, yB - boreRearOffsetMm],
+        ];
+
+        // TRUE OPEN CENTRAL CUTOUT with R10mm corner fillets leaving ~80mm wide perimeter steel flanges
+        const minSideFlangeMm = boreFrontOffsetMm + 24.0;
+        const minFrontFlangeMm = boreFrontOffsetMm + 24.0;
+        const minRearFlangeMm = boreRearOffsetMm + 24.0;
+        const rawCutW = bbExtra?.cutout_w_mm ?? fw - 160.0;
+        const rawCutD = bbExtra?.cutout_d_mm ?? fd - 180.0;
+        const maxCutW = Math.max(0, xR - xL - 2 * minSideFlangeMm);
+        const maxCutD = Math.max(0, yB - minRearFlangeMm - (yF + minFrontFlangeMm));
+        const cutW = Math.min(Math.max(rawCutW, 0), maxCutW);
+        const cutD = Math.min(Math.max(rawCutD, 0), maxCutD);
+
+        const cutXMin = midX - cutW * 0.5;
+        const cutXMax = midX + cutW * 0.5;
+        const yCutCenter = 0.5 * (yF + yRearWing);
+        const cutYMin = Math.max(yF + minFrontFlangeMm, yCutCenter - cutD * 0.5);
+        const cutYMax = Math.min(yB - minRearFlangeMm, cutYMin + cutD);
+
+        if (cutW >= 24.0 && cutYMax - cutYMin >= 24.0) {
+          const cutFilletR = Math.min(10.0, cutW * 0.25, (cutYMax - cutYMin) * 0.25);
+          addCwRoundedRectHole(cutXMin, cutYMin, cutXMax, cutYMax, cutFilletR);
+        }
+
+        // TRUE PUNCHED 3x Ø26.0mm circular Z-motor pilot/leadscrew bores (strictly CW)
+        for (const [bxMm, byMm] of zMotorBoresMm) {
+          const boreHole = new THREE.Path();
+          boreHole.absarc(sx(bxMm), sy(byMm), boreRadiusMm * SCALE, 0, Math.PI * 2, true);
+          bbShape.holes.push(boreHole);
+        }
+
+        // TRUE PUNCHED 8x narrow 3.6mm DIN/accessory mounting slots through the perimeter steel flanges:
+        // 4x 50x3.6mm vertical slots (2 left flange, 2 right flange) + 4x 40x3.6mm horizontal slots (2 front, 2 rear)
+        const slotWidthMm = 3.6;
+        const slotHalfW = slotWidthMm * 0.5;
+        const slotRadiusMm = slotHalfW;
+        const flangeClearMinMm = 12.0;
+
+        // Left & right flange vertical 50 x 3.6mm slots
+        const leftOpenSpanX = cutXMin - (xL + extWidthMm);
+        const rightOpenSpanX = xR - extWidthMm - cutXMax;
+        const leftSlotX = 0.5 * (xL + extWidthMm + cutXMin);
+        const rightSlotX = 0.5 * (cutXMax + (xR - extWidthMm));
+        const vSpanMin = yF + boreFrontOffsetMm + 30.0;
+        const vSpanMax = yRearWing - 22.0;
+        const vSpan = vSpanMax - vSpanMin;
+        if (leftOpenSpanX >= flangeClearMinMm && rightOpenSpanX >= flangeClearMinMm && vSpan >= 52.0) {
+          const vSlotLen = Math.min(50.0, Math.max(16.0, (vSpan - 20.0) * 0.5));
+          const vHalf = vSlotLen * 0.5;
+          const vCentersY = [vSpanMin + vSpan * 0.27, vSpanMin + vSpan * 0.73];
+          for (const cyMm of vCentersY) {
+            addCwRoundedRectHole(
+              leftSlotX - slotHalfW,
+              cyMm - vHalf,
+              leftSlotX + slotHalfW,
+              cyMm + vHalf,
+              slotRadiusMm
+            );
+            addCwRoundedRectHole(
+              rightSlotX - slotHalfW,
+              cyMm - vHalf,
+              rightSlotX + slotHalfW,
+              cyMm + vHalf,
+              slotRadiusMm
+            );
+          }
+        }
+
+        // Front flange horizontal 40 x 3.6mm slots (2x)
+        const frontOpenSpanY = cutYMin - (yF + extWidthMm);
+        const frontSlotY = 0.5 * (yF + extWidthMm + cutYMin);
+        const hFrontMin = xL + boreFrontOffsetMm + 30.0;
+        const hFrontMax = xR - boreFrontOffsetMm - 30.0;
+        const hFrontSpan = hFrontMax - hFrontMin;
+        if (frontOpenSpanY >= flangeClearMinMm && hFrontSpan >= 44.0) {
+          const hFrontLen = Math.min(40.0, Math.max(14.0, (hFrontSpan - 20.0) * 0.5));
+          const hFrontHalf = hFrontLen * 0.5;
+          const fCentersX = [hFrontMin + hFrontSpan * 0.27, hFrontMin + hFrontSpan * 0.73];
+          for (const cxMm of fCentersX) {
+            addCwRoundedRectHole(
+              cxMm - hFrontHalf,
+              frontSlotY - slotHalfW,
+              cxMm + hFrontHalf,
+              frontSlotY + slotHalfW,
+              slotRadiusMm
+            );
+          }
+        }
+
+        // Rear flange horizontal 40 x 3.6mm slots (2x: rear-left wing & rear-right wing)
+        const rearSlotTopLimit = yRearWing - wireNotchDepth;
+        const rearOpenSpanY = rearSlotTopLimit - cutYMax;
+        const rearSlotY = 0.5 * (cutYMax + rearSlotTopLimit);
+        const rearLeftMin = Math.max(leftSlotX + 12.0, xL + 46.0);
+        const rearLeftMax = midX - 28.0;
+        const rearWingSpan = rearLeftMax - rearLeftMin;
+        if (rearOpenSpanY >= flangeClearMinMm && rearWingSpan >= 24.0) {
+          const hRearLen = Math.min(40.0, Math.max(12.0, rearWingSpan - 10.0));
+          const hRearHalf = hRearLen * 0.5;
+          const rearLeftCenterX = 0.5 * (rearLeftMin + rearLeftMax);
+          const rearRightCenterX = fw - rearLeftCenterX;
+          for (const cxMm of [rearLeftCenterX, rearRightCenterX]) {
+            addCwRoundedRectHole(
+              cxMm - hRearHalf,
+              rearSlotY - slotHalfW,
+              cxMm + hRearHalf,
+              rearSlotY + slotHalfW,
+              slotRadiusMm
+            );
+          }
+        }
 
         const backboneGeo = new THREE.ExtrudeGeometry(bbShape, {
           depth: plateThickScene,
           bevelEnabled: false,
-          curveSegments: 1,
+          curveSegments: 16,
         });
         backboneGeo.rotateX(-Math.PI / 2);
         backboneGeo.computeVertexNormals();
@@ -4327,12 +4543,12 @@ export const PrinterViewport: React.FC<Props> = ({
         if (!toolheadPunchIn) {
           tagInspectable(backboneMesh, {
             key: "frame:trident_backbone",
-            name: "Trident Backbone (Clee, 3mm Mild Steel)",
+            name: "Trident Backbone (Clee, 3.18mm Mild Steel Perimeter Plate)",
             subsystem: "frame",
             partGroupId: "trident_backbone",
             role: "panel",
             material: geom.trident_backbone?.material_name ?? "Powder-Coated Mild Steel",
-            profile: `${plateThickMm.toFixed(1)}mm solid laser-cut plate`,
+            profile: `${plateThickMm.toFixed(2)}mm laser-cut open-center perimeter plate`,
             complianceSharePct: bbBaySens?.compliance_share_pct ?? bbStiff?.compliance_share_pct,
             heatScore: bbBaySens ? getLensScore(bbBaySens, adjointLens) : undefined,
             estHzGain: bbStiff?.est_hz_gain,
@@ -4343,7 +4559,7 @@ export const PrinterViewport: React.FC<Props> = ({
         }
         group.add(backboneMesh);
 
-        // Crisp metallic edge highlight around the solid laser-cut steel plate
+        // Crisp metallic edge highlight outlining outer perimeter, R10 central cutout, Ø26 bores & 3.6mm slots
         const backboneEdgesGeo = new THREE.EdgesGeometry(backboneGeo, 28);
         const backboneEdgesMat = new THREE.LineBasicMaterial({
           color: 0x475569,
@@ -4354,56 +4570,25 @@ export const PrinterViewport: React.FC<Props> = ({
         backboneEdges.position.y = plateBaseY;
         group.add(backboneEdges);
 
-        // Surface details on top of the solid steel plate:
-        // 3 circular NEMA-17 Z-motor bore/mounting rings + M3 bolts, 8 DIN-rail/wiring slots, and 4-side M5 perimeter bolts
+        // Hardware details on top of the plate:
+        // 12x M3 stainless socket-head bolts (4 on a 31x31mm square around each of the 3x Ø26mm Z-motor bores)
+        // + 10x M5 frame-mounting socket-head bolts (4 FL, 4 FR, 2 on the split rear-center tab)
         if (!toolheadPunchIn) {
-          const padCentersMm: Array<[number, number]> =
-            geom.z_leadscrews && geom.z_leadscrews.length > 0
-              ? geom.z_leadscrews.map((zl) => [zl.motor_pos_mm[0], zl.motor_pos_mm[1]])
-              : [
-                  [extHalfMm + 28, extHalfMm + 28],
-                  [fw * 0.5, fd - extHalfMm - 28],
-                  [fw - extHalfMm - 28, extHalfMm + 28],
-                ];
-
-          // Circular NEMA-17 pilot bore recess (22mm dia) + machined mounting ring (39mm OD)
-          const boreDiskGeo = new THREE.CylinderGeometry(0.112, 0.112, 0.008, 24);
-          const boreDiskMat = new THREE.MeshStandardMaterial({
-            color: 0x0b0f17,
-            metalness: 0.2,
-            roughness: 0.88,
-          });
-          const mountRingGeo = new THREE.RingGeometry(0.114, 0.198, 24);
-          mountRingGeo.rotateX(-Math.PI / 2);
-          const mountRingMat = new THREE.MeshStandardMaterial({
-            color: 0x334155,
-            metalness: 0.78,
-            roughness: 0.3,
-          });
-
           const m3BoltCoords: THREE.Vector3[] = [];
-          const m3OffsetScene = 15.5 * SCALE; // NEMA-17 standard 31mm x 31mm M3 bolt pattern
+          const m3OffsetMm = 15.5; // NEMA-17 standard 31 x 31mm M3 bolt pattern
           const m3BoltY = plateTopY + 0.01;
 
-          for (const [pxMm, pyMm] of padCentersMm) {
-            const pPos = toThree([pxMm, pyMm, extHalfMm + plateThickMm], cx, cy);
-            const boreMesh = new THREE.Mesh(boreDiskGeo, boreDiskMat);
-            boreMesh.position.set(pPos.x, plateTopY + 0.003, pPos.z);
-            group.add(boreMesh);
-
-            const ringMesh = new THREE.Mesh(mountRingGeo, mountRingMat);
-            ringMesh.position.set(pPos.x, plateTopY + 0.005, pPos.z);
-            group.add(ringMesh);
-
-            for (const dx of [-m3OffsetScene, m3OffsetScene]) {
-              for (const dz of [-m3OffsetScene, m3OffsetScene]) {
-                m3BoltCoords.push(new THREE.Vector3(pPos.x + dx, m3BoltY, pPos.z + dz));
+          for (const [bxMm, byMm] of zMotorBoresMm) {
+            for (const dxMm of [-m3OffsetMm, m3OffsetMm]) {
+              for (const dyMm of [-m3OffsetMm, m3OffsetMm]) {
+                const bPos = toThree([bxMm + dxMm, byMm + dyMm, extHalfMm + plateThickMm], cx, cy);
+                m3BoltCoords.push(new THREE.Vector3(bPos.x, m3BoltY, bPos.z));
               }
             }
           }
 
           if (m3BoltCoords.length > 0) {
-            const m3BoltGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.016, 8);
+            const m3BoltGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.02, 10);
             const m3BoltMat = new THREE.MeshStandardMaterial({
               color: 0xe2e8f0,
               metalness: 0.88,
@@ -4420,99 +4605,40 @@ export const PrinterViewport: React.FC<Props> = ({
             group.add(m3BoltInst);
           }
 
-          // 8 narrow dark recessed DIN-rail / wiring slots matching Clee's West3D Trident Backbone layout:
-          // 2 left inner, 2 right inner, 2 front-left/right horizontal, 2 rear-left/right horizontal
-          const leftInnerX = Math.min(fw * 0.2, Math.max(extHalfMm + 48, fw * 0.18));
-          const rightInnerX = fw - leftInnerX;
-          const vSlotLenMm = Math.min(72, Math.max(36, fd * 0.19));
-          const hSlotLenFrontMm = Math.min(76, Math.max(36, fw * 0.19));
-          const hSlotLenRearMm = Math.min(68, Math.max(34, fw * 0.17));
-          const slotNarrowMm = 7.5;
-          const frontSlotY = Math.max(extHalfMm + 36, fd * 0.13);
-          const rearSlotY = fd - frontSlotY;
-
-          const slotSpecsMm: Array<{ cxMm: number; cyMm: number; wMm: number; dMm: number }> = [
-            // 2 left inner vertical slots
-            { cxMm: leftInnerX, cyMm: fd * 0.36, wMm: slotNarrowMm, dMm: vSlotLenMm },
-            { cxMm: leftInnerX, cyMm: fd * 0.66, wMm: slotNarrowMm, dMm: vSlotLenMm },
-            // 2 right inner vertical slots
-            { cxMm: rightInnerX, cyMm: fd * 0.36, wMm: slotNarrowMm, dMm: vSlotLenMm },
-            { cxMm: rightInnerX, cyMm: fd * 0.66, wMm: slotNarrowMm, dMm: vSlotLenMm },
-            // 2 front-left / front-right horizontal slots
-            { cxMm: fw * 0.34, cyMm: frontSlotY, wMm: hSlotLenFrontMm, dMm: slotNarrowMm },
-            { cxMm: fw * 0.66, cyMm: frontSlotY, wMm: hSlotLenFrontMm, dMm: slotNarrowMm },
-            // 2 rear-left / rear-right horizontal slots
-            { cxMm: fw * 0.27, cyMm: rearSlotY, wMm: hSlotLenRearMm, dMm: slotNarrowMm },
-            { cxMm: fw * 0.73, cyMm: rearSlotY, wMm: hSlotLenRearMm, dMm: slotNarrowMm },
+          // 10x M5 frame-mounting socket-head bolts on 2020 deck extrusion centerlines:
+          // 4 FL (2 front + 2 left), 4 FR (2 front + 2 right), 2 on the rear-center Z-motor tab
+          const m5OffNear = 16.0;
+          const m5OffFar = 52.0;
+          const rearTabBoltOffsetX = 0.5 * (zRailNotchHalfW + rearTabHalfW);
+          const m5PointsMm: Array<[number, number]> = [
+            // 4x Front-Left
+            [xL + cornerRelief + m5OffNear, 0],
+            [xL + cornerRelief + m5OffFar, 0],
+            [0, yF + cornerRelief + m5OffNear],
+            [0, yF + cornerRelief + m5OffFar],
+            // 4x Front-Right
+            [xR - cornerRelief - m5OffNear, 0],
+            [xR - cornerRelief - m5OffFar, 0],
+            [fw, yF + cornerRelief + m5OffNear],
+            [fw, yF + cornerRelief + m5OffFar],
+            // 2x Rear-center Z-motor tab
+            [midX - rearTabBoltOffsetX, fd],
+            [midX + rearTabBoltOffsetX, fd],
           ];
 
-          const slotRimGeo = new THREE.BoxGeometry(1, 0.004, 1);
-          const slotRimMat = new THREE.MeshStandardMaterial({
-            color: 0x3b4759,
-            metalness: 0.72,
-            roughness: 0.35,
-          });
-          const slotCutGeo = new THREE.BoxGeometry(1, 0.007, 1);
-          const slotCutMat = new THREE.MeshStandardMaterial({
-            color: 0x090d14,
-            metalness: 0.15,
-            roughness: 0.92,
-          });
-          const slotRimInst = new THREE.InstancedMesh(slotRimGeo, slotRimMat, slotSpecsMm.length);
-          const slotCutInst = new THREE.InstancedMesh(slotCutGeo, slotCutMat, slotSpecsMm.length);
-          const slotDummy = new THREE.Object3D();
-          for (let i = 0; i < slotSpecsMm.length; i++) {
-            const s = slotSpecsMm[i];
-            const sPos = toThree([s.cxMm, s.cyMm, extHalfMm + plateThickMm], cx, cy);
-            slotDummy.position.set(sPos.x, plateTopY + 0.002, sPos.z);
-            slotDummy.scale.set(s.wMm * SCALE + 0.018, 1, s.dMm * SCALE + 0.018);
-            slotDummy.updateMatrix();
-            slotRimInst.setMatrixAt(i, slotDummy.matrix);
-
-            slotDummy.position.set(sPos.x, plateTopY + 0.004, sPos.z);
-            slotDummy.scale.set(s.wMm * SCALE, 1, s.dMm * SCALE);
-            slotDummy.updateMatrix();
-            slotCutInst.setMatrixAt(i, slotDummy.matrix);
-          }
-          slotRimInst.instanceMatrix.needsUpdate = true;
-          slotCutInst.instanceMatrix.needsUpdate = true;
-          group.add(slotRimInst);
-          group.add(slotCutInst);
-
-          // M5 perimeter bolts along ALL 4 bottom 2020 extrusion centerlines (front, rear, left, right)
-          const bbBoltCoords: THREE.Vector3[] = [];
-          const boltY = plateTopY + 0.014;
-          const p00 = toThree([0, 0, 0], cx, cy);
-          const p11 = toThree([fw, fd, 0], cx, cy);
-          const sideSteps = 5;
-          for (let i = 0; i <= sideSteps; i++) {
-            const t = i / sideSteps;
-            const zAlong = p00.z + t * (p11.z - p00.z);
-            bbBoltCoords.push(new THREE.Vector3(p00.x, boltY, zAlong));
-            bbBoltCoords.push(new THREE.Vector3(p11.x, boltY, zAlong));
-          }
-          const spanSteps = 6;
-          for (let i = 1; i < spanSteps; i++) {
-            const t = i / spanSteps;
-            const cadX = t * fw;
-            const xAlong = p00.x + t * (p11.x - p00.x);
-            // Front bottom extrusion
-            bbBoltCoords.push(new THREE.Vector3(xAlong, boltY, p00.z));
-            // Rear bottom extrusion (skip rear-center Z-rail clearance notch)
-            if (Math.abs(cadX - fw * 0.5) >= notchHalfW + 6) {
-              bbBoltCoords.push(new THREE.Vector3(xAlong, boltY, p11.z));
-            }
-          }
-          const bbBoltGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.022, 8);
+          const m5BoltY = plateTopY + 0.015;
+          const bbBoltGeo = new THREE.CylinderGeometry(0.036, 0.036, 0.028, 10);
           const bbBoltMat = new THREE.MeshStandardMaterial({
             color: 0xdbe4ee,
             metalness: 0.86,
             roughness: 0.24,
           });
-          const bbBoltInst = new THREE.InstancedMesh(bbBoltGeo, bbBoltMat, bbBoltCoords.length);
+          const bbBoltInst = new THREE.InstancedMesh(bbBoltGeo, bbBoltMat, m5PointsMm.length);
           const bbDummy = new THREE.Object3D();
-          for (let i = 0; i < bbBoltCoords.length; i++) {
-            bbDummy.position.copy(bbBoltCoords[i]);
+          for (let i = 0; i < m5PointsMm.length; i++) {
+            const [mxMm, myMm] = m5PointsMm[i];
+            const bPos = toThree([mxMm, myMm, extHalfMm + plateThickMm], cx, cy);
+            bbDummy.position.set(bPos.x, m5BoltY, bPos.z);
             bbDummy.updateMatrix();
             bbBoltInst.setMatrixAt(i, bbDummy.matrix);
           }
