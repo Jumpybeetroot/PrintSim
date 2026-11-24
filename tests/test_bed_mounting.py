@@ -692,3 +692,70 @@ def test_trident_2020_t_subframe_elevation_alignment_and_zero_bed_clipping() -> 
         assert gd_zd["bed_mount_anchor_nodes"] == ["bed_frame"] * len(gd_zd["bed_mount_points_mm"])
 
 
+@pytest.mark.parametrize(
+    ("material", "thickness_mm"),
+    [
+        ("aluminum_5052_sheet", 5.0),
+        ("acm_dibond", 3.0),
+    ],
+)
+def test_trident_rear_z_column_does_not_clip_rear_panel_in_modal(
+    material: str, thickness_mm: float
+) -> None:
+    """Bolted rear structural panel tracks the rear-center 2020 Z-column in Y with zero pass-through."""
+    spec = _trident_base()
+    spec.frame.enclosed_panels = True
+    spec.frame.panel_mounting = "bolted_structural"
+    spec.frame.panel_material = material
+    spec.frame.panel_thickness_mm = thickness_mm
+    spec.frame.trident_backbone = True
+
+    # Test with odd panel_mesh_n=3 (Studio default) to ensure even centerline column alignment
+    asm = build_assembly(spec, panel_mesh_n=3)
+    _assert_spd_and_finite(asm)
+    mo = solve_modal_fea(asm, num_modes=8)
+
+    nmap = asm.node_map
+    z_bed_z = float(nmap["z_bed_r"].position_m[2])
+    bay = "rear_low"
+
+    # Rear bay centerline column exists at x = w/2 and couples to rear Z-column in normal Y
+    w_mid = 0.5 * spec.frame.width_mm * 1e-3
+    pcol = sorted(
+        [
+            n
+            for n in asm.nodes
+            if n.id.startswith(f"pan_{bay}_") and abs(float(n.position_m[0]) - w_mid) < 1e-4
+        ],
+        key=lambda n: float(n.position_m[2]),
+    )
+    assert len(pcol) >= 4
+    interior_contact_springs = [
+        sp
+        for sp in asm.fastener_springs
+        if sp.bay == bay
+        and sp.shell_node_id in {n.id for n in pcol[1:-1]}
+        and sp.k_normal_n_m >= 5.0e6
+        and sp.k_shear_n_m == 0.0
+    ]
+    assert len(interior_contact_springs) >= 1
+
+    # Across all primary modes, z_bed_r must not pass through the rear panel in Y
+    for mode in mo.modes:
+        z_y = float(mode.nodal_vectors["z_bed_r"][1])
+        panel_y = 0.0
+        for na, nb in zip(pcol, pcol[1:]):
+            za, zb = float(na.position_m[2]), float(nb.position_m[2])
+            if za - 1e-4 <= z_bed_z <= zb + 1e-4:
+                t = (z_bed_z - za) / max(zb - za, 1e-9)
+                panel_y = (1.0 - t) * float(mode.nodal_vectors[na.id][1]) + t * float(
+                    mode.nodal_vectors[nb.id][1]
+                )
+                break
+        assert abs(z_y - panel_y) < 0.08, (
+            f"{material} {thickness_mm}mm mode {mode.mode_number} ({mode.frequency_hz:.1f} Hz): "
+            f"z_bed_r u_y={z_y:+.4f} vs rear panel u_y={panel_y:+.4f}"
+        )
+
+
+

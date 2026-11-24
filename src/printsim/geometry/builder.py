@@ -2002,6 +2002,7 @@ def _find_or_split_frame_node(
     p_target: np.ndarray,
     snap_tol_m: float = 5e-4,
     allow_gantry: bool = True,
+    allow_rear_z: bool = False,
 ) -> str:
     """Locate an existing structural frame/rail node near ``p_target`` or split the spanning beam."""
     excluded_roles = {"panel", "backbone", "toolhead", "cog", "nozzle", "bed"}
@@ -2010,7 +2011,7 @@ def _find_or_split_frame_node(
     best_id: str | None = None
     best_dist = snap_tol_m
     for n in nodes:
-        if n.role in excluded_roles:
+        if n.role in excluded_roles and not (allow_rear_z and n.id == "z_bed_r"):
             continue
         dist = float(np.linalg.norm(n.position_m - p_target))
         if dist < best_dist:
@@ -2020,7 +2021,8 @@ def _find_or_split_frame_node(
         return best_id
 
     for idx, m in enumerate(members):
-        if m.role not in ("frame", "rail", "tower"):
+        is_allowed_rear_z = allow_rear_z and m.id.startswith("bed_rear_z_")
+        if m.role not in ("frame", "rail", "tower") and not is_allowed_rear_z:
             continue
         p0 = nmap[m.start_id].position_m
         p1 = nmap[m.end_id].position_m
@@ -2039,7 +2041,7 @@ def _find_or_split_frame_node(
                 node = StructuralNode(
                     id=split_id,
                     position_m=(p0 + proj * u).copy(),
-                    role="frame",
+                    role="bed" if is_allowed_rear_z else "frame",
                 )
                 nodes.append(node)
                 nmap[split_id] = node
@@ -2047,7 +2049,11 @@ def _find_or_split_frame_node(
                 return split_id
 
     # Fallback: closest frame/rail node
-    non_panel = [n for n in nodes if n.role not in excluded_roles]
+    non_panel = [
+        n
+        for n in nodes
+        if n.role not in excluded_roles or (allow_rear_z and n.id == "z_bed_r")
+    ]
     return min(non_panel, key=lambda n: float(np.linalg.norm(n.position_m - p_target))).id
 
 
@@ -2166,14 +2172,35 @@ def _add_corexy_shell_panels(
             k_normal_per_m = max(1.0e6, 2.0 * k_shear_per_m)
             k_rot_per_m = 45.0 * clamp_eff
 
-        nx_g = mesh_n
+        has_rear_z_col = (
+            mounting != "clip_enclosure"
+            and bay in ("rear", "rear_low", "rear_top")
+            and spec.bed.z_drive in ("leadscrew_triple", "leadscrew_single")
+            and "b_rear_mid" in nmap
+            and "g_rear_mid" in nmap
+            and "z_bed_r" in nmap
+        )
+        # Ensure rear bays with a rear-center vertical Z-column (Trident / single-Z)
+        # have an exact centerline grid column (xi = 0.5) so the rear panel contacts
+        # b_rear_mid -> bed_rear_z_bot -> z_bed_r -> bed_rear_z_top -> g_rear_mid
+        # without unphysical out-of-plane pass-through in modal/static views.
+        # Keep ny_g uniform (identical to left/right bays) so corner columns share
+        # exact split nodes with zero stub segments or extra vertical DOFs.
+        nx_g = (mesh_n if mesh_n % 2 == 0 else mesh_n + 1) if has_rear_z_col else mesh_n
         ny_g = mesh_n if bh > 0.12 else max(1, mesh_n // 2)
+        rear_z_top_z: float | None = (
+            float(nmap["g_rear_mid"].position_m[2])
+            if (has_rear_z_col and bay in ("rear_low", "rear"))
+            else None
+        )
         nvec = np.asarray(n_tup, dtype=float)
         off_nominal = d_c * nvec
+        mid_i = nx_g // 2
 
         grid = np.empty((ny_g + 1, nx_g + 1), dtype=object)
         for j in range(ny_g + 1):
             eta = j / ny_g
+            ds_vert = (bh / ny_g) * (0.5 if j in (0, ny_g) else 1.0)
             for i in range(nx_g + 1):
                 if is_top_wall and j == 0 and (wall_base, i) in seam_nodes:
                     # Stitch top sub-bay seamlessly onto lower sub-bay's gantry-level shell nodes
@@ -2204,7 +2231,16 @@ def _add_corexy_shell_panels(
                 if is_low_wall and j == ny_g:
                     seam_nodes[(wall_base, i)] = sid
 
-                if i in (0, nx_g) or j in (0, ny_g):
+                is_perim = i in (0, nx_g) or j in (0, ny_g)
+                on_rear_z_interior = (
+                    not is_perim
+                    and has_rear_z_col
+                    and bay in ("rear_low", "rear")
+                    and i == mid_i
+                    and rear_z_top_z is not None
+                    and float(p_frame[2]) <= rear_z_top_z + 1e-3
+                )
+                if is_perim:
                     fid = _find_or_split_frame_node(
                         nodes, nmap, members, p_frame, allow_gantry=bolted_to_gantry
                     )
@@ -2212,7 +2248,7 @@ def _add_corexy_shell_panels(
                     if j in (0, ny_g):
                         ds += (bw / nx_g) * (0.5 if i in (0, nx_g) else 1.0)
                     if i in (0, nx_g):
-                        ds += (bh / ny_g) * (0.5 if j in (0, ny_g) else 1.0)
+                        ds += ds_vert
                     actual_off = p_shell - nmap[fid].position_m
                     sp = FastenerSpring(
                         id=f"cbush_{bay}_{j}_{i}",
@@ -2232,6 +2268,38 @@ def _add_corexy_shell_panels(
                     fastener_springs.append(sp)
                     if is_low_wall and j == ny_g:
                         seam_springs[(wall_base, i)] = sp
+                elif on_rear_z_interior:
+                    # Rear panel rests flush against the outer face of the rear-center
+                    # vertical 2020 Z-extrusion (bed_rear_z_bot / z_bed_r / bed_rear_z_top):
+                    # enforce out-of-plane normal contact (zero pass-through in Y) without
+                    # adding artificial in-plane shear bolts that do not exist down the center.
+                    fid = _find_or_split_frame_node(
+                        nodes,
+                        nmap,
+                        members,
+                        p_frame,
+                        allow_gantry=bolted_to_gantry,
+                        allow_rear_z=True,
+                    )
+                    actual_off = p_shell - nmap[fid].position_m
+                    k_contact_n_m = max(k_normal_per_m * ds_vert, 5.0e6)
+                    fastener_springs.append(
+                        FastenerSpring(
+                            id=f"cbush_{bay}_{j}_{i}",
+                            bay=bay,
+                            shell_node_id=sid,
+                            frame_node_id=fid,
+                            k_shear_n_m=0.0,
+                            k_normal_n_m=k_contact_n_m,
+                            k_rot_nm_rad=0.0,
+                            normal_vec=n_tup,
+                            offset_m=(
+                                float(actual_off[0]),
+                                float(actual_off[1]),
+                                float(actual_off[2]),
+                            ),
+                        )
+                    )
 
         for j in range(ny_g):
             for i in range(nx_g):
