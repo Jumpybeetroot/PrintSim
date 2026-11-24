@@ -89,6 +89,8 @@ uv run printsim serve --port 8000
 
 For frontend hot-reload development, run `uv run printsim serve --port 8000` in one terminal and `cd web && npm run dev` in another (proxies `/api` to port 8000).
 
+Changing the studio UI? Follow [docs/STUDIO_STYLE_GUIDE.md](docs/STUDIO_STYLE_GUIDE.md). `npm run build` runs a style check (`npm run check:style`) before compiling and fails on raw colours, off-scale sizes and unlabelled controls.
+
 ### 4. Run the Physics Verification Suite
 
 ```bash

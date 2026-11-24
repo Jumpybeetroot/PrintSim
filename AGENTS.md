@@ -13,7 +13,7 @@ You are working on **PrintSim**, a full-featured multiphysics 3D printer simulat
 - `src/printsim/engine/` — Unified multiphysics evaluator (`evaluate_printer`) and headless AI design optimizer (`optimize_design`).
 - `src/printsim/api/` — FastAPI server (`/api/simulate`, `/api/optimize`, `/api/export/stl`).
 - `src/printsim/cli.py` — `printsim` Typer CLI.
-- `web/` — Interactive React + TypeScript + Three.js 3D Studio.
+- `web/` — Interactive React + TypeScript + Three.js 3D Studio. Visual system and UI rules: `docs/STUDIO_STYLE_GUIDE.md`.
 - `examples/` — Reference printer specs (YAML) and benchmark fixtures.
 - `tests/` — Pytest suite including analytical physics benchmarks.
 
@@ -26,6 +26,8 @@ You are working on **PrintSim**, a full-featured multiphysics 3D printer simulat
   - Any new structural, modal, kinematic, or thermal model MUST include a unit test in `tests/` verifying either a closed-form analytical solution (e.g., Euler-Bernoulli deflection/frequency, FK/IK round-trip, steady-state thermal resistance) or a monotonic physical sanity check.
 - **Real Datasheet Parameters**:
   - New materials and profiles in `schema/materials.py` and `schema/profiles.py` must cite realistic engineering values (e.g., Misumi extrusion datasheets, Gates PowerGrip belt stiffness, MatWeb material constants).
+- **Studio UI Follows the Style Guide** (`docs/STUDIO_STYLE_GUIDE.md`, `.agents/rules/web-studio.md`):
+  - Any change under `web/src/` must use the design tokens and documented patterns (cards, pills, fields, labels with `Name (unit)`), keep every control accessibly named, and pass the guide's pre-finish checklist. Background on the system: `docs/STUDIO_UI_OVERHAUL.md`.
 - **Explore Existing Work & Research First** (`.agents/rules/research-and-reuse.md`):
   - Before building custom solvers, CAD tools, or optimizers from scratch, research proven open-source libraries (`gmsh`, `scikit-fem`, `build123d`, `sectionproperties`, `pymoo`, `optuna`, Klipper `shaper_defs`/`shaper_calibrate`, `fullcontrol`, `ht`) and published engineering models; integrate existing work via clean adapters/extras whenever it improves accuracy or saves reinventing the wheel.
 
@@ -33,7 +35,7 @@ You are working on **PrintSim**, a full-featured multiphysics 3D printer simulat
 
 Always run verification before committing or declaring a task complete:
 - Python physics & API tests: `uv run pytest -v`
-- Frontend TypeScript & bundle build (when `web/` changes): `npm run build --prefix web`
+- Frontend style check, TypeScript & bundle build (when `web/` changes): `npm run build --prefix web` (runs `web/scripts/check-style.mjs` first; fix violations per `docs/STUDIO_STYLE_GUIDE.md`, do not bypass the check)
 - CLI smoke check: `uv run printsim evaluate examples/corexy_voron_style.yaml`
 
 ## 4. Version Control Rules

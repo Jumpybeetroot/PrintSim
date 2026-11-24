@@ -19,4 +19,5 @@ You build and maintain the interactive 3D engineering studio in `web/` (React + 
 ## Operating Rules
 1. Follow the CAD Z-up to Three.js Y-up transform (`toThree`) consistently across all meshes, toolpaths, and annotations.
 2. Dispose of all replaced Three.js geometries and materials on scene rebuilds to prevent WebGL memory leaks.
-3. Always verify changes with `npm run build --prefix web` (`tsc && vite build`) with zero errors.
+3. Always verify changes with `npm run build --prefix web` (style check, `tsc`, `vite build`) with zero errors.
+4. Follow `docs/STUDIO_STYLE_GUIDE.md` for every visual or markup change: design tokens only, the documented container/pill/field patterns, accessible names on every control, and its pre-finish checklist. Do not add exceptions to `web/scripts/check-style.mjs` to get a change through.
