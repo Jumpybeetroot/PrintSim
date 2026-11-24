@@ -1158,6 +1158,9 @@ export const PrinterViewport: React.FC<Props> = ({
     const tmpYawQuat = new THREE.Quaternion();
     const tmpAlignQuat = new THREE.Quaternion();
     const tmpGe5cPos = new THREE.Vector3();
+    const tmpAnchorNodePos = new THREE.Vector3();
+    const tmpAnchorRotVec = new THREE.Vector3();
+    const tmpAnchorQuat = new THREE.Quaternion();
 
     const hasActiveModalMeshes = (): boolean =>
       stateRef.current.isModal &&
@@ -1799,11 +1802,15 @@ export const PrinterViewport: React.FC<Props> = ({
         if (modalBedMesh && modalBedMountItems.length > 0) {
           const bedPos = modalBedMesh.position;
           const bedQuat = modalBedMesh.quaternion;
-          const framePos = modalBedSubframe ? modalBedSubframe.position : modalBedSubframeBasePos;
-          const frameQuat = modalBedSubframe ? modalBedSubframe.quaternion : tmpIdentQuat;
+          const fallbackFramePos = modalBedSubframe
+            ? modalBedSubframe.position
+            : modalBedSubframeBasePos;
+          const fallbackFrameQuat = modalBedSubframe ? modalBedSubframe.quaternion : tmpIdentQuat;
+          const hasDecorativeSubframe = Boolean(
+            modalBedSubframe && modalBedSubframe.children.length > 0
+          );
 
           tmpBedUp.set(0, 1, 0).applyQuaternion(bedQuat);
-          tmpFrameUp.set(0, 1, 0).applyQuaternion(frameQuat);
 
           for (let mi = 0; mi < modalBedMountItems.length; mi++) {
             const item = modalBedMountItems[mi];
@@ -1814,10 +1821,43 @@ export const PrinterViewport: React.FC<Props> = ({
             item.topGroup.position.copy(tmpMountTopPos);
             item.topGroup.quaternion.copy(bedQuat).multiply(tmpYawQuat);
 
-            // Bottom subframe-side hardware locked flush to 2020 bed subframe top face
-            tmpMountBotPos.copy(item.mountOffsetFromFrame).applyQuaternion(frameQuat).add(framePos);
+            // Bottom subframe-side hardware locked directly to its real FEA anchor node
+            // (or decorative subframe top face when no FEA subframe node exists)
+            let botQuat = fallbackFrameQuat;
+            const useRealFeaAnchor =
+              Boolean(item.bottomNodeId && basePositions[item.bottomNodeId]) &&
+              (!hasDecorativeSubframe || item.bottomNodeId !== effBedFrameNodeId);
+
+            if (useRealFeaAnchor) {
+              getPosInto(item.bottomNodeId, tmpAnchorNodePos);
+              const anchorRot = !isIsoToolhead
+                ? (modalRotations[item.bottomNodeId] ??
+                  modalRotations["bed_frame"] ??
+                  (effBedFrameNodeId ? modalRotations[effBedFrameNodeId] : undefined))
+                : undefined;
+              if (anchorRot && anchorRot.lengthSq() > 1e-8) {
+                tmpAnchorRotVec.copy(anchorRot).multiplyScalar(phase * 0.1);
+                setQuatFromClampedRotVec(tmpAnchorRotVec, maxStageAngle, tmpAnchorQuat);
+                botQuat = tmpAnchorQuat;
+              } else {
+                tmpAnchorQuat.identity();
+                botQuat = tmpAnchorQuat;
+              }
+              tmpMountBotPos
+                .copy(item.bottomOffsetFromNode)
+                .applyQuaternion(botQuat)
+                .add(tmpAnchorNodePos);
+            } else {
+              tmpMountBotPos
+                .copy(item.mountOffsetFromFrame)
+                .applyQuaternion(fallbackFrameQuat)
+                .add(fallbackFramePos);
+            }
+
             item.bottomGroup.position.copy(tmpMountBotPos);
-            item.bottomGroup.quaternion.copy(frameQuat).multiply(tmpYawQuat);
+            item.bottomGroup.quaternion.copy(botQuat).multiply(tmpYawQuat);
+
+            tmpFrameUp.set(0, 1, 0).applyQuaternion(botQuat);
 
             // Compliant middle body stretched/compressed/sheared cleanly between bottom & top anchors
             tmpFlexBotPos.copy(tmpMountBotPos).addScaledVector(tmpFrameUp, item.flexBotInsetY);
@@ -1837,7 +1877,7 @@ export const PrinterViewport: React.FC<Props> = ({
               const yScale = Math.min(2.2, Math.max(0.35, dist / Math.max(item.restFlexLen, 1e-5)));
               item.flexGroup.scale.set(1, yScale, 1);
             } else {
-              item.flexGroup.quaternion.copy(frameQuat).multiply(tmpYawQuat);
+              item.flexGroup.quaternion.copy(botQuat).multiply(tmpYawQuat);
               item.flexGroup.scale.set(1, 0.35, 1);
             }
           }
@@ -1848,7 +1888,10 @@ export const PrinterViewport: React.FC<Props> = ({
             const item = modalGe5cItems[gi];
             if (basePositions[item.nodeId]) {
               getPosInto(item.nodeId, tmpGe5cPos);
-              item.group.position.copy(tmpGe5cPos).add(item.offset);
+              item.group.position.copy(tmpGe5cPos);
+              if (item.offset.lengthSq() > 1e-10) {
+                item.group.position.add(item.offset);
+              }
             }
           }
         }
@@ -2742,10 +2785,25 @@ export const PrinterViewport: React.FC<Props> = ({
           m.id.startsWith("bed_rear_z_") ||
           m.id.startsWith("bed_left_z_") ||
           m.id.startsWith("bed_right_z_"));
+      const isBedSubframeOrArm =
+        isBedMember &&
+        (m.id.startsWith("bed_subframe_") || m.id.startsWith("bed_arm_"));
       const rawW = Math.max(m.width_mm * SCALE, isBedMember ? 0.05 : 0.06);
       const rawH = Math.max(m.height_mm * SCALE, isBedMember ? 0.05 : 0.06);
-      const w = isBedMember && !isBedPost ? Math.min(rawW, 0.11) : rawW;
-      const h = isBedMember && !isBedPost ? Math.min(rawH, 0.11) : rawH;
+      const w = isBedPost
+        ? rawW
+        : isBedSubframeOrArm
+          ? Math.min(rawW, 0.2)
+          : isBedMember
+            ? Math.min(rawW, 0.11)
+            : rawW;
+      const h = isBedPost
+        ? rawH
+        : isBedSubframeOrArm
+          ? Math.min(rawH, 0.2)
+          : isBedMember
+            ? Math.min(rawH, 0.11)
+            : rawH;
 
       // In Toolhead Punch-In mode, ghost far outer frame / brace / bed members so the X-beam & toolhead stay unobstructed
       const isToolheadContextBeam =
@@ -2821,9 +2879,11 @@ export const PrinterViewport: React.FC<Props> = ({
         } else if (m.role === "bed") {
           matColor = isBedPost
             ? new THREE.Color(m.color_hex || "#9aa8ba")
-            : m.id.includes("spring")
-              ? new THREE.Color("#94a3b8")
-              : new THREE.Color("#475569");
+            : m.id.startsWith("bed_subframe_")
+              ? new THREE.Color("#5c6b7e")
+              : m.id.includes("spring")
+                ? new THREE.Color("#94a3b8")
+                : new THREE.Color("#475569");
         }
       }
 
@@ -5130,10 +5190,24 @@ export const PrinterViewport: React.FC<Props> = ({
             ? deformedPos[bedFrameNodeId].clone().sub(bedFrameNodeBase)
             : bedDispDelta.clone();
 
+        const hasFeaTSubframe = geom.members.some((m) => m.id.startsWith("bed_subframe_"));
+        const subframeCenterY =
+          typeof geom.bed_subframe_z_mm === "number"
+            ? toThree([0, 0, geom.bed_subframe_z_mm], cx, cy).y
+            : hasFeaTSubframe
+              ? basePos["bed_frame"]?.y
+              : undefined;
+
         const bedMountsResult = buildBedMountsGroup({
           bedMountType,
           zDriveMode,
           architecture: sim.spec.architecture,
+          hasFeaTSubframe,
+          bedMountAnchorNodes: geom.bed_mount_anchor_nodes,
+          subframeCenterY,
+          bedFrameNodeId,
+          basePositions: basePos,
+          deformedPositions: deformedPos,
           supportPtsThree,
           zArmNodes,
           bedBaseCenter,

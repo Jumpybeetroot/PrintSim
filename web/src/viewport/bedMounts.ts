@@ -16,10 +16,12 @@ export const BED_MOUNT_STANDOFF_HEIGHT_MM: Record<BedMountType, number> = {
 
 export interface ModalBedMountItem {
   topGroup: THREE.Group; // bed-side hardware (moves & tilts with bed_surface)
-  bottomGroup: THREE.Group; // subframe-side hardware (moves & tilts with bed_frame)
+  bottomGroup: THREE.Group; // subframe-side hardware (moves & tilts with real FEA anchor node)
   flexGroup: THREE.Group; // compliant middle body spanning bottomAnchor -> topAnchor (local Y: 0..restFlexLen)
   mountOffsetFromBed: THREE.Vector3; // (dx, -bedThickScene*0.5, dz) relative to bedMesh center
   mountOffsetFromFrame: THREE.Vector3; // (dx, 0, dz) relative to subframeBasePos
+  bottomNodeId: string; // e.g. "bed_t_fl" | "bed_t_fr" | "bed_t_rear_mount" | "bed_frame"
+  bottomOffsetFromNode: THREE.Vector3; // exact offset from anchor node base to bottomGroup base (e.g. (0, +10mm*s, 0))
   flexTopInsetY: number; // distance below bedBottomY where flex body meets topGroup
   flexBotInsetY: number; // distance above subframeTopY where flex body meets bottomGroup
   restFlexLen: number; // rest length of flexGroup along Y (> 0)
@@ -44,6 +46,14 @@ export interface BedMountsBuildParams {
   bedMountType: BedMountType;
   zDriveMode?: string;
   architecture?: string;
+  hasFeaTSubframe?: boolean;
+  bedMountAnchorNodes?: string[];
+  subframeCenterY?: number;
+  bedFrameNodeId?: string;
+  basePositions?: Record<string, THREE.Vector3>;
+  deformedPositions?: Record<string, THREE.Vector3>;
+  anchorBasePositions?: Record<string, THREE.Vector3>;
+  anchorDeformedPositions?: Record<string, THREE.Vector3>;
   supportPtsThree: THREE.Vector3[];
   zArmNodes?: Array<{ nodeId: string; pos: THREE.Vector3 }>;
   bedBaseCenter: THREE.Vector3;
@@ -369,6 +379,14 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     bedMountType,
     zDriveMode,
     architecture,
+    hasFeaTSubframe = false,
+    bedMountAnchorNodes,
+    subframeCenterY: paramSubframeCenterY,
+    bedFrameNodeId = "bed_frame",
+    basePositions,
+    deformedPositions,
+    anchorBasePositions,
+    anchorDeformedPositions,
     supportPtsThree,
     zArmNodes,
     bedBaseCenter,
@@ -387,12 +405,22 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     onTagMesh,
   } = params;
 
+  const effBasePositions = basePositions ?? anchorBasePositions;
+  const effDeformedPositions = deformedPositions ?? anchorDeformedPositions;
+
   const root = new THREE.Group();
   root.name = `bed_mounts_${bedMountType}`;
 
   const standoffMm = BED_MOUNT_STANDOFF_HEIGHT_MM[bedMountType] ?? 14;
-  const standoffH = standoffMm * s;
-  const subframeTopY = bedBottomY - standoffH;
+  const nominalStandoffH = standoffMm * s;
+  const hasValidSubframeCenterY =
+    typeof paramSubframeCenterY === "number" &&
+    Number.isFinite(paramSubframeCenterY) &&
+    bedBottomY - (paramSubframeCenterY + 10.0 * s) >= 4.0 * s;
+  const subframeTopY = hasValidSubframeCenterY
+    ? paramSubframeCenterY + 10.0 * s
+    : bedBottomY - nominalStandoffH;
+  const effectiveStandoffH = Math.max(bedBottomY - subframeTopY, 4.0 * s);
   const subframeBasePos = new THREE.Vector3(bedBaseCenter.x, subframeTopY, bedBaseCenter.z);
   const effFrameDisp = frameDispDelta ?? bedDispDelta;
 
@@ -461,32 +489,10 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
 
   // ---------------------------------------------------------------------------
   // 1. Build Realistic 2020 Aluminum Bed Subframe (`subframeGroup`, top at local y = 0)
+  //    When real FEA 2020 T-subframe beams exist (`hasFeaTSubframe`), do NOT render
+  //    a duplicate decorative T-bar (the FEA 2020 T-subframe is already rendered,
+  //    colored by FEA/modal heatmap, and animated directly by PrinterViewport.tsx).
   // ---------------------------------------------------------------------------
-  const extrusionMat = new THREE.MeshStandardMaterial({
-    color: 0x5c6b7e, // dark-silver anodized 6063-T5 2020 aluminum extrusion
-    metalness: 0.76,
-    roughness: 0.3,
-    transparent: subframeTransparent,
-    opacity: subframeOpacity,
-    depthWrite: !toolheadPunchIn && !isModal && !isFeaStress,
-  });
-  const slotCoreMat = new THREE.MeshStandardMaterial({
-    color: 0x131b26, // dark recessed T-slot groove contrast
-    metalness: 0.35,
-    roughness: 0.72,
-    transparent: subframeTransparent,
-    opacity: subframeOpacity,
-    depthWrite: !toolheadPunchIn && !isModal && !isFeaStress,
-  });
-  const gussetMat = new THREE.MeshStandardMaterial({
-    color: 0x2b3648, // dark anodized 2020 corner T-gusset brackets
-    metalness: 0.78,
-    roughness: 0.34,
-    transparent: subframeTransparent,
-    opacity: subframeOpacity,
-    depthWrite: !toolheadPunchIn && !isModal && !isFeaStress,
-  });
-
   const localPts = supportPtsThree.map((p) => ({
     x: p.x - subframeBasePos.x,
     z: p.z - subframeBasePos.z,
@@ -506,200 +512,260 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
   const isTridentTriple =
     zDriveMode === "leadscrew_triple" && (architecture === "corexy" || architecture === undefined);
 
-  if (isTridentTriple) {
-    // Authentic Voron / Siboor Trident 2020 Aluminum T-Subframe
-    const zFlNode = zArmNodes?.find((n) => n.nodeId === "z_bed_fl");
-    const zFrNode = zArmNodes?.find((n) => n.nodeId === "z_bed_fr");
-    const zRearNode = zArmNodes?.find((n) => n.nodeId === "z_bed_r");
+  const rearPtsAll = localPts.filter((lp) => lp.z < maxMountZ - 15 * s);
+  const centerSpineXAll =
+    rearPtsAll.length === 1 ? rearPtsAll[0].x : (minMountX + maxMountX) * 0.5;
+  const hasSplitRearMounts = rearPtsAll.some((p) => Math.abs(p.x - centerSpineXAll) > 15 * s);
 
-    // Front mount Z coordinate (largest Z in Three.js)
-    const frontPts = localPts.filter((lp) => lp.z >= maxMountZ - 15 * s);
-    const rearPts = localPts.filter((lp) => lp.z < maxMountZ - 15 * s);
-    const zFrontBar =
-      frontPts.length > 0
-        ? frontPts.reduce((acc, p) => acc + p.z, 0) / frontPts.length
-        : maxMountZ;
+  const needsDecorativeSubframe = !hasFeaTSubframe || hasSplitRearMounts;
 
-    // Extend front 2020 crossbar across FL & FR mounts and cleanly toward FL/FR Z-carriage brackets
-    const flLimitX = zFlNode ? zFlNode.pos.x - subframeBasePos.x + 22 * s : minMountX - 38 * s;
-    const frLimitX = zFrNode ? zFrNode.pos.x - subframeBasePos.x - 22 * s : maxMountX + 38 * s;
-    const xFrontLeft = Math.max(flLimitX, minMountX - 36 * s);
-    const xFrontRight = Math.min(frLimitX, maxMountX + 36 * s);
+  if (needsDecorativeSubframe) {
+    const extrusionMat = new THREE.MeshStandardMaterial({
+      color: 0x5c6b7e, // dark-silver anodized 6063-T5 2020 aluminum extrusion
+      metalness: 0.76,
+      roughness: 0.3,
+      transparent: subframeTransparent,
+      opacity: subframeOpacity,
+      depthWrite: !toolheadPunchIn && !isModal && !isFeaStress,
+    });
+    const slotCoreMat = new THREE.MeshStandardMaterial({
+      color: 0x131b26, // dark recessed T-slot groove contrast
+      metalness: 0.35,
+      roughness: 0.72,
+      transparent: subframeTransparent,
+      opacity: subframeOpacity,
+      depthWrite: !toolheadPunchIn && !isModal && !isFeaStress,
+    });
+    const gussetMat = new THREE.MeshStandardMaterial({
+      color: 0x2b3648, // dark anodized 2020 corner T-gusset brackets
+      metalness: 0.78,
+      roughness: 0.34,
+      transparent: subframeTransparent,
+      opacity: subframeOpacity,
+      depthWrite: !toolheadPunchIn && !isModal && !isFeaStress,
+    });
 
-    addExtrusion2020Bar(
-      subframeGroup,
-      xFrontLeft,
-      zFrontBar,
-      xFrontRight,
-      zFrontBar,
-      s,
-      extrusionMat,
-      slotCoreMat,
-      tag
-    );
-
-    // Central front-to-back 2020 spine running from front crossbar back under Rear-Center mount toward rear Z-carriage
-    const centerSpineX =
-      rearPts.length === 1 ? rearPts[0].x : (minMountX + maxMountX) * 0.5;
-    const zSpineStart = zFrontBar - 10.0 * s; // flush butt-joint against back face of front crossbar
-    const rearCarriageLimitZ = zRearNode
-      ? zRearNode.pos.z - subframeBasePos.z + 34 * s
-      : minMountZ - 32 * s;
-    const zSpineEnd = Math.min(minMountZ - 24 * s, rearCarriageLimitZ);
-
-    addExtrusion2020Bar(
-      subframeGroup,
-      centerSpineX,
-      zSpineStart,
-      centerSpineX,
-      zSpineEnd,
-      s,
-      extrusionMat,
-      slotCoreMat,
-      tag
-    );
-
-    // Twin 2020 CNC T-junction corner gussets locking the central spine to the front crossbar
-    const gussetGeo = new THREE.BoxGeometry(10.0 * s, 18.0 * s, 10.0 * s);
-    for (const side of [-1, 1]) {
-      const gMesh = new THREE.Mesh(gussetGeo, gussetMat);
-      gMesh.position.set(centerSpineX + side * 15.0 * s, -10.0 * s, zFrontBar - 15.0 * s);
-      if (isModal) gMesh.frustumCulled = false;
-      subframeGroup.add(gMesh);
-    }
-
-    // If a 4-point mount kit is installed on a Trident, also add a rear 2020 crossbar under RL & RR mounts
-    const hasSplitRearMounts = rearPts.some((p) => Math.abs(p.x - centerSpineX) > 15 * s);
-    if (hasSplitRearMounts) {
-      const zRearBar = rearPts.reduce((acc, p) => acc + p.z, 0) / rearPts.length;
-      const rearMinX = Math.min(...rearPts.map((p) => p.x));
-      const rearMaxX = Math.max(...rearPts.map((p) => p.x));
-      addExtrusion2020Bar(
-        subframeGroup,
-        rearMinX - 24 * s,
-        zRearBar,
-        centerSpineX - 10.0 * s,
-        zRearBar,
-        s,
-        extrusionMat,
-        slotCoreMat,
-        tag
-      );
-      addExtrusion2020Bar(
-        subframeGroup,
-        centerSpineX + 10.0 * s,
-        zRearBar,
-        rearMaxX + 24 * s,
-        zRearBar,
-        s,
-        extrusionMat,
-        slotCoreMat,
-        tag
-      );
-    }
-  } else {
-    // Fixed-Base Voron 2.4 (`belted_quad_z`), Dual-Z, Single-Z, Bedslinger & Delta:
-    // Twin parallel front-to-back 2020 extrusions centered directly under left & right bed mounts
-    const zBarFront = maxMountZ + 26 * s;
-    const zBarRear = minMountZ - 26 * s;
-    const spanX = maxMountX - minMountX;
-
-    if (spanX > 22 * s) {
-      addExtrusion2020Bar(
-        subframeGroup,
-        minMountX,
-        zBarFront,
-        minMountX,
-        zBarRear,
-        s,
-        extrusionMat,
-        slotCoreMat,
-        tag
-      );
-      addExtrusion2020Bar(
-        subframeGroup,
-        maxMountX,
-        zBarFront,
-        maxMountX,
-        zBarRear,
-        s,
-        extrusionMat,
-        slotCoreMat,
-        tag
-      );
-
-      // Subtle cross-tie for any 3-point rear-center (or center) mount so it bolts solidly onto aluminum
-      const centerMounts = localPts.filter(
-        (lp) => Math.abs(lp.x - minMountX) > 12 * s && Math.abs(lp.x - maxMountX) > 12 * s
-      );
-      if (centerMounts.length > 0) {
-        const tieZ = centerMounts.reduce((acc, p) => acc + p.z, 0) / centerMounts.length;
+    if (hasFeaTSubframe) {
+      // Real FEA 2020 T-subframe beams already exist; only add subtle rear outrigger crossbars
+      // if a 4-point mount kit places RL/RR mounts outside the central spine.
+      if (hasSplitRearMounts && rearPtsAll.length > 0) {
+        const zRearBar = rearPtsAll.reduce((acc, p) => acc + p.z, 0) / rearPtsAll.length;
+        const rearMinX = Math.min(...rearPtsAll.map((p) => p.x));
+        const rearMaxX = Math.max(...rearPtsAll.map((p) => p.x));
         addExtrusion2020Bar(
           subframeGroup,
-          minMountX + 10.0 * s,
-          tieZ,
-          maxMountX - 10.0 * s,
-          tieZ,
+          rearMinX - 24 * s,
+          zRearBar,
+          centerSpineXAll - 10.0 * s,
+          zRearBar,
           s,
           extrusionMat,
           slotCoreMat,
           tag
         );
-        const cornerBracketGeo = new THREE.BoxGeometry(8.0 * s, 18.0 * s, 8.0 * s);
-        for (const bx of [minMountX + 14.0 * s, maxMountX - 14.0 * s]) {
-          const cb = new THREE.Mesh(cornerBracketGeo, gussetMat);
-          cb.position.set(bx, -10.0 * s, tieZ + (tieZ < 0 ? 14.0 * s : -14.0 * s));
-          if (isModal) cb.frustumCulled = false;
-          subframeGroup.add(cb);
-        }
-      } else {
-        // Subtle central stabilizer tie on 4-point subframes (never colliding with corner mounts)
-        const midZ = (minMountZ + maxMountZ) * 0.5;
-        if (Math.abs(maxMountZ - minMountZ) > 60 * s) {
-          addExtrusion2020Bar(
-            subframeGroup,
-            minMountX + 10.0 * s,
-            midZ,
-            maxMountX - 10.0 * s,
-            midZ,
-            s,
-            extrusionMat,
-            slotCoreMat,
-            tag
-          );
-        }
+        addExtrusion2020Bar(
+          subframeGroup,
+          centerSpineXAll + 10.0 * s,
+          zRearBar,
+          rearMaxX + 24 * s,
+          zRearBar,
+          s,
+          extrusionMat,
+          slotCoreMat,
+          tag
+        );
       }
-    } else {
-      // Degenerate single-line mount pattern fallback
-      const avgX = (minMountX + maxMountX) * 0.5;
+    } else if (isTridentTriple) {
+      // Legacy fallback: Trident 2020 Aluminum T-Subframe when backend FEA T-subframe beams are absent
+      const zFlNode = zArmNodes?.find((n) => n.nodeId === "z_bed_fl");
+      const zFrNode = zArmNodes?.find((n) => n.nodeId === "z_bed_fr");
+      const zRearNode = zArmNodes?.find((n) => n.nodeId === "z_bed_r");
+
+      const frontPts = localPts.filter((lp) => lp.z >= maxMountZ - 15 * s);
+      const zFrontBar =
+        frontPts.length > 0
+          ? frontPts.reduce((acc, p) => acc + p.z, 0) / frontPts.length
+          : maxMountZ;
+
+      const flLimitX = zFlNode ? zFlNode.pos.x - subframeBasePos.x + 22 * s : minMountX - 38 * s;
+      const frLimitX = zFrNode ? zFrNode.pos.x - subframeBasePos.x - 22 * s : maxMountX + 38 * s;
+      const xFrontLeft = Math.max(flLimitX, minMountX - 36 * s);
+      const xFrontRight = Math.min(frLimitX, maxMountX + 36 * s);
+
       addExtrusion2020Bar(
         subframeGroup,
-        avgX,
-        zBarFront,
-        avgX,
-        zBarRear,
+        xFrontLeft,
+        zFrontBar,
+        xFrontRight,
+        zFrontBar,
         s,
         extrusionMat,
         slotCoreMat,
         tag
       );
-    }
-  }
 
-  // Ensure gussetMat is disposed if unused and disable frustum culling in modal animation
-  let usesGussetMat = false;
-  subframeGroup.traverse((c) => {
-    if ((c as THREE.Mesh).isMesh) {
-      if (isModal) c.frustumCulled = false;
-      if ((c as THREE.Mesh).material === gussetMat) usesGussetMat = true;
+      const zSpineStart = zFrontBar - 10.0 * s;
+      const rearCarriageLimitZ = zRearNode
+        ? zRearNode.pos.z - subframeBasePos.z + 34 * s
+        : minMountZ - 32 * s;
+      const zSpineEnd = Math.min(minMountZ - 24 * s, rearCarriageLimitZ);
+
+      addExtrusion2020Bar(
+        subframeGroup,
+        centerSpineXAll,
+        zSpineStart,
+        centerSpineXAll,
+        zSpineEnd,
+        s,
+        extrusionMat,
+        slotCoreMat,
+        tag
+      );
+
+      const gussetGeo = new THREE.BoxGeometry(10.0 * s, 18.0 * s, 10.0 * s);
+      for (const side of [-1, 1]) {
+        const gMesh = new THREE.Mesh(gussetGeo, gussetMat);
+        gMesh.position.set(centerSpineXAll + side * 15.0 * s, -10.0 * s, zFrontBar - 15.0 * s);
+        if (isModal) gMesh.frustumCulled = false;
+        subframeGroup.add(gMesh);
+      }
+
+      if (hasSplitRearMounts && rearPtsAll.length > 0) {
+        const zRearBar = rearPtsAll.reduce((acc, p) => acc + p.z, 0) / rearPtsAll.length;
+        const rearMinX = Math.min(...rearPtsAll.map((p) => p.x));
+        const rearMaxX = Math.max(...rearPtsAll.map((p) => p.x));
+        addExtrusion2020Bar(
+          subframeGroup,
+          rearMinX - 24 * s,
+          zRearBar,
+          centerSpineXAll - 10.0 * s,
+          zRearBar,
+          s,
+          extrusionMat,
+          slotCoreMat,
+          tag
+        );
+        addExtrusion2020Bar(
+          subframeGroup,
+          centerSpineXAll + 10.0 * s,
+          zRearBar,
+          rearMaxX + 24 * s,
+          zRearBar,
+          s,
+          extrusionMat,
+          slotCoreMat,
+          tag
+        );
+      }
+    } else {
+      // Fixed-Base Voron 2.4 (`belted_quad_z`), Dual-Z, Single-Z, Bedslinger & Delta:
+      // Twin parallel front-to-back 2020 extrusions centered directly under left & right bed mounts
+      const zBarFront = maxMountZ + 26 * s;
+      const zBarRear = minMountZ - 26 * s;
+      const spanX = maxMountX - minMountX;
+
+      if (spanX > 22 * s) {
+        addExtrusion2020Bar(
+          subframeGroup,
+          minMountX,
+          zBarFront,
+          minMountX,
+          zBarRear,
+          s,
+          extrusionMat,
+          slotCoreMat,
+          tag
+        );
+        addExtrusion2020Bar(
+          subframeGroup,
+          maxMountX,
+          zBarFront,
+          maxMountX,
+          zBarRear,
+          s,
+          extrusionMat,
+          slotCoreMat,
+          tag
+        );
+
+        const centerMounts = localPts.filter(
+          (lp) => Math.abs(lp.x - minMountX) > 12 * s && Math.abs(lp.x - maxMountX) > 12 * s
+        );
+        if (centerMounts.length > 0) {
+          const tieZ = centerMounts.reduce((acc, p) => acc + p.z, 0) / centerMounts.length;
+          addExtrusion2020Bar(
+            subframeGroup,
+            minMountX + 10.0 * s,
+            tieZ,
+            maxMountX - 10.0 * s,
+            tieZ,
+            s,
+            extrusionMat,
+            slotCoreMat,
+            tag
+          );
+          const cornerBracketGeo = new THREE.BoxGeometry(8.0 * s, 18.0 * s, 8.0 * s);
+          for (const bx of [minMountX + 14.0 * s, maxMountX - 14.0 * s]) {
+            const cb = new THREE.Mesh(cornerBracketGeo, gussetMat);
+            cb.position.set(bx, -10.0 * s, tieZ + (tieZ < 0 ? 14.0 * s : -14.0 * s));
+            if (isModal) cb.frustumCulled = false;
+            subframeGroup.add(cb);
+          }
+        } else {
+          const midZ = (minMountZ + maxMountZ) * 0.5;
+          if (Math.abs(maxMountZ - minMountZ) > 60 * s) {
+            addExtrusion2020Bar(
+              subframeGroup,
+              minMountX + 10.0 * s,
+              midZ,
+              maxMountX - 10.0 * s,
+              midZ,
+              s,
+              extrusionMat,
+              slotCoreMat,
+              tag
+            );
+          }
+        }
+      } else {
+        const avgX = (minMountX + maxMountX) * 0.5;
+        addExtrusion2020Bar(
+          subframeGroup,
+          avgX,
+          zBarFront,
+          avgX,
+          zBarRear,
+          s,
+          extrusionMat,
+          slotCoreMat,
+          tag
+        );
+      }
     }
-  });
-  if (!usesGussetMat) gussetMat.dispose();
+
+    // Dispose any unused materials and disable frustum culling in modal animation
+    let usesExtrusionMat = false;
+    let usesSlotCoreMat = false;
+    let usesGussetMat = false;
+    subframeGroup.traverse((c) => {
+      if ((c as THREE.Mesh).isMesh) {
+        if (isModal) c.frustumCulled = false;
+        const m = (c as THREE.Mesh).material;
+        if (m === extrusionMat) usesExtrusionMat = true;
+        if (m === slotCoreMat) usesSlotCoreMat = true;
+        if (m === gussetMat) usesGussetMat = true;
+      }
+    });
+    if (!usesExtrusionMat) extrusionMat.dispose();
+    if (!usesSlotCoreMat) slotCoreMat.dispose();
+    if (!usesGussetMat) gussetMat.dispose();
+  }
 
   // ---------------------------------------------------------------------------
   // Helper to register each articulated 3-part mount item (`topGroup`, `bottomGroup`, `flexGroup`)
   // ---------------------------------------------------------------------------
   const registerMountItem = (
+    idx: number,
     sp: THREE.Vector3,
     topGroup: THREE.Group,
     bottomGroup: THREE.Group,
@@ -708,7 +774,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     flexBotInsetY: number,
     radialYaw: number
   ): void => {
-    const restFlexLen = Math.max(standoffH - flexTopInsetY - flexBotInsetY, 0.5 * s);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 0.5 * s);
     const mountOffsetFromBed = new THREE.Vector3(
       sp.x - bedBaseCenter.x,
       -bedThickScene * 0.5,
@@ -720,12 +786,30 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       sp.z - subframeBasePos.z
     );
 
+    const rawAnchorId = bedMountAnchorNodes?.[idx];
+    const bottomNodeId =
+      rawAnchorId && effBasePositions?.[rawAnchorId]
+        ? rawAnchorId
+        : effBasePositions?.[bedFrameNodeId]
+          ? bedFrameNodeId
+          : rawAnchorId || bedFrameNodeId;
+    const anchorBase = effBasePositions?.[bottomNodeId];
+    const bottomOffsetFromNode = anchorBase
+      ? new THREE.Vector3(
+          sp.x - anchorBase.x,
+          subframeTopY - anchorBase.y,
+          sp.z - anchorBase.z
+        )
+      : new THREE.Vector3(sp.x - subframeBasePos.x, 0, sp.z - subframeBasePos.z);
+
     const item: ModalBedMountItem = {
       topGroup,
       bottomGroup,
       flexGroup,
       mountOffsetFromBed,
       mountOffsetFromFrame,
+      bottomNodeId,
+      bottomOffsetFromNode,
       flexTopInsetY,
       flexBotInsetY,
       restFlexLen,
@@ -740,15 +824,20 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       }
     }
 
+    const anchorDisp =
+      isFeaStress && anchorBase && effDeformedPositions?.[bottomNodeId]
+        ? effDeformedPositions[bottomNodeId].clone().sub(anchorBase)
+        : effFrameDisp;
+
     const topPos = new THREE.Vector3(
       sp.x + bedDispDelta.x,
       bedBottomY + bedDispDelta.y,
       sp.z + bedDispDelta.z
     );
     const botPos = new THREE.Vector3(
-      sp.x + effFrameDisp.x,
-      subframeTopY + effFrameDisp.y,
-      sp.z + effFrameDisp.z
+      sp.x + anchorDisp.x,
+      subframeTopY + anchorDisp.y,
+      sp.z + anchorDisp.z
     );
     placeArticulatedMountStatic(item, topPos, botPos);
 
@@ -763,9 +852,9 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
   // ---------------------------------------------------------------------------
   if (bedMountType === "trident_3pt_standoffs") {
     // 1. Stock Voron / Siboor Trident 3-Pt Phenolic Bakelite Thermal-Isolation Standoffs (10 mm)
-    const flexTopInsetY = 2.0 * s;
-    const flexBotInsetY = 1.8 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 6.2 mm
+    const flexTopInsetY = Math.min(2.0 * s, effectiveStandoffH * 0.22);
+    const flexBotInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.22);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
 
     const bakeliteMat = makeMat({
       color: 0x852d12, // phenolic reddish-brown Bakelite thermal insulator
@@ -888,7 +977,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       botBoss.position.y = 1.4 * s;
       bottomGroup.add(botBoss);
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
     });
 
     if (!hasSlottedFront) {
@@ -896,9 +985,9 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     }
   } else if (bedMountType === "kinematic_3pt") {
     // 2. 3-Point Maxwell Kinematic Ball-in-V-Groove (16 mm)
-    const flexTopInsetY = 3.2 * s;
-    const flexBotInsetY = 5.2 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 7.6 mm
+    const flexTopInsetY = Math.min(3.2 * s, effectiveStandoffH * 0.25);
+    const flexBotInsetY = Math.min(5.2 * s, effectiveStandoffH * 0.36);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
 
     const lowerPuckMat = makeMat({
       color: 0x334155, // dark-anodized CNC aluminum lower puck
@@ -940,7 +1029,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     const magnetGeo = new THREE.CylinderGeometry(4.5 * s, 4.5 * s, 1.2 * s, 16);
     const baseBoltGeo = new THREE.CylinderGeometry(1.7 * s, 1.7 * s, 1.6 * s, 10);
 
-    for (const sp of supportPtsThree) {
+    supportPtsThree.forEach((sp, idx) => {
       const yaw = radialYawToCenter(sp, bedBaseCenter);
 
       const topGroup = new THREE.Group();
@@ -981,13 +1070,13 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
         bottomGroup.add(bBolt);
       }
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
-    }
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
   } else if (bedMountType === "whopping_pochard_kinematic") {
     // 3. Whopping Pochard 301 Spring-Steel Leaf-Spring Kinematic (14 mm, Tap-Rated)
-    const flexTopInsetY = 3.8 * s;
-    const flexBotInsetY = 4.6 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 5.6 mm
+    const flexTopInsetY = Math.min(3.8 * s, effectiveStandoffH * 0.3);
+    const flexBotInsetY = Math.min(4.6 * s, effectiveStandoffH * 0.35);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
 
     const leafBladeMat = makeMat({
       color: 0xe2e8f0, // 301 stainless spring-steel leaf flexure blade
@@ -1031,7 +1120,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     const lowerStepGeo = new THREE.BoxGeometry(9.6 * s, 1.4 * s, 13.4 * s);
     const m5TnutBoltGeo = new THREE.CylinderGeometry(3.2 * s, 3.2 * s, 1.6 * s, 12);
 
-    for (const sp of supportPtsThree) {
+    supportPtsThree.forEach((sp, idx) => {
       const yaw = radialYawToCenter(sp, bedBaseCenter);
 
       const topGroup = new THREE.Group();
@@ -1076,13 +1165,13 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       m5Bolt.position.set(-9.6 * s, 4.9 * s, 0);
       bottomGroup.add(m5Bolt);
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
-    }
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
   } else if (bedMountType === "floating_4pt") {
     // 4. 4-Pt Floating — Anchor #0 Fixed Shoulder Bolt + Anchors #1–3 Radially Slotted Tabs (12 mm)
-    const flexTopInsetY = 3.2 * s;
-    const flexBotInsetY = 3.6 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 5.2 mm
+    const flexTopInsetY = Math.min(3.2 * s, effectiveStandoffH * 0.28);
+    const flexBotInsetY = Math.min(3.6 * s, effectiveStandoffH * 0.32);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
 
     const fixedBushingMat = makeMat({
       color: 0xcbd5e1,
@@ -1221,13 +1310,13 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
         bottomGroup.add(slotRecess);
       }
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
     });
   } else if (bedMountType === "silicone_4pt") {
     // 6. 4-Pt 70A Matte Orange Silicone Isolator Columns (16 mm)
-    const flexTopInsetY = 1.8 * s;
-    const flexBotInsetY = 1.8 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 12.4 mm
+    const flexTopInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.2);
+    const flexBotInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.2);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
 
     const siliconeMat = makeMat({
       color: 0xea580c, // matte 70A orange silicone rubber
@@ -1252,7 +1341,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     const innerGuideGeo = new THREE.CylinderGeometry(1.9 * s, 1.9 * s, restFlexLen, 10);
     const botWasherGeo = new THREE.CylinderGeometry(9.4 * s, 8.4 * s, 1.8 * s, 20);
 
-    for (const sp of supportPtsThree) {
+    supportPtsThree.forEach((sp, idx) => {
       const yaw = radialYawToCenter(sp, bedBaseCenter);
 
       const topGroup = new THREE.Group();
@@ -1277,13 +1366,13 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       botWasher.position.y = 0.9 * s;
       bottomGroup.add(botWasher);
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
-    }
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
   } else if (bedMountType === "springs_4pt") {
     // 7. 4-Pt Yellow ISO Die Springs (20 mm) — True Helical Coil + Under-Bar Knurled Thumbwheel
-    const flexTopInsetY = 2.2 * s;
-    const flexBotInsetY = 2.2 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 15.6 mm
+    const flexTopInsetY = Math.min(2.2 * s, effectiveStandoffH * 0.2);
+    const flexBotInsetY = Math.min(2.2 * s, effectiveStandoffH * 0.2);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 2.0 * s);
 
     const springMat = makeMat({
       color: 0xfacc15, // matte yellow ISO die-spring steel
@@ -1331,7 +1420,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     const brassHubGeo = new THREE.CylinderGeometry(4.2 * s, 4.2 * s, 4.4 * s, 14);
     const wheelCenterY = -(EXTRUSION_2020_MM + 2.0) * s;
 
-    for (const sp of supportPtsThree) {
+    supportPtsThree.forEach((sp, idx) => {
       const yaw = radialYawToCenter(sp, bedBaseCenter);
 
       const topGroup = new THREE.Group();
@@ -1369,13 +1458,13 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       brassHub.position.y = wheelCenterY;
       bottomGroup.add(brassHub);
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
-    }
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
   } else {
     // 5. rigid_4pt — 4-Pt Rigid Hard-Bolted Machined Hexagonal Standoffs (12 mm)
-    const flexTopInsetY = 1.8 * s;
-    const flexBotInsetY = 1.8 * s;
-    const restFlexLen = standoffH - flexTopInsetY - flexBotInsetY; // 8.4 mm
+    const flexTopInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.22);
+    const flexBotInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.22);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
 
     const hexStandoffMat = makeMat({
       color: 0xdce4ee, // machined 6-sided hexagonal aluminum/steel standoff
@@ -1400,7 +1489,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     const hexBodyGeo = new THREE.CylinderGeometry(7.2 * s, 7.2 * s, restFlexLen, 6);
     const botFlangeGeo = new THREE.CylinderGeometry(10.2 * s, 9.4 * s, 1.8 * s, 20);
 
-    for (const sp of supportPtsThree) {
+    supportPtsThree.forEach((sp, idx) => {
       const yaw = radialYawToCenter(sp, bedBaseCenter);
 
       const topGroup = new THREE.Group();
@@ -1422,12 +1511,14 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
       botWasher.position.y = 0.9 * s;
       bottomGroup.add(botWasher);
 
-      registerMountItem(sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
-    }
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
   }
 
   // ---------------------------------------------------------------------------
   // 3. Build 3× GE5C Spherical Rod-End Bearing Assemblies for ALL `leadscrew_triple` builds
+  //    Locked directly to exact `z_bed_fl / fr / r` elevation (ZERO vertical drop!)
+  //    and aimed collinearly along `bed_arm_fl / fr / r`.
   // ---------------------------------------------------------------------------
   if (isTridentTriple && zArmNodes && zArmNodes.length > 0) {
     const ge5cOuterMat = makeMat({
@@ -1458,46 +1549,49 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     const zBracketGeo = new THREE.BoxGeometry(11.0 * s, 12.6 * s, 12.0 * s);
     const rodEndShankGeo = new THREE.BoxGeometry(10.5 * s, 6.6 * s, 10.6 * s);
 
-    const subframeCenterY = subframeTopY - 10.0 * s;
+    const ge5cTargetByNode: Record<string, string> = {
+      z_bed_fl: "bed_t_fl",
+      z_bed_fr: "bed_t_fr",
+      z_bed_r: "bed_t_rear_mount",
+    };
 
     for (const zNode of zArmNodes) {
       const zPt = zNode.pos;
-      const toCenter = new THREE.Vector3(bedBaseCenter.x - zPt.x, 0, bedBaseCenter.z - zPt.z);
-      const horizLen = toCenter.length();
-      const inwardDist = horizLen > 0.35 ? 25.0 * s : 0;
-      if (horizLen > 1e-4) toCenter.divideScalar(horizLen);
-
-      const offset = new THREE.Vector3(
-        toCenter.x * inwardDist,
-        subframeCenterY - zPt.y,
-        toCenter.z * inwardDist
-      );
+      const targetNodeId = ge5cTargetByNode[zNode.nodeId];
+      const aimTarget = (targetNodeId && effBasePositions?.[targetNodeId]) || bedBaseCenter;
 
       const bearingGrp = new THREE.Group();
       bearingGrp.name = `ge5c_${zNode.nodeId}`;
-      bearingGrp.rotation.y = radialYawToCenter(zPt, bedBaseCenter);
+      bearingGrp.rotation.y = radialYawToCenter(zPt, aimTarget);
+
+      // Position GE5C assembly along local +X (collinear with bed_arm_*) at EXACT y = 0 (zNode.pos.y)
+      const horizDist = Math.hypot(aimTarget.x - zPt.x, aimTarget.z - zPt.z);
+      const ge5cInwardX = horizDist > 36 * s ? 22.0 * s : horizDist * 0.45;
 
       const outerRace = tag(new THREE.Mesh(outerRaceGeo, ge5cOuterMat));
+      outerRace.position.set(ge5cInwardX, 0, 0);
       bearingGrp.add(outerRace);
 
       const bronzeBall = tag(new THREE.Mesh(innerBallGeo, ge5cBronzeMat));
+      bronzeBall.position.set(ge5cInwardX, 0, 0);
       bearingGrp.add(bronzeBall);
 
       const centerPin = new THREE.Mesh(clevisPinGeo, ge5cPinMat);
+      centerPin.position.set(ge5cInwardX, 0, 0);
       bearingGrp.add(centerPin);
 
       const pinCap = new THREE.Mesh(pinCapGeo, ge5cPinMat);
-      pinCap.position.y = 6.2 * s;
+      pinCap.position.set(ge5cInwardX, 6.2 * s, 0);
       bearingGrp.add(pinCap);
 
-      // Z-carriage clevis bracket on outward (-X) side toward vertical Z-rail
+      // Z-carriage clevis bracket on outward (-X) side gripping vertical Z-rail carriage
       const zBracket = tag(new THREE.Mesh(zBracketGeo, ge5cBracketMat));
-      zBracket.position.set(-10.5 * s, 0, 0);
+      zBracket.position.set(ge5cInwardX - 10.5 * s, 0, 0);
       bearingGrp.add(zBracket);
 
-      // Machined rod-end collar shank on inward (+X) side toward T-subframe
+      // Machined rod-end collar shank on inward (+X) side gripping bed_arm_fl / fr / r
       const rodShank = new THREE.Mesh(rodEndShankGeo, ge5cOuterMat);
-      rodShank.position.set(10.0 * s, 0, 0);
+      rodShank.position.set(ge5cInwardX + 10.0 * s, 0, 0);
       bearingGrp.add(rodShank);
 
       if (isModal) {
@@ -1506,15 +1600,21 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
         });
       }
 
-      const zDelta = zArmDispDeltas?.[zNode.nodeId];
-      bearingGrp.position.copy(zPt).add(offset);
+      const zDelta =
+        zArmDispDeltas?.[zNode.nodeId] ??
+        (isFeaStress &&
+        effBasePositions?.[zNode.nodeId] &&
+        effDeformedPositions?.[zNode.nodeId]
+          ? effDeformedPositions[zNode.nodeId].clone().sub(effBasePositions[zNode.nodeId])
+          : undefined);
+      bearingGrp.position.copy(zPt);
       if (zDelta) bearingGrp.position.add(zDelta);
 
       root.add(bearingGrp);
       ge5cItems.push({
         group: bearingGrp,
         nodeId: zNode.nodeId,
-        offset,
+        offset: new THREE.Vector3(0, 0, 0),
       });
     }
   }

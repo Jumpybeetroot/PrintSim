@@ -1125,6 +1125,8 @@ export interface GeometryData {
   feet_type?: FrameFeetType;
   bed_support_points_mm?: [number, number, number][];
   bed_mount_points_mm?: [number, number, number][];
+  bed_subframe_z_mm?: number;
+  bed_mount_anchor_nodes?: string[];
   z_rails?: ZRailGeometryData[];
   z_leadscrews?: ZLeadscrewGeometryData[];
   toolhead_structure?: ToolheadStructureGeometryData;
