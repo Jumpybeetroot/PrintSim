@@ -1,13 +1,20 @@
 import React, { useEffect, useRef, useState } from "react";
+import { onTabListKeyDown } from "../utils/a11y";
 import { DesignAnchoringSection, DesignFrameSection } from "./DesignFrameSection";
 import { DesignBedZSection } from "./DesignBedZSection";
 import {
+  AWD_SYNC_LABELS,
   BELT_LABELS,
   SHAPER_LABELS,
   getBeltDefaults,
   getBeltTensionSliderMax,
 } from "../constants/printerLabels";
 import {
+  loadShowHintsPreference,
+  saveShowHintsPreference,
+} from "../utils/studioStorage";
+import {
+  AwdSyncMode,
   BearingClearanceClass,
   BeltRoutingType,
   BracketMaterialType,
@@ -34,6 +41,16 @@ import {
   ZProbeType,
 } from "../types";
 
+/** Top-level sections of the Printer tab, in order, for the jump bar. */
+const DESIGN_SECTIONS = [
+  { id: "frame", label: "Frame" },
+  { id: "gantry", label: "Gantry" },
+  { id: "toolhead", label: "Toolhead" },
+  { id: "hotend", label: "Hotend" },
+  { id: "bed", label: "Bed" },
+  { id: "sim", label: "Sim" },
+] as const;
+
 interface Props {
   catalog: CatalogResponse | null;
   sim: SimulationResponse | null;
@@ -43,6 +60,9 @@ interface Props {
   onFilamentChange: (id: string) => void;
   spec: PrinterSpecData | null;
   onSpecChange: (next: PrinterSpecData, changeLabel?: string) => void;
+  savedBuildsCount?: number;
+  lastAutoSavedAt?: string | null;
+  onOpenSavedBuilds?: () => void;
   toolheadRelPos: [number, number, number];
   onToolheadRelPosChange: (pos: [number, number, number], changeLabel?: string) => void;
   panelMeshN: number;
@@ -52,6 +72,8 @@ interface Props {
   onSimulateYaml: () => void;
   gcodeText: string;
   onGcodeChange: (txt: string) => void;
+  /** Runs the virtual print with the current G-code box contents. */
+  onRunGcode?: () => void;
   onRunPartFea: (params: {
     preset: string;
     materialId: string;
@@ -82,11 +104,72 @@ const DRIVE_TYPE_OPTIONS: Array<{ id: DriveType; label: string; shortLabel: stri
   { id: "foc_servo", label: "FOC Servo (Closed-Loop)", shortLabel: "FOC Servo" },
 ];
 
+const AWD_SYNC_OPTIONS: Array<{ id: AwdSyncMode; label: string; shortLabel: string }> = [
+  { id: "none", label: AWD_SYNC_LABELS.none, shortLabel: "Off" },
+  { id: "torque_mirror", label: AWD_SYNC_LABELS.torque_mirror, shortLabel: "Torque Mirror" },
+  { id: "position_equalizer", label: AWD_SYNC_LABELS.position_equalizer, shortLabel: "Pos + Equalizer" },
+];
+
+function computeNotchPhaseMetrics(depthDb: number, q: number): {
+  maxLagDeg: number;
+  peakLagFreqRatio: number;
+} {
+  const safeDepth = Math.max(0.5, Math.min(30, depthDb));
+  const safeQ = Math.max(0.5, Math.min(8, q));
+  const k = Math.pow(10, -safeDepth / 20);
+  const sqrtK = Math.sqrt(k);
+  const maxLagDeg = (Math.atan((1 - k) / (2 * sqrtK)) * 180) / Math.PI;
+  const peakLagFreqRatio =
+    Math.sqrt(1 + k / (4 * safeQ * safeQ)) - sqrtK / (2 * safeQ);
+  return { maxLagDeg, peakLagFreqRatio };
+}
+
 const HEATBREAK_LABELS: Record<string, string> = {
   titanium_grade5: "Titanium Gr.5",
   stainless_304: "Stainless 304",
-  brass_c360: "Brass C360",
 };
+
+const X_BEAM_METAL_PROFILE_IDS = new Set([
+  "extrusion_2020",
+  "extrusion_2040",
+  "cnc_al_beam_20x20",
+  "al_tube_20x20x2",
+  "extrusion_3030",
+]);
+
+const X_BEAM_LIGHTWEIGHT_TUBE_IDS = new Set([
+  "cf_tube_20x20x1_5",
+  "cf_tube_20x20x2",
+  "cf_tube_25x25x2",
+  "ti_tube_20x20x1_2",
+]);
+
+const X_BEAM_MATERIAL_IDS = new Set([
+  "aluminum_6063_t5",
+  "aluminum_6061_t6",
+  "aluminum_7075_t6",
+  "carbon_fiber_tube",
+  "carbon_fiber_high_tg",
+  "titanium_grade5",
+  "steel_4140",
+]);
+
+const PART_FEA_PRINTED_IDS = new Set([
+  "abs_printed",
+  "pet_cf_printed",
+  "pa12_cf_printed",
+  "ppa_cf_printed",
+  "pps_cf_printed",
+]);
+
+const PART_FEA_METAL_IDS = new Set([
+  "aluminum_6061_t6",
+  "aluminum_7075_t6",
+  "carbon_fiber_plate",
+  "steel_4140",
+  "stainless_304",
+  "titanium_grade5",
+]);
 
 const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
   {
@@ -720,6 +803,9 @@ export const DesignPanel: React.FC<Props> = ({
   onFilamentChange,
   spec,
   onSpecChange,
+  savedBuildsCount = 0,
+  lastAutoSavedAt = null,
+  onOpenSavedBuilds,
   toolheadRelPos,
   onToolheadRelPosChange,
   panelMeshN,
@@ -729,6 +815,7 @@ export const DesignPanel: React.FC<Props> = ({
   onSimulateYaml,
   gcodeText,
   onGcodeChange,
+  onRunGcode,
   onRunPartFea,
   onRunStlFea,
   onDownloadPartStep,
@@ -740,7 +827,64 @@ export const DesignPanel: React.FC<Props> = ({
   loading,
 }) => {
   const [tab, setTab] = useState<"params" | "part_fea" | "yaml" | "gcode">("params");
-  const [showHints, setShowHints] = useState<boolean>(false);
+
+  // Section jump bar: track which Printer-tab section is at the top of the scroll area.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [activeSection, setActiveSection] = useState<string>(DESIGN_SECTIONS[0].id);
+  // After a chip click, the clicked section stays highlighted until the panel stops scrolling
+  // to it. The lock is released by a pause in scroll events, not a fixed time, so a long
+  // smooth scroll cannot outlast it.
+  const jumpLockedRef = useRef<boolean>(false);
+  const jumpLockTimerRef = useRef<number | null>(null);
+  const holdJumpLock = (ms: number) => {
+    jumpLockedRef.current = true;
+    if (jumpLockTimerRef.current !== null) window.clearTimeout(jumpLockTimerRef.current);
+    jumpLockTimerRef.current = window.setTimeout(() => {
+      jumpLockedRef.current = false;
+      jumpLockTimerRef.current = null;
+    }, ms);
+  };
+  const designReady = Boolean(catalog && spec);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || tab !== "params" || !designReady) return;
+    const measure = () => {
+      if (jumpLockedRef.current) {
+        holdJumpLock(160);
+        return;
+      }
+      // The last sections are short and can never reach the top; at the bottom, pick the last one.
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2 && el.scrollTop > 0) {
+        setActiveSection(DESIGN_SECTIONS[DESIGN_SECTIONS.length - 1].id);
+        return;
+      }
+      const line = el.getBoundingClientRect().top + 64;
+      let current: string = DESIGN_SECTIONS[0].id;
+      for (const sec of DESIGN_SECTIONS) {
+        const node = el.querySelector<HTMLElement>(`[data-design-section="${sec.id}"]`);
+        if (node && node.getBoundingClientRect().top <= line) current = sec.id;
+      }
+      setActiveSection(current);
+    };
+    el.addEventListener("scroll", measure, { passive: true });
+    measure();
+    return () => {
+      el.removeEventListener("scroll", measure);
+      if (jumpLockTimerRef.current !== null) window.clearTimeout(jumpLockTimerRef.current);
+      jumpLockedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, designReady]);
+
+  const jumpToSection = (id: string) => {
+    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-design-section="${id}"]`);
+    if (!node) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setActiveSection(id);
+    holdJumpLock(600);
+    node.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  };
+  const [showHints, setShowHints] = useState<boolean>(() => loadShowHintsPreference());
   const [feaEngine, setFeaEngine] = useState<SolidFeaEngine>("tet10");
   const [partPreset, setPartPreset] = useState<string>("corner_gusset");
   const [partMat, setPartMat] = useState<string>("pa12_cf_printed");
@@ -813,6 +957,21 @@ export const DesignPanel: React.FC<Props> = ({
   const [notchDraft, setNotchDraft] = useState<string>(
     spec?.kinematics.notch_filter_hz != null ? String(Math.round(spec.kinematics.notch_filter_hz)) : ""
   );
+
+  const [awdEqBwDraft, setAwdEqBwDraft] = useState<number>(
+    Number((spec?.kinematics.awd_equalizer_bw_hz ?? 2.0).toFixed(1))
+  );
+  const awdEqBwTimerRef = useRef<number | null>(null);
+
+  const [notchDepthDraft, setNotchDepthDraft] = useState<number>(
+    Number((spec?.kinematics.notch_depth_db ?? 12.0).toFixed(1))
+  );
+  const notchDepthTimerRef = useRef<number | null>(null);
+
+  const [notchQDraft, setNotchQDraft] = useState<number>(
+    Number((spec?.kinematics.notch_q ?? 1.75).toFixed(2))
+  );
+  const notchQTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (spec?.gantry.belt.pretension_n != null) {
@@ -899,6 +1058,24 @@ export const DesignPanel: React.FC<Props> = ({
   }, [spec?.kinematics.notch_filter_hz]);
 
   useEffect(() => {
+    if (spec) {
+      setAwdEqBwDraft(Number((spec.kinematics.awd_equalizer_bw_hz ?? 2.0).toFixed(1)));
+    }
+  }, [spec?.kinematics.awd_equalizer_bw_hz]);
+
+  useEffect(() => {
+    if (spec) {
+      setNotchDepthDraft(Number((spec.kinematics.notch_depth_db ?? 12.0).toFixed(1)));
+    }
+  }, [spec?.kinematics.notch_depth_db]);
+
+  useEffect(() => {
+    if (spec) {
+      setNotchQDraft(Number((spec.kinematics.notch_q ?? 1.75).toFixed(2)));
+    }
+  }, [spec?.kinematics.notch_q]);
+
+  useEffect(() => {
     return () => {
       if (tensionTimerRef.current != null) window.clearTimeout(tensionTimerRef.current);
       if (carriageMassTimerRef.current != null) window.clearTimeout(carriageMassTimerRef.current);
@@ -913,6 +1090,9 @@ export const DesignPanel: React.FC<Props> = ({
       if (bodyWallThickTimerRef.current != null) window.clearTimeout(bodyWallThickTimerRef.current);
       if (hotendMountThickTimerRef.current != null)
         window.clearTimeout(hotendMountThickTimerRef.current);
+      if (awdEqBwTimerRef.current != null) window.clearTimeout(awdEqBwTimerRef.current);
+      if (notchDepthTimerRef.current != null) window.clearTimeout(notchDepthTimerRef.current);
+      if (notchQTimerRef.current != null) window.clearTimeout(notchQTimerRef.current);
     };
   }, []);
 
@@ -1292,6 +1472,125 @@ export const DesignPanel: React.FC<Props> = ({
   };
 
   const driveMode: "2wd" | "awd" = spec.gantry.drive_mode || "2wd";
+  const isOpenLoopDrive = currentDriveType === "open_loop_stepper";
+  const currentLpv = Boolean(spec.kinematics.lpv_workspace_scheduling ?? false);
+  const currentAwdSync: AwdSyncMode = spec.kinematics.awd_sync_mode ?? "none";
+  const currentAwdEqBw = spec.kinematics.awd_equalizer_bw_hz ?? 2.0;
+  const currentNotchDepthDb = spec.kinematics.notch_depth_db ?? 12.0;
+  const currentNotchQ = spec.kinematics.notch_q ?? 1.75;
+  const currentPinRotor = Boolean(spec.kinematics.pin_rotor_ff ?? false);
+  const currentImuDamping = Boolean(spec.kinematics.toolhead_imu_active_damping ?? false);
+  const currentModeSpaceFf = Boolean(spec.kinematics.mode_space_torque_ff ?? false);
+
+  const activeBetaCount =
+    (spec.kinematics.input_shaper === "smooth_flatness" ? 1 : 0) +
+    (currentLpv ? 1 : 0) +
+    (currentAwdSync !== "none" ? 1 : 0) +
+    (currentPinRotor ? 1 : 0) +
+    (currentImuDamping ? 1 : 0) +
+    (currentModeSpaceFf ? 1 : 0);
+
+  const expectedBetaAwdSync: AwdSyncMode =
+    driveMode === "awd" ? "position_equalizer" : "none";
+  const isFocBetaStackActive =
+    currentDriveType === "foc_servo" &&
+    spec.kinematics.input_shaper === "smooth_flatness" &&
+    currentLpv &&
+    currentAwdSync === expectedBetaAwdSync &&
+    currentPinRotor &&
+    currentModeSpaceFf;
+
+  const notchPhaseMetrics = computeNotchPhaseMetrics(notchDepthDraft, notchQDraft);
+
+  const commitAwdEqBw = (nextVal: number) => {
+    const clamped = Math.max(0.5, Math.min(15.0, Math.round(nextVal * 2) / 2));
+    if (Math.abs(clamped - currentAwdEqBw) < 0.05) return;
+    update(
+      (d) => {
+        d.kinematics.awd_equalizer_bw_hz = clamped;
+      },
+      `AWD Equalizer BW: ${currentAwdEqBw.toFixed(1)} Hz → ${clamped.toFixed(1)} Hz`
+    );
+  };
+
+  const handleAwdEqBwSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 2) / 2;
+    setAwdEqBwDraft(rounded);
+    if (awdEqBwTimerRef.current != null) window.clearTimeout(awdEqBwTimerRef.current);
+    awdEqBwTimerRef.current = window.setTimeout(() => commitAwdEqBw(rounded), 200);
+  };
+
+  const commitNotchDepth = (nextVal: number) => {
+    const clamped = Math.max(3.0, Math.min(30.0, Math.round(nextVal * 2) / 2));
+    if (Math.abs(clamped - currentNotchDepthDb) < 0.05) return;
+    update(
+      (d) => {
+        d.kinematics.notch_depth_db = clamped;
+      },
+      `Notch Depth: ${currentNotchDepthDb.toFixed(1)} dB → ${clamped.toFixed(1)} dB`
+    );
+  };
+
+  const handleNotchDepthSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 2) / 2;
+    setNotchDepthDraft(rounded);
+    if (notchDepthTimerRef.current != null) window.clearTimeout(notchDepthTimerRef.current);
+    notchDepthTimerRef.current = window.setTimeout(() => commitNotchDepth(rounded), 200);
+  };
+
+  const commitNotchQ = (nextVal: number) => {
+    const clamped = Math.max(0.5, Math.min(8.0, Math.round(nextVal * 20) / 20));
+    if (Math.abs(clamped - currentNotchQ) < 0.01) return;
+    update(
+      (d) => {
+        d.kinematics.notch_q = clamped;
+      },
+      `Notch Q: ${currentNotchQ.toFixed(2)} → ${clamped.toFixed(2)}`
+    );
+  };
+
+  const handleNotchQSliderChange = (nextVal: number) => {
+    const rounded = Math.round(nextVal * 20) / 20;
+    setNotchQDraft(rounded);
+    if (notchQTimerRef.current != null) window.clearTimeout(notchQTimerRef.current);
+    notchQTimerRef.current = window.setTimeout(() => commitNotchQ(rounded), 200);
+  };
+
+  const handleLoadFocBetaStack = () => {
+    update(
+      (d) => {
+        d.kinematics.drive_type = "foc_servo";
+        if (d.kinematics.servo_vel_bw_hz == null) {
+          d.kinematics.servo_vel_bw_hz = 180;
+        }
+        d.kinematics.input_shaper = "smooth_flatness";
+        d.kinematics.lpv_workspace_scheduling = true;
+        d.kinematics.awd_sync_mode =
+          d.gantry.drive_mode === "awd" ? "position_equalizer" : "none";
+        d.kinematics.awd_equalizer_bw_hz = 2.0;
+        d.kinematics.pin_rotor_ff = true;
+        d.kinematics.mode_space_torque_ff = true;
+      },
+      "Loaded Kalico FOC Beta Stack"
+    );
+  };
+
+  const handleDisableBetaStack = () => {
+    update(
+      (d) => {
+        if (d.kinematics.input_shaper === "smooth_flatness") {
+          d.kinematics.input_shaper = "auto";
+        }
+        d.kinematics.lpv_workspace_scheduling = false;
+        d.kinematics.awd_sync_mode = "none";
+        d.kinematics.pin_rotor_ff = false;
+        d.kinematics.toolhead_imu_active_damping = false;
+        d.kinematics.mode_space_torque_ff = false;
+      },
+      "Disabled Kalico / FOC Beta Stack"
+    );
+  };
+
   const doubleShearPulleys = Boolean(spec.gantry.double_shear_pulleys);
   const beltPluckHz = sim?.kinematics.belt_pluck_freq_150mm_hz;
   const beltMaxWorkingN = sim?.kinematics.belt_max_working_tension_n;
@@ -1359,12 +1658,25 @@ export const DesignPanel: React.FC<Props> = ({
         { id: currentYRailProfile, label: profileLabel(currentYRailProfile), shortLabel: railProfileShort(currentYRailProfile) },
       ];
 
-  const partFeaMaterials = (() => {
-    const existingIds = new Set(catalog.materials.map((m) => m.id));
+  const partFeaPrintedMaterials = (() => {
+    const fromCatalog = catalog.materials
+      .filter((m) => PART_FEA_PRINTED_IDS.has(m.id))
+      .map((m) => ({ id: m.id, name: m.name }));
+    const existingIds = new Set(fromCatalog.map((m) => m.id));
     const extras = gantryBrackets
-      .filter((b) => !existingIds.has(b.id))
+      .filter((b) => PART_FEA_PRINTED_IDS.has(b.id) && !existingIds.has(b.id))
       .map((b) => ({ id: b.id, name: b.name }));
-    return [...catalog.materials, ...extras];
+    return [...fromCatalog, ...extras];
+  })();
+  const partFeaMetalMaterials = (() => {
+    const fromCatalog = catalog.materials
+      .filter((m) => PART_FEA_METAL_IDS.has(m.id))
+      .map((m) => ({ id: m.id, name: m.name }));
+    const existingIds = new Set(fromCatalog.map((m) => m.id));
+    const extras = gantryBrackets
+      .filter((b) => PART_FEA_METAL_IDS.has(b.id) && !existingIds.has(b.id))
+      .map((b) => ({ id: b.id, name: b.name }));
+    return [...fromCatalog, ...extras];
   })();
 
   const stepperCatalog = catalog.steppers ?? [];
@@ -1444,29 +1756,107 @@ export const DesignPanel: React.FC<Props> = ({
 
   return (
     <aside className="sidebar">
-      <div className="tabs">
-        <button className={`tab-btn ${tab === "params" ? "active" : ""}`} onClick={() => setTab("params")}>
+      {/* Preset & filament apply to every tab, so they sit above the tabs, once. */}
+      <div className="design-header">
+        <div className="design-header-row">
+          <label htmlFor="design-preset-select">Printer</label>
+          <select
+            id="design-preset-select"
+            value={selectedPreset}
+            onChange={(e) => onSelectPreset(e.target.value)}
+          >
+            {!selectedPreset && <option value="">Custom / Saved Configuration</option>}
+            {catalog.presets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.architecture})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="design-header-row">
+          <label htmlFor="design-filament-select" title="Filament material (sets rheology and glass transition)">
+            Filament
+          </label>
+          <select
+            id="design-filament-select"
+            value={filamentId}
+            onChange={(e) => onFilamentChange(e.target.value)}
+          >
+            {catalog.filaments.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name} ({f.print_temp_c}°C)
+              </option>
+            ))}
+          </select>
+        </div>
+        {onOpenSavedBuilds && (
+          <div className="session-save-strip">
+            <span
+              className="session-autosave-pill"
+              title={
+                lastAutoSavedAt
+                  ? `Last auto-saved at ${new Date(lastAutoSavedAt).toLocaleTimeString()} — your settings persist across page refreshes`
+                  : "Active settings auto-save in this browser across page refreshes"
+              }
+            >
+              <span className="saved-autosave-dot" />
+              <span>Auto-saved</span>
+            </span>
+            <div className="session-save-btns">
+              <button
+                type="button"
+                className="btn saved-builds-btn session-mini-btn"
+                onClick={onOpenSavedBuilds}
+              >
+                {savedBuildsCount > 0 ? `Save / Load (${savedBuildsCount})` : "Save / Load"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="tabs" role="tablist" aria-label="Design inputs" onKeyDown={onTabListKeyDown}>
+        <button role="tab"
+          aria-selected={tab === "params"}
+          tabIndex={tab === "params" ? 0 : -1}
+          className={`tab-btn ${tab === "params" ? "active" : ""}`} onClick={() => setTab("params")}>
           Printer
         </button>
-        <button className={`tab-btn ${tab === "part_fea" ? "active" : ""}`} onClick={() => setTab("part_fea")}>
+        <button role="tab"
+          aria-selected={tab === "part_fea"}
+          tabIndex={tab === "part_fea" ? 0 : -1}
+          className={`tab-btn ${tab === "part_fea" ? "active" : ""}`} onClick={() => setTab("part_fea")}>
           Parts &amp; Topo
         </button>
-        <button className={`tab-btn ${tab === "yaml" ? "active" : ""}`} onClick={() => setTab("yaml")}>
+        <button role="tab"
+          aria-selected={tab === "yaml"}
+          tabIndex={tab === "yaml" ? 0 : -1}
+          className={`tab-btn ${tab === "yaml" ? "active" : ""}`} onClick={() => setTab("yaml")}>
           YAML
         </button>
-        <button className={`tab-btn ${tab === "gcode" ? "active" : ""}`} onClick={() => setTab("gcode")}>
+        <button role="tab"
+          aria-selected={tab === "gcode"}
+          tabIndex={tab === "gcode" ? 0 : -1}
+          className={`tab-btn ${tab === "gcode" ? "active" : ""}`} onClick={() => setTab("gcode")}>
           G-code
         </button>
       </div>
 
-      <div className="sidebar-scroll">
+      <div className="sidebar-scroll" ref={scrollRef}>
         {tab === "params" && (
           <div className="hints-toggle-bar">
             <span className="hints-toggle-label">What each control affects</span>
             <button
               type="button"
               className={`hints-pill ${showHints ? "active" : ""}`}
-              onClick={() => setShowHints((v) => !v)}
+ aria-pressed={showHints}
+              onClick={() =>
+                setShowHints((v) => {
+                  const next = !v;
+                  saveShowHintsPreference(next);
+                  return next;
+                })
+              }
               title="Toggle plain-English explanations on printer controls"
             >
               Plain-English Hints: {showHints ? "ON" : "OFF"}
@@ -1474,30 +1864,21 @@ export const DesignPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Preset & Filament selectors always available */}
-        <div className="section-card">
-          <div className="section-title">Preset &amp; Filament</div>
-          <div className="field-row">
-            <label>Printer Template</label>
-            <select value={selectedPreset} onChange={(e) => onSelectPreset(e.target.value)}>
-              {catalog.presets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.architecture})
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field-row">
-            <label>Filament Material (Rheology &amp; Tg)</label>
-            <select value={filamentId} onChange={(e) => onFilamentChange(e.target.value)}>
-              {catalog.filaments.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name} ({f.print_temp_c}°C)
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+        {tab === "params" && (
+          <nav className="section-jump" aria-label="Jump to section">
+            {DESIGN_SECTIONS.map((sec) => (
+              <button
+                key={sec.id}
+                type="button"
+                className={`chip-btn ${activeSection === sec.id ? "active" : ""}`}
+                aria-current={activeSection === sec.id ? "true" : undefined}
+                onClick={() => jumpToSection(sec.id)}
+              >
+                {sec.label}
+              </button>
+            ))}
+          </nav>
+        )}
 
         {tab === "params" && (
           <>
@@ -1512,7 +1893,7 @@ export const DesignPanel: React.FC<Props> = ({
               materialLabel={materialLabel}
             />
 
-            <div className="section-card">
+            <div className="section-card" data-design-section="gantry">
               <div className="section-title">
                 <span>Gantry, Belts &amp; Kinematics</span>
                 {simMassSummary && (
@@ -1552,16 +1933,17 @@ export const DesignPanel: React.FC<Props> = ({
 
               {spec.architecture === "corexy" && (
                 <div className="field-row">
-                  <label>
+                  <label id="dp-xy-drive-mode-1">
                     <span>XY Drive Mode</span>
-                    <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                    <span style={{ color: "var(--accent)", fontWeight: 500 }}>
                       {driveMode === "awd" ? "4 Motors (AWD)" : "2 Motors (2WD)"}
                     </span>
                   </label>
-                  <div className="engine-toggle">
+                  <div role="group" aria-labelledby="dp-xy-drive-mode-1" className="engine-toggle">
                     <button
                       type="button"
                       className={`engine-toggle-btn ${driveMode === "2wd" ? "active" : ""}`}
+ aria-pressed={driveMode === "2wd"}
                       onClick={() => {
                         if (driveMode === "2wd") return;
                         update(
@@ -1578,6 +1960,7 @@ export const DesignPanel: React.FC<Props> = ({
                     <button
                       type="button"
                       className={`engine-toggle-btn ${driveMode === "awd" ? "active" : ""}`}
+ aria-pressed={driveMode === "awd"}
                       onClick={() => {
                         if (driveMode === "awd") return;
                         update(
@@ -1605,10 +1988,10 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="hint-line">Lighter X-beam = faster Y acceleration &amp; less ringing</div>
               )}
 
-              <div className="field-grid-2">
+              <div className="field-grid-2 stack">
                 <div className="field-row">
-                  <label>X Beam Profile</label>
-                  <select
+                  <label htmlFor="dp-x-beam-profile-2">X Beam Profile</label>
+                  <select id="dp-x-beam-profile-2"
                     value={spec.gantry.x_beam_profile}
                     onChange={(e) => {
                       const nextVal = e.target.value;
@@ -1628,16 +2011,47 @@ export const DesignPanel: React.FC<Props> = ({
                       );
                     }}
                   >
-                    {catalog.profiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                    {(() => {
+                      const metalBeams = catalog.profiles.filter((p) =>
+                        X_BEAM_METAL_PROFILE_IDS.has(p.id)
+                      );
+                      const lightTubes = catalog.profiles.filter((p) =>
+                        X_BEAM_LIGHTWEIGHT_TUBE_IDS.has(p.id)
+                      );
+                      const hasCurrent =
+                        metalBeams.some((p) => p.id === spec.gantry.x_beam_profile) ||
+                        lightTubes.some((p) => p.id === spec.gantry.x_beam_profile);
+                      return (
+                        <>
+                          {!hasCurrent && (
+                            <option value={spec.gantry.x_beam_profile}>
+                              {profileLabel(spec.gantry.x_beam_profile)} (Custom)
+                            </option>
+                          )}
+                          <optgroup label="Extrusions & Aluminum Beams">
+                            {metalBeams.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {lightTubes.length > 0 && (
+                            <optgroup label="Carbon Fiber & Titanium Tubes">
+                              {lightTubes.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                        </>
+                      );
+                    })()}
                   </select>
                 </div>
                 <div className="field-row">
-                  <label>X Beam Material</label>
-                  <select
+                  <label htmlFor="dp-x-beam-material-3">X Beam Material</label>
+                  <select id="dp-x-beam-material-3"
                     value={spec.gantry.x_beam_material}
                     onChange={(e) => {
                       const nextVal = e.target.value;
@@ -1649,11 +2063,28 @@ export const DesignPanel: React.FC<Props> = ({
                       );
                     }}
                   >
-                    {catalog.materials.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
+                    {(() => {
+                      const beamMats = catalog.materials.filter((m) =>
+                        X_BEAM_MATERIAL_IDS.has(m.id)
+                      );
+                      const hasCurrent = beamMats.some(
+                        (m) => m.id === spec.gantry.x_beam_material
+                      );
+                      return (
+                        <>
+                          {!hasCurrent && (
+                            <option value={spec.gantry.x_beam_material}>
+                              {materialLabel(spec.gantry.x_beam_material)} (Custom)
+                            </option>
+                          )}
+                          {beamMats.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </>
+                      );
+                    })()}
                   </select>
                 </div>
               </div>
@@ -1664,8 +2095,8 @@ export const DesignPanel: React.FC<Props> = ({
 
               <div className="field-grid-2">
                 <div className="field-row">
-                  <label>Belt Type</label>
-                  <select
+                  <label htmlFor="dp-belt-type-4">Belt Type</label>
+                  <select id="dp-belt-type-4"
                     value={spec.gantry.belt.type}
                     onChange={(e) => {
                       const nextVal = e.target.value as PrinterSpecData["gantry"]["belt"]["type"];
@@ -1704,8 +2135,8 @@ export const DesignPanel: React.FC<Props> = ({
                   </select>
                 </div>
                 <div className="field-row">
-                  <label>Belt Core</label>
-                  <select
+                  <label htmlFor="dp-belt-core-5">Belt Core</label>
+                  <select id="dp-belt-core-5"
                     value={spec.gantry.belt.core}
                     onChange={(e) => {
                       const nextVal = e.target.value as PrinterSpecData["gantry"]["belt"]["core"];
@@ -1763,7 +2194,7 @@ export const DesignPanel: React.FC<Props> = ({
               })()}
 
               <div className="slider-row">
-                <label>
+                <label htmlFor="dp-belt-tension-n-6">
                   <span>Belt Tension (N)</span>
                   <span className="tension-readout">
                     <strong>{tensionDraft} N</strong>
@@ -1773,7 +2204,7 @@ export const DesignPanel: React.FC<Props> = ({
                   </span>
                 </label>
                 <div className="tension-control-row">
-                  <input
+                  <input id="dp-belt-tension-n-6"
                     type="range"
                     min={15}
                     max={beltTensionMax}
@@ -1783,7 +2214,7 @@ export const DesignPanel: React.FC<Props> = ({
                     onPointerUp={() => commitBeltTension(tensionDraft)}
                     onKeyUp={() => commitBeltTension(tensionDraft)}
                   />
-                  <input
+                  <input aria-label="Belt Tension (N) value"
                     type="number"
                     className="tension-num-input"
                     min={15}
@@ -1834,8 +2265,8 @@ export const DesignPanel: React.FC<Props> = ({
                 )}
 
                 <div className="field-row">
-                  <label>Motor Model</label>
-                  <select
+                  <label htmlFor="dp-motor-model-7">Motor Model</label>
+                  <select id="dp-motor-model-7"
                     value={selectedStepperValue}
                     onChange={(e) => {
                       const nextId = e.target.value;
@@ -1887,7 +2318,7 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
 
                 <div className="slider-row">
-                  <label>
+                  <label htmlFor="dp-run-current-amps-max-a-8">
                     <span>
                       Run Current (Amps){" "}
                       <span style={{ color: "var(--muted)", fontWeight: 500 }}>
@@ -1905,7 +2336,7 @@ export const DesignPanel: React.FC<Props> = ({
                     </span>
                   </label>
                   <div className="tension-control-row">
-                    <input
+                    <input id="dp-run-current-amps-max-a-8"
                       type="range"
                       min={0.4}
                       max={3.2}
@@ -1915,7 +2346,7 @@ export const DesignPanel: React.FC<Props> = ({
                       onPointerUp={() => commitRunCurrent(runCurrentDraft)}
                       onKeyUp={() => commitRunCurrent(runCurrentDraft)}
                     />
-                    <input
+                    <input aria-label="Run Current (Amps) value"
                       type="number"
                       className="tension-num-input"
                       min={0.4}
@@ -1941,13 +2372,13 @@ export const DesignPanel: React.FC<Props> = ({
                 </div>
 
                 <div className="field-row">
-                  <label>
+                  <label id="dp-bus-voltage-v-9">
                     <span>Bus Voltage (V)</span>
-                    <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                    <span style={{ color: "var(--text)", fontWeight: 500 }}>
                       {xyStepper.supply_voltage_v}V DC
                     </span>
                   </label>
-                  <div className="voltage-selector-row">
+                  <div role="group" aria-labelledby="dp-bus-voltage-v-9" className="voltage-selector-row">
                     <div className="voltage-preset-group">
                       {BUS_VOLTAGE_PRESETS.map((v) => (
                         <button
@@ -1970,7 +2401,7 @@ export const DesignPanel: React.FC<Props> = ({
                         </button>
                       ))}
                     </div>
-                    <input
+                    <input aria-label="Bus Voltage (V) value"
                       type="number"
                       className="tension-num-input"
                       min={12}
@@ -1994,8 +2425,8 @@ export const DesignPanel: React.FC<Props> = ({
 
               <div className="field-grid-2">
                 <div className="field-row">
-                  <label>Max Vel (mm/s)</label>
-                  <input
+                  <label htmlFor="dp-max-vel-mm-s-10">Max Vel (mm/s)</label>
+                  <input id="dp-max-vel-mm-s-10"
                     type="number"
                     value={spec.kinematics.max_velocity_mm_s}
                     onChange={(e) =>
@@ -2010,8 +2441,8 @@ export const DesignPanel: React.FC<Props> = ({
                   />
                 </div>
                 <div className="field-row">
-                  <label>Max Accel (mm/s²)</label>
-                  <input
+                  <label htmlFor="dp-max-accel-mm-s-11">Max Accel (mm/s²)</label>
+                  <input id="dp-max-accel-mm-s-11"
                     type="number"
                     step={500}
                     value={spec.kinematics.max_accel_mm_s2}
@@ -2030,8 +2461,8 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="field-row">
-                <label>Input Shaper</label>
-                <select
+                <label htmlFor="dp-input-shaper-12">Input Shaper</label>
+                <select id="dp-input-shaper-12"
                   value={spec.kinematics.input_shaper}
                   onChange={(e) => {
                     const nextVal = e.target.value as PrinterSpecData["kinematics"]["input_shaper"];
@@ -2049,10 +2480,33 @@ export const DesignPanel: React.FC<Props> = ({
                   <option value="mzv">MZV</option>
                   <option value="ei">EI</option>
                   <option value="2hump_ei">2HUMP_EI</option>
+                  <option value="3hump_ei">3HUMP_EI</option>
                   <option value="zvdd">ZVDD</option>
                   <option value="smooth_zv">SMOOTH_ZV (Kalico)</option>
                   <option value="smooth_ei">SMOOTH_EI (Kalico)</option>
+                  <option value="smooth_flatness">SMOOTH_FLATNESS (Kalico C4 Beta)</option>
                 </select>
+                {spec.kinematics.input_shaper === "smooth_flatness" && (
+                  <div className="beta-guide-box">
+                    <div className="beta-guide-head">
+                      <span>SMOOTH_FLATNESS Guide</span>
+                      <span className="beta-pill">Kalico C⁴</span>
+                    </div>
+                    <p className="beta-guide-line">
+                      <strong>What it is:</strong> C⁴ septic differential-flatness smoother (
+                      <code>t_sm = 0.70 / f_n</code>) that pre-leads inertial belt stretch to cancel
+                      the primary resonance with ~35% less corner rounding than <code>MZV</code>.
+                    </p>
+                    <p className="beta-guide-line">
+                      <strong>How to set it:</strong> Use your <strong>locked-rotor</strong> belt
+                      frequency (<em>f</em><sub>b</sub>), ensure a clean single-peak spectrum and{" "}
+                      <code>≥ 1.25×</code> motor torque headroom (handles <code>1.17×</code> peak
+                      accel spikes on tight zig-zags), and enable{" "}
+                      <strong>LPV 3×3 Bed Scheduling</strong> below if corner resonance shifts &gt;
+                      5% (mandatory on 2WD CoreXY).
+                    </p>
+                  </div>
+                )}
               </div>
 
               <details className="sub-accordion">
@@ -2066,11 +2520,12 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="sub-accordion-body">
                   {spec.architecture === "corexy" && (
                     <div className="field-row">
-                      <label>Pulley Mounts</label>
-                      <div className="engine-toggle">
+                      <label id="dp-pulley-mounts-13">Pulley Mounts</label>
+                      <div role="group" aria-labelledby="dp-pulley-mounts-13" className="engine-toggle">
                         <button
                           type="button"
                           className={`engine-toggle-btn ${!doubleShearPulleys ? "active" : ""}`}
+ aria-pressed={!doubleShearPulleys}
                           onClick={() => {
                             if (!doubleShearPulleys) return;
                             update(
@@ -2087,6 +2542,7 @@ export const DesignPanel: React.FC<Props> = ({
                         <button
                           type="button"
                           className={`engine-toggle-btn ${doubleShearPulleys ? "active" : ""}`}
+ aria-pressed={doubleShearPulleys}
                           onClick={() => {
                             if (doubleShearPulleys) return;
                             update(
@@ -2105,7 +2561,7 @@ export const DesignPanel: React.FC<Props> = ({
                   )}
 
                   <div className="field-row">
-                    <label>
+                    <label htmlFor="dp-gantry-brackets-preset">
                       <span>Gantry Brackets &amp; Motor Mounts</span>
                       <span
                         className={`sub-block-tag ${
@@ -2154,7 +2610,7 @@ export const DesignPanel: React.FC<Props> = ({
                         </button>
                       </div>
                     )}
-                    <select
+                    <select id="dp-gantry-brackets-preset"
                       value={currentBracketId}
                       onChange={(e) => {
                         const nextId = e.target.value as BracketMaterialType;
@@ -2211,13 +2667,13 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="field-row">
-                    <label>
+                    <label htmlFor="dp-y-gantry-weight-class-preset-14">
                       <span>Y-Gantry Weight Class Preset</span>
                       <span className="sub-block-tag">
                         {matchedWeightClass ? matchedWeightClass.short_name : "Custom"}
                       </span>
                     </label>
-                    <select
+                    <select id="dp-y-gantry-weight-class-preset-14"
                       value={matchedWeightClass ? matchedWeightClass.id : "__custom__"}
                       onChange={(e) => {
                         const nextId = e.target.value;
@@ -2264,14 +2720,14 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="slider-row">
-                    <label>
+                    <label htmlFor="dp-xy-joints-and-y-carriages-15">
                       <span>XY-Joints &amp; Y-Carriages Mass (g)</span>
                       <span className="tension-readout">
                         <strong>{Math.round(carriageMassDraft)} g</strong>
                       </span>
                     </label>
                     <div className="tension-control-row">
-                      <input
+                      <input id="dp-xy-joints-and-y-carriages-15"
                         type="range"
                         min={20}
                         max={600}
@@ -2281,7 +2737,7 @@ export const DesignPanel: React.FC<Props> = ({
                         onPointerUp={() => commitCarriageMass(carriageMassDraft)}
                         onKeyUp={() => commitCarriageMass(carriageMassDraft)}
                       />
-                      <input
+                      <input aria-label="XY-Joints & Y-Carriages Mass (g) value"
                         type="number"
                         className="tension-num-input"
                         min={20}
@@ -2320,7 +2776,7 @@ export const DesignPanel: React.FC<Props> = ({
                         borderRadius: 6,
                         background: "rgba(13, 19, 29, 0.78)",
                         border: "1px solid rgba(56, 189, 248, 0.22)",
-                        fontSize: 10.5,
+                        fontSize: 11,
                         lineHeight: 1.4,
                         color: "var(--muted)",
                         fontVariantNumeric: "tabular-nums",
@@ -2375,7 +2831,7 @@ export const DesignPanel: React.FC<Props> = ({
                           {Math.round(simMassSummary.x_moving_mass_g)}g
                         </strong>
                       </span>
-                      <span style={{ color: "var(--accent)", fontWeight: 700, marginLeft: 2 }}>
+                      <span style={{ color: "var(--accent)", fontWeight: 600, marginLeft: 2 }}>
                         → Total Y: {Math.round(simMassSummary.y_moving_mass_g)}g
                       </span>
                     </div>
@@ -2401,8 +2857,8 @@ export const DesignPanel: React.FC<Props> = ({
 
                   <div className={spec.architecture === "corexy" ? "field-grid-2" : "field-row"}>
                     <div className="field-row">
-                      <label>X Rail Profile</label>
-                      <select
+                      <label htmlFor="dp-x-rail-profile-16">X Rail Profile</label>
+                      <select id="dp-x-rail-profile-16"
                         value={currentXRailProfile}
                         onChange={(e) => {
                           const nextId = e.target.value;
@@ -2423,8 +2879,8 @@ export const DesignPanel: React.FC<Props> = ({
                     </div>
                     {spec.architecture === "corexy" && (
                       <div className="field-row">
-                        <label>Y Rail Profile</label>
-                        <select
+                        <label htmlFor="dp-y-rail-profile-17">Y Rail Profile</label>
+                        <select id="dp-y-rail-profile-17"
                           value={currentYRailProfile}
                           onChange={(e) => {
                             const nextId = e.target.value;
@@ -2447,19 +2903,20 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="field-row">
-                    <label>
+                    <label id="dp-x-rail-mount-18">
                       <span>X Rail Mount</span>
-                      <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                      <span style={{ color: "var(--text)", fontWeight: 500 }}>
                         {selectedXRailMount.name}
                       </span>
                     </label>
-                    <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+                    <div role="group" aria-labelledby="dp-x-rail-mount-18" className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
                       {xRailMounts.map((opt) => (
                         <button
                           key={opt.id}
                           type="button"
                           className={`voltage-pill-btn ${currentXRailMount === opt.id ? "active" : ""}`}
-                          style={{ fontSize: 10 }}
+ aria-pressed={currentXRailMount === opt.id}
+                          style={{ fontSize: 11 }}
                           title={opt.notes}
                           onClick={() => {
                             if (currentXRailMount === opt.id) return;
@@ -2480,19 +2937,20 @@ export const DesignPanel: React.FC<Props> = ({
 
                   {spec.architecture === "corexy" && (
                     <div className="field-row">
-                      <label>
+                      <label id="dp-y-rail-mount-19">
                         <span>Y Rail Mount</span>
-                        <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                        <span style={{ color: "var(--text)", fontWeight: 500 }}>
                           {selectedYRailMount.name}
                         </span>
                       </label>
-                      <div className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+                      <div role="group" aria-labelledby="dp-y-rail-mount-19" className="voltage-preset-group" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
                         {yRailMounts.map((opt) => (
                           <button
                             key={opt.id}
                             type="button"
                             className={`voltage-pill-btn ${currentYRailMount === opt.id ? "active" : ""}`}
-                            style={{ fontSize: 10.5 }}
+ aria-pressed={currentYRailMount === opt.id}
+                            style={{ fontSize: 11 }}
                             title={opt.notes}
                             onClick={() => {
                               if (currentYRailMount === opt.id) return;
@@ -2513,8 +2971,8 @@ export const DesignPanel: React.FC<Props> = ({
 
                   <div className="field-grid-2">
                     <div className="field-row">
-                      <label>Rail Preload</label>
-                      <select
+                      <label htmlFor="dp-rail-preload-20">Rail Preload</label>
+                      <select id="dp-rail-preload-20"
                         value={currentRailPreload}
                         onChange={(e) => {
                           const nextVal = e.target.value as RailPreloadType;
@@ -2534,8 +2992,8 @@ export const DesignPanel: React.FC<Props> = ({
                       </select>
                     </div>
                     <div className="field-row">
-                      <label>Rail Quality / Grade</label>
-                      <select
+                      <label htmlFor="dp-rail-quality-grade-21">Rail Quality / Grade</label>
+                      <select id="dp-rail-quality-grade-21"
                         value={currentRailQuality}
                         onChange={(e) => {
                           const nextVal = e.target.value as RailQualityType;
@@ -2561,7 +3019,7 @@ export const DesignPanel: React.FC<Props> = ({
                   {showHints && selectedRailQuality.notes && (
                     <div
                       style={{
-                        fontSize: 10.5,
+                        fontSize: 11,
                         color: "var(--muted)",
                         marginTop: -2,
                         marginBottom: 6,
@@ -2574,8 +3032,8 @@ export const DesignPanel: React.FC<Props> = ({
 
                   <div className="field-grid-2">
                     <div className="field-row">
-                      <label>Carriage Block</label>
-                      <select
+                      <label htmlFor="dp-carriage-block-22">Carriage Block</label>
+                      <select id="dp-carriage-block-22"
                         value={currentRailBlock}
                         onChange={(e) => {
                           const nextVal = e.target.value as RailBlockType;
@@ -2599,8 +3057,8 @@ export const DesignPanel: React.FC<Props> = ({
                       </select>
                     </div>
                     <div className="field-row">
-                      <label>Rail Bolt Pitch</label>
-                      <select
+                      <label htmlFor="dp-rail-bolt-pitch-23">Rail Bolt Pitch</label>
+                      <select id="dp-rail-bolt-pitch-23"
                         value={currentRailBoltPitch}
                         onChange={(e) => {
                           const nextVal = Number(e.target.value);
@@ -2620,8 +3078,8 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="field-row">
-                    <label>Thermal Rail Backer</label>
-                    <select
+                    <label htmlFor="dp-thermal-rail-backer-24">Thermal Rail Backer</label>
+                    <select id="dp-thermal-rail-backer-24"
                       value={currentRailBacker}
                       onChange={(e) => {
                         const nextVal = e.target.value as RailBackerMaterialType;
@@ -2660,7 +3118,7 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="sub-accordion-body">
                   {spec.architecture === "corexy" && (
                     <div className="field-row">
-                      <label>
+                      <label htmlFor="dp-belt-path-and-idlers-25">
                         <span>Belt Path &amp; Idlers</span>
                         <span
                           style={{
@@ -2668,13 +3126,13 @@ export const DesignPanel: React.FC<Props> = ({
                               currentBeltRouting === "monolith_short"
                                 ? "var(--accent)"
                                 : "var(--muted)",
-                            fontWeight: 600,
+                            fontWeight: 500,
                           }}
                         >
                           {beltRoutingOptionMeta.shortLabel}
                         </span>
                       </label>
-                      <select
+                      <select id="dp-belt-path-and-idlers-25"
                         value={currentBeltRouting}
                         onChange={(e) => {
                           const nextVal = e.target.value as BeltRoutingType;
@@ -2711,8 +3169,8 @@ export const DesignPanel: React.FC<Props> = ({
 
                   <div className="field-grid-2">
                     <div className="field-row">
-                      <label>Idler Shaft</label>
-                      <select
+                      <label htmlFor="dp-idler-shaft-26">Idler Shaft</label>
+                      <select id="dp-idler-shaft-26"
                         value={currentIdlerShaftMm}
                         onChange={(e) => {
                           const nextVal = Number(e.target.value);
@@ -2730,8 +3188,8 @@ export const DesignPanel: React.FC<Props> = ({
                       </select>
                     </div>
                     <div className="field-row">
-                      <label>Bearing Play</label>
-                      <select
+                      <label htmlFor="dp-bearing-play-27">Bearing Play</label>
+                      <select id="dp-bearing-play-27"
                         value={currentBearingClass}
                         onChange={(e) => {
                           const nextVal = e.target.value as BearingClearanceClass;
@@ -2759,14 +3217,14 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="field-row">
-                    <label>
+                    <label htmlFor="dp-drive-control-28">
                       <span>Drive Control</span>
-                      <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                      <span style={{ color: "var(--accent)", fontWeight: 500 }}>
                         {DRIVE_TYPE_OPTIONS.find((o) => o.id === currentDriveType)?.shortLabel ??
                           currentDriveType}
                       </span>
                     </label>
-                    <select
+                    <select id="dp-drive-control-28"
                       value={currentDriveType}
                       onChange={(e) => {
                         const nextVal = e.target.value as DriveType;
@@ -2801,11 +3259,11 @@ export const DesignPanel: React.FC<Props> = ({
                   {currentDriveType !== "open_loop_stepper" && (
                     <div className="field-grid-2">
                       <div className="field-row">
-                        <label>
+                        <label htmlFor="dp-notch-filter-hz-29">
                           <span>Notch Filter (Hz)</span>
-                          <span style={{ fontSize: 10, color: "var(--muted)" }}>blank = Off</span>
+                          <span style={{ fontSize: 11, color: "var(--muted)" }}>blank = Off</span>
                         </label>
-                        <input
+                        <input id="dp-notch-filter-hz-29"
                           type="number"
                           min={20}
                           max={500}
@@ -2828,8 +3286,8 @@ export const DesignPanel: React.FC<Props> = ({
                         />
                       </div>
                       <div className="field-row">
-                        <label>Vel BW (Hz)</label>
-                        <input
+                        <label htmlFor="dp-vel-bw-hz-30">Vel BW (Hz)</label>
+                        <input id="dp-vel-bw-hz-30"
                           type="number"
                           min={20}
                           max={1000}
@@ -2851,9 +3309,452 @@ export const DesignPanel: React.FC<Props> = ({
                   )}
                 </div>
               </details>
+
+              <details className="sub-accordion beta-accordion">
+                <summary>
+                  <span>
+                    <span>Kalico / FOC Beta Features</span>
+                    <span className="beta-pill">BETA</span>
+                  </span>
+                  <span
+                    className={`sub-accordion-tag ${activeBetaCount > 0 ? "beta-active-tag" : ""}`}
+                  >
+                    {activeBetaCount > 0 ? `${activeBetaCount} active` : "Off"}
+                  </span>
+                </summary>
+                <div className="sub-accordion-body">
+                  {/* One-click Kalico FOC Beta Stack bar */}
+                  <div className="beta-stack-bar">
+                    {!isFocBetaStackActive ? (
+                      <button
+                        type="button"
+                        className="beta-stack-btn"
+                        onClick={handleLoadFocBetaStack}
+                        title="Enable FOC Servo, SMOOTH_FLATNESS, LPV 3×3 scheduling, AWD Position Equalizer (2.0 Hz), Pin-Rotor FF, and Mode-Space Torque FF in one click"
+                      >
+                        Load Kalico FOC Beta Stack
+                      </button>
+                    ) : (
+                      <span
+                        className="beta-pill ok"
+                        style={{ flex: "1 1 auto", justifyContent: "center", padding: "4px 7px" }}
+                      >
+                        Kalico FOC Stack Active
+                      </span>
+                    )}
+                    {activeBetaCount > 0 && (
+                      <button
+                        type="button"
+                        className="beta-stack-btn disable"
+                        onClick={handleDisableBetaStack}
+                        title="Reset Kalico / FOC beta features back to off"
+                      >
+                        Disable Beta Stack
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Open-loop drive info banner */}
+                  {isOpenLoopDrive && (
+                    <div className="beta-foc-banner">
+                      <div>
+                        Real-time FOC loops (<code>0x65</code>/<code>0x67</code> Pin-Rotor,
+                        Equalizer, IMU Damping, Mode-Space FF) require Closed-Loop Stepper or FOC
+                        Servo drive.
+                      </div>
+                      <div className="beta-foc-banner-actions">
+                        <button
+                          type="button"
+                          className="beta-mini-btn"
+                          onClick={() => {
+                            update(
+                              (d) => {
+                                d.kinematics.drive_type = "foc_servo";
+                                if (d.kinematics.servo_vel_bw_hz == null) {
+                                  d.kinematics.servo_vel_bw_hz = 180;
+                                }
+                              },
+                              "Drive Control: Open-Loop Stepper → FOC Servo"
+                            );
+                          }}
+                        >
+                          Switch to FOC Servo
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 1. LPV 3x3 Bed Resonance Scheduling */}
+                  <div className="beta-control-group">
+                    <label
+                      className={`beta-toggle-row ${currentLpv ? "active" : ""}`}
+                      title="Schedules smoother_freq(x, y) across a 3×3 bed map so narrow shapers (SMOOTH_FLATNESS / ZV) stay tuned in every corner"
+                    >
+                      <div className="beta-toggle-main">
+                        <span className="beta-toggle-head">
+                          <span>LPV 3×3 Bed Resonance Scheduling</span>
+                          <span className="beta-pill">f(x, y)</span>
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={currentLpv}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          update(
+                            (d) => {
+                              d.kinematics.lpv_workspace_scheduling = checked;
+                            },
+                            `LPV 3×3 Scheduling: ${currentLpv ? "On" : "Off"} → ${checked ? "On" : "Off"}`
+                          );
+                        }}
+                      />
+                    </label>
+                    <div className="beta-setting-note">
+                      <span>
+                        <strong>What:</strong> Schedules <code>smoother_freq(x, y)</code> across a
+                        3×3 bed map so narrow shapers (<code>SMOOTH_FLATNESS</code> /{" "}
+                        <code>ZV</code>) stay tuned in every corner.
+                      </span>{" "}
+                      <span>
+                        <strong>How to set:</strong> Turn ON for CoreXY with{" "}
+                        <code>SMOOTH_FLATNESS</code>; capture 9 ADXL sweeps across the bed on
+                        hardware to populate the map.
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 2. AWD FOC Sync Mode + Equalizer BW */}
+                  <div className="beta-subcard">
+                    <div className="beta-subcard-head">
+                      <span>AWD FOC Sync Mode</span>
+                      {driveMode !== "awd" ? (
+                        <span className="beta-pill muted">2WD Build</span>
+                      ) : currentAwdSync === "position_equalizer" ? (
+                        <span
+                          className={`beta-pill ${
+                            awdEqBwDraft > 4.0
+                              ? "warn"
+                              : awdEqBwDraft >= 1.5 && awdEqBwDraft <= 2.5
+                                ? "ok"
+                                : ""
+                          }`}
+                          title={
+                            awdEqBwDraft > 4.0
+                              ? "Equalizer BW > 4 Hz risks fighting 1×/rev pulley runout and injecting belt ripple"
+                              : awdEqBwDraft >= 1.5 && awdEqBwDraft <= 2.5
+                                ? "Recommended 1.5–2.5 Hz sweet spot: rejects static load sharing drift without fighting 1×/rev pulley runout"
+                                : "Equalizer loop crossover frequency between paired AWD motors"
+                          }
+                        >
+                          {awdEqBwDraft > 4.0
+                            ? "1×/rev Runout Risk (>4 Hz)"
+                            : awdEqBwDraft >= 1.5 && awdEqBwDraft <= 2.5
+                              ? "Runout-Safe (1.5–2.5 Hz)"
+                              : awdEqBwDraft < 1.5
+                                ? "Ultra-Soft (<1.5 Hz)"
+                                : "Moderate (2.5–4.0 Hz)"}
+                        </span>
+                      ) : (
+                        <span className="beta-pill muted">
+                          {AWD_SYNC_OPTIONS.find((o) => o.id === currentAwdSync)?.shortLabel ??
+                            currentAwdSync}
+                        </span>
+                      )}
+                    </div>
+
+                    <select aria-label="AWD FOC Sync Mode"
+                      value={currentAwdSync}
+                      onChange={(e) => {
+                        const nextVal = e.target.value as AwdSyncMode;
+                        if (nextVal === currentAwdSync) return;
+                        update(
+                          (d) => {
+                            d.kinematics.awd_sync_mode = nextVal;
+                            if (
+                              nextVal === "position_equalizer" &&
+                              d.kinematics.awd_equalizer_bw_hz == null
+                            ) {
+                              d.kinematics.awd_equalizer_bw_hz = 2.0;
+                            }
+                          },
+                          `AWD Sync: ${AWD_SYNC_LABELS[currentAwdSync] ?? currentAwdSync} → ${AWD_SYNC_LABELS[nextVal] ?? nextVal}`
+                        );
+                      }}
+                    >
+                      {AWD_SYNC_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {currentAwdSync === "position_equalizer" && (
+                      <div className="slider-row" style={{ marginTop: 2 }}>
+                        <label htmlFor="dp-equalizer-bw-hz-31">
+                          <span>Equalizer BW (Hz)</span>
+                          <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                            {awdEqBwDraft.toFixed(1)} Hz
+                          </span>
+                        </label>
+                        <input id="dp-equalizer-bw-hz-31"
+                          type="range"
+                          min={0.5}
+                          max={15.0}
+                          step={0.5}
+                          value={awdEqBwDraft}
+                          onChange={(e) => handleAwdEqBwSliderChange(Number(e.target.value))}
+                          onMouseUp={() => commitAwdEqBw(awdEqBwDraft)}
+                          onTouchEnd={() => commitAwdEqBw(awdEqBwDraft)}
+                        />
+                      </div>
+                    )}
+
+                    <div className="beta-setting-note">
+                      <span>
+                        <strong>What:</strong> Keeps front &amp; rear AWD motors sharing torque
+                        cleanly without belt slosh or static fighting.
+                      </span>{" "}
+                      <span>
+                        <strong>How to set:</strong> Pick{" "}
+                        <strong>Stage 2: Position + Equalizer</strong> at{" "}
+                        <strong>1.5–2.5 Hz</strong> (<code>2.0 Hz</code> default) with
+                        velocity/accel freeze; keep <code>≤ 4 Hz</code> so it never chases 1×/rev
+                        pulley runout (6–25 Hz).
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 3. TMC4671 Hardware Notch (BIQUAD_T) Depth & Q */}
+                  <div className="beta-subcard">
+                    <div className="beta-subcard-head">
+                      <span>TMC4671 Notch (BIQUAD_T)</span>
+                      <span
+                        className={`beta-pill ${notchPhaseMetrics.maxLagDeg <= 45 ? "ok" : "warn"}`}
+                        title={`Exact BIQUAD_T max phase lag at ${(notchPhaseMetrics.peakLagFreqRatio * 100).toFixed(0)}% of notch freq (≤45° preserves FOC velocity loop phase margin; BW ≈ f₀ / ${notchQDraft.toFixed(2)})`}
+                      >
+                        Max Lag -{Math.round(notchPhaseMetrics.maxLagDeg)}°
+                      </span>
+                    </div>
+
+                    <div className="field-row">
+                      <label htmlFor="dp-notch-freq-hz-32">
+                        <span>Notch Freq (Hz)</span>
+                        <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                          {spec.kinematics.notch_filter_hz != null &&
+                          spec.kinematics.notch_filter_hz > 0
+                            ? `Peak lag @ ~${Math.round(spec.kinematics.notch_filter_hz * notchPhaseMetrics.peakLagFreqRatio)} Hz`
+                            : "blank = Off"}
+                        </span>
+                      </label>
+                      <input id="dp-notch-freq-hz-32"
+                        type="number"
+                        min={20}
+                        max={500}
+                        step={5}
+                        placeholder="Off (e.g. 120)"
+                        value={notchDraft}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setNotchDraft(raw);
+                          if (raw.trim() === "") {
+                            commitNotchFilter("");
+                          }
+                        }}
+                        onBlur={() => commitNotchFilter(notchDraft)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            commitNotchFilter(notchDraft);
+                          }
+                        }}
+                      />
+                    </div>
+
+                    <div className="field-grid-2">
+                      <div className="slider-row">
+                        <label htmlFor="dp-depth-db-33">
+                          <span>Depth (dB)</span>
+                          <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                            {notchDepthDraft.toFixed(1)} dB
+                          </span>
+                        </label>
+                        <input id="dp-depth-db-33"
+                          type="range"
+                          min={3}
+                          max={24}
+                          step={0.5}
+                          value={Math.min(24, Math.max(3, notchDepthDraft))}
+                          onChange={(e) => handleNotchDepthSliderChange(Number(e.target.value))}
+                          onMouseUp={() => commitNotchDepth(notchDepthDraft)}
+                          onTouchEnd={() => commitNotchDepth(notchDepthDraft)}
+                        />
+                      </div>
+                      <div className="slider-row">
+                        <label htmlFor="dp-notch-q-34">
+                          <span>Notch Q</span>
+                          <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                            {notchQDraft.toFixed(2)}
+                          </span>
+                        </label>
+                        <input id="dp-notch-q-34"
+                          type="range"
+                          min={0.8}
+                          max={5.0}
+                          step={0.05}
+                          value={Math.min(5.0, Math.max(0.8, notchQDraft))}
+                          onChange={(e) => handleNotchQSliderChange(Number(e.target.value))}
+                          onMouseUp={() => commitNotchQ(notchQDraft)}
+                          onTouchEnd={() => commitNotchQ(notchQDraft)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="beta-setting-note">
+                      <span>
+                        <strong>What:</strong> Carves out belt/frame resonance inside the TMC4671
+                        velocity feedback loop at 25 kHz PWM.
+                      </span>{" "}
+                      <span>
+                        <strong>How to set:</strong> Set <strong>Freq</strong> to your primary
+                        resonance peak, <strong>Depth = 10–12 dB</strong>,{" "}
+                        <strong>Q = 1.5–2.0</strong> (caps phase lag at <code>-31°</code> to{" "}
+                        <code>-44°</code>; avoid <code>&gt; 15 dB</code> or servo phase margin
+                        drops when belt frequency shifts across the bed).
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 4. Pin-Rotor Belt-Reaction FF (0x65) */}
+                  <div className="beta-control-group">
+                    <label
+                      className={`beta-toggle-row ${currentPinRotor ? "active" : ""} ${
+                        isOpenLoopDrive ? "foc-inactive" : ""
+                      }`}
+                      title="Cancels belt recoil on the rotor via register 0x65, recovering locked-rotor belt resonance f_b without extra sensors"
+                    >
+                      <div className="beta-toggle-main">
+                        <span className="beta-toggle-head">
+                          <span>Pin-Rotor Belt-Reaction FF</span>
+                          <span className="beta-pill">0x65</span>
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={currentPinRotor}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          update(
+                            (d) => {
+                              d.kinematics.pin_rotor_ff = checked;
+                            },
+                            `Pin-Rotor FF (0x65): ${currentPinRotor ? "On" : "Off"} → ${checked ? "On" : "Off"}`
+                          );
+                        }}
+                      />
+                    </label>
+                    <div className="beta-setting-note">
+                      <span>
+                        <strong>What:</strong> Sensorless 2-state belt-deflection observer in the
+                        servo ISR injecting torque offset (<code>0x65</code>) to cancel rotor
+                        recoil, raising resonance toward the stiffer locked-rotor frequency{" "}
+                        <em>f</em><sub>b</sub>.
+                      </span>{" "}
+                      <span>
+                        <strong>How to set:</strong> Enable on FOC/Closed-Loop drives; tune{" "}
+                        <code>pin_mass</code> &amp; <code>pin_lead_us</code> via encoder
+                        following-error sweep before measuring <em>f</em><sub>b</sub>.
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 5. Stage 4 Toolhead IMU Active Damping (ICM-42688-P) */}
+                  <div className="beta-control-group">
+                    <label
+                      className={`beta-toggle-row ${currentImuDamping ? "active" : ""} ${
+                        isOpenLoopDrive ? "foc-inactive" : ""
+                      }`}
+                      title="Injects real-time skyhook damping (+0.07 ζ) from an ICM-42688-P toolhead IMU via TIM6 -> 0x65"
+                    >
+                      <div className="beta-toggle-main">
+                        <span className="beta-toggle-head">
+                          <span>Stage 4 Toolhead IMU Active Damping</span>
+                          <span className="beta-pill ok">+0.07 ζ</span>
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={currentImuDamping}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          update(
+                            (d) => {
+                              d.kinematics.toolhead_imu_active_damping = checked;
+                            },
+                            `Toolhead IMU Damping: ${currentImuDamping ? "On" : "Off"} → ${checked ? "On" : "Off"}`
+                          );
+                        }}
+                      />
+                    </label>
+                    <div className="beta-setting-note">
+                      <span>
+                        <strong>What:</strong> Real-time toolhead accelerometer (
+                        <code>ICM-42688-P</code>) feedback into <code>TIM6 → 0x65</code> adding
+                        active skyhook damping (<code>+0.07 ζ</code>) to flatten PSD peaks.
+                      </span>{" "}
+                      <span>
+                        <strong>How to set:</strong> Experimental — requires low-latency
+                        SPI/differential IMU link; start with conservative gain and verify stability
+                        before increasing accel.
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 6. Mode-Space CoreXY Torque FF + Direction Split */}
+                  <div className="beta-control-group">
+                    <label
+                      className={`beta-toggle-row ${currentModeSpaceFf ? "active" : ""} ${
+                        isOpenLoopDrive ? "foc-inactive" : ""
+                      }`}
+                      title="Compensates pulling vs. pushing belt asymmetry and high-accel tracking lag in CoreXY mode space"
+                    >
+                      <div className="beta-toggle-main">
+                        <span className="beta-toggle-head">
+                          <span>Mode-Space CoreXY Torque FF</span>
+                          <span className="beta-pill">Dir Split</span>
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={currentModeSpaceFf}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          update(
+                            (d) => {
+                              d.kinematics.mode_space_torque_ff = checked;
+                            },
+                            `Mode-Space Torque FF: ${currentModeSpaceFf ? "On" : "Off"} → ${checked ? "On" : "Off"}`
+                          );
+                        }}
+                      />
+                    </label>
+                    <div className="beta-setting-note">
+                      <span>
+                        <strong>What:</strong> Injects CoreXY diagonal inertia/friction FF (
+                        <code>0x67</code>/<code>0x65</code>) with pulling/pushing belt-span
+                        compensation.
+                      </span>{" "}
+                      <span>
+                        <strong>How to set:</strong> Enable on FOC/Closed-Loop after steady-plateau
+                        inertia &amp; friction ID to cut corner tracking lag and circularity error (
+                        <code>G_XY</code>).
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
 
-            <div className="section-card">
+            <div className="section-card" data-design-section="toolhead">
               <div className="section-title">
                 <span>Toolhead CoG, Nozzle &amp; Mount</span>
                 <span
@@ -2873,8 +3774,8 @@ export const DesignPanel: React.FC<Props> = ({
               )}
 
               <div className="field-row">
-                <label>Toolhead Preset</label>
-                <select
+                <label htmlFor="dp-toolhead-preset-35">Toolhead Preset</label>
+                <select id="dp-toolhead-preset-35"
                   value={selectedToolheadPresetVal}
                   onChange={(e) => {
                     const nextId = e.target.value;
@@ -2919,7 +3820,7 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="field-row">
-                <label>
+                <label htmlFor="dp-z-probe-carriage-interface-36">
                   <span>Z-Probe / Carriage Interface</span>
                   <span
                     style={{
@@ -2927,13 +3828,13 @@ export const DesignPanel: React.FC<Props> = ({
                         currentZProbe === "printed_tap" || currentZProbe === "cnc_tap"
                           ? "var(--amber)"
                           : "var(--accent)",
-                      fontWeight: 600,
+                      fontWeight: 500,
                     }}
                   >
                     {zProbeOptionMeta.shortLabel}
                   </span>
                 </label>
-                <select
+                <select id="dp-z-probe-carriage-interface-36"
                   value={currentZProbe}
                   onChange={(e) => {
                     const nextVal = e.target.value as ZProbeType;
@@ -2971,8 +3872,8 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="field-row">
-                <label>
-                  <span>Toolhead Mass (excl. Hotend, g)</span>
+                <label htmlFor="dp-toolhead-mass-excl-hotend-g-37">
+                  <span>Toolhead Mass, excl. Hotend (g)</span>
                   <span
                     className="sub-block-tag"
                     style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}
@@ -2981,7 +3882,7 @@ export const DesignPanel: React.FC<Props> = ({
                     + Hotend = {assembledToolheadMassG}g
                   </span>
                 </label>
-                <input
+                <input id="dp-toolhead-mass-excl-hotend-g-37"
                   type="number"
                   min={50}
                   max={1200}
@@ -3007,7 +3908,7 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="slider-row">
-                <label>
+                <label htmlFor="dp-nozzle-drop-z-mm-38">
                   <span>Nozzle Drop Z (mm)</span>
                   <span className="tension-readout">
                     <strong style={{ color: "#fbbf24" }}>{nozzleZDraft} mm</strong>
@@ -3017,7 +3918,7 @@ export const DesignPanel: React.FC<Props> = ({
                   </span>
                 </label>
                 <div className="tension-control-row">
-                  <input
+                  <input id="dp-nozzle-drop-z-mm-38"
                     type="range"
                     min={0}
                     max={120}
@@ -3027,7 +3928,7 @@ export const DesignPanel: React.FC<Props> = ({
                     onPointerUp={() => commitNozzleZ(nozzleZDraft)}
                     onKeyUp={() => commitNozzleZ(nozzleZDraft)}
                   />
-                  <input
+                  <input aria-label="Nozzle Drop Z (mm) value"
                     type="number"
                     className="tension-num-input"
                     min={0}
@@ -3074,13 +3975,13 @@ export const DesignPanel: React.FC<Props> = ({
                       borderBottom: "1px dashed rgba(255, 255, 255, 0.08)",
                     }}
                   >
-                    <label>
+                    <label htmlFor="dp-body-construction-architecture-39">
                       <span>Body Construction / Architecture</span>
                       <span className="sub-block-tag" style={{ color: "var(--accent)" }}>
                         {selectedBodyConstruction.short_name}
                       </span>
                     </label>
-                    <select
+                    <select id="dp-body-construction-architecture-39"
                       value={currentBodyConstruction}
                       onChange={(e) => {
                         const nextVal = e.target.value as ToolheadConstructionType;
@@ -3107,7 +4008,7 @@ export const DesignPanel: React.FC<Props> = ({
                       <div
                         style={{
                           marginTop: 5,
-                          fontSize: 10.5,
+                          fontSize: 11,
                           lineHeight: 1.35,
                           color: "var(--muted)",
                         }}
@@ -3119,7 +4020,7 @@ export const DesignPanel: React.FC<Props> = ({
 
                   {/* 1. X-Carriage Backplate */}
                   <div className="field-row" style={{ marginBottom: 6 }}>
-                    <label>
+                    <label htmlFor="dp-x-carriage-backplate-40">
                       <span>X-Carriage Backplate</span>
                       <span
                         className="sub-block-tag"
@@ -3128,7 +4029,7 @@ export const DesignPanel: React.FC<Props> = ({
                         {carriagePlateThickDraft.toFixed(1)} mm
                       </span>
                     </label>
-                    <select
+                    <select id="dp-x-carriage-backplate-40"
                       value={currentCarriageMountMat}
                       onChange={(e) => {
                         const nextMat = e.target.value;
@@ -3154,10 +4055,10 @@ export const DesignPanel: React.FC<Props> = ({
                       className="tension-control-row"
                       style={{ marginTop: 4, alignItems: "center", gap: 6 }}
                     >
-                      <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
                         Plate
                       </span>
-                      <input
+                      <input aria-label="X-Carriage Backplate thickness (mm)"
                         type="range"
                         min={2.0}
                         max={15.0}
@@ -3172,7 +4073,7 @@ export const DesignPanel: React.FC<Props> = ({
 
                   {/* 2. Toolhead / Extruder Body */}
                   <div className="field-row" style={{ marginBottom: 6 }}>
-                    <label>
+                    <label htmlFor="dp-toolhead-extruder-body-41">
                       <span>Toolhead / Extruder Body</span>
                       <span
                         className="sub-block-tag"
@@ -3181,7 +4082,7 @@ export const DesignPanel: React.FC<Props> = ({
                         {bodyWallThickDraft.toFixed(1)} mm
                       </span>
                     </label>
-                    <select
+                    <select id="dp-toolhead-extruder-body-41"
                       value={currentBodyMat}
                       onChange={(e) => {
                         const nextMat = e.target.value;
@@ -3204,10 +4105,10 @@ export const DesignPanel: React.FC<Props> = ({
                       className="tension-control-row"
                       style={{ marginTop: 4, alignItems: "center", gap: 6 }}
                     >
-                      <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
                         Wall
                       </span>
-                      <input
+                      <input aria-label="Toolhead / Extruder Body wall thickness (mm)"
                         type="range"
                         min={2.0}
                         max={12.0}
@@ -3222,7 +4123,7 @@ export const DesignPanel: React.FC<Props> = ({
 
                   {/* 3. Hotend Mount / Clamp */}
                   <div className="field-row" style={{ marginBottom: 6 }}>
-                    <label>
+                    <label htmlFor="dp-hotend-mount-clamp-42">
                       <span>Hotend Mount / Clamp</span>
                       <span
                         className="sub-block-tag"
@@ -3231,7 +4132,7 @@ export const DesignPanel: React.FC<Props> = ({
                         {hotendMountThickDraft.toFixed(1)} mm
                       </span>
                     </label>
-                    <select
+                    <select id="dp-hotend-mount-clamp-42"
                       value={currentHotendMountMat}
                       onChange={(e) => {
                         const nextMat = e.target.value;
@@ -3254,10 +4155,10 @@ export const DesignPanel: React.FC<Props> = ({
                       className="tension-control-row"
                       style={{ marginTop: 4, alignItems: "center", gap: 6 }}
                     >
-                      <span style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
                         Clamp
                       </span>
-                      <input
+                      <input aria-label="Hotend Mount / Clamp thickness (mm)"
                         type="range"
                         min={3.0}
                         max={20.0}
@@ -3271,7 +4172,7 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="slider-row">
-                    <label>
+                    <label htmlFor="dp-cog-forward-y-mm-43">
                       <span>CoG Forward Y (mm)</span>
                       <span className="tension-readout">
                         <strong>{cogYDraft} mm</strong>
@@ -3281,7 +4182,7 @@ export const DesignPanel: React.FC<Props> = ({
                       </span>
                     </label>
                     <div className="tension-control-row">
-                      <input
+                      <input id="dp-cog-forward-y-mm-43"
                         type="range"
                         min={0}
                         max={80}
@@ -3291,7 +4192,7 @@ export const DesignPanel: React.FC<Props> = ({
                         onPointerUp={() => commitCogY(cogYDraft)}
                         onKeyUp={() => commitCogY(cogYDraft)}
                       />
-                      <input
+                      <input aria-label="CoG Forward Y (mm) value"
                         type="number"
                         className="tension-num-input"
                         min={0}
@@ -3314,7 +4215,7 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="slider-row">
-                    <label>
+                    <label htmlFor="dp-cog-drop-z-mm-44">
                       <span>CoG Drop Z (mm)</span>
                       <span className="tension-readout">
                         <strong>{cogZDraft} mm</strong>
@@ -3324,7 +4225,7 @@ export const DesignPanel: React.FC<Props> = ({
                       </span>
                     </label>
                     <div className="tension-control-row">
-                      <input
+                      <input id="dp-cog-drop-z-mm-44"
                         type="range"
                         min={0}
                         max={100}
@@ -3334,7 +4235,7 @@ export const DesignPanel: React.FC<Props> = ({
                         onPointerUp={() => commitCogZ(cogZDraft)}
                         onKeyUp={() => commitCogZ(cogZDraft)}
                       />
-                      <input
+                      <input aria-label="CoG Drop Z (mm) value"
                         type="number"
                         className="tension-num-input"
                         min={0}
@@ -3359,7 +4260,7 @@ export const DesignPanel: React.FC<Props> = ({
               </details>
             </div>
 
-            <div className="section-card">
+            <div className="section-card" data-design-section="hotend">
               <div className="section-title">
                 <span>Hotend Stiffness, Thermal &amp; Cooling</span>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -3381,8 +4282,8 @@ export const DesignPanel: React.FC<Props> = ({
               )}
 
               <div className="field-row">
-                <label>Hotend Preset</label>
-                <select
+                <label htmlFor="dp-hotend-preset-45">Hotend Preset</label>
+                <select id="dp-hotend-preset-45"
                   value={selectedHotendPresetVal}
                   onChange={(e) => {
                     const nextId = e.target.value;
@@ -3440,8 +4341,8 @@ export const DesignPanel: React.FC<Props> = ({
 
               <div className="field-grid-2">
                 <div className="field-row">
-                  <label>Nozzle Dia (mm)</label>
-                  <input
+                  <label htmlFor="dp-nozzle-dia-mm-46">Nozzle Dia (mm)</label>
+                  <input id="dp-nozzle-dia-mm-46"
                     type="number"
                     step={0.1}
                     value={spec.toolhead.hotend.nozzle_diameter_mm}
@@ -3457,8 +4358,8 @@ export const DesignPanel: React.FC<Props> = ({
                   />
                 </div>
                 <div className="field-row">
-                  <label>Cooling Fan (CFM)</label>
-                  <input
+                  <label htmlFor="dp-cooling-fan-cfm-47">Cooling Fan (CFM)</label>
+                  <input id="dp-cooling-fan-cfm-47"
                     type="number"
                     step={0.5}
                     value={spec.toolhead.hotend.part_cooling_cfm}
@@ -3485,7 +4386,7 @@ export const DesignPanel: React.FC<Props> = ({
                 </summary>
                 <div className="sub-accordion-body">
                   <div className="field-row">
-                    <label>
+                    <label htmlFor="dp-hotend-weight-g-48">
                       <span>Hotend Weight (g)</span>
                       <span
                         className="sub-block-tag"
@@ -3495,7 +4396,7 @@ export const DesignPanel: React.FC<Props> = ({
                         + {specHotendMassG}g to moving mass
                       </span>
                     </label>
-                    <input
+                    <input id="dp-hotend-weight-g-48"
                       type="number"
                       min={5}
                       max={400}
@@ -3538,8 +4439,8 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="field-row">
-                    <label>Hotend Mount Style</label>
-                    <select
+                    <label htmlFor="dp-hotend-mount-style-49">Hotend Mount Style</label>
+                    <select id="dp-hotend-mount-style-49"
                       value={currentHotendMountStyle}
                       onChange={(e) => {
                         const nextStyle = e.target.value as HotendMountStyle;
@@ -3567,7 +4468,7 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="slider-row">
-                    <label>
+                    <label htmlFor="dp-hotend-structural-stiffness-n-mm-50">
                       <span>Hotend Structural Stiffness (N/mm)</span>
                       <span className="tension-readout">
                         <strong>{hotendStiffnessDraft.toLocaleString()} N/mm</strong>
@@ -3577,7 +4478,7 @@ export const DesignPanel: React.FC<Props> = ({
                       </span>
                     </label>
                     <div className="tension-control-row">
-                      <input
+                      <input id="dp-hotend-structural-stiffness-n-mm-50"
                         type="range"
                         min={25}
                         max={4000}
@@ -3587,7 +4488,7 @@ export const DesignPanel: React.FC<Props> = ({
                         onPointerUp={() => commitHotendStiffness(hotendStiffnessDraft)}
                         onKeyUp={() => commitHotendStiffness(hotendStiffnessDraft)}
                       />
-                      <input
+                      <input aria-label="Hotend Structural Stiffness (N/mm) value"
                         type="number"
                         className="tension-num-input"
                         min={25}
@@ -3614,8 +4515,8 @@ export const DesignPanel: React.FC<Props> = ({
 
                   <div className="field-grid-2">
                     <div className="field-row">
-                      <label>Heater Power (W)</label>
-                      <input
+                      <label htmlFor="dp-heater-power-w-51">Heater Power (W)</label>
+                      <input id="dp-heater-power-w-51"
                         type="number"
                         value={spec.toolhead.hotend.heater_power_w}
                         onChange={(e) =>
@@ -3630,8 +4531,8 @@ export const DesignPanel: React.FC<Props> = ({
                       />
                     </div>
                     <div className="field-row">
-                      <label>Melt Zone (mm)</label>
-                      <input
+                      <label htmlFor="dp-melt-zone-mm-52">Melt Zone (mm)</label>
+                      <input id="dp-melt-zone-mm-52"
                         type="number"
                         value={spec.toolhead.hotend.melt_zone_length_mm}
                         onChange={(e) =>
@@ -3655,8 +4556,8 @@ export const DesignPanel: React.FC<Props> = ({
                   )}
 
                   <div className="field-row">
-                    <label>Heatbreak Material</label>
-                    <select
+                    <label htmlFor="dp-heatbreak-material-53">Heatbreak Material</label>
+                    <select id="dp-heatbreak-material-53"
                       value={spec.toolhead.hotend.heatbreak_material}
                       onChange={(e) => {
                         const nextVal = e.target.value;
@@ -3668,9 +4569,14 @@ export const DesignPanel: React.FC<Props> = ({
                         );
                       }}
                     >
-                      <option value="titanium_grade5">Titanium Gr.5</option>
-                      <option value="stainless_304">Stainless 304</option>
-                      <option value="brass_c360">Brass C360</option>
+                      {spec.toolhead.hotend.heatbreak_material !== "titanium_grade5" &&
+                        spec.toolhead.hotend.heatbreak_material !== "stainless_304" && (
+                          <option value={spec.toolhead.hotend.heatbreak_material}>
+                            {materialLabel(spec.toolhead.hotend.heatbreak_material)} (Custom)
+                          </option>
+                        )}
+                      <option value="titanium_grade5">Titanium Gr.5 (Low Heat Creep)</option>
+                      <option value="stainless_304">Stainless 304 (Standard)</option>
                     </select>
                   </div>
                 </div>
@@ -3704,17 +4610,18 @@ export const DesignPanel: React.FC<Props> = ({
             <div className="section-card">
               <div className="section-title">
                 <span>3D Solid Part FEA</span>
-                <span style={{ color: feaEngine === "tet10" ? "var(--accent)" : "var(--muted)", fontSize: 10 }}>
+                <span style={{ color: feaEngine === "tet10" ? "var(--accent)" : "var(--muted)", fontSize: 11 }}>
                   {feaEngine === "tet10" ? "Tet10 (P2)" : "Voxel Hex8"}
                 </span>
               </div>
 
               <div className="field-row">
-                <label>Solver Engine</label>
-                <div className="engine-toggle">
+                <label id="dp-solver-engine-54">Solver Engine</label>
+                <div role="group" aria-labelledby="dp-solver-engine-54" className="engine-toggle">
                   <button
                     type="button"
                     className={`engine-toggle-btn ${feaEngine === "tet10" ? "active" : ""}`}
+ aria-pressed={feaEngine === "tet10"}
                     onClick={() => setFeaEngine("tet10")}
                   >
                     Curved Tet10
@@ -3723,6 +4630,7 @@ export const DesignPanel: React.FC<Props> = ({
                   <button
                     type="button"
                     className={`engine-toggle-btn ${feaEngine === "hex8" ? "active" : ""}`}
+ aria-pressed={feaEngine === "hex8"}
                     onClick={() => setFeaEngine("hex8")}
                   >
                     Fast Voxel Hex8
@@ -3732,8 +4640,8 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="field-row">
-                <label>Parametric Bracket / Mount</label>
-                <select value={partPreset} onChange={(e) => setPartPreset(e.target.value)}>
+                <label htmlFor="dp-parametric-bracket-mount-55">Parametric Bracket / Mount</label>
+                <select id="dp-parametric-bracket-mount-55" value={partPreset} onChange={(e) => setPartPreset(e.target.value)}>
                   {catalog.part_presets.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -3741,26 +4649,35 @@ export const DesignPanel: React.FC<Props> = ({
                   ))}
                 </select>
               </div>
-              <div className="field-grid-2">
+              <div className="field-grid-2 wide-first">
                 <div className="field-row">
-                  <label>Material</label>
-                  <select
+                  <label htmlFor="dp-material-56">Material</label>
+                  <select id="dp-material-56"
                     value={partMat}
                     onChange={(e) => {
                       setPartMat(e.target.value);
                       setPartFdm(e.target.value.includes("printed"));
                     }}
                   >
-                    {partFeaMaterials.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
+                    <optgroup label="3D-Printed Engineering Polymers">
+                      {partFeaPrintedMaterials.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="CNC Metals & Carbon Plate">
+                      {partFeaMetalMaterials.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
                 <div className="field-row">
-                  <label>FDM Z-Anisotropy</label>
-                  <select value={partFdm ? "yes" : "no"} onChange={(e) => setPartFdm(e.target.value === "yes")}>
+                  <label htmlFor="dp-fdm-z-anisotropy-57">FDM Z-Anisotropy</label>
+                  <select id="dp-fdm-z-anisotropy-57" value={partFdm ? "yes" : "no"} onChange={(e) => setPartFdm(e.target.value === "yes")}>
                     <option value="yes">FDM Layer Model</option>
                     <option value="no">Isotropic (CNC)</option>
                   </select>
@@ -3768,16 +4685,16 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
               <div className="field-grid-3">
                 <div className="field-row">
-                  <label>Fx (N)</label>
-                  <input type="number" value={fx} onChange={(e) => setFx(Number(e.target.value))} />
+                  <label htmlFor="dp-fx-n-58">Fx (N)</label>
+                  <input id="dp-fx-n-58" type="number" value={fx} onChange={(e) => setFx(Number(e.target.value))} />
                 </div>
                 <div className="field-row">
-                  <label>Fy (N)</label>
-                  <input type="number" value={fy} onChange={(e) => setFy(Number(e.target.value))} />
+                  <label htmlFor="dp-fy-n-59">Fy (N)</label>
+                  <input id="dp-fy-n-59" type="number" value={fy} onChange={(e) => setFy(Number(e.target.value))} />
                 </div>
                 <div className="field-row">
-                  <label>Fz (N)</label>
-                  <input type="number" value={fz} onChange={(e) => setFz(Number(e.target.value))} />
+                  <label htmlFor="dp-fz-n-60">Fz (N)</label>
+                  <input id="dp-fz-n-60" type="number" value={fz} onChange={(e) => setFz(Number(e.target.value))} />
                 </div>
               </div>
               <div className="btn-row">
@@ -3810,28 +4727,28 @@ export const DesignPanel: React.FC<Props> = ({
                 <div className="section-title" style={{ marginBottom: 4 }}>
                   Or Upload Custom STEP / STL / OBJ
                 </div>
-                <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.3 }}>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6, lineHeight: 1.3 }}>
                   <code>.step</code>/<code>.stp</code> → Curved Tet10 (Gmsh) • <code>.stl</code>/<code>.obj</code> → Voxel Hex8
                 </div>
                 <div className="field-grid-2" style={{ marginBottom: 6 }}>
                   <div className="field-row">
-                    <label>Fixed Clamp Face</label>
-                    <select value={fixedFace} onChange={(e) => setFixedFace(e.target.value)}>
+                    <label htmlFor="dp-fixed-clamp-face-61">Fixed Clamp Face</label>
+                    <select id="dp-fixed-clamp-face-61" value={fixedFace} onChange={(e) => setFixedFace(e.target.value)}>
                       <option value="min_z">Bottom (-Z)</option>
                       <option value="min_x">Left (-X)</option>
                       <option value="min_y">Front (-Y)</option>
                     </select>
                   </div>
                   <div className="field-row">
-                    <label>Loaded Face</label>
-                    <select value={loadFace} onChange={(e) => setLoadFace(e.target.value)}>
+                    <label htmlFor="dp-loaded-face-62">Loaded Face</label>
+                    <select id="dp-loaded-face-62" value={loadFace} onChange={(e) => setLoadFace(e.target.value)}>
                       <option value="max_z">Top (+Z)</option>
                       <option value="max_x">Right (+X)</option>
                       <option value="max_y">Rear (+Y)</option>
                     </select>
                   </div>
                 </div>
-                <input
+                <input aria-label="Upload a custom STEP, STL or OBJ part"
                   type="file"
                   accept=".stl,.obj,.step,.stp"
                   onChange={(e) => {
@@ -3855,7 +4772,7 @@ export const DesignPanel: React.FC<Props> = ({
             <div className="section-card" style={{ borderColor: "rgba(168, 85, 247, 0.4)" }}>
               <div className="section-title">
                 <span>3D Topology Optimization (SIMP)</span>
-                <span style={{ color: "var(--purple)", fontSize: 10 }}>Generative</span>
+                <span style={{ color: "var(--purple)", fontSize: 11 }}>Generative</span>
               </div>
               <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.35 }}>
                 Carves low-stress voxels from the selected preset &amp; load case above while maximizing
@@ -3863,11 +4780,11 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="slider-row">
-                <label>
+                <label htmlFor="dp-target-volume-fraction-63">
                   <span>Target Volume Fraction</span>
                   <strong style={{ color: "var(--text)" }}>{Math.round(targetVolFrac * 100)}%</strong>
                 </label>
-                <input
+                <input id="dp-target-volume-fraction-63"
                   type="range"
                   min={0.25}
                   max={0.8}
@@ -3878,11 +4795,11 @@ export const DesignPanel: React.FC<Props> = ({
               </div>
 
               <div className="slider-row">
-                <label>
+                <label htmlFor="dp-simp-iterations-64">
                   <span>SIMP Iterations</span>
                   <strong style={{ color: "var(--text)" }}>{topoIterations}</strong>
                 </label>
-                <input
+                <input id="dp-simp-iterations-64"
                   type="range"
                   min={8}
                   max={30}
@@ -3950,6 +4867,7 @@ export const DesignPanel: React.FC<Props> = ({
               </button>
             </div>
             <textarea
+              aria-label="Printer YAML"
               className="code-editor"
               value={yamlText}
               onChange={(e) => onYamlChange(e.target.value)}
@@ -3960,12 +4878,27 @@ export const DesignPanel: React.FC<Props> = ({
 
         {tab === "gcode" && (
           <div className="section-card">
-            <div className="section-title">Custom G-code Input</div>
-            <p style={{ margin: 0, color: "var(--muted)", fontSize: 11.5 }}>
+            <div className="section-title">
+              <span>Custom G-code Input</span>
+              {onRunGcode && (
+                <button
+                  type="button"
+                  className="btn primary"
+                  style={{ padding: "4px 8px" }}
+                  disabled={loading}
+                  onClick={onRunGcode}
+                  title="Run the virtual print with this G-code and show the result in the Print view"
+                >
+                  {loading ? "Solving..." : "Run Print Sim"}
+                </button>
+              )}
+            </div>
+            <p style={{ margin: 0, color: "var(--muted)", fontSize: 12 }}>
               Leave blank to run the built-in high-speed calibration cube &amp; ringing torture benchmark, or paste
               any Marlin/Klipper/OrcaSlicer G-code below.
             </p>
             <textarea
+              aria-label="G-code input"
               className="code-editor"
               placeholder="; Paste G-code here (G0/G1 moves)..."
               value={gcodeText}

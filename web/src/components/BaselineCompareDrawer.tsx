@@ -789,6 +789,7 @@ export const BaselineCompareDrawer: React.FC<BaselineCompareDrawerProps> = ({
                 <button
                   type="button"
                   className={`psd-axis-btn ${psdAxis === "x" ? "active" : ""}`}
+ aria-pressed={psdAxis === "x"}
                   onClick={() => setPsdAxis("x")}
                 >
                   X Axis{" "}
@@ -799,6 +800,7 @@ export const BaselineCompareDrawer: React.FC<BaselineCompareDrawerProps> = ({
                 <button
                   type="button"
                   className={`psd-axis-btn ${psdAxis === "y" ? "active" : ""}`}
+ aria-pressed={psdAxis === "y"}
                   onClick={() => setPsdAxis("y")}
                 >
                   Y Axis{" "}

@@ -236,7 +236,7 @@ export const ParetoModal: React.FC<Props> = ({
               <button
                 type="button"
                 className="btn"
-                style={{ padding: "5px 10px", fontSize: 11.5 }}
+                style={{ padding: "5px 10px", fontSize: 12 }}
                 onClick={onRerun}
                 title="Re-run Pareto multi-objective optimization from current design"
               >
@@ -692,6 +692,7 @@ export const ParetoModal: React.FC<Props> = ({
                         type="button"
                         key={pt.id}
                         className={`pareto-list-row ${active ? "active" : ""}`}
+ aria-pressed={active}
                         onClick={() => setSelectedId(pt.id)}
                         onMouseEnter={() => setHoveredId(pt.id)}
                         onMouseLeave={() => setHoveredId((prev) => (prev === pt.id ? null : prev))}

@@ -31,7 +31,7 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
-function isValidPrinterSpec(val: unknown): val is PrinterSpecData {
+export function isValidPrinterSpec(val: unknown): val is PrinterSpecData {
   if (!isPlainObject(val)) return false;
   if (typeof val.architecture !== "string" || !VALID_ARCHITECTURES.has(val.architecture)) {
     return false;

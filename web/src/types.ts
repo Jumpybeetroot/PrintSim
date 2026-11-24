@@ -102,6 +102,10 @@ export type BearingClearanceClass = "C2" | "CN" | "C3";
 
 export type BedMountType =
   | "kinematic_3pt"
+  | "cnc_kelvin_magnetic"
+  | "captive_belleville_kinematic"
+  | "dual_leaf_ti_kinematic"
+  | "spherical_3pt_ratrig"
   | "trident_3pt_standoffs"
   | "whopping_pochard_kinematic"
   | "rigid_4pt"
@@ -191,11 +195,17 @@ export type ZRailProfileType =
 export type ZLeadscrewType =
   | "auto"
   | "tr8x4_pom"
+  | "tr8x4_wobblex"
   | "tr8x8_pom"
   | "tr8x8_brass"
   | "sfu1204_bk10"
+  | "sfu1204_wobblex"
+  | "sfu1605_fk12"
   | "gt2_6mm_z_belt"
-  | "gt2_9mm_z_belt";
+  | "gt2_9mm_z_belt"
+  | "gt2_9mm_planetary_z"
+  | "gt2_9mm_worm_z"
+  | "kevinakasam_belted_z";
 
 export type HotendMountStyle =
   | "groove_mount"
@@ -208,6 +218,21 @@ export type AdjointLens = "print_impact" | "compliance" | "modal" | "mass";
 export type SubsystemKey = "toolhead" | "gantry" | "frame" | "bed";
 
 export type DriveType = "open_loop_stepper" | "closed_loop_stepper" | "foc_servo";
+
+export type InputShaperType =
+  | "auto"
+  | "none"
+  | "zv"
+  | "mzv"
+  | "ei"
+  | "2hump_ei"
+  | "3hump_ei"
+  | "zvdd"
+  | "smooth_zv"
+  | "smooth_ei"
+  | "smooth_flatness";
+
+export type AwdSyncMode = "none" | "torque_mirror" | "position_equalizer";
 
 export interface BedMountCatalogItem {
   id: BedMountType;
@@ -340,6 +365,11 @@ export interface ZDriveMechanismItem {
   lead_mm?: number;
   diameter_mm?: number;
   backlash_um?: number;
+  wobble_decoupled?: boolean;
+  self_locking?: boolean;
+  unpowered_drop_risk?: boolean;
+  gear_ratio?: number;
+  cost_per_axis_usd?: number;
   notes?: string;
 }
 
@@ -643,20 +673,19 @@ export interface PrinterSpecData {
     max_z_velocity_mm_s: number;
     max_z_accel_mm_s2: number;
     square_corner_velocity_mm_s: number;
-    input_shaper:
-      | "auto"
-      | "none"
-      | "zv"
-      | "mzv"
-      | "ei"
-      | "2hump_ei"
-      | "zvdd"
-      | "smooth_zv"
-      | "smooth_ei";
+    input_shaper: InputShaperType;
     drive_type?: DriveType;
     servo_vel_bw_hz?: number;
     servo_pos_bw_hz?: number;
     notch_filter_hz?: number | null;
+    lpv_workspace_scheduling?: boolean;
+    awd_sync_mode?: AwdSyncMode;
+    awd_equalizer_bw_hz?: number;
+    notch_depth_db?: number;
+    notch_q?: number;
+    pin_rotor_ff?: boolean;
+    toolhead_imu_active_damping?: boolean;
+    mode_space_torque_ff?: boolean;
     delta_arm_length_mm: number;
     delta_radius_mm: number;
     xy_stepper: {
@@ -1302,7 +1331,27 @@ export interface KinematicsData {
   belt_practical_issues?: string[];
   pulley_circumference_mm?: number;
   vfa_belt_tooth_speed_range_mm_s?: [number, number];
+  motor_max_accel_x_mm_s2?: number;
+  motor_max_accel_y_mm_s2?: number;
+  motor_max_accel_mm_s2?: number;
+  belt_max_accel_mm_s2?: number;
+  motor_max_velocity_mm_s?: number;
+  shaper_l1_accel_factor?: number;
   delta_workspace_valid: boolean;
+}
+
+export interface MotionLimitsData {
+  shaper_max_accel_mm_s2: number;
+  motor_max_accel_mm_s2: number;
+  belt_max_accel_mm_s2: number;
+  achievable_max_accel_mm_s2: number;
+  accel_limiting_factor: "motor" | "shaper" | "belt";
+  motor_max_velocity_mm_s: number;
+  flow_max_velocity_mm_s: number;
+  configured_max_velocity_mm_s: number;
+  configured_max_accel_mm_s2: number;
+  speed_limiting_factor: "motor_voltage" | "hotend_flow";
+  shaper_l1_accel_factor: number;
 }
 
 export interface ThermalStructuralReport {
@@ -1509,6 +1558,7 @@ export interface SimulationResponse {
   static_fea: StaticFeaData;
   modal_fea: ModalFeaData;
   kinematics: KinematicsData;
+  motion_limits?: MotionLimitsData;
   thermal_structural?: ThermalStructuralReport;
   bed_plate_fea?: BedPlateFeaData | null;
   workspace_frf?: WorkspaceFRFData;

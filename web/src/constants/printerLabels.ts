@@ -1,4 +1,10 @@
-import { FrontBraceType, PrinterSpecData, TopBraceType } from "../types";
+import {
+  AwdSyncMode,
+  FrontBraceType,
+  InputShaperType,
+  PrinterSpecData,
+  TopBraceType,
+} from "../types";
 
 export const BRACING_LABELS: Record<PrinterSpecData["frame"]["bracing"], string> = {
   none: "None (Open Frame)",
@@ -54,16 +60,24 @@ export const BELT_LABELS: Record<PrinterSpecData["gantry"]["belt"]["type"], stri
   at5_16mm: "AT5 16mm Heavy Steel",
 };
 
-export const SHAPER_LABELS: Record<PrinterSpecData["kinematics"]["input_shaper"], string> = {
+export const SHAPER_LABELS: Record<InputShaperType, string> = {
   auto: "Auto (Klipper)",
   none: "None",
   zv: "ZV",
   mzv: "MZV",
   ei: "EI",
   "2hump_ei": "2HUMP_EI",
+  "3hump_ei": "3HUMP_EI",
   zvdd: "ZVDD",
   smooth_zv: "SMOOTH_ZV (Kalico)",
   smooth_ei: "SMOOTH_EI (Kalico)",
+  smooth_flatness: "SMOOTH_FLATNESS (Kalico C4 Beta)",
+};
+
+export const AWD_SYNC_LABELS: Record<AwdSyncMode, string> = {
+  none: "Off (Independent)",
+  torque_mirror: "Stage 1: Torque Mirror",
+  position_equalizer: "Stage 2: Position + Equalizer",
 };
 
 export function getBeltDefaults(

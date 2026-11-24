@@ -9,10 +9,31 @@ export const BED_MOUNT_STANDOFF_HEIGHT_MM: Record<BedMountType, number> = {
   floating_4pt: 12,
   rigid_4pt: 12,
   whopping_pochard_kinematic: 14,
+  dual_leaf_ti_kinematic: 14,
+  cnc_kelvin_magnetic: 15,
+  spherical_3pt_ratrig: 15,
   kinematic_3pt: 16,
+  captive_belleville_kinematic: 16,
   silicone_4pt: 16,
   springs_4pt: 20,
 };
+
+const THREE_POINT_BED_MOUNTS: ReadonlySet<BedMountType> = new Set<BedMountType>([
+  "kinematic_3pt",
+  "cnc_kelvin_magnetic",
+  "captive_belleville_kinematic",
+  "dual_leaf_ti_kinematic",
+  "spherical_3pt_ratrig",
+  "trident_3pt_standoffs",
+  "whopping_pochard_kinematic",
+]);
+
+/**
+ * Returns true if the given `BedMountType` uses a 3-point triangular support layout.
+ */
+export function isThreePointBedMount(mt: BedMountType): boolean {
+  return THREE_POINT_BED_MOUNTS.has(mt);
+}
 
 export interface ModalBedMountItem {
   topGroup: THREE.Group; // bed-side hardware (moves & tilts with bed_surface)
@@ -366,7 +387,7 @@ function placeArticulatedMountStatic(
 
 /**
  * Build realistic engineering-accurate 3D CAD bed mount assemblies + 2020 aluminum bed subframe +
- * Trident GE5C spherical Z-joints for all 7 `BedMountType` variants.
+ * Trident GE5C spherical Z-joints for all 11 `BedMountType` variants.
  *
  * Every mount is split cleanly into `topGroup`, `bottomGroup`, and `flexGroup` so Modal View and
  * Static FEA View articulate the heated bed, subframe, and compliant standoffs accurately with zero gap.
@@ -848,7 +869,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
   };
 
   // ---------------------------------------------------------------------------
-  // 2. Build Articulated Bed Mount Hardware for all 7 `BedMountType` variants
+  // 2. Build Articulated Bed Mount Hardware for all 11 `BedMountType` variants
   // ---------------------------------------------------------------------------
   if (bedMountType === "trident_3pt_standoffs") {
     // 1. Stock Voron / Siboor Trident 3-Pt Phenolic Bakelite Thermal-Isolation Standoffs (10 mm)
@@ -1167,6 +1188,543 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
 
       registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
     });
+  } else if (bedMountType === "cnc_kelvin_magnetic") {
+    // 3a. CNC N48SH Magnetic Kelvin Kinematic (15 mm — MRW / ChaoticLab 3-2-1 Cone / V-Groove / Flat)
+    const flexTopInsetY = Math.min(3.4 * s, effectiveStandoffH * 0.25);
+    const flexBotInsetY = Math.min(4.8 * s, effectiveStandoffH * 0.35);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
+
+    const cncBaseMat = makeMat({
+      color: 0x364458, // CNC billet anodized slate-blue aluminum Kelvin base
+      metalness: 0.84,
+      roughness: 0.24,
+      sensTint: true,
+    });
+    const cncSilverMat = makeMat({
+      color: 0xdbe4ef, // chamfered CNC silver aluminum flange & rim
+      metalness: 0.9,
+      roughness: 0.18,
+    });
+    const goldMagCupMat = makeMat({
+      color: 0xd9a83e, // high-temp gold/nickel N48SH magnet cup & keeper
+      metalness: 0.88,
+      roughness: 0.18,
+    });
+    const chromeBallMat = makeMat({
+      color: 0xf8fafc, // hardened G10 chrome steel ball
+      metalness: 0.96,
+      roughness: 0.06,
+    });
+    const hardenedSteelMat = makeMat({
+      color: 0xcbd5e1, // ground hardened steel pins & flat pad
+      metalness: 0.93,
+      roughness: 0.12,
+    });
+    const conePocketMat = makeMat({
+      color: 0x111827, // dark machined cone recess
+      metalness: 0.5,
+      roughness: 0.55,
+    });
+
+    // Bed-side CNC flange + high-temp gold/nickel N48SH magnet cup (y = 0..-3.4*s)
+    const topFlangeGeo = new THREE.CylinderGeometry(11.0 * s, 10.6 * s, 1.4 * s, 20);
+    const magCupGeo = new THREE.CylinderGeometry(8.8 * s, 7.0 * s, 2.0 * s, 20);
+    const magKeeperRingGeo = new THREE.CylinderGeometry(9.4 * s, 9.4 * s, 0.7 * s, 20);
+
+    // Chrome steel bearing ball (flexGroup: y = 0..restFlexLen)
+    const ballR = Math.min(3.9 * s, restFlexLen * 0.54);
+    const ballGeo = new THREE.SphereGeometry(ballR, 20, 14);
+
+    // Shared CNC billet octagonal Kelvin base puck + M3 mounting screws
+    const kelvinBaseGeo = new THREE.CylinderGeometry(12.0 * s, 12.8 * s, 3.2 * s, 8);
+    const baseBoltGeo = new THREE.CylinderGeometry(1.6 * s, 1.6 * s, 1.5 * s, 10);
+
+    // Point 0: Machined cone seat (3 DOF constrained)
+    const coneOuterGeo = new THREE.CylinderGeometry(7.2 * s, 9.4 * s, 1.8 * s, 20);
+    const conePocketGeo = new THREE.CylinderGeometry(4.0 * s, 2.0 * s, 1.2 * s, 16);
+    const coneRimGeo = new THREE.CylinderGeometry(7.4 * s, 7.4 * s, 0.45 * s, 20);
+
+    // Point 1: Radial V-groove with twin hardened dowel pins (2 DOF constrained)
+    const hasVGroove = supportPtsThree.length > 1;
+    const vCheekGeo = hasVGroove ? new THREE.BoxGeometry(15.4 * s, 1.4 * s, 2.4 * s) : null;
+    const vPinGeo = hasVGroove ? new THREE.CylinderGeometry(2.0 * s, 2.0 * s, 16.2 * s, 12) : null;
+    const vMagDiscGeo = hasVGroove ? new THREE.CylinderGeometry(4.2 * s, 4.2 * s, 1.0 * s, 16) : null;
+
+    // Point 2: Precision ground flat hardened steel pad (1 DOF constrained)
+    const hasFlatPad = supportPtsThree.length > 2;
+    const flatPadGeo = hasFlatPad ? new THREE.CylinderGeometry(9.6 * s, 10.0 * s, 1.4 * s, 24) : null;
+    const flatMagCollarGeo = hasFlatPad
+      ? new THREE.CylinderGeometry(10.6 * s, 10.8 * s, 0.9 * s, 24)
+      : null;
+
+    let usedHardenedSteel = false;
+
+    supportPtsThree.forEach((sp, idx) => {
+      const yaw = radialYawToCenter(sp, bedBaseCenter);
+
+      const topGroup = new THREE.Group();
+      const topFlange = tag(new THREE.Mesh(topFlangeGeo, cncSilverMat));
+      topFlange.position.y = -0.7 * s;
+      topGroup.add(topFlange);
+
+      const magCup = tag(new THREE.Mesh(magCupGeo, goldMagCupMat));
+      magCup.position.y = -2.4 * s;
+      topGroup.add(magCup);
+
+      const magKeeper = new THREE.Mesh(magKeeperRingGeo, cncBaseMat);
+      magKeeper.position.y = -1.75 * s;
+      topGroup.add(magKeeper);
+
+      const flexGroup = new THREE.Group();
+      const ball = tag(new THREE.Mesh(ballGeo, chromeBallMat));
+      ball.position.y = restFlexLen * 0.5;
+      flexGroup.add(ball);
+
+      const bottomGroup = new THREE.Group();
+      const kelvinBase = tag(new THREE.Mesh(kelvinBaseGeo, cncBaseMat));
+      kelvinBase.position.y = 1.6 * s;
+      bottomGroup.add(kelvinBase);
+
+      for (const side of [-1, 1]) {
+        const bBolt = new THREE.Mesh(baseBoltGeo, cncSilverMat);
+        bBolt.position.set(0, 3.3 * s, side * 9.2 * s);
+        bottomGroup.add(bBolt);
+      }
+
+      if (idx === 0) {
+        // Kelvin Point 0: Machined Cone Seat
+        const coneOuter = tag(new THREE.Mesh(coneOuterGeo, cncBaseMat));
+        coneOuter.position.y = 3.9 * s;
+        bottomGroup.add(coneOuter);
+
+        const coneRim = new THREE.Mesh(coneRimGeo, goldMagCupMat);
+        coneRim.position.y = 4.65 * s;
+        bottomGroup.add(coneRim);
+
+        const conePocket = new THREE.Mesh(conePocketGeo, conePocketMat);
+        conePocket.position.y = 4.35 * s;
+        bottomGroup.add(conePocket);
+      } else if (idx === 1 && vCheekGeo && vPinGeo && vMagDiscGeo) {
+        // Kelvin Point 1: Radial V-Groove with Twin Hardened Steel Pins
+        usedHardenedSteel = true;
+        const vMagDisc = new THREE.Mesh(vMagDiscGeo, goldMagCupMat);
+        vMagDisc.position.y = 3.6 * s;
+        bottomGroup.add(vMagDisc);
+
+        for (const side of [-1, 1]) {
+          const cheek = new THREE.Mesh(vCheekGeo, cncBaseMat);
+          cheek.position.set(0, 3.6 * s, side * 6.2 * s);
+          bottomGroup.add(cheek);
+
+          const pin = tag(new THREE.Mesh(vPinGeo, hardenedSteelMat));
+          pin.rotation.z = Math.PI * 0.5;
+          pin.position.set(0, 4.1 * s, side * 3.6 * s);
+          bottomGroup.add(pin);
+        }
+      } else if (flatPadGeo && flatMagCollarGeo) {
+        // Kelvin Point 2: Precision Ground Flat Hardened Steel Pad
+        usedHardenedSteel = true;
+        const flatCollar = new THREE.Mesh(flatMagCollarGeo, goldMagCupMat);
+        flatCollar.position.y = 3.45 * s;
+        bottomGroup.add(flatCollar);
+
+        const flatPad = tag(new THREE.Mesh(flatPadGeo, hardenedSteelMat));
+        flatPad.position.y = 4.15 * s;
+        bottomGroup.add(flatPad);
+      }
+
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
+
+    if (!usedHardenedSteel) {
+      hardenedSteelMat.dispose();
+    }
+  } else if (bedMountType === "captive_belleville_kinematic") {
+    // 3b. Super-Stiff Captive Belleville Kinematic (16 mm, Tap-Rated)
+    //     Heavy CNC V-groove saddle + hardened steel ball + captive shoulder bolt + stacked copper/spring-steel Belleville washer tower
+    const flexTopInsetY = Math.min(3.4 * s, effectiveStandoffH * 0.24);
+    const flexBotInsetY = Math.min(5.2 * s, effectiveStandoffH * 0.34);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
+
+    const cncSaddleMat = makeMat({
+      color: 0x263142, // heavy dark-anodized CNC V-groove saddle
+      metalness: 0.82,
+      roughness: 0.28,
+      sensTint: true,
+    });
+    const chromeBallMat = makeMat({
+      color: 0xf8fafc, // hardened steel ball
+      metalness: 0.96,
+      roughness: 0.08,
+    });
+    const shoulderBoltMat = makeMat({
+      color: 0xe2e8f0, // captive stainless shoulder bolt & upper boss
+      metalness: 0.92,
+      roughness: 0.16,
+    });
+    const copperBellevilleMat = makeMat({
+      color: 0xd97736, // copper-bronze Belleville disc spring
+      metalness: 0.86,
+      roughness: 0.22,
+    });
+    const springSteelBellMat = makeMat({
+      color: 0x475569, // blued spring-steel alternating Belleville disc
+      metalness: 0.88,
+      roughness: 0.24,
+    });
+    const vPinMat = makeMat({
+      color: 0xcbd5e1,
+      metalness: 0.92,
+      roughness: 0.14,
+    });
+
+    // Bed-side heavy boss + spherical ball seat + captive shoulder bolt head (y = 0..-3.4*s)
+    const upperBossGeo = new THREE.CylinderGeometry(11.4 * s, 10.6 * s, 1.6 * s, 20);
+    const upperSeatGeo = new THREE.CylinderGeometry(8.2 * s, 6.2 * s, 1.8 * s, 20);
+    const boltHeadGeo = new THREE.CylinderGeometry(3.8 * s, 3.8 * s, 1.5 * s, 14);
+
+    // Hardened ball + captive shoulder bolt + upper preload Belleville pair (flexGroup: y = 0..restFlexLen)
+    const ballR = Math.min(4.1 * s, restFlexLen * 0.56);
+    const ballGeo = new THREE.SphereGeometry(ballR, 20, 14);
+    const centerBoltShaftGeo = new THREE.CylinderGeometry(2.1 * s, 2.1 * s, restFlexLen, 12);
+    const upperBellUpGeo = new THREE.CylinderGeometry(5.6 * s, 7.6 * s, 1.15 * s, 20);
+    const upperBellDownGeo = new THREE.CylinderGeometry(7.6 * s, 5.6 * s, 1.15 * s, 20);
+
+    // Heavy CNC V-groove saddle + twin V-groove dowel pins + under-bar Belleville tower (bottomGroup)
+    const saddleBlockGeo = new THREE.BoxGeometry(19.2 * s, 3.6 * s, 16.4 * s);
+    const saddleCheekGeo = new THREE.BoxGeometry(18.0 * s, 1.8 * s, 3.4 * s);
+    const vPinGeo = new THREE.CylinderGeometry(2.1 * s, 2.1 * s, 17.4 * s, 12);
+    const lowerStudLen = (EXTRUSION_2020_MM + 11.5) * s;
+    const lowerStudGeo = new THREE.CylinderGeometry(2.1 * s, 2.1 * s, lowerStudLen, 12);
+    const bellDiscUpGeo = new THREE.CylinderGeometry(5.4 * s, 8.2 * s, 1.45 * s, 20);
+    const bellDiscDownGeo = new THREE.CylinderGeometry(8.2 * s, 5.4 * s, 1.45 * s, 20);
+    const lockNutGeo = new THREE.CylinderGeometry(5.8 * s, 5.8 * s, 2.4 * s, 6);
+
+    supportPtsThree.forEach((sp, idx) => {
+      const yaw = radialYawToCenter(sp, bedBaseCenter);
+
+      const topGroup = new THREE.Group();
+      const upperBoss = tag(new THREE.Mesh(upperBossGeo, cncSaddleMat));
+      upperBoss.position.y = -0.8 * s;
+      topGroup.add(upperBoss);
+
+      const upperSeat = tag(new THREE.Mesh(upperSeatGeo, shoulderBoltMat));
+      upperSeat.position.y = -2.5 * s;
+      topGroup.add(upperSeat);
+
+      const boltHead = new THREE.Mesh(boltHeadGeo, shoulderBoltMat);
+      boltHead.position.y = -0.75 * s;
+      topGroup.add(boltHead);
+
+      const flexGroup = new THREE.Group();
+      const ball = tag(new THREE.Mesh(ballGeo, chromeBallMat));
+      ball.position.y = restFlexLen * 0.5;
+      flexGroup.add(ball);
+
+      const boltShaft = new THREE.Mesh(centerBoltShaftGeo, shoulderBoltMat);
+      boltShaft.position.y = restFlexLen * 0.5;
+      flexGroup.add(boltShaft);
+
+      // Visible Belleville preload collar pair seated just above/below the saddle throat
+      const upperBellevilleA = new THREE.Mesh(upperBellUpGeo, copperBellevilleMat);
+      upperBellevilleA.position.y = restFlexLen * 0.86;
+      flexGroup.add(upperBellevilleA);
+
+      const upperBellevilleB = new THREE.Mesh(upperBellDownGeo, springSteelBellMat);
+      upperBellevilleB.position.y = restFlexLen * 0.14;
+      flexGroup.add(upperBellevilleB);
+
+      const bottomGroup = new THREE.Group();
+      const saddle = tag(new THREE.Mesh(saddleBlockGeo, cncSaddleMat));
+      saddle.position.y = 1.8 * s;
+      bottomGroup.add(saddle);
+
+      for (const side of [-1, 1]) {
+        const cheek = new THREE.Mesh(saddleCheekGeo, cncSaddleMat);
+        cheek.position.set(0, 4.2 * s, side * 6.4 * s);
+        bottomGroup.add(cheek);
+
+        const pin = tag(new THREE.Mesh(vPinGeo, vPinMat));
+        pin.rotation.z = Math.PI * 0.5;
+        pin.position.set(0, 4.35 * s, side * 3.8 * s);
+        bottomGroup.add(pin);
+      }
+
+      // Captive center shoulder bolt passing through 2020 subframe
+      const lowerStud = new THREE.Mesh(lowerStudGeo, shoulderBoltMat);
+      lowerStud.position.y = -lowerStudLen * 0.5 + 1.0 * s;
+      bottomGroup.add(lowerStud);
+
+      // Stacked copper / spring-steel Belleville washer tower beneath the 2020 subframe bar
+      const towerStartY = -EXTRUSION_2020_MM * s - 0.8 * s;
+      for (let d = 0; d < 5; d++) {
+        const isCopper = d % 2 === 0;
+        const discGeo = isCopper ? bellDiscUpGeo : bellDiscDownGeo;
+        const discMat = isCopper ? copperBellevilleMat : springSteelBellMat;
+        const disc = tag(new THREE.Mesh(discGeo, discMat));
+        disc.position.y = towerStartY - d * 1.48 * s;
+        bottomGroup.add(disc);
+      }
+
+      const lockNut = new THREE.Mesh(lockNutGeo, shoulderBoltMat);
+      lockNut.position.y = towerStartY - 5 * 1.48 * s - 1.1 * s;
+      bottomGroup.add(lockNut);
+
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
+  } else if (bedMountType === "dual_leaf_ti_kinematic") {
+    // 3c. Dual-Blade Ti/301 Leaf-Spring Kinematic (14 mm — Annex / Heavy Pochard, Tap-Rated)
+    //     Twin stacked anodized Titanium-tint S-leaf flexure blades with heavier CNC clamps & spacer block
+    const flexTopInsetY = Math.min(3.4 * s, effectiveStandoffH * 0.26);
+    const flexBotInsetY = Math.min(4.2 * s, effectiveStandoffH * 0.32);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
+
+    const tiUpperBladeMat = makeMat({
+      color: 0xcbd5e1, // anodized Grade-5 Titanium leaf blade (upper)
+      metalness: 0.92,
+      roughness: 0.17,
+      sensTint: true,
+    });
+    const tiLowerBladeMat = makeMat({
+      color: 0x94a3b8, // secondary slate-Ti / 301 leaf blade (lower)
+      metalness: 0.9,
+      roughness: 0.2,
+      sensTint: true,
+    });
+    const heavyClampMat = makeMat({
+      color: 0x1e293b, // heavier dark-anodized CNC clamp blocks
+      metalness: 0.82,
+      roughness: 0.3,
+      sensTint: true,
+    });
+    const tiSpacerMat = makeMat({
+      color: 0xdbe4ef, // precision machined silver-Ti spacer block between twin blades
+      metalness: 0.88,
+      roughness: 0.2,
+    });
+    const boltMat = makeMat({
+      color: 0xf1f5f9,
+      metalness: 0.92,
+      roughness: 0.15,
+    });
+    const tiBluePinMat = makeMat({
+      color: 0x60a5fa, // titanium-blue anodized locator dowel
+      metalness: 0.86,
+      roughness: 0.2,
+    });
+
+    // Heavy CNC upper clamp + inter-blade spacer + bottom cap (y = 0..-3.4*s + clamping stack)
+    const upperClampGeo = new THREE.BoxGeometry(14.8 * s, 3.4 * s, 18.6 * s);
+    const upperSpacerGeo = new THREE.BoxGeometry(11.6 * s, 1.5 * s, 16.0 * s);
+    const upperCapGeo = new THREE.BoxGeometry(11.6 * s, 1.1 * s, 16.0 * s);
+    const m3BoltGeo = new THREE.CylinderGeometry(1.85 * s, 1.85 * s, 2.2 * s, 10);
+    const tiPinGeo = new THREE.CylinderGeometry(1.7 * s, 1.7 * s, 4.8 * s, 12);
+
+    // Twin stacked S-leaf flexure blades with visible inter-blade air gap & precision end spacer blocks
+    const bladeSpanY = Math.max(restFlexLen * 0.72, 1.2 * s);
+    const bladeGapY = Math.max(restFlexLen - bladeSpanY, 0.9 * s);
+    const leafBladeGeo = createLeafFlexureBladeGeometry(s, 15.2 * s, 0.95 * s, bladeSpanY);
+    const endSpacerGeo = new THREE.BoxGeometry(6.8 * s, bladeGapY, 15.6 * s);
+
+    // Heavy stepped CNC lower clamp block + inter-blade spacer + M5 anchor bolt
+    const lowerBaseGeo = new THREE.BoxGeometry(16.6 * s, 4.2 * s, 19.2 * s);
+    const lowerCapGeo = new THREE.BoxGeometry(11.6 * s, 1.4 * s, 16.0 * s);
+    const m5BoltGeo = new THREE.CylinderGeometry(3.3 * s, 3.3 * s, 1.8 * s, 12);
+
+    supportPtsThree.forEach((sp, idx) => {
+      const yaw = radialYawToCenter(sp, bedBaseCenter);
+
+      const topGroup = new THREE.Group();
+      const upperClamp = tag(new THREE.Mesh(upperClampGeo, heavyClampMat));
+      upperClamp.position.set(5.8 * s, -1.7 * s, 0);
+      topGroup.add(upperClamp);
+
+      const upperSpacer = tag(new THREE.Mesh(upperSpacerGeo, tiSpacerMat));
+      upperSpacer.position.set(5.8 * s, -4.35 * s, 0);
+      topGroup.add(upperSpacer);
+
+      const upperCap = new THREE.Mesh(upperCapGeo, heavyClampMat);
+      upperCap.position.set(5.8 * s, -5.85 * s, 0);
+      topGroup.add(upperCap);
+
+      for (const zOff of [-5.6 * s, 0, 5.6 * s]) {
+        const bolt = new THREE.Mesh(m3BoltGeo, boltMat);
+        bolt.position.set(5.8 * s, -6.7 * s, zOff);
+        topGroup.add(bolt);
+      }
+
+      const topPin = new THREE.Mesh(tiPinGeo, tiBluePinMat);
+      topPin.position.set(1.4 * s, -2.4 * s, 0);
+      topGroup.add(topPin);
+
+      const flexGroup = new THREE.Group();
+      // Lower stacked Ti leaf blade (y = 0 .. bladeSpanY)
+      const lowerBlade = tag(new THREE.Mesh(leafBladeGeo, tiLowerBladeMat));
+      flexGroup.add(lowerBlade);
+
+      // Upper stacked Ti leaf blade (y = bladeGapY .. restFlexLen)
+      const upperBlade = tag(new THREE.Mesh(leafBladeGeo, tiUpperBladeMat));
+      upperBlade.position.y = bladeGapY;
+      flexGroup.add(upperBlade);
+
+      // Machined spacer blocks separating the twin stacked blades at both clamped ends
+      const innerSpacer = tag(new THREE.Mesh(endSpacerGeo, tiSpacerMat));
+      innerSpacer.position.set(6.8 * s, bladeSpanY + bladeGapY * 0.5 - 0.4 * s, 0);
+      flexGroup.add(innerSpacer);
+
+      const outerSpacer = tag(new THREE.Mesh(endSpacerGeo, tiSpacerMat));
+      outerSpacer.position.set(-6.8 * s, bladeGapY * 0.5 + 0.4 * s, 0);
+      flexGroup.add(outerSpacer);
+
+      const bottomGroup = new THREE.Group();
+      const lowerBase = tag(new THREE.Mesh(lowerBaseGeo, heavyClampMat));
+      lowerBase.position.set(-5.8 * s, 2.1 * s, 0);
+      bottomGroup.add(lowerBase);
+
+      const lowerCap = tag(new THREE.Mesh(lowerCapGeo, tiSpacerMat));
+      lowerCap.position.set(-5.8 * s, 5.1 * s, 0);
+      bottomGroup.add(lowerCap);
+
+      for (const zOff of [-5.6 * s, 0, 5.6 * s]) {
+        const bolt = new THREE.Mesh(m3BoltGeo, boltMat);
+        bolt.position.set(-5.8 * s, 6.4 * s, zOff);
+        bottomGroup.add(bolt);
+      }
+
+      const m5Anchor = new THREE.Mesh(m5BoltGeo, boltMat);
+      m5Anchor.position.set(-10.8 * s, 4.7 * s, 0);
+      bottomGroup.add(m5Anchor);
+
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
+  } else if (bedMountType === "spherical_3pt_ratrig") {
+    // 3d. RatRig V-Core 3/4 3-Pt Spherical Pivot Kinematic (15 mm, Tap-Rated)
+    //     Machined spherical ball-socket joint (chrome bearing sphere in dark-anodized housing + radial slot base bracket)
+    const flexTopInsetY = Math.min(3.4 * s, effectiveStandoffH * 0.25);
+    const flexBotInsetY = Math.min(4.6 * s, effectiveStandoffH * 0.33);
+    const restFlexLen = Math.max(effectiveStandoffH - flexTopInsetY - flexBotInsetY, 1.0 * s);
+
+    const housingMat = makeMat({
+      color: 0x1f2937, // dark-anodized CNC spherical socket housing
+      metalness: 0.82,
+      roughness: 0.3,
+      sensTint: true,
+    });
+    const bracketMat = makeMat({
+      color: 0x94a3b8, // machined radial-slot base bracket
+      metalness: 0.84,
+      roughness: 0.26,
+      sensTint: true,
+    });
+    const chromeSphereMat = makeMat({
+      color: 0xf8fafc, // hardened chrome spherical bearing inner sphere
+      metalness: 0.96,
+      roughness: 0.08,
+    });
+    const bronzeLinerMat = makeMat({
+      color: 0xc9933b, // bronze/PTFE spherical bearing liner ring
+      metalness: 0.84,
+      roughness: 0.22,
+    });
+    const boltMat = makeMat({
+      color: 0xe2e8f0, // stainless M6 pivot stud & cap screws
+      metalness: 0.92,
+      roughness: 0.16,
+    });
+    const slotDarkMat = makeMat({
+      color: 0x0f172a, // recessed radial expansion slot
+      metalness: 0.25,
+      roughness: 0.82,
+    });
+
+    // Identify rear-center fixed anchor (smallest Three.js Z = largest CAD Y)
+    let rearFixedIdx = 0;
+    let minZ = Infinity;
+    supportPtsThree.forEach((pt, idx) => {
+      if (pt.z < minZ) {
+        minZ = pt.z;
+        rearFixedIdx = idx;
+      }
+    });
+
+    // Bed-side circular mounting boss + M6 thermal isolation collar (y = 0..-3.4*s)
+    const topBossGeo = new THREE.CylinderGeometry(10.6 * s, 9.8 * s, 1.8 * s, 20);
+    const topCollarGeo = new THREE.CylinderGeometry(6.6 * s, 5.4 * s, 1.6 * s, 18);
+
+    // Spherical ball-socket assembly (flexGroup: y = 0..restFlexLen)
+    const outerSocketGeo = new THREE.CylinderGeometry(9.6 * s, 9.6 * s, restFlexLen * 0.66, 22);
+    const linerRingGeo = new THREE.CylinderGeometry(7.2 * s, 7.2 * s, restFlexLen * 0.76, 20);
+    const sphereR = Math.min(5.2 * s, restFlexLen * 0.62);
+    const sphereGeo = new THREE.SphereGeometry(sphereR, 20, 14);
+    const pivotStudGeo = new THREE.CylinderGeometry(2.6 * s, 2.6 * s, restFlexLen, 14);
+
+    // Radial-slot CNC base bracket + fixed rear boss (bottomGroup: y = 0..+4.6*s)
+    const baseBracketGeo = new THREE.BoxGeometry(24.0 * s, 3.6 * s, 14.0 * s);
+    const slotChannelGeo = new THREE.BoxGeometry(12.2 * s, 3.8 * s, 4.4 * s);
+    const fixedCollarGeo = new THREE.CylinderGeometry(6.8 * s, 7.4 * s, 1.2 * s, 18);
+    const clampScrewGeo = new THREE.CylinderGeometry(2.2 * s, 2.2 * s, 1.6 * s, 12);
+
+    let usedSlotDark = false;
+
+    supportPtsThree.forEach((sp, idx) => {
+      const yaw = radialYawToCenter(sp, bedBaseCenter);
+      const isRearFixed = idx === rearFixedIdx;
+
+      const topGroup = new THREE.Group();
+      const topBoss = tag(new THREE.Mesh(topBossGeo, housingMat));
+      topBoss.position.y = -0.9 * s;
+      topGroup.add(topBoss);
+
+      const topCollar = tag(new THREE.Mesh(topCollarGeo, boltMat));
+      topCollar.position.y = -2.6 * s;
+      topGroup.add(topCollar);
+
+      const flexGroup = new THREE.Group();
+      const outerSocket = tag(new THREE.Mesh(outerSocketGeo, housingMat));
+      outerSocket.position.y = restFlexLen * 0.5;
+      flexGroup.add(outerSocket);
+
+      const bronzeLiner = new THREE.Mesh(linerRingGeo, bronzeLinerMat);
+      bronzeLiner.position.y = restFlexLen * 0.5;
+      flexGroup.add(bronzeLiner);
+
+      const chromeSphere = tag(new THREE.Mesh(sphereGeo, chromeSphereMat));
+      chromeSphere.position.y = restFlexLen * 0.5;
+      flexGroup.add(chromeSphere);
+
+      const pivotStud = new THREE.Mesh(pivotStudGeo, boltMat);
+      pivotStud.position.y = restFlexLen * 0.5;
+      flexGroup.add(pivotStud);
+
+      const bottomGroup = new THREE.Group();
+      const baseBracket = tag(new THREE.Mesh(baseBracketGeo, bracketMat));
+      baseBracket.position.y = 1.8 * s;
+      bottomGroup.add(baseBracket);
+
+      if (isRearFixed) {
+        const fixedCollar = new THREE.Mesh(fixedCollarGeo, housingMat);
+        fixedCollar.position.y = 4.1 * s;
+        bottomGroup.add(fixedCollar);
+      } else {
+        usedSlotDark = true;
+        const slotChannel = new THREE.Mesh(slotChannelGeo, slotDarkMat);
+        slotChannel.position.y = 1.8 * s;
+        bottomGroup.add(slotChannel);
+      }
+
+      for (const side of [-1, 1]) {
+        const cScrew = new THREE.Mesh(clampScrewGeo, boltMat);
+        cScrew.position.set(side * 9.2 * s, 4.1 * s, 0);
+        bottomGroup.add(cScrew);
+      }
+
+      registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
+    });
+
+    if (!usedSlotDark) {
+      slotDarkMat.dispose();
+      slotChannelGeo.dispose();
+    }
   } else if (bedMountType === "floating_4pt") {
     // 4. 4-Pt Floating — Anchor #0 Fixed Shoulder Bolt + Anchors #1–3 Radially Slotted Tabs (12 mm)
     const flexTopInsetY = Math.min(3.2 * s, effectiveStandoffH * 0.28);

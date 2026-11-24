@@ -142,6 +142,29 @@ const PANEL_MATERIALS: Array<{ id: string; label: string; shortLabel: string }> 
   { id: "carbon_fiber_plate", label: "Carbon Fiber 3K Sheet", shortLabel: "Carbon Fiber 3K" },
 ];
 
+const FRAME_EXTRUSION_IDS = new Set([
+  "extrusion_2020",
+  "extrusion_2040",
+  "extrusion_3030",
+  "extrusion_4040",
+  "extrusion_3060",
+]);
+
+const FRAME_TUBE_IDS = new Set([
+  "al_tube_20x20x2",
+  "al_tube_30x30x3",
+  "steel_tube_25x25x2",
+]);
+
+const FRAME_MATERIAL_IDS = new Set([
+  "aluminum_6063_t5",
+  "aluminum_6061_t6",
+  "aluminum_7075_t6",
+  "steel_4140",
+  "stainless_304",
+  "titanium_grade5",
+]);
+
 const PANEL_MOUNTING_SHORT: Record<string, string> = {
   none: "Open",
   clip_enclosure: "Clip-In",
@@ -551,11 +574,11 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
       : `${frameProfileCode} centerlines + ${frameProfileWidthMm} mm`;
 
   return (
-    <div className="section-card">
+    <div className="section-card" data-design-section="frame">
       <div className="section-title">Frame &amp; Structure (FEA)</div>
       <div className="field-row">
-        <label>Architecture</label>
-        <select
+        <label htmlFor="df-architecture-1">Architecture</label>
+        <select id="df-architecture-1"
           value={spec.architecture}
           onChange={(e) => {
             const nextVal = e.target.value as PrinterSpecData["architecture"];
@@ -576,13 +599,13 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
       {spec.architecture === "corexy" && (
         <>
           <div className="field-row">
-            <label>
+            <label htmlFor="df-gantry-and-z-architecture-2">
               <span>Gantry &amp; Z Architecture</span>
-              <span style={{ color: isFlyingGantry ? "var(--amber)" : "var(--accent)", fontWeight: 600 }}>
+              <span style={{ color: isFlyingGantry ? "var(--amber)" : "var(--accent)", fontWeight: 500 }}>
                 {isFlyingGantry ? "Flying Gantry" : "Fixed Gantry"}
               </span>
             </label>
-            <select
+            <select id="df-gantry-and-z-architecture-2"
               value={spec.bed.z_drive}
               onChange={(e) => {
                 const nextZ = e.target.value as PrinterSpecData["bed"]["z_drive"];
@@ -624,18 +647,19 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
 
       {sizePresets && (
         <div className="field-row">
-          <label>
+          <label id="df-quick-frame-size-3">
             <span>Quick Frame Size</span>
-            <span style={{ fontSize: 10, color: "var(--muted)" }}>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>
               {activeSizePresetId ? `${activeSizePresetId} Class` : "Custom"}
             </span>
           </label>
-          <div className="frame-size-presets">
+          <div role="group" aria-labelledby="df-quick-frame-size-3" className="frame-size-presets">
             {sizePresets.map((preset) => (
               <button
                 key={preset.id}
                 type="button"
                 className={`frame-size-pill ${activeSizePresetId === preset.id ? "active" : ""}`}
+ aria-pressed={activeSizePresetId === preset.id}
                 title={`Set frame ${preset.frame.join("×")} mm, build ${preset.build.join("×")} mm, bed ${preset.bed.join("×")} mm`}
                 onClick={() => handleApplyFramePreset(preset)}
               >
@@ -645,6 +669,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             <button
               type="button"
               className={`frame-size-pill ${activeSizePresetId === null ? "active" : ""}`}
+ aria-pressed={activeSizePresetId === null}
               title="Enter custom frame centerline dimensions below"
               onClick={() => {
                 frameWidthInputRef.current?.focus();
@@ -659,8 +684,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
 
       <div className="field-grid-3">
         <div className="field-row">
-          <label>Width mm</label>
-          <input
+          <label htmlFor="df-width-mm-4">Width (mm)</label>
+          <input id="df-width-mm-4"
             ref={frameWidthInputRef}
             type="number"
             min={200}
@@ -681,8 +706,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           />
         </div>
         <div className="field-row">
-          <label>Depth mm</label>
-          <input
+          <label htmlFor="df-depth-mm-5">Depth (mm)</label>
+          <input id="df-depth-mm-5"
             type="number"
             min={200}
             max={1500}
@@ -702,8 +727,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           />
         </div>
         <div className="field-row">
-          <label>Height mm</label>
-          <input
+          <label htmlFor="df-height-mm-6">Height (mm)</label>
+          <input id="df-height-mm-6"
             type="number"
             min={200}
             max={1500}
@@ -746,8 +771,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         </div>
         <div className="field-grid-3">
           <div className="field-row">
-            <label>Build X mm</label>
-            <input
+            <label htmlFor="df-build-x-mm-7">Build X (mm)</label>
+            <input id="df-build-x-mm-7"
               type="number"
               min={80}
               max={1300}
@@ -767,8 +792,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             />
           </div>
           <div className="field-row">
-            <label>Build Y mm</label>
-            <input
+            <label htmlFor="df-build-y-mm-8">Build Y (mm)</label>
+            <input id="df-build-y-mm-8"
               type="number"
               min={80}
               max={1300}
@@ -788,8 +813,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             />
           </div>
           <div className="field-row">
-            <label>Build Z mm</label>
-            <input
+            <label htmlFor="df-build-z-mm-9">Build Z (mm)</label>
+            <input id="df-build-z-mm-9"
               type="number"
               min={80}
               max={1300}
@@ -811,10 +836,10 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         </div>
       </div>
 
-      <div className="field-grid-2">
+      <div className="field-grid-2 stack">
         <div className="field-row">
-          <label>Frame Profile</label>
-          <select
+          <label htmlFor="df-frame-profile-10">Frame Profile</label>
+          <select id="df-frame-profile-10"
             value={spec.frame.profile}
             onChange={(e) => {
               const nextVal = e.target.value;
@@ -826,16 +851,43 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               );
             }}
           >
-            {catalog.profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
+            {(() => {
+              const extrusions = catalog.profiles.filter((p) => FRAME_EXTRUSION_IDS.has(p.id));
+              const tubes = catalog.profiles.filter((p) => FRAME_TUBE_IDS.has(p.id));
+              const hasCurrent =
+                extrusions.some((p) => p.id === spec.frame.profile) ||
+                tubes.some((p) => p.id === spec.frame.profile);
+              return (
+                <>
+                  {!hasCurrent && (
+                    <option value={spec.frame.profile}>
+                      {profileLabel(spec.frame.profile)} (Custom)
+                    </option>
+                  )}
+                  <optgroup label="T-Slot Extrusions">
+                    {extrusions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {tubes.length > 0 && (
+                    <optgroup label="Structural Frame Tubes">
+                      {tubes.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </>
+              );
+            })()}
           </select>
         </div>
         <div className="field-row">
-          <label>Frame Material</label>
-          <select
+          <label htmlFor="df-frame-material-11">Frame Material</label>
+          <select id="df-frame-material-11"
             value={spec.frame.material}
             onChange={(e) => {
               const nextVal = e.target.value;
@@ -847,11 +899,24 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               );
             }}
           >
-            {catalog.materials.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
+            {(() => {
+              const frameMats = catalog.materials.filter((m) => FRAME_MATERIAL_IDS.has(m.id));
+              const hasCurrent = frameMats.some((m) => m.id === spec.frame.material);
+              return (
+                <>
+                  {!hasCurrent && (
+                    <option value={spec.frame.material}>
+                      {materialLabel(spec.frame.material)} (Custom)
+                    </option>
+                  )}
+                  {frameMats.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </>
+              );
+            })()}
           </select>
         </div>
       </div>
@@ -877,15 +942,15 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
 
         return (
           <div className="field-row">
-            <label>
+            <label htmlFor="df-corner-upright-profile-12">
               <span>Corner Upright Profile</span>
               {isMixed && (
-                <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                <span style={{ color: "var(--accent)", fontWeight: 500 }}>
                   Mixed Frame
                 </span>
               )}
             </label>
-            <select
+            <select id="df-corner-upright-profile-12"
               value={currentUpright}
               onChange={(e) => {
                 const raw = e.target.value;
@@ -931,7 +996,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
 
       {spec.architecture === "corexy" && (
         <div className="slider-row">
-          <label>
+          <label htmlFor="df-top-to-gantry-clearance-mm-13">
             <span>Top-to-Gantry Clearance (mm)</span>
             <span className="tension-readout">
               <strong>{gantryClearanceDraft} mm</strong>
@@ -945,7 +1010,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             </span>
           </label>
           <div className="tension-control-row">
-            <input
+            <input id="df-top-to-gantry-clearance-mm-13"
               type="range"
               min={25}
               max={250}
@@ -955,7 +1020,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               onPointerUp={() => commitGantryClearance(gantryClearanceDraft)}
               onKeyUp={() => commitGantryClearance(gantryClearanceDraft)}
             />
-            <input
+            <input aria-label="Top-to-Gantry Clearance (mm) value"
               type="number"
               className="tension-num-input"
               min={25}
@@ -985,8 +1050,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
       )}
 
       <div className="field-row">
-        <label>Bracing</label>
-        <select
+        <label htmlFor="df-bracing-14">Bracing</label>
+        <select id="df-bracing-14"
           value={spec.frame.bracing}
           onChange={(e) => {
             const nextVal = e.target.value as PrinterSpecData["frame"]["bracing"];
@@ -1080,10 +1145,10 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
       {spec.architecture === "corexy" && (
         <>
           <div className="field-row">
-            <label>
+            <label htmlFor="df-top-brace-open-center-15">
               <span>Top Brace (Open Center)</span>
               {currentTopBrace !== "none" && (
-                <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                <span style={{ color: "var(--accent)", fontWeight: 500 }}>
                   {topBraceCatalogItem?.short_label ??
                     (currentTopBrace === "cnc_halo_ring"
                       ? "CNC Halo"
@@ -1093,7 +1158,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 </span>
               )}
             </label>
-            <select
+            <select id="df-top-brace-open-center-15"
               value={currentTopBrace}
               onChange={(e) => {
                 const nextVal = e.target.value as TopBraceType;
@@ -1154,10 +1219,10 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           </div>
 
           <div className="field-row">
-            <label>
+            <label htmlFor="df-front-brace-open-door-16">
               <span>Front Brace (Open Door)</span>
               {currentFrontBrace !== "none" && (
-                <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                <span style={{ color: "var(--accent)", fontWeight: 500 }}>
                   {frontBraceCatalogItem?.short_label ??
                     (currentFrontBrace === "cnc_portal_frame"
                       ? "CNC Portal"
@@ -1167,7 +1232,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 </span>
               )}
             </label>
-            <select
+            <select id="df-front-brace-open-door-16"
               value={currentFrontBrace}
               onChange={(e) => {
                 const nextVal = e.target.value as FrontBraceType;
@@ -1251,8 +1316,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         </summary>
         <div className="sub-accordion-body">
           <div className="field-row">
-            <label>Corner Joint Type</label>
-            <select
+            <label htmlFor="df-corner-joint-type-17">Corner Joint Type</label>
+            <select id="df-corner-joint-type-17"
               value={currentCornerJoint}
               onChange={(e) => {
                 const nextVal = e.target.value as CornerJointType;
@@ -1278,7 +1343,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           </div>
 
           <div className="field-row">
-            <label>
+            <label htmlFor="df-extrusion-cavity-filling-18">
               <span>Extrusion Cavity Filling</span>
               <span
                 style={{
@@ -1286,7 +1351,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                   alignItems: "center",
                   gap: 4,
                   color: currentFillingId !== "none" ? "var(--accent)" : "var(--muted)",
-                  fontWeight: 600,
+                  fontWeight: 500,
                 }}
               >
                 <span
@@ -1296,7 +1361,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 {selectedFilling.short_name}
               </span>
             </label>
-            <select
+            <select id="df-extrusion-cavity-filling-18"
               value={currentFillingId}
               onChange={(e) => {
                 const nextId = e.target.value as ExtrusionFillingType;
@@ -1371,8 +1436,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         )}
 
         <div className="field-row">
-          <label>Panel Mounting</label>
-          <select
+          <label htmlFor="df-panel-mounting-19">Panel Mounting</label>
+          <select id="df-panel-mounting-19"
             value={effectivePanelMounting}
             onChange={(e) => {
               const nextMount = e.target.value as PrinterSpecData["frame"]["panel_mounting"];
@@ -1403,10 +1468,10 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         </div>
 
         {panelsEnabled && (
-          <div className="field-grid-2">
+          <div className="field-grid-2 wide-first">
             <div className="field-row">
-              <label>Panel Material</label>
-              <select
+              <label htmlFor="df-panel-material-20">Panel Material</label>
+              <select id="df-panel-material-20"
                 value={currentPanelMaterial}
                 onChange={(e) => {
                   const nextMat = e.target.value;
@@ -1423,6 +1488,11 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                   );
                 }}
               >
+                {!PANEL_MATERIALS.some((pm) => pm.id === currentPanelMaterial) && (
+                  <option value={currentPanelMaterial}>
+                    {materialLabel(currentPanelMaterial)} (Custom)
+                  </option>
+                )}
                 {PANEL_MATERIALS.map((pm) => (
                   <option key={pm.id} value={pm.id}>
                     {pm.label}
@@ -1431,8 +1501,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               </select>
             </div>
             <div className="field-row">
-              <label>Thickness (mm)</label>
-              <select
+              <label htmlFor="df-thickness-mm-21">Thickness (mm)</label>
+              <select id="df-thickness-mm-21"
                 value={currentPanelThickness}
                 onChange={(e) => {
                   const nextThick = Number(e.target.value);
@@ -1528,7 +1598,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           )}
 
         <div className="slider-row" style={{ marginTop: 4 }}>
-          <label>
+          <label htmlFor="df-chamber-temp-c-22">
             <span>Chamber Temp (°C)</span>
             <span className="tension-readout">
               <strong style={{ color: chamberTempDraft >= 55 ? "var(--amber)" : "var(--text)" }}>
@@ -1540,7 +1610,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             </span>
           </label>
           <div className="tension-control-row">
-            <input
+            <input id="df-chamber-temp-c-22"
               type="range"
               min={25}
               max={85}
@@ -1550,7 +1620,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               onPointerUp={() => commitChamberTemp(chamberTempDraft)}
               onKeyUp={() => commitChamberTemp(chamberTempDraft)}
             />
-            <input
+            <input aria-label="Chamber Temp (°C) value"
               type="number"
               className="tension-num-input"
               min={25}
@@ -1642,7 +1712,7 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
   };
 
   return (
-    <div className="section-card">
+    <div className="section-card" data-design-section="sim">
       <details className="sub-accordion">
         <summary>
           <span>Simulation &amp; Anchoring</span>
@@ -1652,18 +1722,18 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
         </summary>
         <div className="sub-accordion-body">
           <div className="field-row">
-            <label>
+            <label htmlFor="df-benchtop-feet-23">
               <span>Benchtop Feet</span>
               <span
                 style={{
                   color: currentFeetType === "rigid_bolted" ? "var(--muted)" : "var(--accent)",
-                  fontWeight: 600,
+                  fontWeight: 500,
                 }}
               >
                 {frameFeetOptionMeta.shortLabel}
               </span>
             </label>
-            <select
+            <select id="df-benchtop-feet-23"
               value={currentFeetType}
               onChange={(e) => {
                 const nextVal = e.target.value as FrameFeetType;
@@ -1716,6 +1786,7 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
                     key={preset.id}
                     type="button"
                     className={`chip-btn ${isActive ? "active" : ""}`}
+ aria-pressed={isActive}
                     onClick={() => {
                       setPosDraft(preset.pos);
                       commitToolheadRelPos(preset.pos, `Test Position: ${preset.label}`);
@@ -1739,7 +1810,7 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
                 return (
                   <div key={axisName} className="pos-slider-row">
                     <span className="pos-axis-lbl">{axisName}</span>
-                    <input
+                    <input aria-label={`Toolhead test position ${axisName} (%)`}
                       type="range"
                       min={10}
                       max={90}
@@ -1764,8 +1835,8 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
           </div>
 
           <div className="field-row">
-            <label>Panel Shell Mesh (MITC4)</label>
-            <div
+            <label id="df-panel-shell-mesh-mitc4-24">Panel Shell Mesh (MITC4)</label>
+            <div role="group" aria-labelledby="df-panel-shell-mesh-mitc4-24"
               className="engine-toggle engine-toggle-4"
               style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
             >
@@ -1781,6 +1852,7 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
                   key={n}
                   type="button"
                   className={`engine-toggle-btn ${panelMeshN === n ? "active" : ""}`}
+ aria-pressed={panelMeshN === n}
                   onClick={() => onPanelMeshNChange(n)}
                 >
                   {label}

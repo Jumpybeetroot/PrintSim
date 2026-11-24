@@ -5,6 +5,7 @@ import {
   ModalBedMountItem,
   ModalGe5cJointItem,
   buildBedMountsGroup,
+  isThreePointBedMount,
 } from "../viewport/bedMounts";
 import {
   bedWarpColorInto,
@@ -800,8 +801,30 @@ export const PrinterViewport: React.FC<Props> = ({
   const [ecoDpr, setEcoDpr] = useState<boolean>(false);
   const [modalPaused, setModalPaused] = useState<boolean>(false);
   const [showHudDetails, setShowHudDetails] = useState<boolean>(false);
+  const [toolsMenuOpen, setToolsMenuOpen] = useState<boolean>(false);
+  const toolsMenuRef = useRef<HTMLDivElement | null>(null);
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
+
+  useEffect(() => {
+    if (!toolsMenuOpen) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (target && toolsMenuRef.current?.contains(target)) return;
+      setToolsMenuOpen(false);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setToolsMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [toolsMenuOpen]);
 
   const adjointLens = sensitivityLensProp ?? internalAdjointLens;
   const setAdjointLens = (next: AdjointLens) => {
@@ -4044,14 +4067,38 @@ export const PrinterViewport: React.FC<Props> = ({
           transparent: toolheadPunchIn,
           opacity: toolheadPunchIn ? 0.16 : 1.0,
         });
+        const wobbleXCopperMat = new THREE.MeshStandardMaterial({
+          color: 0xd97736,
+          metalness: 0.88,
+          roughness: 0.2,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.16 : 1.0,
+        });
+        const gearboxMetalMat = new THREE.MeshStandardMaterial({
+          color: 0xb8c4d4,
+          metalness: 0.9,
+          roughness: 0.2,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.16 : 1.0,
+        });
+        const gearboxHousingMat = new THREE.MeshStandardMaterial({
+          color: 0x334155,
+          metalness: 0.8,
+          roughness: 0.3,
+          transparent: toolheadPunchIn,
+          opacity: toolheadPunchIn ? 0.16 : 1.0,
+        });
 
         let leadUsed = false;
-        let ballUsed = false;
+        let ballChromeUsed = false;
+        let ballNutUsed = false;
         let brassUsed = false;
         let pomUsed = false;
         let beltUsed = false;
         let couplerUsed = false;
         let zMotorUsed = false;
+        let wobbleXUsed = false;
+        let gearboxUsed = false;
 
         const zMotorBodyGeo = new THREE.BoxGeometry(0.42, 0.38, 0.42);
         const zMotorCapGeo = new THREE.BoxGeometry(0.43, 0.045, 0.43);
@@ -4066,7 +4113,13 @@ export const PrinterViewport: React.FC<Props> = ({
           const driveLen = p0.distanceTo(p1);
           if (driveLen < 1e-3) continue;
 
-          const mechNice = zl.mechanism_id.replace(/_/g, " ").toUpperCase();
+          const mechId = zl.mechanism_id || "";
+          const isWobbleX = mechId.includes("wobblex");
+          const isPlanetary = mechId.includes("planetary");
+          const isWorm = mechId.includes("worm");
+          const isHeavyBall = mechId.includes("sfu1605");
+
+          const mechNice = mechId.replace(/_/g, " ").toUpperCase();
           const zDriveInspect: InspectedPartInfo = {
             key: `z_drive:${zl.id}`,
             name:
@@ -4079,16 +4132,20 @@ export const PrinterViewport: React.FC<Props> = ({
             partGroupId: "bed_support",
             role: "bed",
             material: zl.kind === "belt" ? "gt2_belt" : "steel",
-            profile: zl.mechanism_id,
+            profile: mechId,
           };
           const zMotorInspect: InspectedPartInfo = {
             key: `z_motor:${zl.id}`,
-            name: `NEMA17 Z-Axis Motor (${zl.id})`,
+            name: isPlanetary
+              ? `NEMA17 + 5:1 Planetary Z-Motor (${zl.id})`
+              : isWorm
+                ? `NEMA17 + 20:1 Worm Z-Motor (${zl.id})`
+                : `NEMA17 Z-Axis Motor (${zl.id})`,
             subsystem: "bed",
             partGroupId: "bed_support",
             role: "bed",
             material: "nema17_stepper",
-            profile: zl.mechanism_id,
+            profile: mechId,
           };
 
           // NEMA17 Z-stepper motor at motor_pos_mm
@@ -4101,6 +4158,58 @@ export const PrinterViewport: React.FC<Props> = ({
           const zMotCap = new THREE.Mesh(zMotorCapGeo, zMotorCapMat);
           zMotCap.position.y = 0.02;
           zMotGrp.add(zMotCap);
+
+          // Metallic gearbox collar on Z motor for Planetary / Worm belted-Z mods
+          if (isPlanetary) {
+            gearboxUsed = true;
+            const gCollar = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.185, 0.195, 0.22, 20),
+              gearboxMetalMat
+            );
+            gCollar.position.y = 0.15;
+            tagInspectable(gCollar, zMotorInspect);
+            zMotGrp.add(gCollar);
+
+            const gBaseFlange = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.215, 0.215, 0.04, 20),
+              gearboxHousingMat
+            );
+            gBaseFlange.position.y = 0.055;
+            zMotGrp.add(gBaseFlange);
+
+            const gTopBoss = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.145, 0.165, 0.055, 20),
+              gearboxHousingMat
+            );
+            gTopBoss.position.y = 0.285;
+            zMotGrp.add(gTopBoss);
+          } else if (isWorm) {
+            gearboxUsed = true;
+            const wormBlock = new THREE.Mesh(
+              new THREE.BoxGeometry(0.36, 0.26, 0.34),
+              gearboxHousingMat
+            );
+            wormBlock.position.y = 0.17;
+            tagInspectable(wormBlock, zMotorInspect);
+            zMotGrp.add(wormBlock);
+
+            const wormDrum = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.14, 0.14, 0.38, 18),
+              gearboxMetalMat
+            );
+            wormDrum.rotation.z = Math.PI * 0.5;
+            wormDrum.position.y = 0.18;
+            tagInspectable(wormDrum, zMotorInspect);
+            zMotGrp.add(wormDrum);
+
+            const wormCollar = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.115, 0.125, 0.06, 16),
+              gearboxMetalMat
+            );
+            wormCollar.position.y = 0.33;
+            zMotGrp.add(wormCollar);
+          }
+
           zMotGrp.position.copy(mPos);
           group.add(zMotGrp);
 
@@ -4153,12 +4262,20 @@ export const PrinterViewport: React.FC<Props> = ({
             tagInspectable(clampBlock, zDriveInspect);
             group.add(clampBlock);
           } else {
-            const isBall = zl.kind === "ballscrew" || zl.mechanism_id.includes("sfu");
-            const rShaft = Math.max((zl.diameter_mm || (isBall ? 12 : 8)) * 0.5 * SCALE, 0.036);
-            const shaftGeo = new THREE.CylinderGeometry(rShaft, rShaft, 1, 14);
+            const isBall = zl.kind === "ballscrew" || mechId.includes("sfu");
+            const nominalDiamMm = zl.diameter_mm || (isHeavyBall ? 16 : isBall ? 12 : 8);
+            const rShaft = Math.max(
+              nominalDiamMm * 0.5 * SCALE,
+              isHeavyBall ? 0.078 : 0.036
+            );
+            const shaftGeo = new THREE.CylinderGeometry(rShaft, rShaft, 1, 16);
             const shaftMat = isBall ? ballChromeMat : leadSteelMat;
-            if (isBall) ballUsed = true;
-            else leadUsed = true;
+            if (isBall) {
+              ballChromeUsed = true;
+              ballNutUsed = true;
+            } else {
+              leadUsed = true;
+            }
 
             const shaftMesh = new THREE.Mesh(shaftGeo, shaftMat);
             orientBeamMesh(shaftMesh, p0, p1);
@@ -4168,27 +4285,71 @@ export const PrinterViewport: React.FC<Props> = ({
             // Nut block at nut_z_mm
             const nutGrp = new THREE.Group();
             if (isBall) {
-              // SFU1204 flanged ballnut cylinder + BK10 angular-contact bearing block
+              // SFU1204 / SFU1605 flanged ballnut cylinder + BK10 or heavier FK12 bearing support block
+              const nutH = isHeavyBall ? 0.42 : 0.34;
+              const nutR = rShaft * (isHeavyBall ? 2.15 : 2.0);
+              const flangeR = rShaft * (isHeavyBall ? 3.25 : 3.1);
+              const flangeH = isHeavyBall ? 0.085 : 0.06;
               const nutCyl = new THREE.Mesh(
-                new THREE.CylinderGeometry(rShaft * 2.0, rShaft * 2.0, 0.34, 18),
+                new THREE.CylinderGeometry(nutR, nutR, nutH, 18),
                 ballNutMat
               );
               tagInspectable(nutCyl, zDriveInspect);
               nutGrp.add(nutCyl);
               const nutFlange = new THREE.Mesh(
-                new THREE.CylinderGeometry(rShaft * 3.1, rShaft * 3.1, 0.06, 18),
+                new THREE.CylinderGeometry(flangeR, flangeR, flangeH, 18),
                 ballNutMat
               );
-              nutFlange.position.y = 0.14;
+              nutFlange.position.y = nutH * 0.42;
               nutGrp.add(nutFlange);
 
-              // BK10 bottom bearing block
-              const bk10 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.26), pomNutMat);
-              pomUsed = true;
-              bk10.position.set(p0.x, p0.y + 0.1, p0.z);
-              group.add(bk10);
+              if (isHeavyBall) {
+                // Heavy FK12 flanged angular-contact bearing support block
+                pomUsed = true;
+                gearboxUsed = true;
+                const fk12Grp = new THREE.Group();
+                const fkFlange = new THREE.Mesh(
+                  new THREE.BoxGeometry(0.44, 0.12, 0.44),
+                  pomNutMat
+                );
+                fkFlange.position.y = 0.06;
+                tagInspectable(fkFlange, zDriveInspect);
+                fk12Grp.add(fkFlange);
+
+                const fkBoss = new THREE.Mesh(
+                  new THREE.CylinderGeometry(0.165, 0.175, 0.16, 18),
+                  gearboxHousingMat
+                );
+                fkBoss.position.y = 0.18;
+                tagInspectable(fkBoss, zDriveInspect);
+                fk12Grp.add(fkBoss);
+
+                const fkLockNut = new THREE.Mesh(
+                  new THREE.CylinderGeometry(0.125, 0.125, 0.055, 16),
+                  gearboxMetalMat
+                );
+                fkLockNut.position.y = 0.285;
+                fk12Grp.add(fkLockNut);
+
+                const boltGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.04, 10);
+                for (const bx of [-0.16, 0.16]) {
+                  for (const bz of [-0.16, 0.16]) {
+                    const bMesh = new THREE.Mesh(boltGeo, gearboxMetalMat);
+                    bMesh.position.set(bx, 0.135, bz);
+                    fk12Grp.add(bMesh);
+                  }
+                }
+                fk12Grp.position.set(p0.x, p0.y + 0.02, p0.z);
+                group.add(fk12Grp);
+              } else {
+                // BK10 bottom bearing block
+                const bk10 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.26), pomNutMat);
+                pomUsed = true;
+                bk10.position.set(p0.x, p0.y + 0.1, p0.z);
+                group.add(bk10);
+              }
             } else {
-              const isBrass = zl.mechanism_id.includes("brass");
+              const isBrass = mechId.includes("brass");
               const nutMat = isBrass ? brassNutMat : pomNutMat;
               if (isBrass) brassUsed = true;
               else pomUsed = true;
@@ -4206,6 +4367,44 @@ export const PrinterViewport: React.FC<Props> = ({
               nutFlange.position.y = 0.07;
               nutGrp.add(nutFlange);
             }
+
+            // Visible copper/brass WobbleX kinematic decoupler ring assembly on the nut carrier
+            if (isWobbleX) {
+              wobbleXUsed = true;
+              ballChromeUsed = true;
+              const wxBaseY = isBall ? 0.23 : 0.14;
+              const wxRingR = Math.max(rShaft * 3.15, 0.145);
+
+              const wxLowerRing = new THREE.Mesh(
+                new THREE.CylinderGeometry(wxRingR, wxRingR, 0.075, 20),
+                wobbleXCopperMat
+              );
+              wxLowerRing.position.y = wxBaseY;
+              tagInspectable(wxLowerRing, zDriveInspect);
+              nutGrp.add(wxLowerRing);
+
+              const wxUpperRing = new THREE.Mesh(
+                new THREE.CylinderGeometry(wxRingR * 0.94, wxRingR * 0.94, 0.065, 20),
+                wobbleXCopperMat
+              );
+              wxUpperRing.position.y = wxBaseY + 0.105;
+              tagInspectable(wxUpperRing, zDriveInspect);
+              nutGrp.add(wxUpperRing);
+
+              // Three 120°-spaced hardened steel decoupling balls visible between the copper WobbleX plates
+              const wxBallGeo = new THREE.SphereGeometry(0.024, 10, 8);
+              for (let bi = 0; bi < 3; bi++) {
+                const ang = (bi * Math.PI * 2) / 3;
+                const wxBall = new THREE.Mesh(wxBallGeo, ballChromeMat);
+                wxBall.position.set(
+                  Math.cos(ang) * wxRingR * 0.68,
+                  wxBaseY + 0.055,
+                  Math.sin(ang) * wxRingR * 0.68
+                );
+                nutGrp.add(wxBall);
+              }
+            }
+
             nutGrp.position.set(midX, nutY, midZ);
             group.add(nutGrp);
 
@@ -4221,10 +4420,8 @@ export const PrinterViewport: React.FC<Props> = ({
         }
 
         if (!leadUsed) leadSteelMat.dispose();
-        if (!ballUsed) {
-          ballChromeMat.dispose();
-          ballNutMat.dispose();
-        }
+        if (!ballChromeUsed) ballChromeMat.dispose();
+        if (!ballNutUsed) ballNutMat.dispose();
         if (!brassUsed) brassNutMat.dispose();
         if (!pomUsed) pomNutMat.dispose();
         if (!beltUsed) {
@@ -4232,6 +4429,11 @@ export const PrinterViewport: React.FC<Props> = ({
           zPulleyMat.dispose();
         }
         if (!couplerUsed) couplerMat.dispose();
+        if (!wobbleXUsed) wobbleXCopperMat.dispose();
+        if (!gearboxUsed) {
+          gearboxMetalMat.dispose();
+          gearboxHousingMat.dispose();
+        }
         if (!zMotorUsed) {
           zMotorBodyGeo.dispose();
           zMotorCapGeo.dispose();
@@ -5617,7 +5819,7 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // 3D Bed Mount CAD Assemblies (all 7 BedMountType variants via dedicated viewport/bedMounts.ts)
+    // 3D Bed Mount CAD Assemblies (all 11 BedMountType variants via dedicated viewport/bedMounts.ts)
     if (
       viewMode === "assembly" ||
       viewMode === "sensitivity" ||
@@ -5637,11 +5839,7 @@ export const PrinterViewport: React.FC<Props> = ({
         const insetX = bedX * 0.375;
         const insetY = bedY * 0.375;
         const mountZ = bcz - (sim.spec.bed.plate_thickness_mm ?? 8) - 8;
-        if (
-          bedMountType === "kinematic_3pt" ||
-          bedMountType === "whopping_pochard_kinematic" ||
-          bedMountType === "trident_3pt_standoffs"
-        ) {
+        if (isThreePointBedMount(bedMountType)) {
           supportPtsThree.push(
             toThree([bcx - insetX, bcy - insetY, mountZ], cx, cy),
             toThree([bcx + insetX, bcy - insetY, mountZ], cx, cy),
@@ -8056,170 +8254,194 @@ export const PrinterViewport: React.FC<Props> = ({
     canShowBedWarpHud &&
     !showBedWarp &&
     (bedPlateFeaHud?.total_flatness_error_um ?? 0) >= 50;
+  const bedWarpActive = canShowBedWarpHud && showBedWarp && Boolean(bedPlateFeaHud);
+  const activeToolsCount =
+    (toolheadPunchIn ? 1 : 0) + (bedWarpActive ? 1 : 0) + (showHudDetails ? 1 : 0);
+  const hasContextTools =
+    canPunchIn || (canShowBedWarpHud && Boolean(bedPlateFeaHud));
 
   return (
     <div className="viewport-wrap">
-      <div ref={containerRef} className="viewport-canvas" />
+      <div
+        ref={containerRef}
+        className="viewport-canvas"
+        role="img"
+        aria-label="Interactive 3D view of the printer. Drag to orbit, scroll to zoom."
+      />
 
       <div className="viewport-hud-top">
         <div className="viewport-hud-top-left">
-          <div className="hud-pill-group">
+          <div className="hud-pill-group hud-view-modes" role="group" aria-label="View mode">
             {(
               [
-                ["assembly", "Assembly"],
-                ["fea_stress", "Frame FEA"],
-                ["modal", "Modal"],
-                ["sensitivity", "Adjoint ROI"],
-                ["toolpath", "Virtual Print"],
-                ["solid_part", "3D Solid Part"],
-                ["topology", "Topo Opt"],
-              ] as Array<[ViewMode, string]>
-            ).map(([id, label]) => (
+                ["assembly", "Assembly", "3D Printer Structural Assembly"],
+                ["fea_stress", "FEA", "Frame Static FEA Stress & Deflection"],
+                ["modal", "Modal", "Animated 3D Modal Vibration Shapes"],
+                ["sensitivity", "ROI", "Adjoint Structural Sensitivity & Upgrade ROI"],
+                ["toolpath", "Print", "Virtual G-code Print Defect Simulation"],
+                ["solid_part", "Part FEA", "3D Solid Tet10 / Hex8 Bracket FEA"],
+                ["topology", "Topo", "3D SIMP Topology Optimization"],
+              ] as Array<[ViewMode, string, string]>
+            ).map(([id, label, tooltip]) => (
               <button
                 key={id}
+                type="button"
                 className={`hud-pill ${viewMode === id ? "active" : ""}`}
+ aria-pressed={viewMode === id}
                 onClick={() => onViewModeChange(id)}
+                title={tooltip}
               >
                 {label}
               </button>
             ))}
           </div>
 
-          {canPunchIn && (
+          <div className="hud-tools-wrap" ref={toolsMenuRef}>
             <button
               type="button"
-              className={`bed-warp-toggle-pill ${toolheadPunchIn ? "active" : ""}`}
-              style={
-                toolheadPunchIn
-                  ? {
-                      background:
-                        "linear-gradient(135deg, rgba(14, 165, 233, 0.34), rgba(56, 189, 248, 0.22))",
-                      borderColor: "rgba(56, 189, 248, 0.85)",
-                      color: "#e0f2fe",
-                    }
-                  : undefined
-              }
-              onClick={() => setToolheadPunchIn(!toolheadPunchIn)}
-              title="Macro punch-in zoom locked onto the X-rail, carriage backplate, toolhead body, and hotend to inspect local flex and whip"
-            >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                {toolheadPunchIn ? (
-                  <line x1="8" y1="11" x2="14" y2="11" />
-                ) : (
-                  <>
-                    <line x1="11" y1="8" x2="11" y2="14" />
-                    <line x1="8" y1="11" x2="14" y2="11" />
-                  </>
-                )}
-              </svg>
-              <span>{toolheadPunchIn ? "Exit Punch-In" : "Toolhead Punch-In"}</span>
-            </button>
-          )}
-
-          {toolheadPunchIn && viewMode === "modal" && (
-            <button
-              type="button"
-              className={`bed-warp-toggle-pill ${isToolheadIsolated ? "active" : ""}`}
-              style={
-                isToolheadIsolated
-                  ? {
-                      background:
-                        "linear-gradient(135deg, rgba(16, 185, 129, 0.34), rgba(5, 150, 105, 0.24))",
-                      borderColor: "rgba(52, 211, 153, 0.85)",
-                      color: "#d1fae5",
-                    }
-                  : undefined
-              }
-              onClick={() => setIsolateToolheadModal((v) => !v)}
-              title="Freeze frame, gantry, and X-rail carriage stationary so you only see relative flex inside the backplate, toolhead body, clamp, and hotend"
-            >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="7" />
-                <line x1="12" y1="2" x2="12" y2="5" />
-                <line x1="12" y1="19" x2="12" y2="22" />
-                <line x1="2" y1="12" x2="5" y2="12" />
-                <line x1="19" y1="12" x2="22" y2="12" />
-              </svg>
-              <span>{isToolheadIsolated ? "Toolhead Isolated" : "Isolate Toolhead"}</span>
-            </button>
-          )}
-
-          {canShowBedWarpHud && bedPlateFeaHud && (
-            <button
-              type="button"
-              className={`bed-warp-toggle-pill ${showBedWarp ? "active" : ""} ${
-                bedWarpHintHot ? "hint-hot" : ""
+              className={`hud-tools-trigger ${toolsMenuOpen ? "open" : ""} ${
+                activeToolsCount > 0 ? "has-active" : ""
               }`}
-              onClick={() => setShowBedWarp(!showBedWarp)}
-              title={`Toggle 3D MITC4 Heated Bed Thermal/Gravity Warp Mesh (Flatness error: ${bedPlateFeaHud.total_flatness_error_um.toFixed(
-                1
-              )} µm, Taco: ${bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm)`}
+              onClick={() => setToolsMenuOpen((o) => !o)}
+              aria-expanded={toolsMenuOpen}
+              aria-haspopup="menu"
+              title="Viewport overlays, macro punch-in, bed warp mesh & render tools"
             >
-              <span>Bed Thermal/Warp</span>
-              {bedWarpHintHot && (
-                <span className="bed-warp-hint-tag">
-                  {Math.round(bedPlateFeaHud.total_flatness_error_um)} µm
-                </span>
+              {activeToolsCount > 0 && <span className="hud-tools-dot" aria-hidden="true" />}
+              <span>Tools</span>
+              {activeToolsCount > 0 && (
+                <span className="hud-tools-count">{activeToolsCount}</span>
               )}
+              <span className="hud-tools-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+
+            {toolsMenuOpen && (
+              <div className="hud-tools-popover" role="menu">
+                {canPunchIn && (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={toolheadPunchIn}
+                    className={`hud-tools-item ${toolheadPunchIn ? "active" : ""}`}
+                    onClick={() => setToolheadPunchIn(!toolheadPunchIn)}
+                    title="Macro punch-in zoom locked onto the X-rail, carriage backplate, toolhead body, and hotend to inspect local flex and whip"
+                  >
+                    <span className="hud-tools-item-label">Toolhead Punch-In</span>
+                    <span className={`hud-tools-toggle ${toolheadPunchIn ? "on" : ""}`}>
+                      {toolheadPunchIn ? "ON" : "OFF"}
+                    </span>
+                  </button>
+                )}
+
+                {toolheadPunchIn && viewMode === "modal" && (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={isToolheadIsolated}
+                    className={`hud-tools-item ${isToolheadIsolated ? "active-green" : ""}`}
+                    onClick={() => setIsolateToolheadModal((v) => !v)}
+                    title="Freeze frame, gantry, and X-rail carriage stationary so you only see relative flex inside the backplate, toolhead body, clamp, and hotend"
+                  >
+                    <span className="hud-tools-item-label">Isolate Toolhead Flex</span>
+                    <span className={`hud-tools-toggle ${isToolheadIsolated ? "on-green" : ""}`}>
+                      {isToolheadIsolated ? "ON" : "OFF"}
+                    </span>
+                  </button>
+                )}
+
+                {canShowBedWarpHud && bedPlateFeaHud && (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={showBedWarp}
+                    className={`hud-tools-item ${showBedWarp ? "active-amber" : ""}`}
+                    onClick={() => setShowBedWarp(!showBedWarp)}
+                    title={`Toggle 3D MITC4 Heated Bed Thermal/Gravity Warp Mesh (Flatness error: ${bedPlateFeaHud.total_flatness_error_um.toFixed(
+                      1
+                    )} µm, Taco: ${bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm)`}
+                  >
+                    <span className="hud-tools-item-label">Bed Thermal / Warp Mesh</span>
+                    <span className="hud-tools-item-meta">
+                      <span
+                        className={`hud-tools-badge ${bedWarpHintHot ? "hot" : ""}`}
+                      >
+                        {Math.round(bedPlateFeaHud.total_flatness_error_um)} µm
+                      </span>
+                      <span className={`hud-tools-toggle ${showBedWarp ? "on-amber" : ""}`}>
+                        {showBedWarp ? "ON" : "OFF"}
+                      </span>
+                    </span>
+                  </button>
+                )}
+
+                {hasContextTools && <div className="hud-tools-divider" />}
+
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={ecoDpr}
+                  className={`hud-tools-item ${ecoDpr ? "active" : ""}`}
+                  onClick={() => setEcoDpr((v) => !v)}
+                  title="Toggle 1× pixel ratio (Eco) vs 1.5× Retina DPR to reduce GPU fill rate"
+                >
+                  <span className="hud-tools-item-label">Eco 1× DPR</span>
+                  <span className={`hud-tools-toggle ${ecoDpr ? "on" : ""}`}>
+                    {ecoDpr ? "ON" : "OFF"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={showHudDetails}
+                  className={`hud-tools-item ${showHudDetails ? "active" : ""}`}
+                  onClick={() => setShowHudDetails((prev) => !prev)}
+                  title="Toggle detailed HUD overlays over the 3D viewport (all full details are also in the right panel)"
+                >
+                  <span className="hud-tools-item-label">Viewport Detail Banners</span>
+                  <span className={`hud-tools-toggle ${showHudDetails ? "on" : ""}`}>
+                    {showHudDetails ? "FULL" : "CLEAN"}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {toolheadPunchIn && (
+            <button
+              type="button"
+              className="hud-active-chip punch-in"
+              onClick={() => setToolheadPunchIn(false)}
+              title="Exit Toolhead Punch-In macro zoom"
+            >
+              × Punch-In
             </button>
           )}
 
-          <div className="hud-pill-group">
+          {isToolheadIsolated && (
             <button
               type="button"
-              className={`hud-pill ${ecoDpr ? "active" : ""}`}
-              onClick={() => setEcoDpr((v) => !v)}
-              title="Toggle 1× pixel ratio (Eco) vs 1.5× Retina DPR to reduce GPU fill rate"
+              className="hud-active-chip isolated"
+              onClick={() => setIsolateToolheadModal(false)}
+              title="Exit Carriage-Locked Toolhead Flex Isolation"
             >
-              Eco 1×
+              × Isolated
             </button>
-            <button
-              type="button"
-              className={`hud-pill ${showHudDetails ? "active" : ""}`}
-              onClick={() => setShowHudDetails((prev) => !prev)}
-              title="Toggle detailed HUD overlays over the 3D viewport (all full details are also in the right panel)"
-            >
-              {showHudDetails ? "HUD: Full" : "HUD: Clean"}
-            </button>
-          </div>
-        </div>
+          )}
 
-        {sim && (
-          <div className="hud-card hud-stats">
-            <span>
-              <strong>{sim.geometry.mass_summary.total_mass_kg} kg</strong> total
-            </span>
-            <span>
-              X/Y moving: <strong>{sim.geometry.mass_summary.x_moving_mass_g}g</strong> /{" "}
-              <strong>{sim.geometry.mass_summary.y_moving_mass_g}g</strong>
-            </span>
-            <span>
-              Est. BOM: <strong>${sim.geometry.mass_summary.estimated_material_cost_usd}</strong>
-            </span>
-          </div>
-        )}
+          {bedWarpActive && (
+            <button
+              type="button"
+              className="hud-active-chip bed-warp"
+              onClick={() => setShowBedWarp(false)}
+              title="Hide 3D Bed Thermal / Warp Mesh"
+            >
+              × Bed Warp
+            </button>
+          )}
+        </div>
 
         {showHudDetails && viewMode === "modal" && sim && limitingSummary && (() => {
           const shares = limitingSummary.compliance_share_pct;
@@ -8599,8 +8821,8 @@ export const PrinterViewport: React.FC<Props> = ({
               >
                 <span
                   style={{
-                    fontSize: 10.5,
-                    fontWeight: 800,
+                    fontSize: 11,
+                    fontWeight: 700,
                     textTransform: "uppercase",
                     letterSpacing: "0.05em",
                     color: "var(--accent)",
@@ -8610,8 +8832,8 @@ export const PrinterViewport: React.FC<Props> = ({
                 </span>
                 <span
                   style={{
-                    fontSize: 10.5,
-                    fontWeight: 700,
+                    fontSize: 11,
+                    fontWeight: 600,
                     color: "var(--text)",
                     fontVariantNumeric: "tabular-nums",
                   }}
@@ -8647,7 +8869,7 @@ export const PrinterViewport: React.FC<Props> = ({
                           display: "flex",
                           justifyContent: "space-between",
                           alignItems: "center",
-                          fontSize: 10.5,
+                          fontSize: 11,
                         }}
                       >
                         <span
@@ -8665,7 +8887,7 @@ export const PrinterViewport: React.FC<Props> = ({
                       <div
                         style={{
                           height: 5,
-                          borderRadius: 3,
+                          borderRadius: 4,
                           background: "rgba(15, 23, 42, 0.95)",
                           border: "1px solid rgba(39, 50, 71, 0.85)",
                           overflow: "hidden",
@@ -8676,7 +8898,7 @@ export const PrinterViewport: React.FC<Props> = ({
                             width: `${pct}%`,
                             height: "100%",
                             background: color,
-                            borderRadius: 3,
+                            borderRadius: 4,
                             transition: "width 0.22s ease",
                           }}
                         />
@@ -8685,7 +8907,7 @@ export const PrinterViewport: React.FC<Props> = ({
                   ))}
                 </div>
               ) : (
-                <div style={{ fontSize: 10.5, color: "var(--muted)" }}>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>
                   Stage breakdown populates from static FEA toolhead compliance model.
                 </div>
               )}
@@ -8696,7 +8918,7 @@ export const PrinterViewport: React.FC<Props> = ({
                     display: "flex",
                     flexWrap: "wrap",
                     gap: "3px 8px",
-                    fontSize: 10,
+                    fontSize: 11,
                     color: "var(--muted)",
                     paddingTop: 4,
                     borderTop: "1px dashed rgba(255, 255, 255, 0.08)",
@@ -8730,7 +8952,7 @@ export const PrinterViewport: React.FC<Props> = ({
               {isToolheadIsolated && (
                 <div
                   style={{
-                    fontSize: 10.5,
+                    fontSize: 11,
                     lineHeight: 1.35,
                     color: "#a7f3d0",
                     background: "rgba(16, 185, 129, 0.12)",
@@ -8749,7 +8971,7 @@ export const PrinterViewport: React.FC<Props> = ({
               )}
 
               {showHudDetails && bd && domSource && (
-                <div style={{ fontSize: 10.5, lineHeight: 1.35, color: "#cbd5e1" }}>
+                <div style={{ fontSize: 11, lineHeight: 1.35, color: "#cbd5e1" }}>
                   <span className="sens-fix-prefix">Main limit:</span>{" "}
                   {PUNCHIN_FLEX_SOURCE_LABELS[domSource]} ({Math.round(domPct)}% of toolhead tip
                   flex).
@@ -8800,12 +9022,13 @@ export const PrinterViewport: React.FC<Props> = ({
         {viewMode === "fea_stress" && sim && (
           <>
             <div className="hud-card">
-              <span style={{ color: "var(--muted)", fontWeight: 600 }}>Load:</span>
+              <span style={{ color: "var(--muted)", fontWeight: 500 }}>Load:</span>
               {(["xy", "x", "y", "gravity"] as FeaLoadCase[]).map((id) => (
                 <button
                   key={id}
                   type="button"
                   className={`hud-pill ${feaLoadCase === id ? "active" : ""}`}
+ aria-pressed={feaLoadCase === id}
                   style={{ padding: "3px 8px", fontSize: 11 }}
                   title={FEA_LOAD_META[id].explanation}
                   onClick={() => onFeaLoadCaseChange(id)}
@@ -8876,7 +9099,7 @@ export const PrinterViewport: React.FC<Props> = ({
         {viewMode === "modal" && sim && (
           <>
             <div className="hud-card">
-              <span style={{ color: "var(--muted)", fontWeight: 600 }}>Mode:</span>
+              <span style={{ color: "var(--muted)", fontWeight: 500 }}>Mode:</span>
               {(() => {
                 const visibleModes = sim.modal_fea.modes.slice(0, 6).map((m, idx) => ({ m, idx }));
                 if (primaryLimitingModeIdx >= 6 && sim.modal_fea.modes[primaryLimitingModeIdx]) {
@@ -8902,6 +9125,7 @@ export const PrinterViewport: React.FC<Props> = ({
                       className={`hud-pill modal-mode-pill ${clampedModeIdx === idx ? "active" : ""} ${
                         isPrimaryLimiting ? "limiting-mode" : isWorst ? "worst-mode" : ""
                       }`}
+ aria-pressed={clampedModeIdx === idx}
                       style={{ padding: "4px 8px" }}
                       onClick={() => onSelectModeIdx(idx)}
                       title={
@@ -8950,7 +9174,7 @@ export const PrinterViewport: React.FC<Props> = ({
                   <button
                     type="button"
                     className="hud-focus-limiting-btn"
-                    style={{ padding: "3px 8px", fontSize: 10.5 }}
+                    style={{ padding: "3px 8px", fontSize: 11 }}
                     onClick={() => onSelectModeIdx(primaryLimitingModeIdx)}
                     title={`Snap 3D modal animation to Limiting Mode M${primaryLimitingModeNum}${
                       limitingSummary?.primary_structural_mode_label
@@ -8962,11 +9186,12 @@ export const PrinterViewport: React.FC<Props> = ({
                   </button>
                 )}
               <span style={{ color: "var(--muted)" }}>|</span>
-              <span style={{ color: "var(--muted)", fontWeight: 600 }}>Color:</span>
+              <span style={{ color: "var(--muted)", fontWeight: 500 }}>Color:</span>
               <button
                 type="button"
                 className={`hud-pill ${modalColorMode === "relative" ? "active" : ""}`}
-                style={{ padding: "3px 7px", fontSize: 10.5 }}
+ aria-pressed={modalColorMode === "relative"}
+                style={{ padding: "3px 7px", fontSize: 11 }}
                 onClick={() => setModalColorMode("relative")}
                 title="Color nodes by |u_node - u_bed| — whole-frame rocking stays cool blue while flopping toolheads blaze red"
               >
@@ -8975,7 +9200,8 @@ export const PrinterViewport: React.FC<Props> = ({
               <button
                 type="button"
                 className={`hud-pill ${modalColorMode === "global" ? "active" : ""}`}
-                style={{ padding: "3px 7px", fontSize: 10.5 }}
+ aria-pressed={modalColorMode === "global"}
+                style={{ padding: "3px 7px", fontSize: 11 }}
                 onClick={() => setModalColorMode("global")}
                 title="Color nodes by absolute global modal displacement amplitude |u_node|"
               >
@@ -8987,14 +9213,14 @@ export const PrinterViewport: React.FC<Props> = ({
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 6,
-                  fontSize: 10.5,
+                  fontSize: 11,
                   color: "var(--muted)",
                   whiteSpace: "nowrap",
                   fontVariantNumeric: "tabular-nums",
                 }}
                 title="Dial modal animation visual scale (0.1× subtle to 2.0× exaggerated)"
               >
-                <span style={{ fontWeight: 600 }}>
+                <span style={{ fontWeight: 500 }}>
                   Scale{" "}
                   <strong style={{ color: "var(--text)" }}>{modalAmpScale.toFixed(1)}×</strong>
                 </span>
@@ -9013,7 +9239,8 @@ export const PrinterViewport: React.FC<Props> = ({
               <button
                 type="button"
                 className={`hud-pill ${modalPaused ? "active" : ""}`}
-                style={{ padding: "3px 8px", fontSize: 10.5 }}
+ aria-pressed={modalPaused}
+                style={{ padding: "3px 8px", fontSize: 11 }}
                 onClick={() => setModalPaused((p) => !p)}
                 title={
                   modalPaused
@@ -9120,7 +9347,7 @@ export const PrinterViewport: React.FC<Props> = ({
                           }`}
                           title={firstCause.detail}
                         >
-                          <span style={{ color: "var(--accent)", fontWeight: 800 }}>#1</span>
+                          <span style={{ color: "var(--accent)", fontWeight: 700 }}>#1</span>
                           <span className="hud-cause-name">{firstCause.label}</span>
                           <strong className="hud-cause-pct">
                             {Math.round(firstCause.share_pct)}%
@@ -9261,7 +9488,9 @@ export const PrinterViewport: React.FC<Props> = ({
                   {showHudDetails && activeMode.how_to_fix && (
                     <div className="hud-guide-line hud-fix-line hud-guide-compact">
                       <span className="hud-fix-key">Main limit:</span>{" "}
-                      <span className="hud-fix-val">{activeMode.how_to_fix}</span>
+                      <span className="hud-fix-val">
+                        {activeMode.how_to_fix.replace(/^\s*Main limit:\s*/i, "")}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -9295,7 +9524,7 @@ export const PrinterViewport: React.FC<Props> = ({
             <div className="hud-card hud-guide-bar sens-guide">
               <div className="hud-guide-row hud-guide-header">
                 <div className="hud-sens-lens-row">
-                  <span style={{ color: "var(--muted)", fontWeight: 700, fontSize: 10.5 }}>
+                  <span style={{ color: "var(--muted)", fontWeight: 600, fontSize: 11 }}>
                     Lens:
                   </span>
                   {ADJOINT_LENS_OPTIONS.map((opt) => (
@@ -9303,7 +9532,8 @@ export const PrinterViewport: React.FC<Props> = ({
                       key={opt.id}
                       type="button"
                       className={`hud-pill ${adjointLens === opt.id ? "active" : ""}`}
-                      style={{ padding: "3px 8px", fontSize: 10.5 }}
+ aria-pressed={adjointLens === opt.id}
+                      style={{ padding: "3px 8px", fontSize: 11 }}
                       onClick={() => setAdjointLens(opt.id)}
                       title={opt.title}
                     >
@@ -9314,16 +9544,16 @@ export const PrinterViewport: React.FC<Props> = ({
                 <div className="hud-guide-row hud-sens-legend">
                   <div className="legend-gradient sensitivity" />
                   {adjointLens !== "compliance" && (
-                    <span style={{ color: "#22d3ee", fontWeight: 700 }}>Cyan = Inertia Hotspot</span>
+                    <span style={{ color: "#22d3ee", fontWeight: 600 }}>Cyan = Inertia Hotspot</span>
                   )}
                   {adjointLens !== "compliance" && adjointLens !== "mass" && (
                     <span style={{ color: "var(--muted)" }}>·</span>
                   )}
-                  <span style={{ color: "#94a3b8", fontWeight: 600 }}>Slate = Neutral</span>
+                  <span style={{ color: "#94a3b8", fontWeight: 500 }}>Slate = Neutral</span>
                   {adjointLens !== "mass" && (
                     <>
                       <span style={{ color: "var(--muted)" }}>·</span>
-                      <span style={{ color: "#fb923c", fontWeight: 700 }}>
+                      <span style={{ color: "#fb923c", fontWeight: 600 }}>
                         Red/Orange = Compliance Hotspot
                       </span>
                     </>
@@ -9348,7 +9578,7 @@ export const PrinterViewport: React.FC<Props> = ({
                     })}
                   </div>
                   <div className="subsystem-bar-legend">
-                    <span style={{ color: "var(--muted)", fontWeight: 600 }}>Print-Error Share:</span>
+                    <span style={{ color: "var(--muted)", fontWeight: 500 }}>Print-Error Share:</span>
                     {SUBSYSTEM_ORDER.map((k) => {
                       const entry = breakdown[k];
                       const isPrimary = primarySub === k;

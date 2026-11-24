@@ -17,18 +17,153 @@ const FALLBACK_Z_RAIL_PROFILES: Array<{ id: ZRailProfileType; name: string }> = 
   { id: "none", name: "None (Leadscrew Guided)" },
 ];
 
-const FALLBACK_Z_DRIVE_MECHANISMS: Array<{ id: ZLeadscrewType; name: string }> = [
-  { id: "auto", name: "Auto (Match Z Architecture)" },
-  { id: "tr8x4_pom", name: "TR8×4 Trident POM Nut" },
-  { id: "tr8x8_pom", name: "TR8×8 POM Nut" },
-  { id: "tr8x8_brass", name: "TR8×8 Brass Nut" },
-  { id: "sfu1204_bk10", name: "SFU1204 C7 Ballscrew + BK10" },
-  { id: "gt2_6mm_z_belt", name: "GT2 6mm Z-Belt" },
-  { id: "gt2_9mm_z_belt", name: "GT2 9mm Z-Belt" },
+interface ZDriveOptionMeta {
+  id: ZLeadscrewType;
+  name: string;
+  kind: "auto" | "leadscrew" | "ballscrew" | "belt";
+  wobble_decoupled?: boolean;
+  self_locking?: boolean;
+  unpowered_drop_risk?: boolean;
+  backlash_um?: number;
+  gear_ratio?: number;
+  cost_per_axis_usd?: number;
+  notes?: string;
+}
+
+const FALLBACK_Z_DRIVE_MECHANISMS: ZDriveOptionMeta[] = [
+  { id: "auto", name: "Auto (Match Z Architecture)", kind: "auto" },
+  {
+    id: "tr8x4_pom",
+    name: "TR8×4 Trident POM Nut",
+    kind: "leadscrew",
+    wobble_decoupled: false,
+    self_locking: true,
+    unpowered_drop_risk: false,
+    backlash_um: 25,
+    notes: "Standard 4mm-lead Trident leadscrew with self-locking POM nut.",
+  },
+  {
+    id: "tr8x4_wobblex",
+    name: "TR8×4 + WobbleX Decoupler",
+    kind: "leadscrew",
+    wobble_decoupled: true,
+    self_locking: true,
+    unpowered_drop_risk: false,
+    backlash_um: 25,
+    notes: "Floating kinematic WobbleX nut decouples XY screw runout while staying self-locking.",
+  },
+  {
+    id: "tr8x8_pom",
+    name: "TR8×8 POM Nut",
+    kind: "leadscrew",
+    wobble_decoupled: false,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 30,
+    notes: "Fast 8mm-lead 4-start screw; lower friction can back-drive heavy beds when unpowered.",
+  },
+  {
+    id: "tr8x8_brass",
+    name: "TR8×8 Brass Nut",
+    kind: "leadscrew",
+    wobble_decoupled: false,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 45,
+    notes: "Budget brass leadscrew nut with higher axial backlash and runout coupling.",
+  },
+  {
+    id: "sfu1204_bk10",
+    name: "SFU1204 C7 Ballscrew + BK10",
+    kind: "ballscrew",
+    wobble_decoupled: false,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 10,
+    notes: "High-stiffness 12mm C7 rolled ballscrew on BK10 angular-contact bearings; back-drives unpowered.",
+  },
+  {
+    id: "sfu1204_wobblex",
+    name: "SFU1204 + BK10 + WobbleX",
+    kind: "ballscrew",
+    wobble_decoupled: true,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 10,
+    notes: "SFU1204 ballscrew axial rigidity paired with a WobbleX XY runout decoupler.",
+  },
+  {
+    id: "sfu1605_fk12",
+    name: "SFU1605 Heavy Ballscrew + FK12/BK12",
+    kind: "ballscrew",
+    wobble_decoupled: false,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 8,
+    notes: "Industrial 16mm ballscrew + heavy FK12 flange support for large high-mass beds.",
+  },
+  {
+    id: "gt2_6mm_z_belt",
+    name: "GT2 6mm Z-Belt",
+    kind: "belt",
+    wobble_decoupled: true,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 12,
+    notes: "Stock Voron 2.4 6mm GT2 Z-belt drive — zero screw wobble.",
+  },
+  {
+    id: "gt2_9mm_z_belt",
+    name: "GT2 9mm Z-Belt",
+    kind: "belt",
+    wobble_decoupled: true,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 8,
+    notes: "Upgraded 9mm GT2 Z-belt with +50% tensile stiffness and zero Z-wobble.",
+  },
+  {
+    id: "gt2_9mm_planetary_z",
+    name: "9mm Belted-Z (5:1 Planetary)",
+    kind: "belt",
+    wobble_decoupled: true,
+    self_locking: false,
+    unpowered_drop_risk: true,
+    backlash_um: 12,
+    gear_ratio: 5,
+    notes: "9mm belted Z with compact 5:1 planetary gearbox for high thrust and zero screw wobble.",
+  },
+  {
+    id: "gt2_9mm_worm_z",
+    name: "9mm Belted-Z (Self-Locking Worm / 20:1)",
+    kind: "belt",
+    wobble_decoupled: true,
+    self_locking: true,
+    unpowered_drop_risk: false,
+    backlash_um: 18,
+    gear_ratio: 20,
+    notes: "Self-locking 20:1 worm-geared 9mm belted Z — zero Z-wobble and zero bed drop on power loss.",
+  },
+  {
+    id: "kevinakasam_belted_z",
+    name: "KevinAkaSam Belted-Z (80:16 + Keybak)",
+    kind: "belt",
+    wobble_decoupled: true,
+    self_locking: false,
+    unpowered_drop_risk: false,
+    backlash_um: 10,
+    gear_ratio: 5,
+    notes: "80:16 belted-Z conversion with Keybak spring counterbalance to prevent unpowered bed drop.",
+  },
 ];
+
+const FALLBACK_Z_DRIVE_BY_ID: Record<string, ZDriveOptionMeta> = Object.fromEntries(
+  FALLBACK_Z_DRIVE_MECHANISMS.map((m) => [m.id, m])
+);
 
 const BED_MOUNT_OPTIONS: Array<{
   id: BedMountType;
+  group: "kinematic" | "standard";
   label: string;
   shortLabel: string;
   hint: string;
@@ -41,7 +176,78 @@ const BED_MOUNT_OPTIONS: Array<{
   tacoTitle: string;
 }> = [
   {
+    id: "captive_belleville_kinematic",
+    group: "kinematic",
+    label: "Super-Stiff Captive Belleville Kinematic (Tap-Rated)",
+    shortLabel: "Captive Belleville Kinematic",
+    hint: "Captive shoulder bolt + stacked Belleville disc springs preload hardened ball in CNC V-groove — ultra-high axial stiffness and zero thermal taco.",
+    points: 3,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "High-preload captive Belleville stack locks the ball solidly under Voron Tap probing",
+    tacoLabel: "Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "Exact 3-point kinematic V-grooves allow free radial thermal expansion with zero plate buckling",
+  },
+  {
+    id: "dual_leaf_ti_kinematic",
+    group: "kinematic",
+    label: "Dual-Blade Ti/301 Leaf-Spring Kinematic (Annex / Heavy Pochard)",
+    shortLabel: "Dual-Leaf Ti Kinematic",
+    hint: "Twin stacked Titanium / 301 spring-steel leaf flexures double vertical & lateral stiffness while eliminating thermal taco.",
+    points: 3,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Dual-blade parallel Ti/301 flexures provide zero-play rigidity under Voron Tap probing",
+    tacoLabel: "Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "Radial parallel leaf flexures absorb bed thermal expansion smoothly without taco buckling",
+  },
+  {
+    id: "whopping_pochard_kinematic",
+    group: "kinematic",
+    label: "Whopping Pochard Leaf-Spring (Tap-Rated)",
+    shortLabel: "Whopping Pochard",
+    hint: "Zero-play kinematic leaf-spring mount — eliminates thermal taco while staying rigid under Voron Tap probing.",
+    points: 3,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Bolted 301 spring-steel leaf flexures resist vertical Tap probing with zero play",
+    tacoLabel: "Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "Radial leaf-spring flexures absorb bed thermal expansion without taco buckling",
+  },
+  {
+    id: "spherical_3pt_ratrig",
+    group: "kinematic",
+    label: "RatRig V-Core 3/4 3-Pt Spherical Pivot Kinematic",
+    shortLabel: "RatRig 3-Pt Spherical",
+    hint: "Three spherical ball-socket pivots with radial expansion slots — proven Tap-rated stiffness on large 300–500mm beds.",
+    points: 3,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Hard-bolted spherical bearing pivots resist vertical Tap probing forces cleanly",
+    tacoLabel: "Near-Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "Spherical pivots + radial expansion slots relieve thermal growth with near-zero plate warp",
+  },
+  {
+    id: "cnc_kelvin_magnetic",
+    group: "kinematic",
+    label: "CNC N48SH Magnetic Kelvin Kinematic (MRW / ChaoticLab)",
+    shortLabel: "CNC Kelvin Magnetic",
+    hint: "True 3-2-1 cone/V-groove/flat CNC billet Kelvin mount with high-temp N48SH magnets — zero thermal taco and removable bed.",
+    points: 3,
+    tapRated: false,
+    tapLabel: "Magnetic — Not Tap-Rated",
+    tapTitle: "Magnetic preload can lift or shift under Voron Tap nozzle probing forces",
+    tacoLabel: "Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "True 3-2-1 Kelvin constraint (cone + V-groove + flat) allows completely stress-free thermal expansion",
+  },
+  {
     id: "kinematic_3pt",
+    group: "kinematic",
     label: "3-Pt Kinematic (Maxwell)",
     shortLabel: "3-Pt Kinematic",
     hint: "Zero thermal taco buckling at high bed temps with high axial/lateral stiffness.",
@@ -55,6 +261,7 @@ const BED_MOUNT_OPTIONS: Array<{
   },
   {
     id: "trident_3pt_standoffs",
+    group: "standard",
     label: "3-Pt Trident Bakelite Standoffs + GE5C",
     shortLabel: "Trident 3-Pt Bakelite",
     hint: "Stock Voron/Siboor Trident 3-point Bakelite thermal standoffs on 2020 T-subframe with GE5C spherical Z-joints.",
@@ -67,33 +274,8 @@ const BED_MOUNT_OPTIONS: Array<{
     tacoTitle: "Rear-center fixed anchor with two front slotted thermal-relief washers",
   },
   {
-    id: "whopping_pochard_kinematic",
-    label: "Whopping Pochard Leaf-Spring (Tap-Rated)",
-    shortLabel: "Whopping Pochard",
-    hint: "Zero-play kinematic leaf-spring mount — eliminates thermal taco while staying rigid under Voron Tap probing.",
-    points: 3,
-    tapRated: true,
-    tapLabel: "Tap-Rated ✓",
-    tapTitle: "Bolted 301 spring-steel leaf flexures resist vertical Tap probing with zero play",
-    tacoLabel: "Zero Taco",
-    tacoTone: "ok",
-    tacoTitle: "Radial leaf-spring flexures absorb bed thermal expansion without taco buckling",
-  },
-  {
-    id: "rigid_4pt",
-    label: "4-Pt Rigid (Hard Spacers)",
-    shortLabel: "4-Pt Rigid",
-    hint: "Stiffest mechanically, but over-constrains thermal expansion and tacos above 80°C.",
-    points: 4,
-    tapRated: true,
-    tapLabel: "Tap-Rated ✓",
-    tapTitle: "Solid metal hex standoffs provide highest axial probing rigidity",
-    tacoLabel: "High Thermal Taco Risk",
-    tacoTone: "danger",
-    tacoTitle: "Over-constrained 4-corner hard bolting buckles the bed plate above 80°C",
-  },
-  {
     id: "floating_4pt",
+    group: "standard",
     label: "4-Pt Floating (1 Fixed + 3 Slotted)",
     shortLabel: "4-Pt Floating",
     hint: "Stiff vertically while slotted corners relieve thermal expansion without buckling.",
@@ -106,7 +288,22 @@ const BED_MOUNT_OPTIONS: Array<{
     tacoTitle: "1 fixed locator anchor + 3 radially slotted glide tabs relieve expansion",
   },
   {
+    id: "rigid_4pt",
+    group: "standard",
+    label: "4-Pt Rigid (Hard Spacers)",
+    shortLabel: "4-Pt Rigid",
+    hint: "Stiffest mechanically, but over-constrains thermal expansion and tacos above 80°C.",
+    points: 4,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Solid metal hex standoffs provide highest axial probing rigidity",
+    tacoLabel: "High Thermal Taco Risk",
+    tacoTone: "danger",
+    tacoTitle: "Over-constrained 4-corner hard bolting buckles the bed plate above 80°C",
+  },
+  {
     id: "silicone_4pt",
+    group: "standard",
     label: "4-Pt Silicone Spacers",
     shortLabel: "4-Pt Silicone",
     hint: "Thermally decoupled with moderate damping; softer than kinematic/rigid mounts.",
@@ -120,6 +317,7 @@ const BED_MOUNT_OPTIONS: Array<{
   },
   {
     id: "springs_4pt",
+    group: "standard",
     label: "4-Pt Bed Springs (Yellow)",
     shortLabel: "4-Pt Springs",
     hint: "Low-cost leveling springs; softest mount with highest bed-bounce under Y accel.",
@@ -138,8 +336,8 @@ const PLATE_MATERIAL_FALLBACKS: Array<{ id: string; name: string }> = [
   { id: "atp5_aluminum", name: "ATP-5 Cast Aluminum Plate" },
   { id: "aluminum_6061_t6", name: "Aluminum 6061-T6" },
   { id: "aluminum_7075_t6", name: "Aluminum 7075-T6" },
-  { id: "steel_mild", name: "Mild Steel (A36)" },
-  { id: "carbon_fiber_quasi", name: "Carbon Fiber (Quasi-Isotropic)" },
+  { id: "carbon_fiber_plate", name: "Carbon Fiber 3K Plate" },
+  { id: "steel_4140", name: "4140 Alloy Steel" },
 ];
 
 const PLATE_MATERIAL_IDS = new Set([
@@ -147,15 +345,8 @@ const PLATE_MATERIAL_IDS = new Set([
   "atp5_aluminum",
   "aluminum_6061_t6",
   "aluminum_7075_t6",
-  "aluminum_5052_sheet",
-  "steel_mild",
-  "steel_4140",
-  "stainless_304",
-  "titanium_grade5",
-  "carbon_fiber_quasi",
   "carbon_fiber_plate",
-  "brass_c360",
-  "copper_c110",
+  "steel_4140",
 ]);
 
 function bedZTopologyMeta(arch: PrinterSpecData["architecture"], zDrive: string): {
@@ -339,24 +530,61 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
       : FALLBACK_Z_RAIL_PROFILES;
   const currentZRailProfile: ZRailProfileType = spec.bed.z_rail_profile ?? "mgn12_rail";
 
-  const zDriveMechanismOptions: Array<{ id: string; name: string }> =
+  const zDriveMechanismOptions: ZDriveOptionMeta[] =
     catalog.z_drive_mechanisms && catalog.z_drive_mechanisms.length > 0
       ? [
-          { id: "auto", name: "Auto (Match Z Architecture)" },
-          ...catalog.z_drive_mechanisms.map((m) => ({ id: m.id, name: m.name })),
+          { id: "auto", name: "Auto (Match Z Architecture)", kind: "auto" },
+          ...catalog.z_drive_mechanisms.map((m) => {
+            const fb = FALLBACK_Z_DRIVE_BY_ID[m.id];
+            return {
+              id: m.id as ZLeadscrewType,
+              name: m.name,
+              kind: m.kind,
+              wobble_decoupled: m.wobble_decoupled ?? fb?.wobble_decoupled,
+              self_locking: m.self_locking ?? fb?.self_locking,
+              unpowered_drop_risk: m.unpowered_drop_risk ?? fb?.unpowered_drop_risk,
+              backlash_um: m.backlash_um ?? fb?.backlash_um,
+              gear_ratio: m.gear_ratio ?? fb?.gear_ratio,
+              cost_per_axis_usd: m.cost_per_axis_usd ?? fb?.cost_per_axis_usd,
+              notes: m.notes ?? fb?.notes,
+            };
+          }),
         ]
       : FALLBACK_Z_DRIVE_MECHANISMS;
   const currentZLeadscrewType: ZLeadscrewType = spec.bed.z_leadscrew_type ?? "auto";
+  const isBeltedQuadZ = spec.bed.z_drive === "belted_quad_z";
+  const isMovingBedZ = !isBeltedQuadZ && spec.architecture !== "delta";
+  const screwDriveOptions = zDriveMechanismOptions.filter(
+    (m) => m.id !== "auto" && m.kind !== "belt"
+  );
+  const beltDriveOptions = zDriveMechanismOptions.filter(
+    (m) => m.id !== "auto" && m.kind === "belt"
+  );
+
+  const effectiveZDriveId: ZLeadscrewType =
+    currentZLeadscrewType !== "auto"
+      ? currentZLeadscrewType
+      : isBeltedQuadZ
+        ? "gt2_6mm_z_belt"
+        : spec.bed.z_drive === "leadscrew_triple"
+          ? "tr8x4_pom"
+          : "tr8x8_pom";
+  const activeZDriveMeta: ZDriveOptionMeta | undefined =
+    zDriveMechanismOptions.find((m) => m.id === effectiveZDriveId) ??
+    FALLBACK_Z_DRIVE_BY_ID[effectiveZDriveId];
+
+  const kinematicBedMountOptions = BED_MOUNT_OPTIONS.filter((o) => o.group === "kinematic");
+  const standardBedMountOptions = BED_MOUNT_OPTIONS.filter((o) => o.group === "standard");
 
   return (
-    <div className="section-card">
+    <div className="section-card" data-design-section="bed">
       <div className="section-title">
         <span>Build Plate &amp; Bed Mount</span>
         <span className="sub-block-tag">{bedTempDraft}°C</span>
       </div>
 
       <div className="slider-row">
-        <label>
+        <label htmlFor="db-bed-temp-c-1">
           <span>Bed Temp (°C)</span>
           <span className="tension-readout">
             <strong style={{ color: bedTempDraft >= 100 ? "var(--amber)" : "var(--text)" }}>
@@ -365,7 +593,7 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
           </span>
         </label>
         <div className="tension-control-row">
-          <input
+          <input id="db-bed-temp-c-1"
             type="range"
             min={25}
             max={130}
@@ -375,7 +603,7 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             onPointerUp={() => commitBedTemp(bedTempDraft)}
             onKeyUp={() => commitBedTemp(bedTempDraft)}
           />
-          <input
+          <input aria-label="Bed Temp (°C) value"
             type="number"
             className="tension-num-input"
             min={25}
@@ -394,15 +622,15 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
       </div>
 
       <div className="field-row">
-        <label>
+        <label htmlFor="db-bed-mount-2">
           <span>Bed Mount</span>
           {bedMountCatalogEntry?.k_axial_n_per_mm != null && (
-            <span style={{ fontSize: 10, color: "var(--muted)" }}>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>
               k_z {Math.round(bedMountCatalogEntry.k_axial_n_per_mm)} N/mm
             </span>
           )}
         </label>
-        <select
+        <select id="db-bed-mount-2"
           value={currentBedMount}
           onChange={(e) => {
             const nextVal = e.target.value as BedMountType;
@@ -419,14 +647,26 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             );
           }}
         >
-          {BED_MOUNT_OPTIONS.map((opt) => {
-            const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
-            return (
-              <option key={opt.id} value={opt.id}>
-                {catItem?.name ?? opt.label}
-              </option>
-            );
-          })}
+          <optgroup label="3-Pt Kinematic Mounts">
+            {kinematicBedMountOptions.map((opt) => {
+              const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
+              return (
+                <option key={opt.id} value={opt.id}>
+                  {catItem?.name ?? opt.label}
+                </option>
+              );
+            })}
+          </optgroup>
+          <optgroup label="Standard Standoffs & 4-Pt Mounts">
+            {standardBedMountOptions.map((opt) => {
+              const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
+              return (
+                <option key={opt.id} value={opt.id}>
+                  {catItem?.name ?? opt.label}
+                </option>
+              );
+            })}
+          </optgroup>
         </select>
         <div className="mount-physics-strip" aria-label="Bed mount physics summary">
           <span
@@ -463,8 +703,8 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
 
       <div className="field-grid-3">
         <div className="field-row">
-          <label title="Build Plate Width (mm)">Bed W mm</label>
-          <input
+          <label htmlFor="db-bed-w-mm-3" title="Build Plate Width (mm)">Bed W (mm)</label>
+          <input id="db-bed-w-mm-3"
             type="number"
             min={80}
             max={1300}
@@ -484,8 +724,8 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
           />
         </div>
         <div className="field-row">
-          <label title="Build Plate Depth (mm)">Bed D mm</label>
-          <input
+          <label htmlFor="db-bed-d-mm-4" title="Build Plate Depth (mm)">Bed D (mm)</label>
+          <input id="db-bed-d-mm-4"
             type="number"
             min={80}
             max={1300}
@@ -505,8 +745,8 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
           />
         </div>
         <div className="field-row">
-          <label title="Bed Heater Wattage (W)">Heater W</label>
-          <input
+          <label htmlFor="db-heater-w-5" title="Bed Heater Wattage (W)">Heater (W)</label>
+          <input id="db-heater-w-5"
             type="number"
             min={50}
             max={3000}
@@ -527,10 +767,10 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
         </div>
       </div>
 
-      <div className="field-grid-2">
+      <div className="field-grid-2 wide-last">
         <div className="field-row">
-          <label>Plate Thickness (mm)</label>
-          <input
+          <label htmlFor="db-plate-thickness-mm-6">Plate Thickness (mm)</label>
+          <input id="db-plate-thickness-mm-6"
             type="number"
             min={4}
             max={12}
@@ -552,8 +792,8 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
           />
         </div>
         <div className="field-row">
-          <label>Plate Material</label>
-          <select
+          <label htmlFor="db-plate-material-7">Plate Material</label>
+          <select id="db-plate-material-7"
             value={spec.bed.plate_material}
             onChange={(e) => {
               const nextVal = e.target.value;
@@ -590,64 +830,169 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             <span>{zTopoMeta.caption}</span>
           </div>
 
-          <div className="field-grid-2">
-            <div className="field-row">
-              <label>Z Linear Rails / Guideway</label>
-              <select
-                value={currentZRailProfile}
-                onChange={(e) => {
-                  const nextVal = e.target.value as ZRailProfileType;
-                  const prevLbl =
-                    zRailProfileOptions.find((o) => o.id === currentZRailProfile)?.name ??
-                    currentZRailProfile;
-                  const nextLbl =
-                    zRailProfileOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
-                  update(
-                    (d) => {
-                      d.bed.z_rail_profile = nextVal;
-                    },
-                    `Z Rails: ${prevLbl} → ${nextLbl}`
-                  );
-                }}
-              >
-                {zRailProfileOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field-row">
-              <label>Z Leadscrew / Drive</label>
-              <select
-                value={currentZLeadscrewType}
-                onChange={(e) => {
-                  const nextVal = e.target.value as ZLeadscrewType;
-                  const prevLbl =
-                    zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)
-                      ?.name ?? currentZLeadscrewType;
-                  const nextLbl =
-                    zDriveMechanismOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
-                  update(
-                    (d) => {
-                      d.bed.z_leadscrew_type = nextVal;
-                    },
-                    `Z Drive: ${prevLbl} → ${nextLbl}`
-                  );
-                }}
-              >
-                {zDriveMechanismOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="field-row">
+            <label htmlFor="db-z-linear-rails-guideway-8">Z Linear Rails / Guideway</label>
+            <select id="db-z-linear-rails-guideway-8"
+              value={currentZRailProfile}
+              onChange={(e) => {
+                const nextVal = e.target.value as ZRailProfileType;
+                const prevLbl =
+                  zRailProfileOptions.find((o) => o.id === currentZRailProfile)?.name ??
+                  currentZRailProfile;
+                const nextLbl =
+                  zRailProfileOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                update(
+                  (d) => {
+                    d.bed.z_rail_profile = nextVal;
+                  },
+                  `Z Rails: ${prevLbl} → ${nextLbl}`
+                );
+              }}
+            >
+              {!zRailProfileOptions.some((opt) => opt.id === currentZRailProfile) && (
+                <option value={currentZRailProfile}>{currentZRailProfile} (Custom)</option>
+              )}
+              {zRailProfileOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="field-row">
-            <label>Bed Mass (g)</label>
-            <input
+            <label htmlFor="db-field-9">
+              <span>{isBeltedQuadZ ? "Z Belt Drive" : "Z Leadscrew / Drive"}</span>
+              {currentZLeadscrewType === "auto" && activeZDriveMeta && (
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                  → {activeZDriveMeta.name}
+                </span>
+              )}
+            </label>
+            <select id="db-field-9"
+              value={currentZLeadscrewType}
+              onChange={(e) => {
+                const nextVal = e.target.value as ZLeadscrewType;
+                const prevLbl =
+                  zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)
+                    ?.name ?? currentZLeadscrewType;
+                const nextLbl =
+                  zDriveMechanismOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                update(
+                  (d) => {
+                    d.bed.z_leadscrew_type = nextVal;
+                  },
+                  `Z Drive: ${prevLbl} → ${nextLbl}`
+                );
+              }}
+            >
+              <option value="auto">Auto (Match Z Architecture)</option>
+              {isBeltedQuadZ ? (
+                <>
+                  {currentZLeadscrewType !== "auto" &&
+                    !beltDriveOptions.some((o) => o.id === currentZLeadscrewType) && (
+                      <option value={currentZLeadscrewType}>
+                        {zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)
+                          ?.name ?? currentZLeadscrewType}{" "}
+                        (Custom)
+                      </option>
+                    )}
+                  <optgroup label="Belted Z Drives">
+                    {beltDriveOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              ) : (
+                <>
+                  <optgroup label="Leadscrews & Ballscrews">
+                    {screwDriveOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {beltDriveOptions.length > 0 && (
+                    <optgroup label="Belted Z Conversions">
+                      {beltDriveOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </>
+              )}
+            </select>
+            {activeZDriveMeta && (
+              <div className="mount-physics-strip" aria-label="Z drive physics summary">
+                <span
+                  className={`mount-pill ${activeZDriveMeta.wobble_decoupled ? "ok" : "neutral"}`}
+                  title={
+                    activeZDriveMeta.wobble_decoupled
+                      ? "Belted Z or WobbleX floating nut decouples XY screw runout from print walls"
+                      : "Rigidly coupled nut transmits leadscrew/ballscrew runout laterally unless well-aligned"
+                  }
+                >
+                  {activeZDriveMeta.wobble_decoupled ? "Wobble-Free" : "Screw-Coupled"}
+                </span>
+                {activeZDriveMeta.self_locking ? (
+                  <span
+                    className="mount-pill ok"
+                    title="High mechanical lead/worm friction holds Z height securely when stepper power is cut"
+                  >
+                    Self-Locking
+                  </span>
+                ) : !activeZDriveMeta.unpowered_drop_risk ? (
+                  <span
+                    className="mount-pill ok"
+                    title="Keybak spring retractor counterbalances bed weight to prevent unpowered drop"
+                  >
+                    Keybak Balanced
+                  </span>
+                ) : isMovingBedZ ? (
+                  <span
+                    className="mount-pill warn"
+                    title="Low back-drive friction can allow a heavy moving bed to drop when Z steppers power off"
+                  >
+                    Drop Risk (Unpowered)
+                  </span>
+                ) : (
+                  <span
+                    className="mount-pill info"
+                    title="Flying-gantry belt drive relies on motor holding torque or physical gantry stops when unpowered"
+                  >
+                    Powered Hold
+                  </span>
+                )}
+                {activeZDriveMeta.gear_ratio != null && activeZDriveMeta.gear_ratio > 1 && (
+                  <span
+                    className="mount-pill info"
+                    title={`Mechanical drive reduction ratio (${activeZDriveMeta.gear_ratio}:1)`}
+                  >
+                    {activeZDriveMeta.gear_ratio}:1 Gear
+                  </span>
+                )}
+                {activeZDriveMeta.backlash_um != null && (
+                  <span
+                    className="mount-pill neutral"
+                    title="Nominal axial Z backlash under direction reversal"
+                  >
+                    Backlash ~{Math.round(activeZDriveMeta.backlash_um)} µm
+                  </span>
+                )}
+              </div>
+            )}
+            {showHints && activeZDriveMeta?.notes && (
+              <div className="hint-line">{activeZDriveMeta.notes}</div>
+            )}
+          </div>
+
+          <div className="field-row">
+            <label htmlFor="db-bed-mass-g-10">Bed Mass (g)</label>
+            <input id="db-bed-mass-g-10"
               type="number"
               min={800}
               max={6000}

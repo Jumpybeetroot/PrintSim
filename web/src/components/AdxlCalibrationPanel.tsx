@@ -588,7 +588,7 @@ export const AdxlCalibrationPanel: React.FC<Props> = ({ spec, onApplyFittedSpec 
               }}
               title={`Click or drop ${axis}-axis Klipper/ADXL345 CSV`}
             >
-              <input
+              <input aria-label={`${axis}-axis accelerometer CSV file`}
                 ref={inputRef}
                 type="file"
                 accept=".csv,.txt,text/csv"

@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { TooltipLayer } from "./components/TooltipLayer";
 import { BaselineCompareDrawer } from "./components/BaselineCompareDrawer";
 import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
+import { SavedBuildsDrawer } from "./components/SavedBuildsDrawer";
 import {
   ARCH_LABELS,
+  AWD_SYNC_LABELS,
   BELT_LABELS,
   BRACING_LABELS,
   FRONT_BRACE_LABELS,
@@ -17,6 +20,18 @@ import {
   decodeSpecFromHash,
   encodeSpecToHash,
 } from "./utils/shareSpec";
+import {
+  clearAutoSavedSession,
+  deleteSavedBuild,
+  loadAutoSavedSession,
+  loadSavedBuilds,
+  parseSettingsFile,
+  saveAutoSavedSession,
+  SavedBuildEntry,
+  serializeSettingsFile,
+  StudioPersistedSettings,
+  upsertSavedBuild,
+} from "./utils/studioStorage";
 import {
   AdjointLens,
   CatalogResponse,
@@ -106,11 +121,17 @@ const Z_RAIL_LABELS: Record<string, string> = {
 const Z_LEADSCREW_LABELS: Record<string, string> = {
   auto: "Auto",
   tr8x4_pom: "TR8×4 POM",
+  tr8x4_wobblex: "TR8×4 + WobbleX",
   tr8x8_pom: "TR8×8 POM",
   tr8x8_brass: "TR8×8 Brass",
   sfu1204_bk10: "SFU1204 Ballscrew",
+  sfu1204_wobblex: "SFU1204 + WobbleX",
+  sfu1605_fk12: "SFU1605 + FK12",
   gt2_6mm_z_belt: "GT2 6mm Z-Belt",
   gt2_9mm_z_belt: "GT2 9mm Z-Belt",
+  gt2_9mm_planetary_z: "9mm Belted-Z (5:1 Planetary)",
+  gt2_9mm_worm_z: "9mm Belted-Z (20:1 Worm)",
+  kevinakasam_belted_z: "KevinAkaSam Belted-Z",
 };
 
 const HOTEND_MOUNT_STYLE_LABELS: Record<string, string> = {
@@ -155,6 +176,10 @@ const DRIVE_TYPE_LABELS: Record<string, string> = {
 
 const BED_MOUNT_LABELS: Record<string, string> = {
   kinematic_3pt: "3-Pt Kinematic",
+  cnc_kelvin_magnetic: "CNC Kelvin Magnetic",
+  captive_belleville_kinematic: "Captive Belleville Kinematic",
+  dual_leaf_ti_kinematic: "Dual-Leaf Ti Kinematic",
+  spherical_3pt_ratrig: "RatRig 3-Pt Spherical",
   trident_3pt_standoffs: "Trident 3-Pt Bakelite",
   whopping_pochard_kinematic: "Whopping Pochard Leaf-Spring",
   rigid_4pt: "4-Pt Rigid",
@@ -576,6 +601,48 @@ function describeSpecDiff(
   if (nextDriveType !== "open_loop_stepper" && Math.round(prevVelBw) !== Math.round(nextVelBw)) {
     diffs.push(`Servo Vel BW: ${Math.round(prevVelBw)} Hz → ${Math.round(nextVelBw)} Hz`);
   }
+  const prevLpv = Boolean(prev.kinematics.lpv_workspace_scheduling ?? false);
+  const nextLpv = Boolean(next.kinematics.lpv_workspace_scheduling ?? false);
+  if (prevLpv !== nextLpv) {
+    diffs.push(`LPV 3×3 Scheduling: ${prevLpv ? "On" : "Off"} → ${nextLpv ? "On" : "Off"}`);
+  }
+  const prevAwdSync = prev.kinematics.awd_sync_mode ?? "none";
+  const nextAwdSync = next.kinematics.awd_sync_mode ?? "none";
+  if (prevAwdSync !== nextAwdSync) {
+    diffs.push(
+      `AWD Sync: ${AWD_SYNC_LABELS[prevAwdSync] ?? prevAwdSync} → ${AWD_SYNC_LABELS[nextAwdSync] ?? nextAwdSync}`
+    );
+  }
+  const prevEqBw = prev.kinematics.awd_equalizer_bw_hz ?? 2.0;
+  const nextEqBw = next.kinematics.awd_equalizer_bw_hz ?? 2.0;
+  if (Math.abs(prevEqBw - nextEqBw) >= 0.05) {
+    diffs.push(`AWD Equalizer BW: ${prevEqBw.toFixed(1)} Hz → ${nextEqBw.toFixed(1)} Hz`);
+  }
+  const prevNotchDepth = prev.kinematics.notch_depth_db ?? 12.0;
+  const nextNotchDepth = next.kinematics.notch_depth_db ?? 12.0;
+  if (Math.abs(prevNotchDepth - nextNotchDepth) >= 0.05) {
+    diffs.push(`Notch Depth: ${prevNotchDepth.toFixed(1)} dB → ${nextNotchDepth.toFixed(1)} dB`);
+  }
+  const prevNotchQ = prev.kinematics.notch_q ?? 1.75;
+  const nextNotchQ = next.kinematics.notch_q ?? 1.75;
+  if (Math.abs(prevNotchQ - nextNotchQ) >= 0.01) {
+    diffs.push(`Notch Q: ${prevNotchQ.toFixed(2)} → ${nextNotchQ.toFixed(2)}`);
+  }
+  const prevPinRotor = Boolean(prev.kinematics.pin_rotor_ff ?? false);
+  const nextPinRotor = Boolean(next.kinematics.pin_rotor_ff ?? false);
+  if (prevPinRotor !== nextPinRotor) {
+    diffs.push(`Pin-Rotor FF (0x65): ${prevPinRotor ? "On" : "Off"} → ${nextPinRotor ? "On" : "Off"}`);
+  }
+  const prevImuDamp = Boolean(prev.kinematics.toolhead_imu_active_damping ?? false);
+  const nextImuDamp = Boolean(next.kinematics.toolhead_imu_active_damping ?? false);
+  if (prevImuDamp !== nextImuDamp) {
+    diffs.push(`Toolhead IMU Damping: ${prevImuDamp ? "On" : "Off"} → ${nextImuDamp ? "On" : "Off"}`);
+  }
+  const prevModeSpace = Boolean(prev.kinematics.mode_space_torque_ff ?? false);
+  const nextModeSpace = Boolean(next.kinematics.mode_space_torque_ff ?? false);
+  if (prevModeSpace !== nextModeSpace) {
+    diffs.push(`Mode-Space Torque FF: ${prevModeSpace ? "On" : "Off"} → ${nextModeSpace ? "On" : "Off"}`);
+  }
   if (
     (prev.kinematics.xy_stepper.preset_id ?? "") !== (next.kinematics.xy_stepper.preset_id ?? "") ||
     prev.kinematics.xy_stepper.name !== next.kinematics.xy_stepper.name
@@ -732,10 +799,18 @@ export default function App() {
   const [baselinePinned, setBaselinePinned] = useState<boolean>(false);
   const pinTimerRef = useRef<number | null>(null);
   const [compareDrawerOpen, setCompareDrawerOpen] = useState<boolean>(false);
+  const [savedDrawerOpen, setSavedDrawerOpen] = useState<boolean>(false);
+  const [savedBuilds, setSavedBuilds] = useState<SavedBuildEntry[]>(() => loadSavedBuilds());
+  const [activeSavedBuildId, setActiveSavedBuildId] = useState<string | null>(null);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
+  const [savedStatusMsg, setSavedStatusMsg] = useState<string | null>(null);
+  const [savedStatusErr, setSavedStatusErr] = useState<string | null>(null);
   const [bom, setBom] = useState<PrinterBOMResponse | null>(null);
   const [bomLoading, setBomLoading] = useState<boolean>(false);
   const [stockLengthMm, setStockLengthMm] = useState<number>(1000);
   const [loading, setLoading] = useState<boolean>(false);
+  // Which pane is shown when the window is too narrow for all three (see .pane-switch in styles.css).
+  const [narrowPane, setNarrowPane] = useState<"design" | "view" | "results">("design");
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [optObjective, setOptObjective] = useState<"balanced" | "speed" | "rigidity" | "budget">("balanced");
   const [optMessage, setOptMessage] = useState<string | null>(null);
@@ -771,6 +846,9 @@ export default function App() {
   const [showBedWarp, setShowBedWarp] = useState<boolean>(false);
   const [toolheadPunchIn, setToolheadPunchIn] = useState<boolean>(false);
   const [studioSyncStatus, setStudioSyncStatus] = useState<"connected" | "syncing" | "offline">("syncing");
+  const [openMenu, setOpenMenu] = useState<"optimize" | "export" | null>(null);
+  const optimizeMenuRef = useRef<HTMLDivElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Refs for atomic history capture, live studio bridge & stale-request guarding
   const clientIdRef = useRef<string>(getOrCreateStudioClientId());
@@ -789,6 +867,8 @@ export default function App() {
   const stockLengthRef = useRef<number>(1000);
   const toolheadRelPosRef = useRef<[number, number, number]>([0.5, 0.5, 0.5]);
   const panelMeshNRef = useRef<number>(3);
+  const hasHydratedRef = useRef<boolean>(false);
+  const persistedSnapshotRef = useRef<StudioPersistedSettings | null>(null);
   const viewportCaptureRef = useRef<((frames?: number, delayMs?: number) => Promise<string[]>) | null>(null);
 
   simRef.current = sim;
@@ -803,6 +883,27 @@ export default function App() {
   stockLengthRef.current = stockLengthMm;
   toolheadRelPosRef.current = toolheadRelPos;
   panelMeshNRef.current = panelMeshN;
+  persistedSnapshotRef.current = spec
+    ? {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        spec,
+        selectedPreset,
+        filamentId,
+        toolheadRelPos,
+        panelMeshN,
+        stockLengthMm,
+        viewMode,
+        selectedModeIdx,
+        feaScale,
+        feaLoadCase,
+        sensitivityLens,
+        modalColorMode,
+        showBedWarp,
+        optObjective,
+        gcodeText,
+      }
+    : null;
 
   const handleRegisterCapture = useCallback(
     (fn: (frames?: number, delayMs?: number) => Promise<string[]>) => {
@@ -880,7 +981,7 @@ export default function App() {
         const bomData = await fetchBomForSpec(data.spec, stockLengthRef.current);
 
         // Ignore stale out-of-order responses
-        if (reqId !== simReqIdRef.current) return;
+        if (reqId !== simReqIdRef.current) return false;
 
         if (options?.isBaselineReset) {
           const label = `Stock ${options.baselineName || data.printer_name}`;
@@ -923,10 +1024,12 @@ export default function App() {
         setSpec(data.spec);
         setYamlText(data.yaml_text);
         setLayerLimit(Math.max(0, data.virtual_print.layer_count - 1));
+        return true;
       } catch (e) {
         if (reqId === simReqIdRef.current) {
           setError(e instanceof Error ? e.message : String(e));
         }
+        return false;
       } finally {
         if (reqId === simReqIdRef.current) {
           setLoading(false);
@@ -1184,22 +1287,94 @@ export default function App() {
     }
   }, []);
 
+  const clearSpecHashIfPresent = useCallback(() => {
+    try {
+      if (window.location.hash.startsWith("#spec=")) {
+        window.history.replaceState(
+          null,
+          "",
+          `${window.location.pathname}${window.location.search}`
+        );
+      }
+    } catch {
+      // Ignore history API errors in restricted contexts
+    }
+  }, []);
+
+  const applyPersistedSettings = useCallback(
+    async (
+      settings: StudioPersistedSettings,
+      options?: { baselineName?: string; activeBuildId?: string | null; clearHash?: boolean }
+    ): Promise<boolean> => {
+      const safeViewMode: ViewMode =
+        settings.viewMode === "topology" ? "assembly" : settings.viewMode;
+
+      setSelectedPreset(settings.selectedPreset);
+      setFilamentId(settings.filamentId);
+      setToolheadRelPos(settings.toolheadRelPos);
+      setPanelMeshN(settings.panelMeshN);
+      setStockLengthMm(settings.stockLengthMm);
+      setViewMode(safeViewMode);
+      setSelectedModeIdx(settings.selectedModeIdx);
+      setFeaScale(settings.feaScale);
+      setFeaLoadCase(settings.feaLoadCase);
+      setSensitivityLens(settings.sensitivityLens);
+      setModalColorMode(settings.modalColorMode);
+      setShowBedWarp(settings.showBedWarp);
+      setOptObjective(settings.optObjective);
+      setGcodeText(settings.gcodeText ?? "");
+      setSpec(settings.spec);
+      setOptMessage(null);
+      if (options?.activeBuildId !== undefined) {
+        setActiveSavedBuildId(options.activeBuildId);
+      }
+      if (options?.clearHash) {
+        clearSpecHashIfPresent();
+      }
+
+      filamentRef.current = settings.filamentId;
+      toolheadRelPosRef.current = settings.toolheadRelPos;
+      panelMeshNRef.current = settings.panelMeshN;
+      stockLengthRef.current = settings.stockLengthMm;
+      viewModeRef.current = safeViewMode;
+      selectedModeIdxRef.current = settings.selectedModeIdx;
+      gcodeTextRef.current = settings.gcodeText ?? "";
+      specRef.current = settings.spec;
+
+      return runSimulate(
+        { spec: settings.spec },
+        settings.gcodeText ?? "",
+        settings.filamentId,
+        {
+          isBaselineReset: true,
+          baselineName: options?.baselineName || settings.spec.name || "Saved Build",
+          toolheadRelPosOverride: settings.toolheadRelPos,
+          panelMeshNOverride: settings.panelMeshN,
+        }
+      );
+    },
+    [clearSpecHashIfPresent, runSimulate]
+  );
+
   const loadPreset = useCallback(
     async (presetId: string) => {
+      if (!presetId) return;
       setSelectedPreset(presetId);
+      setActiveSavedBuildId(null);
       setOptMessage(null);
+      clearSpecHashIfPresent();
       clearDeepVerify();
       const res = await fetch(`/api/presets/${presetId}`);
       if (!res.ok) return;
       const data = await res.json();
       setSpec(data.spec);
       setYamlText(data.yaml_text);
-      await runSimulate({ spec: data.spec }, gcodeText, undefined, {
+      await runSimulate({ spec: data.spec }, gcodeTextRef.current, undefined, {
         isBaselineReset: true,
         baselineName: data.spec?.name,
       });
     },
-    [clearDeepVerify, gcodeText, runSimulate]
+    [clearDeepVerify, clearSpecHashIfPresent, runSimulate]
   );
 
   useEffect(() => {
@@ -1208,23 +1383,49 @@ export default function App() {
         const res = await fetch("/api/catalog");
         const data: CatalogResponse = await res.json();
         setCatalog(data);
+        const firstId =
+          data.presets.find((p) => p.id === "voron_trident_300")?.id ||
+          data.presets.find((p) => p.id === "corexy_voron_style")?.id ||
+          data.presets[0]?.id;
+
         const sharedSpec = decodeSpecFromHash(window.location.hash);
         if (sharedSpec) {
           setSelectedPreset("");
           setSpec(sharedSpec);
-          await runSimulate({ spec: sharedSpec }, gcodeText, undefined, {
+          await runSimulate({ spec: sharedSpec }, gcodeTextRef.current, undefined, {
             isBaselineReset: true,
             baselineName: sharedSpec.name || "Shared Build",
           });
         } else {
-          const firstId =
-            data.presets.find((p) => p.id === "voron_trident_300")?.id ||
-            data.presets.find((p) => p.id === "corexy_voron_style")?.id ||
-            data.presets[0]?.id;
-          if (firstId) {
+          const autoSaved = loadAutoSavedSession();
+          let restoredOk = false;
+          if (autoSaved) {
+            const validPreset =
+              autoSaved.selectedPreset &&
+              data.presets.some((p) => p.id === autoSaved.selectedPreset)
+                ? autoSaved.selectedPreset
+                : "";
+            const validFilament = data.filaments.some((f) => f.id === autoSaved.filamentId)
+              ? autoSaved.filamentId
+              : "pla";
+            restoredOk = await applyPersistedSettings(
+              {
+                ...autoSaved,
+                selectedPreset: validPreset,
+                filamentId: validFilament,
+              },
+              { baselineName: autoSaved.spec.name || "Restored Session" }
+            );
+            if (restoredOk) {
+              setLastAutoSavedAt(autoSaved.savedAt);
+            }
+          }
+          if (!restoredOk && firstId) {
             await loadPreset(firstId);
           }
         }
+        hasHydratedRef.current = true;
+
         // Preload default Curved Tet10 bracket FEA (with Hex8 fallback) so 3D Solid Part tab is instant
         const tetRes = await fetch("/api/fea/tet-part", {
           method: "POST",
@@ -1256,6 +1457,220 @@ export default function App() {
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save active studio settings to localStorage so browser refreshes never lose edits
+  useEffect(() => {
+    if (!hasHydratedRef.current || !spec) return;
+    const timer = window.setTimeout(() => {
+      const snapshot = persistedSnapshotRef.current;
+      if (!snapshot) return;
+      const res = saveAutoSavedSession({
+        ...snapshot,
+        savedAt: new Date().toISOString(),
+      });
+      if (res.ok && res.data) {
+        setLastAutoSavedAt(res.data);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [
+    spec,
+    selectedPreset,
+    filamentId,
+    toolheadRelPos,
+    panelMeshN,
+    stockLengthMm,
+    viewMode,
+    selectedModeIdx,
+    feaScale,
+    feaLoadCase,
+    sensitivityLens,
+    modalColorMode,
+    showBedWarp,
+    optObjective,
+    gcodeText,
+  ]);
+
+  // Flush pending auto-save synchronously if user refreshes immediately after an edit
+  useEffect(() => {
+    const flushAutoSave = () => {
+      if (!hasHydratedRef.current || !persistedSnapshotRef.current) return;
+      saveAutoSavedSession({
+        ...persistedSnapshotRef.current,
+        savedAt: new Date().toISOString(),
+      });
+    };
+    window.addEventListener("pagehide", flushAutoSave);
+    window.addEventListener("beforeunload", flushAutoSave);
+    return () => {
+      window.removeEventListener("pagehide", flushAutoSave);
+      window.removeEventListener("beforeunload", flushAutoSave);
+    };
+  }, []);
+
+  const handleOpenSavedBuilds = useCallback(() => {
+    setSavedStatusMsg(null);
+    setSavedStatusErr(null);
+    setSavedBuilds(loadSavedBuilds());
+    setSavedDrawerOpen(true);
+  }, []);
+
+  const handleSaveBuild = useCallback(
+    (name: string, overwriteId?: string) => {
+      const snapshot = persistedSnapshotRef.current;
+      if (!snapshot) return;
+      const res = upsertSavedBuild(name, snapshot, overwriteId);
+      if (!res.ok || !res.data) {
+        setSavedStatusErr(res.error || "Failed to save build");
+        setSavedStatusMsg(null);
+        return;
+      }
+      setSavedBuilds(res.data.builds);
+      setActiveSavedBuildId(res.data.entry.id);
+      setSavedStatusErr(null);
+      setSavedStatusMsg(`Saved "${res.data.entry.name}"`);
+    },
+    []
+  );
+
+  const handleLoadSavedBuild = useCallback(
+    async (entry: SavedBuildEntry) => {
+      setSavedStatusErr(null);
+      const ok = await applyPersistedSettings(entry.settings, {
+        baselineName: entry.name,
+        activeBuildId: entry.id,
+        clearHash: true,
+      });
+      if (ok) {
+        const autoRes = saveAutoSavedSession({
+          ...entry.settings,
+          savedAt: new Date().toISOString(),
+        });
+        if (autoRes.ok && autoRes.data) {
+          setLastAutoSavedAt(autoRes.data);
+        }
+        setSavedDrawerOpen(false);
+      } else {
+        setSavedStatusErr(`Could not simulate saved build "${entry.name}".`);
+      }
+    },
+    [applyPersistedSettings]
+  );
+
+  const handleDeleteSavedBuild = useCallback((id: string) => {
+    const res = deleteSavedBuild(id);
+    if (!res.ok || !res.data) {
+      setSavedStatusErr(res.error || "Failed to delete build");
+      return;
+    }
+    setSavedBuilds(res.data);
+    setActiveSavedBuildId((prev) => (prev === id ? null : prev));
+    setSavedStatusErr(null);
+    setSavedStatusMsg("Deleted saved build");
+  }, []);
+
+  const handleExportSettingsJson = useCallback((name: string) => {
+    const snapshot = persistedSnapshotRef.current;
+    if (!snapshot) return;
+    const jsonText = serializeSettingsFile(name, snapshot);
+    const blob = new Blob([jsonText], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const slug =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_|_$/g, "") || "printsim_settings";
+    a.href = url;
+    a.download = `${slug}_settings.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setSavedStatusErr(null);
+    setSavedStatusMsg(`Exported "${slug}_settings.json"`);
+  }, []);
+
+  const handleImportSettingsFile = useCallback(
+    async (file: File) => {
+      setSavedStatusMsg(null);
+      setSavedStatusErr(null);
+      try {
+        const text = await file.text();
+        const ext = file.name.split(".").pop()?.toLowerCase() || "";
+        if (ext === "yaml" || ext === "yml") {
+          setSelectedPreset("");
+          setActiveSavedBuildId(null);
+          clearSpecHashIfPresent();
+          const ok = await runSimulate({ yaml_text: text }, gcodeTextRef.current, undefined, {
+            isBaselineReset: true,
+            baselineName: file.name.replace(/\.(ya?ml)$/i, ""),
+          });
+          if (ok) {
+            setSavedDrawerOpen(false);
+          } else {
+            setSavedStatusErr(`Failed to parse or simulate YAML file "${file.name}".`);
+          }
+          return;
+        }
+
+        const parsed = parseSettingsFile(text);
+        if (!parsed) {
+          setSavedStatusErr(
+            `Could not read "${file.name}". Expected a PrintSim .json settings file or .yaml printer spec.`
+          );
+          return;
+        }
+        const ok = await applyPersistedSettings(parsed.settings, {
+          baselineName: parsed.name,
+          activeBuildId: null,
+          clearHash: true,
+        });
+        if (ok) {
+          const autoRes = saveAutoSavedSession({
+            ...parsed.settings,
+            savedAt: new Date().toISOString(),
+          });
+          if (autoRes.ok && autoRes.data) {
+            setLastAutoSavedAt(autoRes.data);
+          }
+          setSavedDrawerOpen(false);
+        } else {
+          setSavedStatusErr(`Imported file "${file.name}" failed simulation validation.`);
+        }
+      } catch (e) {
+        setSavedStatusErr(e instanceof Error ? e.message : "Failed to import file");
+      }
+    },
+    [applyPersistedSettings, clearSpecHashIfPresent, runSimulate]
+  );
+
+  const handleResetToStock = useCallback(async () => {
+    clearAutoSavedSession();
+    clearSpecHashIfPresent();
+    setActiveSavedBuildId(null);
+    setLastAutoSavedAt(null);
+    setFilamentId("pla");
+    filamentRef.current = "pla";
+    setToolheadRelPos([0.5, 0.5, 0.5]);
+    toolheadRelPosRef.current = [0.5, 0.5, 0.5];
+    setPanelMeshN(3);
+    panelMeshNRef.current = 3;
+    setStockLengthMm(1000);
+    stockLengthRef.current = 1000;
+    setViewMode("assembly");
+    viewModeRef.current = "assembly";
+    setSelectedModeIdx(0);
+    selectedModeIdxRef.current = 0;
+    setShowBedWarp(false);
+    setGcodeText("");
+    gcodeTextRef.current = "";
+    const defaultId =
+      catalogRef.current?.presets.find((p) => p.id === "voron_trident_300")?.id ||
+      catalogRef.current?.presets.find((p) => p.id === "corexy_voron_style")?.id ||
+      catalogRef.current?.presets[0]?.id ||
+      "voron_trident_300";
+    await loadPreset(defaultId);
+    setSavedDrawerOpen(false);
+  }, [clearSpecHashIfPresent, loadPreset]);
 
   const runSimulateRef = useRef(runSimulate);
   runSimulateRef.current = runSimulate;
@@ -1938,14 +2353,54 @@ export default function App() {
     setViewMode("modal");
   }, []);
 
+  useEffect(() => {
+    if (!openMenu) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (openMenu === "optimize" && optimizeMenuRef.current?.contains(target)) return;
+      if (openMenu === "export" && exportMenuRef.current?.contains(target)) return;
+      setOpenMenu(null);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpenMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openMenu]);
+
+  const isOptimizeBusy = optimizing || paretoLoading || deepVerifyLoading;
+  const optimizeTriggerLabel = optimizing
+    ? "Optimizing…"
+    : paretoLoading
+      ? "Searching…"
+      : deepVerifyLoading
+        ? "Verifying…"
+        : "Optimize ▾";
+  const exportTriggerLabel = shareCopied
+    ? "Copied Link ✓"
+    : exportingStep
+      ? "Exporting STEP…"
+      : exportingDxf
+        ? "Exporting DXF…"
+        : "Export ▾";
+
   return (
     <div className="app-shell">
+      <TooltipLayer />
       <style>{`@keyframes studioSyncPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }`}</style>
       <header className="topbar">
         <div className="brand">
           <span className="brand-badge">PrintSim 1.1</span>
-          <span>Multiphysics 3D Printer Studio</span>
+          <span className="brand-subtitle">Multiphysics 3D Printer Studio</span>
           <span
+            className="agent-sync-pill"
             title="Live Studio Bridge active — AI agents can inspect & sync this session via PrintSim MCP/API"
             style={{
               display: "inline-flex",
@@ -1954,7 +2409,7 @@ export default function App() {
               padding: "3px 8px",
               borderRadius: 999,
               fontSize: 11,
-              fontWeight: 600,
+              fontWeight: 500,
               letterSpacing: "0.02em",
               background:
                 studioSyncStatus === "offline"
@@ -2003,101 +2458,273 @@ export default function App() {
             <span>Agent Sync</span>
           </span>
           {optMessage && (
-            <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, marginLeft: 8 }}>
+            <span className="topbar-opt-msg" title={optMessage}>
               ✓ {optMessage}
             </span>
           )}
         </div>
 
         <div className="topbar-actions">
-          <select
-            style={{ width: 130 }}
-            value={optObjective}
-            onChange={(e) => setOptObjective(e.target.value as typeof optObjective)}
-            title="AI Optimization Objective"
-          >
-            <option value="balanced">AI: Balanced</option>
-            <option value="speed">AI: Max Speed</option>
-            <option value="rigidity">AI: Max Rigidity</option>
-            <option value="budget">AI: Budget/Light</option>
-          </select>
-          <button className="btn ai" disabled={optimizing || !spec} onClick={handleOptimize}>
-            {optimizing ? "Optimizing..." : "AI Optimize Design"}
-          </button>
-          <button
-            className="btn pareto"
-            disabled={paretoLoading || !spec}
-            onClick={runParetoFrontier}
-            title="Explore pymoo NSGA-II multi-goal Pareto trade-off frontier (Cost vs. Safe Accel vs. Stiffness)"
-          >
-            {paretoLoading ? "Searching Frontier..." : "Trade-Off Frontier"}
-          </button>
-          <button
-            className={`btn deep-verify ${deepVerifyResult ? "verified" : ""}`}
-            disabled={deepVerifyLoading || !spec}
-            onClick={runDeepVerify}
-            title="Run fine-mesh MITC4 shell convergence verification & inspect 3D panel stress/drum modes"
-          >
-            {deepVerifyLoading ? "Verifying..." : "Deep Verify"}
-          </button>
-          <button className="btn" disabled={!spec} onClick={handleExportStl}>
-            Export STL
-          </button>
-          <button
-            className="btn"
-            disabled={!spec || exportingStep}
-            onClick={handleExportStep}
-            title="Export full OpenCASCADE B-Rep STEP CAD assembly"
-          >
-            {exportingStep ? "Exporting STEP..." : "Export STEP"}
-          </button>
-          <button
-            className="btn"
-            disabled={!spec || exportingDxf}
-            onClick={handleExportDxf}
-            title="Download 2D CNC/laser-cut DXF flat plates for frame panels, gussets, deck plates, Top CNC Halo Ring, and Front Portal / Header+Skirt plates"
-          >
-            {exportingDxf ? "Exporting DXF..." : "DXF Plates"}
-          </button>
-          <button className="btn" disabled={!spec} onClick={handleExportBomCsv}>
-            Export BOM CSV
-          </button>
-          <button
-            className={`btn ${baselinePinned ? "share-copied" : ""}`}
-            disabled={!sim || !spec}
-            onClick={handlePinBaseline}
-            title="Pin the current printer simulation as the trade-study comparison baseline"
-          >
-            {baselinePinned ? "Pinned ✓" : "Pin Baseline"}
-          </button>
-          {baselineSim && sim && (
+          {/* 1. Optimize Popover Menu */}
+          <div className="topbar-menu-wrap" ref={optimizeMenuRef}>
             <button
-              className="btn compare-btn"
-              onClick={() => setCompareDrawerOpen(true)}
-              title="Open side-by-side Baseline vs. Current trade-study comparison & Dual-PSD overlay"
+              type="button"
+              className={`btn topbar-menu-trigger ${openMenu === "optimize" ? "open" : ""} ${
+                isOptimizeBusy ? "ai" : deepVerifyResult ? "deep-verify verified" : ""
+              }`}
+              disabled={!spec}
+              aria-expanded={openMenu === "optimize"}
+              aria-haspopup="menu"
+              onClick={() => setOpenMenu((m) => (m === "optimize" ? null : "optimize"))}
+              title="AI Optimize Design, Trade-Off Pareto Frontier, and Fine-Mesh Deep Verify"
             >
-              Compare
+              {!isOptimizeBusy && deepVerifyResult && (
+                <span className="topbar-verified-dot" aria-hidden="true" />
+              )}
+              <span>{optimizeTriggerLabel}</span>
             </button>
-          )}
+            {openMenu === "optimize" && (
+              <div className="topbar-menu-popover" role="menu">
+                <div className="topbar-menu-section">
+                  <label className="topbar-menu-label" htmlFor="topbar-opt-objective">
+                    AI Objective
+                  </label>
+                  <select
+                    id="topbar-opt-objective"
+                    value={optObjective}
+                    onChange={(e) => setOptObjective(e.target.value as typeof optObjective)}
+                    title="AI Optimization Objective"
+                  >
+                    <option value="balanced">AI: Balanced</option>
+                    <option value="speed">AI: Max Speed</option>
+                    <option value="rigidity">AI: Max Rigidity</option>
+                    <option value="budget">AI: Budget/Light</option>
+                  </select>
+                </div>
+                <div className="topbar-menu-divider" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="topbar-menu-item ai"
+                  disabled={optimizing || !spec}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void handleOptimize();
+                  }}
+                >
+                  <span className="topbar-menu-item-title">
+                    {optimizing ? "Optimizing..." : "AI Optimize Design"}
+                  </span>
+                  <span className="topbar-menu-item-sub">
+                    Optimize frame, gantry &amp; toolhead for objective
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="topbar-menu-item pareto"
+                  disabled={paretoLoading || !spec}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void runParetoFrontier();
+                  }}
+                  title="Explore pymoo NSGA-II multi-goal Pareto trade-off frontier (Cost vs. Safe Accel vs. Stiffness)"
+                >
+                  <span className="topbar-menu-item-title">
+                    {paretoLoading ? "Searching Frontier..." : "Trade-Off Frontier (Pareto)"}
+                  </span>
+                  <span className="topbar-menu-item-sub">
+                    NSGA-II Cost vs. Safe Accel vs. Stiffness
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`topbar-menu-item deep-verify ${deepVerifyResult ? "verified" : ""}`}
+                  disabled={deepVerifyLoading || !spec}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void runDeepVerify();
+                  }}
+                  title="Run fine-mesh MITC4 shell convergence verification & inspect 3D panel stress/drum modes"
+                >
+                  <span className="topbar-menu-item-title">
+                    {deepVerifyLoading ? "Verifying..." : "Deep Verify (Fine Shell Mesh)"}
+                  </span>
+                  <span className="topbar-menu-item-sub">
+                    {deepVerifyResult
+                      ? "Verified ✓ — Fine MITC4 shell convergence"
+                      : "Fine-mesh MITC4 shell convergence check"}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 2. Export Popover Menu */}
+          <div className="topbar-menu-wrap" ref={exportMenuRef}>
+            <button
+              type="button"
+              className={`btn topbar-menu-trigger ${openMenu === "export" ? "open" : ""} ${
+                shareCopied ? "share-copied" : ""
+              }`}
+              disabled={!spec}
+              aria-expanded={openMenu === "export"}
+              aria-haspopup="menu"
+              onClick={() => setOpenMenu((m) => (m === "export" ? null : "export"))}
+              title="Export STL, STEP CAD, DXF Plates, BOM CSV, or copy a shareable link"
+            >
+              <span>{exportTriggerLabel}</span>
+            </button>
+            {openMenu === "export" && (
+              <div className="topbar-menu-popover" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="topbar-menu-item"
+                  disabled={!spec}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void handleExportStl();
+                  }}
+                >
+                  <span className="topbar-menu-item-title">Export STL (.stl)</span>
+                  <span className="topbar-menu-item-sub">3D structural mesh assembly</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="topbar-menu-item"
+                  disabled={!spec || exportingStep}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void handleExportStep();
+                  }}
+                  title="Export full OpenCASCADE B-Rep STEP CAD assembly"
+                >
+                  <span className="topbar-menu-item-title">
+                    {exportingStep ? "Exporting STEP..." : "Export STEP CAD (.step)"}
+                  </span>
+                  <span className="topbar-menu-item-sub">OpenCASCADE B-Rep CAD assembly</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="topbar-menu-item"
+                  disabled={!spec || exportingDxf}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void handleExportDxf();
+                  }}
+                  title="Download 2D CNC/laser-cut DXF flat plates for frame panels, gussets, deck plates, Top CNC Halo Ring, and Front Portal / Header+Skirt plates"
+                >
+                  <span className="topbar-menu-item-title">
+                    {exportingDxf ? "Exporting DXF..." : "Export DXF Plates (.dxf)"}
+                  </span>
+                  <span className="topbar-menu-item-sub">2D CNC / laser-cut flat plates</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="topbar-menu-item"
+                  disabled={!spec}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void handleExportBomCsv();
+                  }}
+                >
+                  <span className="topbar-menu-item-title">Export BOM CSV (.csv)</span>
+                  <span className="topbar-menu-item-sub">Bill of materials &amp; cut list</span>
+                </button>
+                <div className="topbar-menu-divider" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`topbar-menu-item ${shareCopied ? "share-copied" : ""}`}
+                  disabled={!spec}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    void handleShareLink();
+                  }}
+                  title="Copy shareable URL with this printer build encoded in the link hash"
+                >
+                  <span className="topbar-menu-item-title">
+                    {shareCopied ? "Copied Link ✓" : "Copy Share Link (#spec=)"}
+                  </span>
+                  <span className="topbar-menu-item-sub">Encode full build in shareable URL</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 3. Compact Compare Control */}
+          <div className="topbar-compare-group">
+            <button
+              type="button"
+              className={`btn topbar-compare-pin ${baselinePinned ? "share-copied" : ""}`}
+              disabled={!sim || !spec}
+              onClick={handlePinBaseline}
+              title="Pin the current printer simulation as the trade-study comparison baseline"
+            >
+              {baselinePinned ? "Pinned ✓" : "Pin"}
+            </button>
+            {baselineSim && sim && (
+              <button
+                type="button"
+                className="btn compare-btn topbar-compare-open"
+                onClick={() => setCompareDrawerOpen(true)}
+                title="Open side-by-side Baseline vs. Current trade-study comparison & Dual-PSD overlay"
+              >
+                Compare
+              </button>
+            )}
+          </div>
+
+          {/* 4. Save / Load */}
           <button
-            className={`btn ${shareCopied ? "share-copied" : ""}`}
-            disabled={!spec}
-            onClick={handleShareLink}
-            title="Copy shareable URL with this printer build encoded in the link hash"
+            type="button"
+            className="btn saved-builds-btn"
+            onClick={handleOpenSavedBuilds}
+            title="Save or retrieve named printer settings (active session also auto-saves on refresh)"
           >
-            {shareCopied ? "Copied Link ✓" : "Share Link"}
+            {savedBuilds.length > 0 ? `Save / Load (${savedBuilds.length})` : "Save / Load"}
           </button>
+
+          {/* 5. Re-Simulate Primary Button */}
           <button
+            type="button"
             className="btn primary"
             disabled={loading || !spec}
-            onClick={() => spec && runSimulate({ spec }, gcodeText, undefined, { changeLabel: "Re-Simulated Design" })}
+            onClick={() =>
+              spec && runSimulate({ spec }, gcodeText, undefined, { changeLabel: "Re-Simulated Design" })
+            }
           >
             {loading ? "Solving..." : "Re-Simulate"}
           </button>
         </div>
       </header>
 
-      <main className="workspace">
+      <nav className="pane-switch" aria-label="Workspace pane">
+        {(
+          [
+            ["design", "Design"],
+            ["view", "3D View"],
+            ["results", "Results"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`pane-switch-btn ${narrowPane === id ? "active" : ""}`}
+            aria-pressed={narrowPane === id}
+            onClick={() => setNarrowPane(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="workspace" data-pane={narrowPane}>
         <DesignPanel
           catalog={catalog}
           sim={sim}
@@ -2107,6 +2734,9 @@ export default function App() {
           onFilamentChange={handleFilamentChange}
           spec={spec}
           onSpecChange={handleSpecChange}
+          savedBuildsCount={savedBuilds.length}
+          lastAutoSavedAt={lastAutoSavedAt}
+          onOpenSavedBuilds={handleOpenSavedBuilds}
           toolheadRelPos={toolheadRelPos}
           onToolheadRelPosChange={handleToolheadRelPosChange}
           panelMeshN={panelMeshN}
@@ -2116,6 +2746,11 @@ export default function App() {
           onSimulateYaml={() => runSimulate({ yaml_text: yamlText }, gcodeText)}
           gcodeText={gcodeText}
           onGcodeChange={setGcodeText}
+          onRunGcode={() => {
+            if (!spec) return;
+            runSimulate({ spec }, gcodeText, undefined, { changeLabel: "Ran G-code Print Simulation" });
+            setViewMode("toolpath");
+          }}
           onRunPartFea={runPartFea}
           onRunStlFea={runStlFea}
           onDownloadPartStep={handleDownloadPartStep}
@@ -2218,6 +2853,25 @@ export default function App() {
         currentBom={bom}
         catalog={catalog}
         onPinCurrent={handlePinBaseline}
+      />
+
+      <SavedBuildsDrawer
+        open={savedDrawerOpen}
+        onClose={() => setSavedDrawerOpen(false)}
+        currentSpec={spec}
+        currentFilamentId={filamentId}
+        catalog={catalog}
+        savedBuilds={savedBuilds}
+        activeBuildId={activeSavedBuildId}
+        lastAutoSavedAt={lastAutoSavedAt}
+        statusMessage={savedStatusMsg}
+        statusError={savedStatusErr}
+        onSaveCurrent={handleSaveBuild}
+        onLoadBuild={handleLoadSavedBuild}
+        onDeleteBuild={handleDeleteSavedBuild}
+        onExportSettingsJson={handleExportSettingsJson}
+        onImportSettingsFile={handleImportSettingsFile}
+        onResetToStock={handleResetToStock}
       />
     </div>
   );

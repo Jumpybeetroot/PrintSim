@@ -238,7 +238,7 @@ export const CncMetrologyContent: React.FC<{
     <div className="cnc-metrology-card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {workspaceFrf?.drive_type && (
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <span className="badge-pill" style={{ fontSize: 9.5, padding: "1px 6px" }}>
+          <span className="badge-pill" style={{ fontSize: 11, padding: "1px 6px" }}>
             {workspaceFrf.drive_type.replace(/_/g, " ")}
           </span>
         </div>
@@ -661,7 +661,8 @@ export const AdjointSensitivityContent: React.FC<{
         <button
           type="button"
           className={`deep-verify-cta ${viewMode === "sensitivity" ? "active" : ""}`}
-          style={{ padding: "2px 8px", fontSize: 10 }}
+ aria-pressed={viewMode === "sensitivity"}
+          style={{ padding: "2px 8px", fontSize: 11 }}
           onClick={() => onViewModeChange("sensitivity")}
           title="Color structural frame & panel bays by adjoint Hz/USD & Hz/100g ROI in the 3D viewport"
         >
@@ -701,7 +702,7 @@ export const AdjointSensitivityContent: React.FC<{
             <div className="sens-breakdown-head">
               <span>4-Subsystem Nozzle-Error Share</span>
               {primary && (
-                <span className="badge-pill bad" style={{ padding: "0 6px", fontSize: 9.5 }}>
+                <span className="badge-pill bad" style={{ padding: "0 6px", fontSize: 11 }}>
                   #1 {SUBSYSTEM_DISPLAY[primary]?.short ?? primary}
                 </span>
               )}
