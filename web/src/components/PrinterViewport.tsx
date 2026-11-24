@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { buildBedMountsGroup } from "../viewport/bedMounts";
+import {
+  ModalBedMountItem,
+  ModalGe5cJointItem,
+  buildBedMountsGroup,
+} from "../viewport/bedMounts";
 import {
   bedWarpColorInto,
   sensitivityColorInto,
@@ -918,6 +922,12 @@ export const PrinterViewport: React.FC<Props> = ({
     modalBedMesh?: THREE.Mesh;
     modalBedNodeId?: string;
     modalBedOffset: THREE.Vector3;
+    modalBedSubframe?: THREE.Group;
+    modalBedSubframeBasePos: THREE.Vector3;
+    modalBedSubframeOffset: THREE.Vector3;
+    modalBedFrameNodeId?: string;
+    modalBedMountItems: ModalBedMountItem[];
+    modalGe5cItems: ModalGe5cJointItem[];
     basePositions: Record<string, THREE.Vector3>;
     modalVectors: Record<string, THREE.Vector3>;
     modalRotations: Record<string, THREE.Vector3>;
@@ -951,6 +961,10 @@ export const PrinterViewport: React.FC<Props> = ({
     modalCollarRelToTh: new THREE.Vector3(),
     modalBodyDepthRef: 0.22,
     modalBedOffset: new THREE.Vector3(0, -0.04, 0),
+    modalBedSubframeBasePos: new THREE.Vector3(),
+    modalBedSubframeOffset: new THREE.Vector3(),
+    modalBedMountItems: [],
+    modalGe5cItems: [],
     basePositions: {},
     modalVectors: {},
     modalRotations: {},
@@ -1130,6 +1144,20 @@ export const PrinterViewport: React.FC<Props> = ({
     const tmpCollarS2 = new THREE.Vector3();
     const tmpNozTipWorld = new THREE.Vector3();
     const tmpRelQuat = new THREE.Quaternion();
+    const tmpBedRotVec = new THREE.Vector3();
+    const tmpBedFrameRotVec = new THREE.Vector3();
+    const tmpMountTopPos = new THREE.Vector3();
+    const tmpMountBotPos = new THREE.Vector3();
+    const tmpFlexTopPos = new THREE.Vector3();
+    const tmpFlexBotPos = new THREE.Vector3();
+    const tmpFlexDir = new THREE.Vector3();
+    const tmpUpAxis = new THREE.Vector3(0, 1, 0);
+    const tmpXAxis = new THREE.Vector3(1, 0, 0);
+    const tmpBedUp = new THREE.Vector3();
+    const tmpFrameUp = new THREE.Vector3();
+    const tmpYawQuat = new THREE.Quaternion();
+    const tmpAlignQuat = new THREE.Quaternion();
+    const tmpGe5cPos = new THREE.Vector3();
 
     const hasActiveModalMeshes = (): boolean =>
       stateRef.current.isModal &&
@@ -1255,6 +1283,12 @@ export const PrinterViewport: React.FC<Props> = ({
           modalBedMesh,
           modalBedNodeId,
           modalBedOffset,
+          modalBedSubframe,
+          modalBedSubframeBasePos,
+          modalBedSubframeOffset,
+          modalBedFrameNodeId,
+          modalBedMountItems,
+          modalGe5cItems,
           isolateToolheadModal: isIsoToolhead,
           modalAmpScale: ampScale,
           isToolheadPunchIn: isPunchIn,
@@ -1738,6 +1772,85 @@ export const PrinterViewport: React.FC<Props> = ({
         }
         if (modalBedMesh && modalBedNodeId) {
           getPosInto(modalBedNodeId, modalBedMesh.position).add(modalBedOffset);
+          const bedRot = !isIsoToolhead ? modalRotations[modalBedNodeId] : undefined;
+          if (bedRot && bedRot.lengthSq() > 1e-8) {
+            tmpBedRotVec.copy(bedRot).multiplyScalar(phase * 0.1);
+            setQuatFromClampedRotVec(tmpBedRotVec, maxStageAngle, modalBedMesh.quaternion);
+          } else {
+            modalBedMesh.quaternion.identity();
+          }
+        }
+
+        const effBedFrameNodeId =
+          modalBedFrameNodeId && basePositions[modalBedFrameNodeId]
+            ? modalBedFrameNodeId
+            : modalBedNodeId;
+        if (modalBedSubframe && effBedFrameNodeId) {
+          getPosInto(effBedFrameNodeId, modalBedSubframe.position).add(modalBedSubframeOffset);
+          const frameRot = !isIsoToolhead ? modalRotations[effBedFrameNodeId] : undefined;
+          if (frameRot && frameRot.lengthSq() > 1e-8) {
+            tmpBedFrameRotVec.copy(frameRot).multiplyScalar(phase * 0.1);
+            setQuatFromClampedRotVec(tmpBedFrameRotVec, maxStageAngle, modalBedSubframe.quaternion);
+          } else {
+            modalBedSubframe.quaternion.identity();
+          }
+        }
+
+        if (modalBedMesh && modalBedMountItems.length > 0) {
+          const bedPos = modalBedMesh.position;
+          const bedQuat = modalBedMesh.quaternion;
+          const framePos = modalBedSubframe ? modalBedSubframe.position : modalBedSubframeBasePos;
+          const frameQuat = modalBedSubframe ? modalBedSubframe.quaternion : tmpIdentQuat;
+
+          tmpBedUp.set(0, 1, 0).applyQuaternion(bedQuat);
+          tmpFrameUp.set(0, 1, 0).applyQuaternion(frameQuat);
+
+          for (let mi = 0; mi < modalBedMountItems.length; mi++) {
+            const item = modalBedMountItems[mi];
+            tmpYawQuat.setFromAxisAngle(tmpUpAxis, item.radialYaw);
+
+            // Top bed-side hardware locked flush to heated bed plate underside
+            tmpMountTopPos.copy(item.mountOffsetFromBed).applyQuaternion(bedQuat).add(bedPos);
+            item.topGroup.position.copy(tmpMountTopPos);
+            item.topGroup.quaternion.copy(bedQuat).multiply(tmpYawQuat);
+
+            // Bottom subframe-side hardware locked flush to 2020 bed subframe top face
+            tmpMountBotPos.copy(item.mountOffsetFromFrame).applyQuaternion(frameQuat).add(framePos);
+            item.bottomGroup.position.copy(tmpMountBotPos);
+            item.bottomGroup.quaternion.copy(frameQuat).multiply(tmpYawQuat);
+
+            // Compliant middle body stretched/compressed/sheared cleanly between bottom & top anchors
+            tmpFlexBotPos.copy(tmpMountBotPos).addScaledVector(tmpFrameUp, item.flexBotInsetY);
+            tmpFlexTopPos.copy(tmpMountTopPos).addScaledVector(tmpBedUp, -item.flexTopInsetY);
+            tmpFlexDir.subVectors(tmpFlexTopPos, tmpFlexBotPos);
+            const dist = tmpFlexDir.length();
+
+            item.flexGroup.position.copy(tmpFlexBotPos);
+            if (dist > 1e-5) {
+              tmpFlexDir.divideScalar(dist);
+              if (tmpFlexDir.y < -0.9999) {
+                tmpAlignQuat.setFromAxisAngle(tmpXAxis, Math.PI);
+              } else {
+                tmpAlignQuat.setFromUnitVectors(tmpUpAxis, tmpFlexDir);
+              }
+              item.flexGroup.quaternion.copy(tmpAlignQuat).multiply(tmpYawQuat);
+              const yScale = Math.min(2.2, Math.max(0.35, dist / Math.max(item.restFlexLen, 1e-5)));
+              item.flexGroup.scale.set(1, yScale, 1);
+            } else {
+              item.flexGroup.quaternion.copy(frameQuat).multiply(tmpYawQuat);
+              item.flexGroup.scale.set(1, 0.35, 1);
+            }
+          }
+        }
+
+        if (modalGe5cItems.length > 0) {
+          for (let gi = 0; gi < modalGe5cItems.length; gi++) {
+            const item = modalGe5cItems[gi];
+            if (basePositions[item.nodeId]) {
+              getPosInto(item.nodeId, tmpGe5cPos);
+              item.group.position.copy(tmpGe5cPos).add(item.offset);
+            }
+          }
         }
       }
 
@@ -2140,6 +2253,12 @@ export const PrinterViewport: React.FC<Props> = ({
     stateRef.current.modalBodyDepthRef = 0.22;
     stateRef.current.modalBedMesh = undefined;
     stateRef.current.modalBedNodeId = undefined;
+    stateRef.current.modalBedSubframe = undefined;
+    stateRef.current.modalBedSubframeBasePos.set(0, 0, 0);
+    stateRef.current.modalBedSubframeOffset.set(0, 0, 0);
+    stateRef.current.modalBedFrameNodeId = undefined;
+    stateRef.current.modalBedMountItems = [];
+    stateRef.current.modalGe5cItems = [];
     stateRef.current.modalRotations = {};
     stateRef.current.modalHotendLen = 0.45;
     stateRef.current.isModal = viewMode === "modal";
@@ -4983,34 +5102,46 @@ export const PrinterViewport: React.FC<Props> = ({
 
       if (supportPtsThree.length > 0) {
         const zDriveMode = geom.bed_z_drive ?? sim.spec.bed.z_drive;
-        const zArmEndPtsThree: THREE.Vector3[] = [];
-        if (
-          bedMountType === "trident_3pt_standoffs" &&
-          sim.spec.architecture === "corexy" &&
-          zDriveMode !== "belted_quad_z"
-        ) {
-          if (geom.bed_support_points_mm && geom.bed_support_points_mm.length > 0) {
-            for (const armPtMm of geom.bed_support_points_mm) {
-              zArmEndPtsThree.push(toThree(armPtMm, cx, cy));
-            }
-          } else {
-            for (const nid of ["z_bed_fl", "z_bed_fr", "z_bed_r"]) {
-              if (basePos[nid]) zArmEndPtsThree.push(basePos[nid].clone());
+        const zArmNodes: Array<{ nodeId: string; pos: THREE.Vector3 }> = [];
+        const zArmDispDeltas: Record<string, THREE.Vector3> = {};
+        if (sim.spec.architecture === "corexy" && zDriveMode === "leadscrew_triple") {
+          for (const nid of ["z_bed_fl", "z_bed_fr", "z_bed_r"]) {
+            if (basePos[nid]) {
+              zArmNodes.push({ nodeId: nid, pos: basePos[nid].clone() });
+              if (viewMode === "fea_stress" && deformedPos[nid]) {
+                zArmDispDeltas[nid] = deformedPos[nid].clone().sub(basePos[nid]);
+              }
             }
           }
         }
+
+        const bedFrameNodeId =
+          (geom.bed_frame_node_id && basePos[geom.bed_frame_node_id]
+            ? geom.bed_frame_node_id
+            : undefined) ?? (basePos["bed_frame"] ? "bed_frame" : bedNodeId);
+        const bedFrameNodeBase = basePos[bedFrameNodeId];
 
         const bedDispDelta =
           viewMode === "fea_stress" && deformedPos[bedNodeId] && bedNodeBase
             ? deformedPos[bedNodeId].clone().sub(bedNodeBase)
             : new THREE.Vector3(0, 0, 0);
-        const bedMountsGroup = buildBedMountsGroup({
+        const frameDispDelta =
+          viewMode === "fea_stress" && deformedPos[bedFrameNodeId] && bedFrameNodeBase
+            ? deformedPos[bedFrameNodeId].clone().sub(bedFrameNodeBase)
+            : bedDispDelta.clone();
+
+        const bedMountsResult = buildBedMountsGroup({
           bedMountType,
+          zDriveMode,
+          architecture: sim.spec.architecture,
           supportPtsThree,
-          zArmEndPtsThree,
+          zArmNodes,
           bedBaseCenter,
+          bedThickScene,
           bedBottomY: bedBaseCenter.y - bedThickScene * 0.5,
           bedDispDelta,
+          frameDispDelta,
+          zArmDispDeltas,
           scale: SCALE,
           viewMode,
           toolheadPunchIn,
@@ -5020,7 +5151,22 @@ export const PrinterViewport: React.FC<Props> = ({
           bedEmissiveIntensity,
           onTagMesh: (mesh) => tagInspectable(mesh, bedInspectInfo),
         });
-        group.add(bedMountsGroup);
+        group.add(bedMountsResult.root);
+
+        if (viewMode === "modal" && bedNodeBase) {
+          stateRef.current.modalBedSubframe = bedMountsResult.subframeGroup;
+          stateRef.current.modalBedSubframeBasePos.copy(bedMountsResult.subframeBasePos);
+          stateRef.current.modalBedFrameNodeId = bedFrameNodeId;
+          if (bedFrameNodeBase) {
+            stateRef.current.modalBedSubframeOffset
+              .copy(bedMountsResult.subframeBasePos)
+              .sub(bedFrameNodeBase);
+          } else {
+            stateRef.current.modalBedSubframeOffset.set(0, 0, 0);
+          }
+          stateRef.current.modalBedMountItems = bedMountsResult.mountItems;
+          stateRef.current.modalGe5cItems = bedMountsResult.ge5cItems;
+        }
       }
     }
 
