@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { buildBedMountsGroup } from "../viewport/bedMounts";
 import {
   bedWarpColorInto,
   sensitivityColorInto,
@@ -4940,9 +4941,13 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // 3D Bed Mount Standoffs / Kinematic Pucks / Whopping Pochard Leaf-Springs / Springs / Silicone Columns
-    // Always positioned directly underneath the heated bed plate via `bed_mount_points_mm`
-    if (viewMode === "assembly" || viewMode === "sensitivity" || viewMode === "fea_stress") {
+    // 3D Bed Mount CAD Assemblies (all 7 BedMountType variants via dedicated viewport/bedMounts.ts)
+    if (
+      viewMode === "assembly" ||
+      viewMode === "sensitivity" ||
+      viewMode === "fea_stress" ||
+      viewMode === "modal"
+    ) {
       const bedMountType: BedMountType =
         geom.bed_mount_type ?? sim.spec.bed.mount_type ?? "kinematic_3pt";
       const supportPtsThree: THREE.Vector3[] = [];
@@ -4953,10 +4958,14 @@ export const PrinterViewport: React.FC<Props> = ({
         }
       } else {
         const [bcx, bcy, bcz] = geom.bed_center_mm;
-        const insetX = bedX * 0.36;
-        const insetY = bedY * 0.36;
+        const insetX = bedX * 0.375;
+        const insetY = bedY * 0.375;
         const mountZ = bcz - (sim.spec.bed.plate_thickness_mm ?? 8) - 8;
-        if (bedMountType === "kinematic_3pt" || bedMountType === "whopping_pochard_kinematic") {
+        if (
+          bedMountType === "kinematic_3pt" ||
+          bedMountType === "whopping_pochard_kinematic" ||
+          bedMountType === "trident_3pt_standoffs"
+        ) {
           supportPtsThree.push(
             toThree([bcx - insetX, bcy - insetY, mountZ], cx, cy),
             toThree([bcx + insetX, bcy - insetY, mountZ], cx, cy),
@@ -4973,205 +4982,45 @@ export const PrinterViewport: React.FC<Props> = ({
       }
 
       if (supportPtsThree.length > 0) {
+        const zDriveMode = geom.bed_z_drive ?? sim.spec.bed.z_drive;
+        const zArmEndPtsThree: THREE.Vector3[] = [];
+        if (
+          bedMountType === "trident_3pt_standoffs" &&
+          sim.spec.architecture === "corexy" &&
+          zDriveMode !== "belted_quad_z"
+        ) {
+          if (geom.bed_support_points_mm && geom.bed_support_points_mm.length > 0) {
+            for (const armPtMm of geom.bed_support_points_mm) {
+              zArmEndPtsThree.push(toThree(armPtMm, cx, cy));
+            }
+          } else {
+            for (const nid of ["z_bed_fl", "z_bed_fr", "z_bed_r"]) {
+              if (basePos[nid]) zArmEndPtsThree.push(basePos[nid].clone());
+            }
+          }
+        }
+
         const bedDispDelta =
           viewMode === "fea_stress" && deformedPos[bedNodeId] && bedNodeBase
             ? deformedPos[bedNodeId].clone().sub(bedNodeBase)
             : new THREE.Vector3(0, 0, 0);
-        const bedBottomY = bedBaseCenter.y - bedThickScene * 0.5;
-        const useSensBedTint = viewMode === "sensitivity" && Math.abs(bedHeatScore) > 0.15;
-
-        if (bedMountType === "whopping_pochard_kinematic") {
-          // Whopping Pochard Titanium/Stainless Leaf-Spring Kinematic Flexure Tabs under the bed
-          const leafBladeGeo = new THREE.BoxGeometry(0.32, 0.016, 0.13);
-          const leafBladeMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0xd6dde8,
-            emissive: useSensBedTint ? bedEmissive : 0x000000,
-            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
-            metalness: 0.88,
-            roughness: 0.22,
-          });
-          const clampGeo = new THREE.BoxGeometry(0.14, 0.09, 0.16);
-          const clampMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0x475569,
-            metalness: 0.72,
-            roughness: 0.34,
-          });
-          const pinSeatGeo = new THREE.CylinderGeometry(0.048, 0.056, 0.085, 14);
-          const pinSeatMat = new THREE.MeshStandardMaterial({
-            color: 0x38bdf8,
-            metalness: 0.82,
-            roughness: 0.2,
-          });
-          for (const sp of supportPtsThree) {
-            const grp = new THREE.Group();
-            // Orient leaf-spring blade radially toward bed center (thermal expansion flex axis)
-            const angleToCenter = Math.atan2(bedBaseCenter.z - sp.z, bedBaseCenter.x - sp.x);
-            grp.rotation.y = -angleToCenter;
-
-            const topClamp = new THREE.Mesh(clampGeo, clampMat);
-            topClamp.position.set(0.08, -0.045, 0);
-            tagInspectable(topClamp, bedInspectInfo);
-            grp.add(topClamp);
-
-            const blade = new THREE.Mesh(leafBladeGeo, leafBladeMat);
-            blade.position.set(0, -0.095, 0);
-            tagInspectable(blade, bedInspectInfo);
-            grp.add(blade);
-
-            const seatPin = new THREE.Mesh(pinSeatGeo, pinSeatMat);
-            seatPin.position.set(-0.09, -0.14, 0);
-            grp.add(seatPin);
-
-            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
-            group.add(grp);
-          }
-        } else if (bedMountType === "kinematic_3pt") {
-          const puckGeo = new THREE.CylinderGeometry(0.11, 0.125, 0.045, 14);
-          const puckMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0xcbd5e1,
-            emissive: useSensBedTint ? bedEmissive : 0x000000,
-            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
-            metalness: 0.78,
-            roughness: 0.28,
-          });
-          const ballGeo = new THREE.SphereGeometry(0.068, 12, 12);
-          const ballMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0xeab308,
-            metalness: 0.85,
-            roughness: 0.2,
-          });
-          for (const sp of supportPtsThree) {
-            const grp = new THREE.Group();
-            const topPuck = new THREE.Mesh(puckGeo, puckMat);
-            topPuck.position.y = -0.025;
-            grp.add(topPuck);
-            const ball = new THREE.Mesh(ballGeo, ballMat);
-            ball.position.y = -0.085;
-            grp.add(ball);
-            const botPuck = new THREE.Mesh(puckGeo, puckMat);
-            botPuck.position.y = -0.145;
-            grp.add(botPuck);
-            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
-            group.add(grp);
-          }
-        } else if (bedMountType === "springs_4pt") {
-          const coilGeo = new THREE.TorusGeometry(0.068, 0.017, 8, 16);
-          const coilMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0xfacc15,
-            emissive: useSensBedTint ? bedEmissive : 0x000000,
-            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
-            metalness: 0.45,
-            roughness: 0.35,
-          });
-          const washerGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.02, 12);
-          const washerMat = new THREE.MeshStandardMaterial({
-            color: 0x334155,
-            metalness: 0.7,
-            roughness: 0.4,
-          });
-          for (const sp of supportPtsThree) {
-            const grp = new THREE.Group();
-            const topW = new THREE.Mesh(washerGeo, washerMat);
-            topW.position.y = -0.012;
-            grp.add(topW);
-            for (let k = 0; k < 4; k++) {
-              const coil = new THREE.Mesh(coilGeo, coilMat);
-              coil.rotation.x = Math.PI * 0.5;
-              coil.position.y = -0.042 - k * 0.038;
-              grp.add(coil);
-            }
-            const botW = new THREE.Mesh(washerGeo, washerMat);
-            botW.position.y = -0.19;
-            grp.add(botW);
-            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
-            group.add(grp);
-          }
-        } else if (bedMountType === "silicone_4pt") {
-          const silGeo = new THREE.CylinderGeometry(0.082, 0.082, 0.16, 14);
-          const silMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0xf97316,
-            emissive: useSensBedTint ? bedEmissive : 0x000000,
-            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
-            roughness: 0.75,
-            metalness: 0.08,
-          });
-          const capGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.022, 14);
-          const capMat = new THREE.MeshStandardMaterial({
-            color: 0x94a3b8,
-            metalness: 0.72,
-            roughness: 0.32,
-          });
-          for (const sp of supportPtsThree) {
-            const grp = new THREE.Group();
-            const col = new THREE.Mesh(silGeo, silMat);
-            col.position.y = -0.09;
-            grp.add(col);
-            const topC = new THREE.Mesh(capGeo, capMat);
-            topC.position.y = -0.012;
-            grp.add(topC);
-            const botC = new THREE.Mesh(capGeo, capMat);
-            botC.position.y = -0.17;
-            grp.add(botC);
-            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
-            group.add(grp);
-          }
-        } else if (bedMountType === "floating_4pt") {
-          const tabGeo = new THREE.BoxGeometry(0.22, 0.032, 0.11);
-          const tabMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0x94a3b8,
-            emissive: useSensBedTint ? bedEmissive : 0x000000,
-            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
-            metalness: 0.75,
-            roughness: 0.3,
-          });
-          const pinGeo = new THREE.CylinderGeometry(0.052, 0.052, 0.14, 12);
-          const fixedPinMat = new THREE.MeshStandardMaterial({
-            color: 0xe2e8f0,
-            metalness: 0.85,
-            roughness: 0.22,
-          });
-          const floatPinMat =
-            supportPtsThree.length > 1
-              ? new THREE.MeshStandardMaterial({
-                  color: 0x38bdf8,
-                  metalness: 0.65,
-                  roughness: 0.28,
-                })
-              : fixedPinMat;
-          supportPtsThree.forEach((sp, idx) => {
-            const grp = new THREE.Group();
-            const tab = new THREE.Mesh(tabGeo, tabMat);
-            tab.position.y = -0.025;
-            grp.add(tab);
-            const pin = new THREE.Mesh(pinGeo, idx === 0 ? fixedPinMat : floatPinMat);
-            pin.position.y = -0.095;
-            grp.add(pin);
-            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
-            group.add(grp);
-          });
-        } else {
-          // rigid_4pt
-          const standGeo = new THREE.CylinderGeometry(0.072, 0.072, 0.16, 12);
-          const standMat = new THREE.MeshStandardMaterial({
-            color: useSensBedTint ? bedColor : 0xe2e8f0,
-            emissive: useSensBedTint ? bedEmissive : 0x000000,
-            emissiveIntensity: useSensBedTint ? bedEmissiveIntensity : 0,
-            metalness: 0.86,
-            roughness: 0.2,
-          });
-          const flangeGeo = new THREE.CylinderGeometry(0.105, 0.105, 0.028, 6);
-          for (const sp of supportPtsThree) {
-            const grp = new THREE.Group();
-            const cyl = new THREE.Mesh(standGeo, standMat);
-            cyl.position.y = -0.085;
-            grp.add(cyl);
-            const flg = new THREE.Mesh(flangeGeo, standMat);
-            flg.position.y = -0.018;
-            grp.add(flg);
-            grp.position.set(sp.x + bedDispDelta.x, bedBottomY + bedDispDelta.y, sp.z + bedDispDelta.z);
-            group.add(grp);
-          }
-        }
+        const bedMountsGroup = buildBedMountsGroup({
+          bedMountType,
+          supportPtsThree,
+          zArmEndPtsThree,
+          bedBaseCenter,
+          bedBottomY: bedBaseCenter.y - bedThickScene * 0.5,
+          bedDispDelta,
+          scale: SCALE,
+          viewMode,
+          toolheadPunchIn,
+          useSensBedTint: viewMode === "sensitivity" && Math.abs(bedHeatScore) > 0.15,
+          bedColor,
+          bedEmissive,
+          bedEmissiveIntensity,
+          onTagMesh: (mesh) => tagInspectable(mesh, bedInspectInfo),
+        });
+        group.add(bedMountsGroup);
       }
     }
 

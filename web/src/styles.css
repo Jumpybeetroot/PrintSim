@@ -5556,3 +5556,55 @@ textarea.code-editor {
   color: var(--accent);
   font-weight: 700;
 }
+
+.mount-physics-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mount-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1.5px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  white-space: nowrap;
+}
+
+.mount-pill.neutral {
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.72);
+  border-color: rgba(71, 85, 105, 0.65);
+}
+
+.mount-pill.ok {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.42);
+}
+
+.mount-pill.info {
+  color: #38bdf8;
+  background: rgba(14, 165, 233, 0.12);
+  border-color: rgba(56, 189, 248, 0.38);
+}
+
+.mount-pill.warn {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.mount-pill.danger {
+  color: #fb7185;
+  background: rgba(244, 63, 94, 0.15);
+  border-color: rgba(244, 63, 94, 0.45);
+}

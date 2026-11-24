@@ -6,6 +6,7 @@ import {
   ZLeadscrewType,
   ZRailProfileType,
 } from "../types";
+import { BED_MOUNT_STANDOFF_HEIGHT_MM } from "../viewport/bedMounts";
 
 const FALLBACK_Z_RAIL_PROFILES: Array<{ id: ZRailProfileType; name: string }> = [
   { id: "mgn12_rail", name: "MGN12H Linear Rail (12×8mm)" },
@@ -31,48 +32,104 @@ const BED_MOUNT_OPTIONS: Array<{
   label: string;
   shortLabel: string;
   hint: string;
+  points: 3 | 4;
+  tapRated: boolean;
+  tapLabel: string;
+  tapTitle: string;
+  tacoLabel: string;
+  tacoTone: "ok" | "info" | "danger";
+  tacoTitle: string;
 }> = [
   {
     id: "kinematic_3pt",
     label: "3-Pt Kinematic (Maxwell)",
     shortLabel: "3-Pt Kinematic",
     hint: "Zero thermal taco buckling at high bed temps with high axial/lateral stiffness.",
+    points: 3,
+    tapRated: false,
+    tapLabel: "Magnetic — Not Tap-Rated",
+    tapTitle: "Magnetic preload can lift or shift under Voron Tap nozzle probing forces",
+    tacoLabel: "Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "Exact 6-DOF Maxwell radial V-grooves allow unconstrained radial thermal expansion",
   },
   {
     id: "trident_3pt_standoffs",
     label: "3-Pt Trident Bakelite Standoffs + GE5C",
     shortLabel: "Trident 3-Pt Bakelite",
     hint: "Stock Voron/Siboor Trident 3-point Bakelite thermal standoffs on 2020 T-subframe with GE5C spherical Z-joints.",
+    points: 3,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Hard-bolted phenolic Bakelite columns stay rigid under Voron Tap probing",
+    tacoLabel: "Low Slotted Relief",
+    tacoTone: "info",
+    tacoTitle: "Rear-center fixed anchor with two front slotted thermal-relief washers",
   },
   {
     id: "whopping_pochard_kinematic",
     label: "Whopping Pochard Leaf-Spring (Tap-Rated)",
     shortLabel: "Whopping Pochard",
     hint: "Zero-play kinematic leaf-spring mount — eliminates thermal taco while staying rigid under Voron Tap probing.",
+    points: 3,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Bolted 301 spring-steel leaf flexures resist vertical Tap probing with zero play",
+    tacoLabel: "Zero Taco",
+    tacoTone: "ok",
+    tacoTitle: "Radial leaf-spring flexures absorb bed thermal expansion without taco buckling",
   },
   {
     id: "rigid_4pt",
     label: "4-Pt Rigid (Hard Spacers)",
     shortLabel: "4-Pt Rigid",
     hint: "Stiffest mechanically, but over-constrains thermal expansion and tacos above 80°C.",
+    points: 4,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Solid metal hex standoffs provide highest axial probing rigidity",
+    tacoLabel: "High Thermal Taco Risk",
+    tacoTone: "danger",
+    tacoTitle: "Over-constrained 4-corner hard bolting buckles the bed plate above 80°C",
   },
   {
     id: "floating_4pt",
     label: "4-Pt Floating (1 Fixed + 3 Slotted)",
     shortLabel: "4-Pt Floating",
     hint: "Stiff vertically while slotted corners relieve thermal expansion without buckling.",
+    points: 4,
+    tapRated: true,
+    tapLabel: "Tap-Rated ✓",
+    tapTitle: "Solid vertical shoulder-bolt support handles nozzle probing loads cleanly",
+    tacoLabel: "Low Slotted Relief",
+    tacoTone: "info",
+    tacoTitle: "1 fixed locator anchor + 3 radially slotted glide tabs relieve expansion",
   },
   {
     id: "silicone_4pt",
     label: "4-Pt Silicone Spacers",
     shortLabel: "4-Pt Silicone",
     hint: "Thermally decoupled with moderate damping; softer than kinematic/rigid mounts.",
+    points: 4,
+    tapRated: false,
+    tapLabel: "Compliant — Not Tap-Rated",
+    tapTitle: "70A elastomer compresses under Tap probing force, degrading Z-offset repeatability",
+    tacoLabel: "Low Compliant Relief",
+    tacoTone: "info",
+    tacoTitle: "Compliant silicone columns shear laterally to relieve thermal expansion",
   },
   {
     id: "springs_4pt",
     label: "4-Pt Bed Springs (Yellow)",
     shortLabel: "4-Pt Springs",
     hint: "Low-cost leveling springs; softest mount with highest bed-bounce under Y accel.",
+    points: 4,
+    tapRated: false,
+    tapLabel: "Compliant — Not Tap-Rated",
+    tapTitle: "Low axial spring stiffness deflects heavily under nozzle probing forces",
+    tacoLabel: "Low Compliant Relief",
+    tacoTone: "info",
+    tacoTitle: "Compliant coil springs absorb radial expansion with minimal plate buckling",
   },
 ];
 
@@ -371,6 +428,32 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             );
           })}
         </select>
+        <div className="mount-physics-strip" aria-label="Bed mount physics summary">
+          <span
+            className="mount-pill neutral"
+            title={`${bedMountCatalogEntry?.mount_points ?? bedMountOptionMeta.points}-point bed support layout`}
+          >
+            {bedMountCatalogEntry?.mount_points ?? bedMountOptionMeta.points}-Pt
+          </span>
+          <span
+            className={`mount-pill ${bedMountOptionMeta.tapRated ? "ok" : "warn"}`}
+            title={bedMountOptionMeta.tapTitle}
+          >
+            {bedMountOptionMeta.tapLabel}
+          </span>
+          <span
+            className={`mount-pill ${bedMountOptionMeta.tacoTone}`}
+            title={bedMountOptionMeta.tacoTitle}
+          >
+            {bedMountOptionMeta.tacoLabel}
+          </span>
+          <span
+            className="mount-pill neutral"
+            title="Nominal standoff stack height between heated bed plate and subframe"
+          >
+            {BED_MOUNT_STANDOFF_HEIGHT_MM[currentBedMount]} mm
+          </span>
+        </div>
         {showHints && (
           <div className="hint-line">
             {bedMountCatalogEntry?.notes || bedMountOptionMeta.hint}
