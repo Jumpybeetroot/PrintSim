@@ -15,7 +15,6 @@ import tempfile
 import time
 from typing import Any, Literal
 
-import httpx
 import numpy as np
 from pydantic import BaseModel, Field
 from scipy.linalg import eigh
@@ -1004,6 +1003,8 @@ def fetch_onshape_step(
         url_or_doc, workspace_id=workspace_id, element_id=element_id
     )
     access_key, secret_key = _resolve_onshape_credentials()
+
+    import httpx
 
     with httpx.Client(follow_redirects=True, timeout=180.0) as client:
         if kind == "assemblies":

@@ -82,3 +82,24 @@ def test_wasm_dispatch_simulate_bom_solid_and_exports() -> None:
     step_env = dispatch_api_request("POST", "/api/export/step", json.dumps(spec))
     assert step_env["status"] == 400
     assert "build123d" in json.loads(step_env["body_text"])["detail"]
+
+
+def test_wasm_dispatch_runs_without_optional_native_or_web_packages() -> None:
+    """Verify Pyodide-like minimal runtime (only numpy/scipy/pydantic/pyyaml) can simulate."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import json, sys\n"
+        "for pkg in ('trimesh', 'ezdxf', 'httpx', 'fastapi', 'uvicorn', 'typer', 'rich', 'gmsh', 'build123d'):\n"
+        "    sys.modules[pkg] = None\n"
+        "from printsim.wasm_dispatch import dispatch_api_request\n"
+        "p = json.loads(dispatch_api_request('GET', '/api/presets/voron_monolith_awd')['body_text'])\n"
+        "s = dispatch_api_request('POST', '/api/simulate', json.dumps({'spec': p['spec'], 'include_toolpath_segments': False}))\n"
+        "assert s['status'] == 200, s\n"
+        "sim = json.loads(s['body_text'])\n"
+        "assert sim['modal_fea']['fundamental_freq_hz'] > 40.0\n"
+        "assert dispatch_api_request('GET', '/api/assets/hardware')['status'] == 200\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, f"Pyodide-minimal probe failed:\n{proc.stderr}"
