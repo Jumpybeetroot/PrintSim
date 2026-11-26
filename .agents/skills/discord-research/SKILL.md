@@ -19,7 +19,7 @@ This does two things in <1 second:
 1. Searches PrintSim's local SQLite+FTS5 Touchstone KB (`data/touchstones/printsim_kb.db`) so you never re-search data already captured.
 2. Ranks the exact Discord channel URLs (`https://discord.com/channels/<guild_id>/<channel_id>`) from [`servers.yaml`](servers.yaml) and generates ready-to-use Discord search queries (`in:<channel> ...`, `has:file`, `has:image`) plus `[CHECK PINS FIRST]` hints.
 
-If the question may also be documented on GitHub repos, VoronDB, Klipper Discourse, or Answer Overflow, run `search_web` in parallel before or alongside Discord lookup.
+If the question may also be documented on GitHub repos, VoronDB, Klipper Discourse, Answer Overflow, or Discord's public **Discoverable Server Web Pages** (`site:discord.com/servers`), run `search_web` in parallel before or alongside Discord lookup. Note that Discoverable Server Web Pages expose anonymized summaries/snippets without raw ADXL `.csv` attachments or full pinned tables, so still use Step 2 (read-only Pins + native search) for verified measurements and raw CSVs.
 
 ## 2. Dispatch a Fast, Read-Only Browser Subagent
 
