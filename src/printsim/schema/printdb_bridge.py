@@ -103,6 +103,8 @@ def hydrate_stepper_catalog(catalog: dict[str, dict[str, Any]]) -> None:
         "ldo_2504ac": "components/motors/ldo-42sth48-2504ac",
         "ldo_2804ah": "components/motors/ldo-42sth48-2804ah",
         "moons_420i": "components/motors/moons-ms17hd6p420i-04",
+        "ldo_09deg_2004mah": "components/motors/ldo-42sth48-2004mah-vrn",
+        "moons_09deg_ha2p4200": "components/motors/moons-ms17ha2p4200",
     }
     for key, rid in mapping.items():
         if key not in catalog:

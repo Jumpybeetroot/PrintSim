@@ -9,7 +9,7 @@ ISO 5753 bearing radial clearance backlash (`C2`, `CN`, `C3`).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -61,6 +61,19 @@ class TimeDomainMetrologyResult:
     ballbar_angles_deg: list[float]
     ballbar_radial_error_um: list[float]
 
+    # Benchmark A separated geometric vs. tracking-lag error metrics
+    printed_path_error_um: float = 0.0
+    shaper_path_smoothing_um: float = 0.0
+    cross_track_error_um: float = 0.0
+    along_track_lag_um: float = 0.0
+
+    # Benchmark C: Multi-Segment Zig-Zag S-Curve
+    zigzag_path_error_um: float = 0.0
+    zigzag_shaper_smoothing_um: float = 0.0
+    zigzag_residual_ringing_um: float = 0.0
+    zigzag_unshaped_ringing_um: float = 0.0
+    zigzag_trace: dict[str, list[float]] = field(default_factory=dict)
+
     def to_dict(self) -> dict:
         return {
             "corner_rounding_um": round(float(self.corner_rounding_um), 2),
@@ -73,6 +86,10 @@ class TimeDomainMetrologyResult:
             "corner_accel_mm_s2": round(float(self.corner_accel_mm_s2), 0),
             "shaper_used": self.shaper_used,
             "shaper_freq_hz": round(float(self.shaper_freq_hz), 2),
+            "printed_path_error_um": round(float(self.printed_path_error_um), 2),
+            "shaper_path_smoothing_um": round(float(self.shaper_path_smoothing_um), 2),
+            "cross_track_error_um": round(float(self.cross_track_error_um), 2),
+            "along_track_lag_um": round(float(self.along_track_lag_um), 2),
             "corner_trace": self.corner_trace,
             "ballbar_radius_mm": round(float(self.ballbar_radius_mm), 2),
             "ballbar_speed_mm_s": round(float(self.ballbar_speed_mm_s), 1),
@@ -81,6 +98,11 @@ class TimeDomainMetrologyResult:
             "quadrant_glitch_um": round(float(self.quadrant_glitch_um), 2),
             "ballbar_angles_deg": [round(float(a), 1) for a in self.ballbar_angles_deg],
             "ballbar_radial_error_um": [round(float(e), 2) for e in self.ballbar_radial_error_um],
+            "zigzag_path_error_um": round(float(self.zigzag_path_error_um), 2),
+            "zigzag_shaper_smoothing_um": round(float(self.zigzag_shaper_smoothing_um), 2),
+            "zigzag_residual_ringing_um": round(float(self.zigzag_residual_ringing_um), 2),
+            "zigzag_unshaped_ringing_um": round(float(self.zigzag_unshaped_ringing_um), 2),
+            "zigzag_trace": self.zigzag_trace,
         }
 
 
@@ -144,6 +166,43 @@ def _trapezoidal_1d(
     t_tot = params[-1]
     t_arr = np.arange(0.0, t_tot + 0.5 * dt, dt, dtype=float)
     return t_arr, _eval_trapezoid(t_arr, params)
+
+
+def _dist_to_polyline(pts: np.ndarray, vertices: np.ndarray) -> np.ndarray:
+    """Exact minimum Euclidean distance from each 2D point in `pts` to the polyline `vertices`."""
+    min_d2 = np.full(pts.shape[0], np.inf, dtype=float)
+    for i in range(len(vertices) - 1):
+        a = vertices[i]
+        b = vertices[i + 1]
+        ab = b - a
+        ab_len2 = float(ab[0] * ab[0] + ab[1] * ab[1])
+        if ab_len2 <= 1e-24:
+            diff = pts - a[None, :]
+        else:
+            t = np.clip(((pts - a[None, :]) @ ab) / ab_len2, 0.0, 1.0)
+            diff = pts - (a[None, :] + t[:, None] * ab[None, :])
+        d2 = diff[:, 0] * diff[:, 0] + diff[:, 1] * diff[:, 1]
+        min_d2 = np.minimum(min_d2, d2)
+    return np.sqrt(np.maximum(min_d2, 0.0))
+
+
+def _sample_wall_dev_um(
+    y_m: np.ndarray,
+    x_m: np.ndarray,
+    i_start: int,
+    wall_d_mm: np.ndarray,
+) -> list[float]:
+    """Interpolate lateral wall deviation `x * 1e6` (um) vs. +Y wall distance `y * 1e3` (mm)."""
+    if i_start >= len(y_m) - 1:
+        return [0.0] * len(wall_d_mm)
+    i_peak = i_start + int(np.argmax(y_m[i_start:]))
+    y_seg = y_m[i_start : i_peak + 1] * 1e3
+    x_seg = x_m[i_start : i_peak + 1] * 1e6
+    if y_seg.size < 2:
+        return [0.0] * len(wall_d_mm)
+    order = np.argsort(y_seg, kind="mergesort")
+    vals = np.interp(wall_d_mm, y_seg[order], x_seg[order])
+    return [round(float(v), 2) for v in vals]
 
 
 def _discretize_zoh(
@@ -357,17 +416,47 @@ def simulate_time_domain_metrology(
     else:
         ringing_decay_mm = 0.0
 
-    # Downsampled corner trace (~90 points centered around the 90° vertex)
+    # Separated geometric printed path error vs. shaper smoothing vs. cross-track / along-track lag
+    corner_poly = np.array([[-leg_len, 0.0], [0.0, 0.0], [0.0, leg_len]], dtype=float)
+    printed_path_error_um = float(np.max(_dist_to_polyline(y_shaped, corner_poly))) * 1e6
+    shaper_path_smoothing_um = (
+        0.0
+        if sh_used == "NONE"
+        else float(np.max(_dist_to_polyline(r_shaped_a, corner_poly))) * 1e6
+    )
+
+    err_a = y_shaped - r_shaped_a
+    dr_a = np.gradient(r_shaped_a, dt, axis=0)
+    spd_a = np.hypot(dr_a[:, 0], dr_a[:, 1])
+    moving_a = spd_a > 1e-3
+    if np.any(moving_a):
+        t_hat = dr_a[moving_a] / spd_a[moving_a, None]
+        n_hat = np.column_stack([-t_hat[:, 1], t_hat[:, 0]])
+        err_m = err_a[moving_a]
+        cross_track_error_um = float(np.max(np.abs(np.sum(err_m * n_hat, axis=1)))) * 1e6
+        along_track_lag_um = float(np.max(np.abs(np.sum(err_m * t_hat, axis=1)))) * 1e6
+    else:
+        cross_track_error_um = 0.0
+        along_track_lag_um = 0.0
+
+    # Downsampled corner trace (~90 points centered around the 90° vertex) + +Y wall profile
     i_lo = max(0, int(round((t_corner - 0.055) / dt)))
     i_hi = min(len(t_a) - 1, int(round((t_corner + 0.115 + t_shaper_tail) / dt)))
     trace_idx = np.unique(np.linspace(i_lo, i_hi, 90, dtype=int))
+    wall_d_mm = np.linspace(0.0, 25.0, 120, dtype=float)
+    i_wall_start = int(np.searchsorted(t_a, t_corner))
     corner_trace = {
         "ideal_x_mm": [round(float(x_ideal_a[i]) * 1e3, 4) for i in trace_idx],
         "ideal_y_mm": [round(float(y_ideal_a[i]) * 1e3, 4) for i in trace_idx],
+        "shaped_cmd_x_mm": [round(float(r_shaped_a[i, 0]) * 1e3, 4) for i in trace_idx],
+        "shaped_cmd_y_mm": [round(float(r_shaped_a[i, 1]) * 1e3, 4) for i in trace_idx],
         "actual_x_mm": [round(float(x_sh[i]) * 1e3, 4) for i in trace_idx],
         "actual_y_mm": [round(float(y_sh[i]) * 1e3, 4) for i in trace_idx],
         "unshaped_x_mm": [round(float(x_un[i]) * 1e3, 4) for i in trace_idx],
         "unshaped_y_mm": [round(float(y_un[i]) * 1e3, 4) for i in trace_idx],
+        "wall_dist_mm": [round(float(d), 3) for d in wall_d_mm],
+        "wall_dev_unshaped_um": _sample_wall_dev_um(y_un, x_un, i_wall_start, wall_d_mm),
+        "wall_dev_shaped_um": _sample_wall_dev_um(y_sh, x_sh, i_wall_start, wall_d_mm),
     }
 
     # =========================================================================
@@ -621,6 +710,148 @@ def simulate_time_domain_metrology(
             quad_glitches.append(spike_val)
     quadrant_glitch_um = max(quad_glitches) if quad_glitches else 0.0
 
+    # =========================================================================
+    # Benchmark C: Multi-Segment Zig-Zag S-Curve (Klipper SCV Junction Deviation)
+    # =========================================================================
+    zz_pts = (
+        np.array(
+            [
+                [-15.0, 0.0],
+                [0.0, 0.0],
+                [6.0, 1.2],
+                [12.0, -1.2],
+                [18.0, 1.2],
+                [24.0, -0.8],
+                [30.0, 0.0],
+                [50.0, 0.0],
+            ],
+            dtype=float,
+        )
+        * 1e-3
+    )
+    n_seg = len(zz_pts) - 1
+    seg_vecs = zz_pts[1:] - zz_pts[:-1]
+    seg_lens = np.hypot(seg_vecs[:, 0], seg_vecs[:, 1])
+    seg_dirs = seg_vecs / np.maximum(seg_lens[:, None], 1e-12)
+
+    # Klipper SCV junction deviation: R = jd * sin(theta/2) / (1 - sin(theta/2)),
+    # where jd = v_scv^2 * (sqrt(2) - 1) / a_c recovers v_j = v_scv at a 90° corner.
+    jd = (v_scv * v_scv) * (math.sqrt(2.0) - 1.0) / max(a_c, 1e-6)
+    v_node = np.zeros(len(zz_pts), dtype=float)
+    for idx_v in range(1, n_seg):
+        cos_theta = float(np.clip(-np.dot(seg_dirs[idx_v - 1], seg_dirs[idx_v]), -1.0, 1.0))
+        sin_half = math.sqrt(max(0.0, 0.5 * (1.0 - cos_theta)))
+        if sin_half >= 0.999999:
+            v_node[idx_v] = v_c
+        elif sin_half <= 1e-9:
+            v_node[idx_v] = 0.0
+        else:
+            r_arc = jd * sin_half / (1.0 - sin_half)
+            v_node[idx_v] = min(v_c, math.sqrt(max(0.0, a_c * r_arc)))
+
+    # Forward & backward lookahead velocity pass
+    for idx_s in range(n_seg):
+        v_max_reach = math.sqrt(v_node[idx_s] ** 2 + 2.0 * a_c * float(seg_lens[idx_s]))
+        v_node[idx_s + 1] = min(v_node[idx_s + 1], v_max_reach)
+    for idx_s in range(n_seg - 1, -1, -1):
+        v_max_reach = math.sqrt(v_node[idx_s + 1] ** 2 + 2.0 * a_c * float(seg_lens[idx_s]))
+        v_node[idx_s] = min(v_node[idx_s], v_max_reach)
+
+    seg_params = [
+        _trapezoid_params(
+            float(seg_lens[s]),
+            float(v_node[s]),
+            v_c,
+            float(v_node[s + 1]),
+            a_c,
+        )
+        for s in range(n_seg)
+    ]
+    t_seg_starts = np.zeros(n_seg, dtype=float)
+    t_seg_ends = np.zeros(n_seg, dtype=float)
+    t_cur = 0.0
+    for s in range(n_seg):
+        t_seg_starts[s] = t_cur
+        t_cur += float(seg_params[s][-1])
+        t_seg_ends[s] = t_cur
+    t_motion_c = t_cur
+    t_dwell_c = max(0.06, t_shaper_tail + 0.04)
+    dt_c = 2.0 * dt  # 1 kHz exact ZOH step doubling (A_dc = A_d^2, B_dc = (A_d + I) B_d)
+    t_c = np.arange(0.0, t_motion_c + t_dwell_c + 0.5 * dt_c, dt_c, dtype=float)
+
+    x_ideal_c = np.empty_like(t_c)
+    y_ideal_c = np.empty_like(t_c)
+    x_ideal_c.fill(float(zz_pts[-1, 0]))
+    y_ideal_c.fill(float(zz_pts[-1, 1]))
+    for s in range(n_seg):
+        t0_s = float(t_seg_starts[s])
+        t1_s = float(t_seg_ends[s])
+        mask_s = (t_c >= t0_s) & (t_c < t1_s) if s < n_seg - 1 else (t_c >= t0_s) & (t_c <= t1_s)
+        if np.any(mask_s):
+            frac = _eval_trapezoid(t_c[mask_s] - t0_s, seg_params[s]) / max(float(seg_lens[s]), 1e-12)
+            x_ideal_c[mask_s] = float(zz_pts[s, 0]) + frac * float(seg_vecs[s, 0])
+            y_ideal_c[mask_s] = float(zz_pts[s, 1]) + frac * float(seg_vecs[s, 1])
+
+    r_ideal_c = np.column_stack([x_ideal_c, y_ideal_c])
+    if sh_used == "NONE":
+        r_shaped_c = r_ideal_c
+    else:
+        r_shaped_c = np.column_stack(
+            [
+                apply_shaper_to_trajectory(t_c, x_ideal_c, shaper_x),
+                apply_shaper_to_trajectory(t_c, y_ideal_c, shaper_y),
+            ]
+        )
+
+    A_dc = A_d @ A_d
+    B_dc = (A_d + np.eye(n_state, dtype=float)) @ B_d
+    y_unshaped_c = _run_zoh_lti(A_dc, B_dc, coupled.C_noz, coupled.D, r_ideal_c)
+    y_shaped_c = (
+        y_unshaped_c
+        if sh_used == "NONE"
+        else _run_zoh_lti(A_dc, B_dc, coupled.C_noz, coupled.D, r_shaped_c)
+    )
+
+    dist_actual_c = _dist_to_polyline(y_shaped_c, zz_pts)
+    zigzag_path_error_um = float(np.max(dist_actual_c)) * 1e6
+    zigzag_shaper_smoothing_um = (
+        0.0
+        if sh_used == "NONE"
+        else float(np.max(_dist_to_polyline(r_shaped_c, zz_pts))) * 1e6
+    )
+
+    t_exit_c = float(t_seg_ends[-2])
+    mask_zz_un = (t_c >= t_exit_c) & (y_unshaped_c[:, 0] <= 0.048)
+    zigzag_unshaped_ringing_um = (
+        float(np.max(y_unshaped_c[mask_zz_un, 1]) - np.min(y_unshaped_c[mask_zz_un, 1])) * 1e6
+        if np.any(mask_zz_un)
+        else 0.0
+    )
+    mask_zz_sh = (t_c >= t_exit_c + t_shaper_tail) & (y_shaped_c[:, 0] <= 0.048)
+    if sh_used == "NONE":
+        zigzag_residual_ringing_um = zigzag_unshaped_ringing_um
+    elif np.any(mask_zz_sh):
+        zigzag_residual_ringing_um = (
+            float(np.max(y_shaped_c[mask_zz_sh, 1]) - np.min(y_shaped_c[mask_zz_sh, 1])) * 1e6
+        )
+    else:
+        zigzag_residual_ringing_um = 0.0
+
+    in_zz_win = np.flatnonzero((x_ideal_c >= -0.004) & (x_ideal_c <= 0.042))
+    if in_zz_win.size > 0:
+        zz_idx = np.unique(in_zz_win[np.linspace(0, in_zz_win.size - 1, min(110, in_zz_win.size), dtype=int)])
+    else:
+        zz_idx = np.unique(np.linspace(0, len(t_c) - 1, min(110, len(t_c)), dtype=int))
+    zigzag_trace = {
+        "ideal_x_mm": [round(float(x_ideal_c[i]) * 1e3, 4) for i in zz_idx],
+        "ideal_y_mm": [round(float(y_ideal_c[i]) * 1e3, 4) for i in zz_idx],
+        "actual_x_mm": [round(float(y_shaped_c[i, 0]) * 1e3, 4) for i in zz_idx],
+        "actual_y_mm": [round(float(y_shaped_c[i, 1]) * 1e3, 4) for i in zz_idx],
+        "unshaped_x_mm": [round(float(y_unshaped_c[i, 0]) * 1e3, 4) for i in zz_idx],
+        "unshaped_y_mm": [round(float(y_unshaped_c[i, 1]) * 1e3, 4) for i in zz_idx],
+        "perp_error_um": [round(float(dist_actual_c[i]) * 1e6, 2) for i in zz_idx],
+    }
+
     return TimeDomainMetrologyResult(
         corner_rounding_um=corner_rounding_um,
         corner_overshoot_um=corner_overshoot_um,
@@ -640,4 +871,13 @@ def simulate_time_domain_metrology(
         quadrant_glitch_um=quadrant_glitch_um,
         ballbar_angles_deg=angles_deg,
         ballbar_radial_error_um=radial_72,
+        printed_path_error_um=printed_path_error_um,
+        shaper_path_smoothing_um=shaper_path_smoothing_um,
+        cross_track_error_um=cross_track_error_um,
+        along_track_lag_um=along_track_lag_um,
+        zigzag_path_error_um=zigzag_path_error_um,
+        zigzag_shaper_smoothing_um=zigzag_shaper_smoothing_um,
+        zigzag_residual_ringing_um=zigzag_residual_ringing_um,
+        zigzag_unshaped_ringing_um=zigzag_unshaped_ringing_um,
+        zigzag_trace=zigzag_trace,
     )

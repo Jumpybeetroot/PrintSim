@@ -76,9 +76,10 @@ class AxisShaperGraph:
     recommended_freq_hz: float
     recommended_max_accel_mm_s2: float
     candidates: list[ShaperCandidate]
+    step_response: dict | None = None
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "axis": self.axis,
             "freqs_hz": [round(float(v), 2) for v in self.freqs_hz],
             "raw_psd": [round(float(v), 3) for v in self.raw_psd],
@@ -90,6 +91,9 @@ class AxisShaperGraph:
             "recommended_max_accel_mm_s2": round(float(self.recommended_max_accel_mm_s2), 0),
             "candidates": [c.to_dict() for c in self.candidates],
         }
+        if self.step_response is not None:
+            data["step_response"] = self.step_response
+        return data
 
 
 def get_zvd_shaper(
@@ -619,12 +623,13 @@ _SHAPER_HI_MULT: dict[str, float] = {
 }
 
 
-def _shaper_candidate_freqs(name: str, center_f: float) -> np.ndarray:
+def _shaper_candidate_freqs(name: str, center_f: float, step_hz: float = 1.25) -> np.ndarray:
     """Build Stage 1 coarse frequency grid sized proportionally to each shaper's search span."""
     lo_f = min(max(12.0, center_f * 0.7), 210.0)
     hi_mult = _SHAPER_HI_MULT.get(name.strip().upper(), 1.50)
     hi_f = min(215.0, max(lo_f + 4.0, center_f * hi_mult))
-    n_coarse = max(35, int(math.ceil((hi_f - lo_f) / 1.25)) + 1)
+    min_pts = 18 if step_hz >= 2.0 else 35
+    n_coarse = max(min_pts, int(math.ceil((hi_f - lo_f) / step_hz)) + 1)
     return np.linspace(lo_f, hi_f, n_coarse, dtype=float)
 
 
@@ -656,6 +661,7 @@ def _fit_single_shaper(
     damping_ratio: float,
     soft_tiebreak_weight: float = 0.0,
     test_damping_ratios: Sequence[float] = TEST_DAMPING_RATIOS,
+    skip_fine: bool = False,
 ) -> ShaperCandidate:
     """Fit optimal shaper frequency using Klipper `fit_shaper` damping pessimisation & rules."""
     is_flatness = name.strip().upper() == "SMOOTH_FLATNESS"
@@ -747,7 +753,7 @@ def _fit_single_shaper(
     _eval_grid(candidate_freqs)
 
     # Stage 2: 0.25 Hz fine local refinement around min-vibration and min-score basins
-    if len(candidate_freqs) >= 2:
+    if not skip_fine and len(candidate_freqs) >= 2:
         coarse_rows = sorted(evaluated.values(), key=lambda r: r[0])
         best_vib_coarse = min(coarse_rows, key=lambda r: r[1])
         sel_coarse = _pick_within_shaper(coarse_rows)
@@ -779,6 +785,147 @@ def _fit_single_shaper(
     )
 
 
+def compute_step_response(
+    freq_hz: float,
+    damping_ratio: float,
+    shaper_name: str,
+    shaper_freq_hz: float,
+    shaper_damping_ratio: float = DEFAULT_SHAPER_DAMPING_RATIO,
+    t_max_s: float = 0.16,
+    n_pts: int = 161,
+) -> dict:
+    """Compute exact analytical 2nd-order underdamped step response with input-shaper convolution.
+
+    Uses the closed-form unit step response
+        y(t) = 1 - exp(-zeta * w_n * t) * (cos(w_d * t) + (zeta / sqrt(1 - zeta^2)) * sin(w_d * t))
+    for t >= 0, convolved with normalized shaper impulses (A_i / sum(A), T_i).
+    """
+    f_n = float(freq_hz)
+    if f_n <= 0.0:
+        raise ValueError(f"freq_hz must be positive, got {freq_hz}")
+    zeta = float(damping_ratio)
+    if not (0.0 <= zeta < 1.0):
+        raise ValueError(f"damping_ratio must be in [0, 1), got {damping_ratio}")
+    if t_max_s <= 0.0 or n_pts < 2:
+        raise ValueError("t_max_s must be positive and n_pts >= 2.")
+
+    omega_n = 2.0 * math.pi * f_n
+    df = math.sqrt(1.0 - zeta * zeta)
+    omega_d = omega_n * df
+    zeta_over_df = zeta / df
+
+    def _step_2nd_order(tau: np.ndarray) -> np.ndarray:
+        out = np.zeros_like(tau, dtype=float)
+        pos = tau >= 0.0
+        if np.any(pos):
+            tp = tau[pos]
+            out[pos] = 1.0 - np.exp(-zeta * omega_n * tp) * (
+                np.cos(omega_d * tp) + zeta_over_df * np.sin(omega_d * tp)
+            )
+        return out
+
+    t_s = np.linspace(0.0, float(t_max_s), int(n_pts), dtype=float)
+    t_ms = t_s * 1e3
+    unshaped = _step_2nd_order(t_s)
+
+    key = shaper_name.strip().upper()
+    if key == "NONE":
+        amps = np.array([1.0], dtype=float)
+        times = np.array([0.0], dtype=float)
+    else:
+        amps, times = get_shaper_pulses(
+            key,
+            float(shaper_freq_hz),
+            damping_ratio=float(shaper_damping_ratio),
+        )
+    weights = amps / float(np.sum(amps))
+
+    if key == "NONE":
+        shaped = unshaped.copy()
+    else:
+        shaped = np.zeros_like(t_s, dtype=float)
+        for w_i, tau_i in zip(weights, times):
+            shaped += float(w_i) * _step_2nd_order(t_s - float(tau_i))
+
+    overshoot_unshaped_pct = max(0.0, (float(np.max(unshaped)) - 1.0) * 100.0)
+    overshoot_shaped_pct = max(0.0, (float(np.max(shaped)) - 1.0) * 100.0)
+
+    def _settling_time_ms(y: np.ndarray, band: float = 0.02) -> float:
+        err = np.abs(y - 1.0)
+        outside = np.flatnonzero(err > band)
+        if outside.size == 0:
+            return 0.0
+        last_out = int(outside[-1])
+        if last_out >= len(t_ms) - 1:
+            return float(t_ms[-1])
+        e0 = float(err[last_out])
+        e1 = float(err[last_out + 1])
+        if e0 > e1 + 1e-12:
+            alpha = (e0 - band) / (e0 - e1)
+            alpha = max(0.0, min(1.0, alpha))
+            return float(t_ms[last_out] + alpha * (t_ms[last_out + 1] - t_ms[last_out]))
+        return float(t_ms[last_out + 1])
+
+    settle_unshaped_ms = _settling_time_ms(unshaped, 0.02)
+    settle_shaped_ms = _settling_time_ms(shaped, 0.02)
+
+    return {
+        "time_ms": [round(float(v), 3) for v in t_ms],
+        "unshaped": [round(float(v), 5) for v in unshaped],
+        "shaped": [round(float(v), 5) for v in shaped],
+        "overshoot_unshaped_pct": round(float(overshoot_unshaped_pct), 2),
+        "overshoot_shaped_pct": round(float(overshoot_shaped_pct), 2),
+        "settle_time_unshaped_ms": round(float(settle_unshaped_ms), 2),
+        "settle_time_shaped_ms": round(float(settle_shaped_ms), 2),
+    }
+
+
+def compute_vfa_forcing_harmonics(
+    speed_mm_s: float,
+    pulley_teeth: int = 20,
+    belt_pitch_mm: float = 2.0,
+    steps_per_rev: int = 200,
+) -> dict:
+    """Compute speed-dependent VFA belt-mesh and stepper electrical forcing harmonics.
+
+    Diagnostic only: kept strictly separate from standstill Klipper input-shaper scoring.
+    """
+    if pulley_teeth <= 0:
+        raise ValueError(f"pulley_teeth must be positive, got {pulley_teeth}")
+    if belt_pitch_mm <= 0.0:
+        raise ValueError(f"belt_pitch_mm must be positive, got {belt_pitch_mm}")
+    if steps_per_rev <= 0:
+        raise ValueError(f"steps_per_rev must be positive, got {steps_per_rev}")
+
+    speed = max(0.0, float(speed_mm_s))
+    pulley_circ_mm = float(pulley_teeth) * float(belt_pitch_mm)
+    rotor_teeth = float(steps_per_rev) / 4.0
+
+    belt_mesh_hz = speed / float(belt_pitch_mm)
+    motor_rps_hz = speed / pulley_circ_mm
+    motor_elec_hz = motor_rps_hz * rotor_teeth
+    vfa_step_hz = 4.0 * motor_elec_hz
+
+    belt_mesh_wavelength_mm = float(belt_pitch_mm)
+    motor_full_step_wavelength_mm = pulley_circ_mm / float(steps_per_rev)
+    motor_elec_wavelength_mm = pulley_circ_mm / rotor_teeth
+
+    return {
+        "speed_mm_s": round(speed, 2),
+        "pulley_teeth": int(pulley_teeth),
+        "belt_pitch_mm": round(float(belt_pitch_mm), 4),
+        "steps_per_rev": int(steps_per_rev),
+        "rotor_teeth": round(rotor_teeth, 2),
+        "belt_mesh_hz": round(belt_mesh_hz, 3),
+        "motor_rps_hz": round(motor_rps_hz, 4),
+        "motor_elec_hz": round(motor_elec_hz, 3),
+        "vfa_step_hz": round(vfa_step_hz, 3),
+        "belt_mesh_wavelength_mm": round(belt_mesh_wavelength_mm, 4),
+        "motor_full_step_wavelength_mm": round(motor_full_step_wavelength_mm, 4),
+        "motor_elec_wavelength_mm": round(motor_elec_wavelength_mm, 4),
+    }
+
+
 def calibrate_axis_shapers(
     axis: str,
     primary_freq_hz: float,
@@ -796,6 +943,8 @@ def calibrate_axis_shapers(
     measured_damping_override: float | None = None,
     test_damping_ratios: Sequence[float] = TEST_DAMPING_RATIOS,
     shaper_names: Sequence[str] | None = None,
+    include_step_response: bool = True,
+    fast_diagnostic: bool = False,
 ) -> AxisShaperGraph:
     """Run full Klipper `shaper_calibrate` optimization over `[5, 220] Hz` for one axis."""
     psd_zeta = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
@@ -860,19 +1009,22 @@ def calibrate_axis_shapers(
 
     center_f = float(primary_freq_hz) if not normalize_psd else peak_freq
     eval_names = tuple(shaper_names) if shaper_names is not None else SHAPER_NAMES
+    cand_step = 2.5 if fast_diagnostic else 1.25
+    eff_test_drs = (float(damping_ratio),) if fast_diagnostic else test_damping_ratios
 
     candidates = [
         _fit_single_shaper(
             name=name,
             freqs_hz=freqs,
             raw_psd=psd,
-            candidate_freqs=_shaper_candidate_freqs(name, center_f),
+            candidate_freqs=_shaper_candidate_freqs(name, center_f, step_hz=cand_step),
             vibr_threshold=vibr_threshold,
             all_vibrations=all_vibrations,
             scv=scv,
             damping_ratio=damping_ratio,
             soft_tiebreak_weight=tie_w,
-            test_damping_ratios=test_damping_ratios,
+            test_damping_ratios=eff_test_drs,
+            skip_fine=fast_diagnostic,
         )
         for name in eval_names
     ]
@@ -897,13 +1049,14 @@ def calibrate_axis_shapers(
                 name=choice_norm,
                 freqs_hz=freqs,
                 raw_psd=psd,
-                candidate_freqs=_shaper_candidate_freqs(choice_norm, center_f),
+                candidate_freqs=_shaper_candidate_freqs(choice_norm, center_f, step_hz=cand_step),
                 vibr_threshold=vibr_threshold,
                 all_vibrations=all_vibrations,
                 scv=scv,
                 damping_ratio=damping_ratio,
                 soft_tiebreak_weight=tie_w,
-                test_damping_ratios=test_damping_ratios,
+                test_damping_ratios=eff_test_drs,
+                skip_fine=fast_diagnostic,
             )
         if matched is None:
             raise ValueError(f"Unsupported shaper_choice '{shaper_choice}'.")
@@ -911,6 +1064,18 @@ def calibrate_axis_shapers(
         rec_name = matched.name
         rec_freq = matched.freq_hz
         rec_accel = matched.max_accel_mm_s2
+
+    step_response = (
+        compute_step_response(
+            freq_hz=peak_freq,
+            damping_ratio=measured_zeta,
+            shaper_name=rec_name,
+            shaper_freq_hz=rec_freq,
+            shaper_damping_ratio=damping_ratio,
+        )
+        if (include_step_response and not fast_diagnostic)
+        else None
+    )
 
     return AxisShaperGraph(
         axis=axis.upper(),
@@ -923,4 +1088,5 @@ def calibrate_axis_shapers(
         recommended_freq_hz=rec_freq,
         recommended_max_accel_mm_s2=rec_accel,
         candidates=candidates,
+        step_response=step_response,
     )

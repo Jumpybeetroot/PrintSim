@@ -1103,7 +1103,10 @@ def evaluate_printer(
     )
     collision = check_frame_clearance(assembly)
     static_fea = solve_static_fea(assembly, accel_mm_s2=accel_override_mm_s2)
-    modal_fea = solve_modal_fea(assembly)
+    modal_fea = solve_modal_fea(
+        assembly,
+        include_adxl_diagnostic=include_advanced_analysis,
+    )
     kinematics = analyze_kinematics(assembly)
     thermal = simulate_hotend_thermal(spec, filament_id=filament_id)
     thermal_structural = compute_thermal_structural_report(assembly)

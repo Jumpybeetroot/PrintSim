@@ -131,6 +131,7 @@ class ModalResult:
     accel_bottleneck: dict | None = None
     worst_print_mode_number: int = 1
     limiting_modal_summary: dict | None = None
+    adxl_vs_nozzle_diagnostic: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -142,6 +143,7 @@ class ModalResult:
             "accel_bottleneck": self.accel_bottleneck,
             "worst_print_mode_number": self.worst_print_mode_number,
             "limiting_modal_summary": self.limiting_modal_summary,
+            "adxl_vs_nozzle_diagnostic": self.adxl_vs_nozzle_diagnostic,
             "shaper_x": _shaper_dict(self.shaper_x) if self.shaper_x else None,
             "shaper_y": _shaper_dict(self.shaper_y) if self.shaper_y else None,
             "shaper_graphs": {
@@ -412,6 +414,7 @@ def _recommend_shaper(
     scanned_modes: list[tuple[float, float]] | None = None,
     psd_damping_ratio: float | None = None,
     assembly: AssemblyModel | None = None,
+    fast_diagnostic: bool = False,
 ) -> tuple[InputShaperRecommendation, AxisShaperGraph]:
     # Exact 2-DOF drive coupling + dynamic shaker slack-side unloading + strain-energy damping
     c_struct = max(c_struct_m_per_n, 0.0)
@@ -581,6 +584,7 @@ def _recommend_shaper(
             damping_ratio=shaper_damping,
             psd_damping_ratio=zeta_eff,
             psd_damping_secondary=zeta_frame,
+            fast_diagnostic=fast_diagnostic,
         )
     else:
         freqs, psd_base = synthesize_axis_psd(
@@ -665,6 +669,7 @@ def _recommend_shaper(
             ref_peak=100.0,
             ref_all_vibrations=ref_all_vib,
             measured_damping_override=measured_zeta_pre_notch,
+            fast_diagnostic=fast_diagnostic,
         )
 
     shaper = graph.recommended_shaper
@@ -1701,7 +1706,11 @@ def _compute_benchtop_feet_series_compliance(
     return float(c_feet_x), float(c_feet_y)
 
 
-def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
+def solve_modal_fea(
+    assembly: AssemblyModel,
+    num_modes: int = 6,
+    include_adxl_diagnostic: bool = True,
+) -> ModalResult:
     """Solve generalized structural eigenproblem K phi = omega^2 M phi."""
     K, M, _, node_idx, free_dofs = assemble_global_matrices(assembly)
     n_free = len(free_dofs)
@@ -1883,19 +1892,38 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         cy_rel[6 * bed_idx + 5] -= float(dr_noz[0])
         cy_rel[6 * bed_idx + 3] += float(dr_noz[2])
 
+    # Carriage-mounted ADXL relative displacement extraction rows (th_idx relative to bed_idx)
+    cx_car_rel = np.zeros(n_dof, dtype=float)
+    cx_car_rel[6 * th_idx + 0] = 1.0
+    cy_car_rel = np.zeros(n_dof, dtype=float)
+    cy_car_rel[6 * th_idx + 1] = 1.0
+    if bed_idx is not None:
+        cx_car_rel[6 * bed_idx + 0] -= 1.0
+        cx_car_rel[6 * bed_idx + 4] -= float(dr_th[2])
+        cx_car_rel[6 * bed_idx + 5] += float(dr_th[1])
+        cy_car_rel[6 * bed_idx + 1] -= 1.0
+        cy_car_rel[6 * bed_idx + 5] -= float(dr_th[0])
+        cy_car_rel[6 * bed_idx + 3] += float(dr_th[2])
+
     # Exact unit-load static nozzle-to-bed structural compliance c_struct [m/N] (zero mode-truncation drift, B-01/B-02)
     try:
         u_x_stat = lu_solver.solve(fx_exc[free_dofs]) if lu_solver is not None else np.linalg.solve(K_ff, fx_exc[free_dofs])
         u_y_stat = lu_solver.solve(fy_exc[free_dofs]) if lu_solver is not None else np.linalg.solve(K_ff, fy_exc[free_dofs])
         c_struct_fe_x = max(1e-12, float(cx_rel[free_dofs] @ u_x_stat))
         c_struct_fe_y = max(1e-12, float(cy_rel[free_dofs] @ u_y_stat))
+        c_struct_fe_car_x = max(1e-12, float(cx_car_rel[free_dofs] @ u_x_stat))
+        c_struct_fe_car_y = max(1e-12, float(cy_car_rel[free_dofs] @ u_y_stat))
     except (np.linalg.LinAlgError, RuntimeError):
         c_struct_fe_x = 1e-6
         c_struct_fe_y = 1e-6
+        c_struct_fe_car_x = 1e-6
+        c_struct_fe_car_y = 1e-6
 
     candidates: list[dict] = []
     receptance_x: list[tuple[float, float]] = []
     receptance_y: list[tuple[float, float]] = []
+    carriage_rec_x: list[tuple[float, float]] = []
+    carriage_rec_y: list[tuple[float, float]] = []
     panel_drum_freq: float | None = None
     panel_drum_fallback_freq: float | None = None
 
@@ -2058,6 +2086,11 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             if not is_isolated_panel_drum and not is_local_paver_mode:
                 receptance_x.append((freq_hz, comp_x_noz))
                 receptance_y.append((freq_hz, comp_y_noz))
+                if noz_idx != th_idx:
+                    rel_car_x_raw = float(cx_car_rel @ full_vec)
+                    rel_car_y_raw = float(cy_car_rel @ full_vec)
+                    carriage_rec_x.append((freq_hz, (rel_car_x_raw * pf_x) / (m_gen * lam)))
+                    carriage_rec_y.append((freq_hz, (rel_car_y_raw * pf_y) / (m_gen * lam)))
 
         candidates.append(
             {
@@ -2431,6 +2464,103 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         assembly=assembly,
     )
 
+    adxl_vs_nozzle_diagnostic: dict | None = None
+    if include_adxl_diagnostic and noz_idx != th_idx:
+        struct_car_x, norm_scanned_car_x = _receptance_structural_freq_and_psd(
+            carriage_rec_x, fundamental
+        )
+        struct_car_y, norm_scanned_car_y = _receptance_structural_freq_and_psd(
+            carriage_rec_y, fundamental
+        )
+        c_struct_carriage_x = c_struct_fe_car_x + c_feet_x
+        c_struct_carriage_y = c_struct_fe_car_y + c_feet_y
+
+        car_shaper_x, car_graph_x = _recommend_shaper(
+            "X",
+            struct_car_x,
+            belt_x,
+            motor_x,
+            bracket_x,
+            drive_x,
+            c_struct_carriage_x,
+            m_x_eff,
+            k_belt_x,
+            k_motor_x,
+            k_bracket_x,
+            k_drive_x,
+            configured_accel,
+            shaper_choice,
+            scv_mm_s=scv_mm_s,
+            scanned_modes=norm_scanned_car_x,
+            psd_damping_ratio=psd_zeta,
+            assembly=assembly,
+            fast_diagnostic=True,
+        )
+        car_shaper_y, car_graph_y = _recommend_shaper(
+            "Y",
+            struct_car_y,
+            belt_y,
+            motor_y,
+            bracket_y,
+            drive_y,
+            c_struct_carriage_y,
+            m_y_eff,
+            k_belt_y,
+            k_motor_y,
+            k_bracket_y,
+            k_drive_y,
+            configured_accel,
+            shaper_choice,
+            scv_mm_s=scv_mm_s,
+            scanned_modes=norm_scanned_car_y,
+            psd_damping_ratio=psd_zeta,
+            assembly=assembly,
+            fast_diagnostic=True,
+        )
+
+        def _build_adxl_diag_axis(
+            car_sh: InputShaperRecommendation,
+            car_gr: AxisShaperGraph,
+            noz_sh: InputShaperRecommendation,
+            noz_gr: AxisShaperGraph,
+            c_noz_fe: float,
+            c_car_fe: float,
+        ) -> dict:
+            if np.array_equal(car_gr.freqs_hz, noz_gr.freqs_hz):
+                car_psd_aligned = car_gr.raw_psd
+            else:
+                car_psd_aligned = np.interp(noz_gr.freqs_hz, car_gr.freqs_hz, car_gr.raw_psd)
+            car_peak = float(car_sh.effective_freq_hz)
+            noz_peak = float(noz_sh.effective_freq_hz)
+            ratio = float(c_noz_fe / max(c_car_fe, 1e-12))
+            has_div = bool(
+                car_gr.recommended_shaper != noz_gr.recommended_shaper
+                or abs(car_peak - noz_peak) >= 3.0
+                or ratio >= 1.25
+            )
+            return {
+                "carriage_peak_hz": round(car_peak, 1),
+                "nozzle_peak_hz": round(noz_peak, 1),
+                "nozzle_to_carriage_ratio": round(ratio, 3),
+                "carriage_recommended_shaper": car_gr.recommended_shaper,
+                "carriage_recommended_freq_hz": round(float(car_gr.recommended_freq_hz), 1),
+                "carriage_max_accel_mm_s2": round(float(car_sh.max_accel_mm_s2), 0),
+                "nozzle_recommended_shaper": noz_gr.recommended_shaper,
+                "nozzle_recommended_freq_hz": round(float(noz_gr.recommended_freq_hz), 1),
+                "nozzle_max_accel_mm_s2": round(float(noz_sh.max_accel_mm_s2), 0),
+                "carriage_raw_psd": [round(float(v), 3) for v in car_psd_aligned],
+                "has_significant_divergence": has_div,
+            }
+
+        adxl_vs_nozzle_diagnostic = {
+            "x": _build_adxl_diag_axis(
+                car_shaper_x, car_graph_x, shaper_x, shaper_graph_x, c_struct_fe_x, c_struct_fe_car_x
+            ),
+            "y": _build_adxl_diag_axis(
+                car_shaper_y, car_graph_y, shaper_y, shaper_graph_y, c_struct_fe_y, c_struct_fe_car_y
+            ),
+        }
+
     limiting = shaper_y if shaper_y.max_accel_mm_s2 <= shaper_x.max_accel_mm_s2 else shaper_x
     other = shaper_x if limiting.axis == "Y" else shaper_y
     primary_src = limiting.primary_bottleneck
@@ -2557,4 +2687,5 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
         accel_bottleneck=accel_bottleneck,
         worst_print_mode_number=worst_print_mode_number,
         limiting_modal_summary=limiting_modal_summary,
+        adxl_vs_nozzle_diagnostic=adxl_vs_nozzle_diagnostic,
     )
