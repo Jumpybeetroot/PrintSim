@@ -112,3 +112,30 @@ def test_wasm_dispatch_runs_without_optional_native_or_web_packages() -> None:
     )
     proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, f"Pyodide-minimal probe failed:\n{proc.stderr}"
+
+
+def test_wasm_dispatch_boot_and_simulate_keep_heavy_scipy_subpackages_unloaded() -> None:
+    """Pyodide engine boot must stay lean: simulate/BOM never import scipy.signal/optimize/stats.
+
+    Those subpackages add ~1 s (and ~350 modules) to in-browser engine start; only ADXL CSV
+    import/fit and SIMP topology filtering need them, so they are imported lazily in-function.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import json, sys\n"
+        "from printsim.wasm_dispatch import dispatch_api_request\n"
+        "heavy = ('scipy.signal', 'scipy.optimize', 'scipy.stats', 'scipy.ndimage',\n"
+        "         'scipy.interpolate', 'scipy.integrate', 'scipy.spatial')\n"
+        "loaded = [m for m in heavy if m in sys.modules]\n"
+        "assert not loaded, f'heavy scipy subpackages imported at engine boot: {loaded}'\n"
+        "p = json.loads(dispatch_api_request('GET', '/api/presets/voron_trident_300')['body_text'])\n"
+        "s = dispatch_api_request('POST', '/api/simulate', json.dumps({'spec': p['spec']}))\n"
+        "assert s['status'] == 200, s\n"
+        "assert dispatch_api_request('POST', '/api/bom', json.dumps({'spec': p['spec']}))['status'] == 200\n"
+        "loaded = [m for m in heavy if m in sys.modules]\n"
+        "assert not loaded, f'heavy scipy subpackages imported by simulate/bom: {loaded}'\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, f"Lean-import probe failed:\n{proc.stderr}"

@@ -15,6 +15,18 @@ _ALPHA_DRILL: float = 1e-3
 _ALPHA_DRILL_HG: float = 1e-5
 
 
+def cross3(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Cross product of two float 3-vectors, bit-identical to ``np.cross`` without its overhead.
+
+    ``np.cross`` spends ~20x longer in axis normalization (``moveaxis``/``normalize_axis_tuple``)
+    than in arithmetic for single 3-vectors, which dominates per-element frame construction under
+    Pyodide. The component formulas and operation order match NumPy exactly.
+    """
+    a0, a1, a2 = a.tolist()
+    b0, b1, b2 = b.tolist()
+    return np.array([a1 * b2 - a2 * b1, a2 * b0 - a0 * b2, a0 * b1 - a1 * b0], dtype=float)
+
+
 def mitc4_local_frame(coords_3d: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute orthonormal local frame R (rows e1, e2, e3), 2D planar coords, and centroid.
 
@@ -31,7 +43,7 @@ def mitc4_local_frame(coords_3d: np.ndarray) -> tuple[np.ndarray, np.ndarray, np
     pc = 0.25 * np.sum(pts, axis=0)
     d02 = pts[2] - pts[0]
     d13 = pts[3] - pts[1]
-    normal = np.cross(d02, d13)
+    normal = cross3(d02, d13)
     norm_len = float(np.linalg.norm(normal))
     if norm_len < 1e-12:
         raise ValueError("Degenerate zero-area quad element in mitc4_local_frame")
@@ -43,7 +55,7 @@ def mitc4_local_frame(coords_3d: np.ndarray) -> tuple[np.ndarray, np.ndarray, np
     if e1_len < 1e-12:
         raise ValueError("Degenerate edge 0-1 in mitc4_local_frame")
     e1 = v01_proj / e1_len
-    e2 = np.cross(e3, e1)
+    e2 = cross3(e3, e1)
     e2 /= max(float(np.linalg.norm(e2)), 1e-12)
 
     r_mat = np.vstack([e1, e2, e3])
@@ -408,9 +420,9 @@ def fastener_spring_matrices(
         raise ValueError("normal_vec must be non-zero")
     e3 = n_arr / n_len
     ref = np.array([1.0, 0.0, 0.0], dtype=float) if abs(float(e3[0])) < 0.9 else np.array([0.0, 1.0, 0.0], dtype=float)
-    e1 = np.cross(ref, e3)
+    e1 = cross3(ref, e3)
     e1 /= max(float(np.linalg.norm(e1)), 1e-12)
-    e2 = np.cross(e3, e1)
+    e2 = cross3(e3, e1)
     e2 /= max(float(np.linalg.norm(e2)), 1e-12)
     r_mat = np.vstack([e1, e2, e3])
 

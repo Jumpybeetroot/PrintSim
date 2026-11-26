@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
-from scipy.spatial import cKDTree
 
 if TYPE_CHECKING:
     import trimesh
@@ -276,6 +275,8 @@ def _build_sensitivity_filter(
         H = sparse.eye(n_elem, dtype=float, format="csr")
         Hs = np.ones(n_elem, dtype=float)
         return H, Hs
+
+    from scipy.spatial import cKDTree  # lazy: keeps scipy.spatial off the Pyodide boot path
 
     coords = occ.astype(float)
     tree = cKDTree(coords)

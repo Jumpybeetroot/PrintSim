@@ -11,7 +11,8 @@ from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
 from printsim.fea.beam3d import (
-    assemble_global_matrices,
+    GlobalSystem,
+    assemble_global_system,
     beam_rotation_matrix,
     beam_shear_coefficients,
     local_beam_mass,
@@ -937,14 +938,24 @@ def _classify_lumped_mass_group(
 def _precompute_modal_element_blocks(
     assembly: AssemblyModel,
     node_idx: dict[str, int],
+    system: GlobalSystem | None = None,
 ) -> tuple[
     list[tuple[str, str, str, list[int], np.ndarray, np.ndarray | None]],
     list[tuple[str, str, str, int, np.ndarray]],
 ]:
-    """Precompute element (Ke, Me) and lumped-mass blocks once per solve_modal_fea call."""
+    """Precompute element (Ke, Me) and lumped-mass blocks once per solve_modal_fea call.
+
+    With a shared ``system`` the element matrices already computed during global assembly are
+    reused (identical values) instead of being re-derived per element.
+    """
     elem_blocks: list[tuple[str, str, str, list[int], np.ndarray, np.ndarray | None]] = []
 
-    for mem in assembly.members:
+    for m_i, mem in enumerate(assembly.members):
+        if system is not None:
+            dofs, ke, me, _ = system.member_blocks[m_i]
+            gid, label = _classify_modal_group(mem.id, mem.role)
+            elem_blocks.append((gid, label, _role_to_subsystem(mem.role), dofs, ke, me))
+            continue
         i0 = node_idx[mem.start_id]
         i1 = node_idx[mem.end_id]
         p0 = assembly.nodes[i0].position_m
@@ -978,35 +989,41 @@ def _precompute_modal_element_blocks(
         gid, label = _classify_modal_group(mem.id, mem.role)
         elem_blocks.append((gid, label, _role_to_subsystem(mem.role), dofs, ke, me))
 
-    for sh in assembly.shell_elements:
-        n_indices = [node_idx[nid] for nid in sh.node_ids]
-        coords = np.array([assembly.nodes[ni].position_m for ni in n_indices], dtype=float)
-        k_sh, m_sh, _ = mitc4_shell_matrices(
-            coords_3d=coords,
-            e_pa=sh.material.youngs_modulus_pa,
-            nu=sh.material.poisson_ratio,
-            thickness_m=sh.thickness_m,
-            areal_mass_kg_m2=sh.areal_mass_kg_m2,
-            d_bend_nm=sh.d_bend_nm,
-            g_transverse_h_n_m=sh.g_transverse_h_n_m,
-            e_mem_h_n_m=sh.e_mem_h_n_m,
-        )
-        dofs = [6 * ni + d for ni in n_indices for d in range(6)]
+    for sh_i, sh in enumerate(assembly.shell_elements):
+        if system is not None:
+            dofs, k_sh, m_sh = system.shell_blocks[sh_i]
+        else:
+            n_indices = [node_idx[nid] for nid in sh.node_ids]
+            coords = np.array([assembly.nodes[ni].position_m for ni in n_indices], dtype=float)
+            k_sh, m_sh, _ = mitc4_shell_matrices(
+                coords_3d=coords,
+                e_pa=sh.material.youngs_modulus_pa,
+                nu=sh.material.poisson_ratio,
+                thickness_m=sh.thickness_m,
+                areal_mass_kg_m2=sh.areal_mass_kg_m2,
+                d_bend_nm=sh.d_bend_nm,
+                g_transverse_h_n_m=sh.g_transverse_h_n_m,
+                e_mem_h_n_m=sh.e_mem_h_n_m,
+            )
+            dofs = [6 * ni + d for ni in n_indices for d in range(6)]
         bay_key = _canonical_bay_key(sh.bay)
         gid, label = _classify_modal_group(f"bay_{bay_key}", "panel", bay=sh.bay)
         elem_blocks.append((gid, label, "frame", dofs, k_sh, m_sh))
 
-    for sp in assembly.fastener_springs:
-        i_s = node_idx[sp.shell_node_id]
-        i_f = node_idx[sp.frame_node_id]
-        k_sp = fastener_spring_matrices(
-            k_shear_n_m=sp.k_shear_n_m,
-            k_normal_n_m=sp.k_normal_n_m,
-            k_rot_nm_rad=sp.k_rot_nm_rad,
-            normal_vec=np.asarray(sp.normal_vec, dtype=float),
-            offset_vec=np.asarray(sp.offset_m, dtype=float),
-        )
-        dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
+    for sp_i, sp in enumerate(assembly.fastener_springs):
+        if system is not None:
+            dofs, k_sp = system.spring_blocks[sp_i]
+        else:
+            i_s = node_idx[sp.shell_node_id]
+            i_f = node_idx[sp.frame_node_id]
+            k_sp = fastener_spring_matrices(
+                k_shear_n_m=sp.k_shear_n_m,
+                k_normal_n_m=sp.k_normal_n_m,
+                k_rot_nm_rad=sp.k_rot_nm_rad,
+                normal_vec=np.asarray(sp.normal_vec, dtype=float),
+                offset_vec=np.asarray(sp.offset_m, dtype=float),
+            )
+            dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
         bay_raw = sp.bay
         bay_prefix = _canonical_bay_key(bay_raw)
         if bay_raw not in ("bed_mount", "bed_z_drive", "z_guide", "toolhead", "feet", "z_joint") and bay_prefix in (
@@ -1035,10 +1052,13 @@ def _precompute_modal_element_blocks(
         elem_blocks.append((gid, label, subsys, dofs, k_sp, None))
 
     internal_dof_cursor = 6 * len(assembly.nodes)
-    for se in getattr(assembly, "superelements", ()):
-        dofs_se, ke_se, me_se = superelement_element_matrices(
-            se, assembly, node_idx, internal_dof_cursor
-        )
+    for se_i, se in enumerate(getattr(assembly, "superelements", ())):
+        if system is not None:
+            dofs_se, ke_se, me_se = system.superelement_blocks[se_i]
+        else:
+            dofs_se, ke_se, me_se = superelement_element_matrices(
+                se, assembly, node_idx, internal_dof_cursor
+            )
         internal_dof_cursor += max(0, int(getattr(se, "n_internal_modes", max(0, ke_se.shape[0] - 12))))
         gid = getattr(se, "part_group_id", "") or "toolhead_mount"
         label = getattr(se, "part_group_label", "") or "Toolhead & Nozzle Mount"
@@ -1504,17 +1524,23 @@ def _solve_generalized_eigenproblem(
     K_ff: np.ndarray,
     M_ff: np.ndarray,
     target_scan: int,
+    system: GlobalSystem | None = None,
 ) -> tuple[np.ndarray, np.ndarray, object | None]:
-    """Solve K_ff phi = lam M_ff phi with sparse shift-invert or dense Cholesky eigh."""
+    """Solve K_ff phi = lam M_ff phi with sparse shift-invert or dense Cholesky eigh.
+
+    With a shared ``system`` the sparse ``K_ff`` factorization is reused from the static solve
+    and the M-orthonormalized eigenpairs are published under ``("eigen", method, k)`` so the
+    sensitivity solver can skip an identical second eigensolve.
+    """
     n_free = K_ff.shape[0]
     k_scan = min(target_scan, n_free - 2 if n_free > 250 else n_free)
     used_sparse = False
     lu_solver = None
     if n_free > 250 and 1 <= k_scan < n_free - 1:
         try:
-            k_csc = csc_matrix(K_ff)
+            k_csc = system.reduced_stiffness_csc() if system is not None else csc_matrix(K_ff)
             m_csc = csc_matrix(M_ff)
-            lu = splu(k_csc)
+            lu = system.reduced_stiffness_lu() if system is not None else splu(k_csc)
             lu_solver = lu
             op = LinearOperator(K_ff.shape, matvec=lu.solve, dtype=float)
             v0 = np.random.default_rng(0).standard_normal(n_free)
@@ -1564,6 +1590,11 @@ def _solve_generalized_eigenproblem(
                 v = -v
         eigvecs[:, j] = v
 
+    if system is not None:
+        system.store(
+            ("eigen", "sparse" if used_sparse else "dense", int(k_scan)),
+            (eigvals.copy(), eigvecs.copy()),
+        )
     return eigvals, eigvecs, lu_solver
 
 
@@ -1711,20 +1742,24 @@ def solve_modal_fea(
     assembly: AssemblyModel,
     num_modes: int = 6,
     include_adxl_diagnostic: bool = True,
+    system: GlobalSystem | None = None,
 ) -> ModalResult:
-    """Solve generalized structural eigenproblem K phi = omega^2 M phi."""
-    K, M, _, node_idx, free_dofs = assemble_global_matrices(assembly)
+    """Solve generalized structural eigenproblem K phi = omega^2 M phi.
+
+    Pass a pre-assembled ``system`` (``assemble_global_system(assembly)``) to share the global
+    matrices, element blocks, and ``K_ff`` factorization with the static and sensitivity solvers.
+    """
+    if system is None:
+        system = assemble_global_system(assembly)
+    K, M, _, node_idx, free_dofs = system.as_tuple()
     n_free = len(free_dofs)
     if n_free == 0:
         return ModalResult(fundamental_freq_hz=0.0)
 
-    K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
-    M_ff = 0.5 * (M[np.ix_(free_dofs, free_dofs)] + M[np.ix_(free_dofs, free_dofs)].T)
-
-    # Ensure strictly positive-definite mass diagonal floor (for zero-mass rotational DOFs if any)
-    m_diag = np.diag(M_ff)
-    m_floor = max(float(np.max(m_diag)) * 1e-12, 1e-12)
-    M_ff = M_ff + np.diag(np.where(m_diag < m_floor, m_floor, 0.0))
+    # Symmetrized free-free blocks; M_ff carries the strictly positive-definite diagonal floor
+    # (for zero-mass rotational DOFs if any). Shared read-only via the GlobalSystem cache.
+    K_ff = system.reduced_stiffness()
+    M_ff = system.reduced_mass()
 
     panel_indices = [i for i, n in enumerate(assembly.nodes) if n.role == "panel"]
     non_panel_indices = [i for i, n in enumerate(assembly.nodes) if n.role != "panel"]
@@ -1740,7 +1775,9 @@ def solve_modal_fea(
 
     k_ret = min(num_modes, n_free)
     target_scan = max(56 if has_panels else (32 if has_feet else 24), min(n_free, k_ret * 2))
-    eigvals, eigvecs, lu_solver = _solve_generalized_eigenproblem(K_ff, M_ff, target_scan)
+    eigvals, eigvecs, lu_solver = _solve_generalized_eigenproblem(
+        K_ff, M_ff, target_scan, system=system
+    )
 
     th_idx = node_idx[assembly.toolhead_node_id]
     cog_id = (
@@ -2587,7 +2624,9 @@ def solve_modal_fea(
         if not c["is_isolated_panel_drum"] and float(c["rec_y"]) > 0.0 and float(c["lam"]) > 1.0
     )
 
-    elem_blocks, lumped_blocks = _precompute_modal_element_blocks(assembly, node_idx)
+    elem_blocks, lumped_blocks = _precompute_modal_element_blocks(
+        assembly, node_idx, system=system
+    )
     mode_energy_data: list[tuple[dict[str, dict], float, dict[str, dict], float, float]] = []
     for m, c_m in zip(modes, selected_candidates):
         top_causes, u_groups, u_total, t_groups, t_total = _compute_mode_root_causes(

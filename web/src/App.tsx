@@ -888,6 +888,7 @@ export default function App() {
   // Refs for atomic history capture, live studio bridge & stale-request guarding
   const clientIdRef = useRef<string>(getOrCreateStudioClientId());
   const simReqIdRef = useRef<number>(0);
+  const simAbortRef = useRef<AbortController | null>(null);
   const paretoReqIdRef = useRef<number>(0);
   const deepVerifyReqIdRef = useRef<number>(0);
   const simRef = useRef<SimulationResponse | null>(null);
@@ -990,6 +991,12 @@ export default function App() {
       }
     ) => {
       const reqId = ++simReqIdRef.current;
+      // A newer run supersedes any simulate still in flight: abort it so the browser engine can
+      // drop it from its queue (and the local server connection is released) instead of making
+      // the latest edit wait behind results that will be discarded anyway.
+      simAbortRef.current?.abort();
+      const abortCtl = new AbortController();
+      simAbortRef.current = abortCtl;
       const activeFil = filOverride ?? filamentRef.current;
       const activeRelPos = options?.toolheadRelPosOverride ?? toolheadRelPosRef.current;
       const activePanelMeshN = options?.panelMeshNOverride ?? panelMeshNRef.current;
@@ -1008,12 +1015,15 @@ export default function App() {
             toolhead_rel_pos: activeRelPos,
             panel_mesh_n: activePanelMeshN,
           }),
+          signal: abortCtl.signal,
         });
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({ detail: res.statusText }));
           throw new Error(errBody.detail || "Simulation failed");
         }
         const data: SimulationResponse = await res.json();
+        // Superseded while solving: skip the follow-up BOM request entirely
+        if (reqId !== simReqIdRef.current) return false;
         const bomData = await fetchBomForSpec(data.spec, stockLengthRef.current);
 
         // Ignore stale out-of-order responses

@@ -11,7 +11,11 @@ from scipy.linalg import cho_factor, cho_solve, solve
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import splu, spsolve
 
-from printsim.fea.beam3d import assemble_global_matrices, element_internal_forces
+from printsim.fea.beam3d import (
+    GlobalSystem,
+    assemble_global_system,
+    element_internal_forces,
+)
 from printsim.fea.shell_mitc4 import mitc4_shell_von_mises_mpa
 from printsim.geometry.builder import (
     AssemblyModel,
@@ -208,16 +212,35 @@ class StaticFEAResult:
         }
 
 
-def _build_factorized_solver(K: np.ndarray, free_dofs: list[int]):
-    """Pre-factor K_ff once for fast multi-loadcase static solves."""
+def shared_factorized_solver(system: GlobalSystem):
+    """Return the factorized static solver for ``system``, building it at most once."""
+    return system.cached(
+        "factorized_solver",
+        lambda: _build_factorized_solver(system.K, system.free_dofs, system=system),
+    )
+
+
+def _build_factorized_solver(
+    K: np.ndarray,
+    free_dofs: list[int],
+    system: GlobalSystem | None = None,
+):
+    """Pre-factor K_ff once for fast multi-loadcase static solves.
+
+    When ``system`` is given, the symmetrized ``K_ff`` and its SuperLU factorization are taken
+    from (and stored in) the shared :class:`GlobalSystem` cache.
+    """
     n_dof = K.shape[0]
     if not free_dofs:
         return lambda F: np.zeros(n_dof, dtype=float)
-    K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
+    if system is not None:
+        K_ff = system.reduced_stiffness()
+    else:
+        K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
 
     if len(free_dofs) > 250:
         try:
-            lu = splu(csc_matrix(K_ff))
+            lu = system.reduced_stiffness_lu() if system is not None else splu(csc_matrix(K_ff))
 
             def _solve_sparse(F: np.ndarray) -> np.ndarray:
                 u = np.zeros(n_dof, dtype=float)
@@ -372,9 +395,16 @@ def build_inertial_load_vectors(
 def solve_static_fea(
     assembly: AssemblyModel,
     accel_mm_s2: float | None = None,
+    system: GlobalSystem | None = None,
 ) -> StaticFEAResult:
-    """Run static 3D frame FEA under gravity and peak toolhead acceleration loads."""
-    K, _, F_grav, node_idx, free_dofs = assemble_global_matrices(assembly)
+    """Run static 3D frame FEA under gravity and peak toolhead acceleration loads.
+
+    Pass a pre-assembled ``system`` (``assemble_global_system(assembly)``) to share the global
+    matrices and ``K_ff`` factorization with the modal and sensitivity solvers.
+    """
+    if system is None:
+        system = assemble_global_system(assembly)
+    K, _, F_grav, node_idx, free_dofs = system.as_tuple()
     n_dof = K.shape[0]
     th_idx = node_idx[assembly.toolhead_node_id]
     th_dof = 6 * th_idx
@@ -429,7 +459,7 @@ def solve_static_fea(
         accel_mm_s2 if accel_mm_s2 is not None else assembly.spec.kinematics.max_accel_mm_s2
     ) * 1e-3
 
-    solve_rhs = _build_factorized_solver(K, free_dofs)
+    solve_rhs = shared_factorized_solver(system)
 
     # 1. Gravity sag case (nozzle relative to bed)
     u_grav = solve_rhs(F_grav)

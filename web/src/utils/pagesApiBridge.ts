@@ -12,6 +12,10 @@
  *      Pydantic, PyYAML, and PrintSim's Python solver so any parameter edit, custom YAML,
  *      ADXL calibration/fit, Pareto/AI optimization, Solid Hex8 FEA, SIMP topology opt,
  *      and STL/DXF/CSV export runs 100% live in the browser.
+ *   3. Latency guards for the single-threaded engine: identical deterministic requests are
+ *      answered from a bounded in-memory LRU (returning to an earlier design is instant), and
+ *      an aborted `fetch` (AbortSignal) removes its request from the worker queue so
+ *      superseded simulations from rapid edits never run.
  */
 
 export const IS_STATIC_PAGES = import.meta.env.VITE_STATIC_PAGES === "true";
@@ -90,6 +94,67 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+/**
+ * Deterministic, side-effect-free POST endpoints whose 200 responses may be replayed for a
+ * byte-identical request body. The Python engine is seeded/deterministic for these routes.
+ */
+const CACHEABLE_POST_PATHS = new Set<string>([
+  "/api/simulate",
+  "/api/bom",
+  "/api/verify/deep",
+  "/api/fea/solid-part",
+  "/api/superelement/bracket",
+]);
+const RESPONSE_CACHE_MAX_ENTRIES = 24;
+/** UTF-16 code units; ~2 bytes each worst case, so the cache stays under roughly 48 MB. */
+const RESPONSE_CACHE_MAX_CHARS = 24_000_000;
+
+/** Bounded LRU of live-engine JSON responses keyed by `METHOD path\nbody`. */
+class ResponseLru {
+  private entries = new Map<string, WorkerEnvelope>();
+  private totalChars = 0;
+
+  private static cost(key: string, env: WorkerEnvelope): number {
+    return key.length + (env.body_text?.length ?? 0);
+  }
+
+  get(key: string): WorkerEnvelope | undefined {
+    const hit = this.entries.get(key);
+    if (hit) {
+      // Refresh recency: Map iteration order is insertion order.
+      this.entries.delete(key);
+      this.entries.set(key, hit);
+    }
+    return hit;
+  }
+
+  set(key: string, env: WorkerEnvelope): void {
+    const cost = ResponseLru.cost(key, env);
+    if (cost > RESPONSE_CACHE_MAX_CHARS / 4) return;
+    const prev = this.entries.get(key);
+    if (prev) {
+      this.totalChars -= ResponseLru.cost(key, prev);
+      this.entries.delete(key);
+    }
+    this.entries.set(key, env);
+    this.totalChars += cost;
+    while (
+      this.entries.size > RESPONSE_CACHE_MAX_ENTRIES ||
+      this.totalChars > RESPONSE_CACHE_MAX_CHARS
+    ) {
+      const oldestKey = this.entries.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      const oldest = this.entries.get(oldestKey);
+      if (oldest) this.totalChars -= ResponseLru.cost(oldestKey, oldest);
+      this.entries.delete(oldestKey);
+    }
+  }
+}
+
+function abortError(): DOMException {
+  return new DOMException("The operation was aborted.", "AbortError");
+}
+
 let installed = false;
 
 export function installPagesApiBridge(): void {
@@ -113,6 +178,10 @@ export function installPagesApiBridge(): void {
     number,
     { resolve: (env: WorkerEnvelope) => void; reject: (err: Error) => void }
   >();
+  const responseCache = new ResponseLru();
+  // Aborted requests that were already executing still finish in the worker; remember their
+  // cache key so the finished result is kept for an instant return to that design.
+  const abandonedCacheKeys = new Map<number, string>();
 
   const ensureWorker = (): Worker => {
     if (worker) return worker;
@@ -130,7 +199,21 @@ export function installPagesApiBridge(): void {
         if (entry) {
           pending.delete(msg.id);
           entry.resolve(msg.envelope);
+          return;
         }
+        const abandonedKey = abandonedCacheKeys.get(msg.id);
+        if (abandonedKey !== undefined) {
+          abandonedCacheKeys.delete(msg.id);
+          const env = msg.envelope as WorkerEnvelope;
+          if (env?.status === 200 && env.body_text !== undefined) {
+            responseCache.set(abandonedKey, env);
+          }
+        }
+        return;
+      }
+      if (msg?.type === "cancelled") {
+        // The worker dropped the request before it started: nothing will ever arrive for it.
+        abandonedCacheKeys.delete(msg.id);
       }
     };
     worker.onerror = (ev) => {
@@ -138,6 +221,7 @@ export function installPagesApiBridge(): void {
       setStatus({ state: "error", detail });
       pending.forEach((p) => p.reject(new Error(detail)));
       pending.clear();
+      abandonedCacheKeys.clear();
     };
     const wasmZipAbsUrl = new URL(pagesDataUrl("printsim_wasm.zip"), window.location.href).href;
     worker.postMessage({ type: "init", wasmZipUrl: wasmZipAbsUrl });
@@ -147,14 +231,51 @@ export function installPagesApiBridge(): void {
   // Start booting Pyodide right away in background
   ensureWorker();
 
-  const callWorker = (method: string, path: string, bodyJson: string | null): Promise<Response> => {
+  const callWorker = (
+    method: string,
+    path: string,
+    bodyJson: string | null,
+    signal?: AbortSignal | null
+  ): Promise<Response> => {
+    if (signal?.aborted) {
+      return Promise.reject(abortError());
+    }
+
+    const cleanPath = path.split("?", 1)[0].replace(/\/+$/, "");
+    const cacheKey =
+      method === "POST" && bodyJson !== null && CACHEABLE_POST_PATHS.has(cleanPath)
+        ? `${method} ${cleanPath}\n${bodyJson}`
+        : null;
+    if (cacheKey) {
+      const hit = responseCache.get(cacheKey);
+      if (hit) return Promise.resolve(envelopeToResponse(hit));
+    }
+
     const w = ensureWorker();
     const id = nextReqId++;
     return new Promise<Response>((resolve, reject) => {
+      const onAbort = () => {
+        // Drop the request if it is still queued behind another solve; a request that is
+        // already executing cannot be interrupted, so its late response is simply ignored.
+        if (!pending.delete(id)) return;
+        if (cacheKey) abandonedCacheKeys.set(id, cacheKey);
+        w.postMessage({ type: "cancel", id });
+        reject(abortError());
+      };
       pending.set(id, {
-        resolve: (env) => resolve(envelopeToResponse(env)),
-        reject,
+        resolve: (env) => {
+          signal?.removeEventListener("abort", onAbort);
+          if (cacheKey && env.status === 200 && env.body_text !== undefined) {
+            responseCache.set(cacheKey, env);
+          }
+          resolve(envelopeToResponse(env));
+        },
+        reject: (err) => {
+          signal?.removeEventListener("abort", onAbort);
+          reject(err);
+        },
       });
+      signal?.addEventListener("abort", onAbort, { once: true });
       w.postMessage({ type: "request", id, method, path, bodyJson });
     });
   };
@@ -332,6 +453,7 @@ export function installPagesApiBridge(): void {
     }
 
     // 6. All live edits, optimizations, ADXL fits, FEA, and exports -> Pyodide Web Worker
-    return callWorker(method, apiPath, bodyText);
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : null);
+    return callWorker(method, apiPath, bodyText, signal);
   };
 }

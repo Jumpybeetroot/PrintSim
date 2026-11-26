@@ -9,9 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
-from scipy.optimize import minimize_scalar
-from scipy.signal import welch
 
+# NOTE: ``scipy.signal`` / ``scipy.optimize`` are imported inside the functions that use them.
+# This module is reachable from ``wasm_dispatch`` and those two packages add ~1 s (and ~350
+# modules, incl. ``scipy.stats``) to the in-browser Pyodide engine boot, while only ADXL CSV
+# import / fit requests ever need them.
 from printsim.fea.klipper_shaper import (
     MIN_FREQ_HZ,
     AxisShaperGraph,
@@ -471,6 +473,8 @@ def _parse_raw_accel_rows(
 
     n_sig = len(next(iter(resampled_arrays.values())))
     nperseg = _compute_welch_nperseg(n_sig, fs_hz)
+
+    from scipy.signal import welch  # lazy: see module-level import note
 
     welch_freqs: np.ndarray | None = None
     psd_sum: np.ndarray | None = None
@@ -1044,6 +1048,8 @@ def fit_printer_to_adxl(
             if cand_loss < cur_loss - 1e-9:
                 cur_loss = cand_loss
                 cur_rq = cand_rq
+
+    from scipy.optimize import minimize_scalar  # lazy: see module-level import note
 
     opt_res = minimize_scalar(
         lambda t_val: _evaluate(float(t_val), cur_rq, cur_rp, cur_cj)[0],

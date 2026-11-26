@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import splu
 
-from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
+from printsim.fea.shell_mitc4 import cross3, fastener_spring_matrices, mitc4_shell_matrices
 from printsim.geometry.builder import (
     AssemblyModel,
     AttachedSuperelement,
@@ -67,9 +69,9 @@ def beam_rotation_matrix(p0: np.ndarray, p1: np.ndarray) -> tuple[np.ndarray, fl
     else:
         ref = global_z
 
-    ey = np.cross(ref, ex)
+    ey = cross3(ref, ex)
     ey /= np.linalg.norm(ey)
-    ez = np.cross(ex, ey)
+    ez = cross3(ex, ey)
     ez /= np.linalg.norm(ez)
 
     r_mat = np.vstack([ex, ey, ez])  # local = R @ global
@@ -311,10 +313,132 @@ def superelement_element_matrices(
     return dofs, K_eff, M_eff
 
 
+class GlobalSystem:
+    """Global FE system (K, M, gravity load, per-element blocks) assembled once per evaluation.
+
+    ``evaluate_printer`` builds one instance and hands it to the static, modal, and sensitivity
+    solvers, which otherwise each re-assemble identical global matrices and re-derive identical
+    element blocks. Everything stored here is shared **read-only**; derived quantities
+    (symmetrized free-free blocks, sparse LU factorization, eigenpairs) are memoized via
+    :meth:`cached` so each is computed at most once per assembly.
+
+    Element block lists are index-aligned with ``assembly.members`` / ``shell_elements`` /
+    ``fastener_springs`` / ``superelements``:
+      ``member_blocks[i] = (dofs, Ke_global, Me_global, length_m)``
+      ``shell_blocks[i] = (dofs, Ke_global, Me_global)``
+      ``spring_blocks[i] = (dofs, Ke_global)``
+      ``superelement_blocks[i] = (dofs, Ke, Me_or_None)``
+    """
+
+    __slots__ = (
+        "K",
+        "M",
+        "F_grav",
+        "node_idx",
+        "free_dofs",
+        "member_blocks",
+        "shell_blocks",
+        "spring_blocks",
+        "superelement_blocks",
+        "_cache",
+    )
+
+    def __init__(
+        self,
+        K: np.ndarray,
+        M: np.ndarray,
+        F_grav: np.ndarray,
+        node_idx: dict[str, int],
+        free_dofs: list[int],
+        member_blocks: list[tuple[list[int], np.ndarray, np.ndarray, float]],
+        shell_blocks: list[tuple[list[int], np.ndarray, np.ndarray]],
+        spring_blocks: list[tuple[list[int], np.ndarray]],
+        superelement_blocks: list[tuple[list[int], np.ndarray, np.ndarray | None]],
+    ) -> None:
+        self.K = K
+        self.M = M
+        self.F_grav = F_grav
+        self.node_idx = node_idx
+        self.free_dofs = free_dofs
+        self.member_blocks = member_blocks
+        self.shell_blocks = shell_blocks
+        self.spring_blocks = spring_blocks
+        self.superelement_blocks = superelement_blocks
+        self._cache: dict[object, object] = {}
+
+    def as_tuple(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int], list[int]]:
+        """Return the legacy ``(K, M, F_grav, node_idx, free_dofs)`` tuple."""
+        return self.K, self.M, self.F_grav, self.node_idx, self.free_dofs
+
+    def cached(self, key: object, factory):  # noqa: ANN001, ANN201
+        """Return the memoized value for ``key``, computing it with ``factory()`` on first use.
+
+        A raising factory caches nothing, so callers keep their own exception fallbacks.
+        """
+        try:
+            return self._cache[key]
+        except KeyError:
+            value = factory()
+            self._cache[key] = value
+            return value
+
+    def peek(self, key: object):  # noqa: ANN201
+        """Return the memoized value for ``key`` or ``None`` without computing anything."""
+        return self._cache.get(key)
+
+    def store(self, key: object, value: object) -> None:
+        self._cache[key] = value
+
+    def reduced_stiffness(self) -> np.ndarray:
+        """Symmetrized free-free stiffness ``K_ff`` (read-only)."""
+
+        def _build() -> np.ndarray:
+            ix = np.ix_(self.free_dofs, self.free_dofs)
+            k_ff = 0.5 * (self.K[ix] + self.K[ix].T)
+            k_ff.flags.writeable = False
+            return k_ff
+
+        return self.cached("k_ff", _build)
+
+    def reduced_mass(self) -> np.ndarray:
+        """Symmetrized free-free mass ``M_ff`` with the positive-definite diagonal floor (read-only)."""
+
+        def _build() -> np.ndarray:
+            ix = np.ix_(self.free_dofs, self.free_dofs)
+            m_ff = 0.5 * (self.M[ix] + self.M[ix].T)
+            # Strictly positive-definite mass diagonal floor (zero-mass rotational DOFs if any)
+            m_diag = np.diag(m_ff)
+            m_floor = max(float(np.max(m_diag)) * 1e-12, 1e-12)
+            m_ff = m_ff + np.diag(np.where(m_diag < m_floor, m_floor, 0.0))
+            m_ff.flags.writeable = False
+            return m_ff
+
+        return self.cached("m_ff", _build)
+
+    def reduced_stiffness_csc(self) -> csc_matrix:
+        """Sparse CSC copy of ``K_ff`` shared by the static, modal, and sensitivity solvers."""
+        return self.cached("k_ff_csc", lambda: csc_matrix(self.reduced_stiffness()))
+
+    def reduced_stiffness_lu(self):  # noqa: ANN201
+        """SuperLU factorization of ``K_ff``; raises ``RuntimeError`` (uncached) if singular."""
+        return self.cached("k_ff_lu", lambda: splu(self.reduced_stiffness_csc()))
+
+
 def assemble_global_matrices(
     assembly: AssemblyModel,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int], list[int]]:
     """Assemble global K, M, gravity load vector F_g, node index map, and free DOF list."""
+    return assemble_global_system(assembly, freeze=False).as_tuple()
+
+
+def assemble_global_system(assembly: AssemblyModel, freeze: bool = True) -> GlobalSystem:
+    """Assemble the global FE system once, keeping per-element blocks for downstream reuse.
+
+    With ``freeze=True`` (default) every shared array is marked read-only so an accidental
+    in-place edit by one solver raises instead of silently corrupting the others.
+    """
     n_nodes = len(assembly.nodes)
     n_nodal_dof = 6 * n_nodes
     superelements = getattr(assembly, "superelements", ())
@@ -329,6 +453,10 @@ def assemble_global_matrices(
     M = np.zeros((n_dof, n_dof), dtype=float)
     F_grav = np.zeros(n_dof, dtype=float)
     g_acc = 9.80665
+    member_blocks: list[tuple[list[int], np.ndarray, np.ndarray, float]] = []
+    shell_blocks: list[tuple[list[int], np.ndarray, np.ndarray]] = []
+    spring_blocks: list[tuple[list[int], np.ndarray]] = []
+    superelement_blocks: list[tuple[list[int], np.ndarray, np.ndarray | None]] = []
 
     # Assemble beam elements
     for member in assembly.members:
@@ -367,6 +495,7 @@ def assemble_global_matrices(
         dofs = list(range(6 * i0, 6 * i0 + 6)) + list(range(6 * i1, 6 * i1 + 6))
         K[np.ix_(dofs, dofs)] += k_glob
         M[np.ix_(dofs, dofs)] += m_glob
+        member_blocks.append((dofs, k_glob, m_glob, length))
 
         # Consistent Euler-Bernoulli nodal gravity load (-Z) including fixed-end moments.
         # Local bending conventions: v'(x) = +th_z => M_z = +/- w_y L^2 / 12;
@@ -410,6 +539,7 @@ def assemble_global_matrices(
         K[np.ix_(dofs, dofs)] += k_sh
         M[np.ix_(dofs, dofs)] += m_sh
         F_grav[dofs] += f_sh
+        shell_blocks.append((dofs, k_sh, m_sh))
 
     # Assemble 12-DOF Huth-Schwarmann CBUSH fastener springs (shell perimeter <-> frame)
     for spring in assembly.fastener_springs:
@@ -424,6 +554,7 @@ def assemble_global_matrices(
         )
         dofs = list(range(6 * i_s, 6 * i_s + 6)) + list(range(6 * i_f, 6 * i_f + 6))
         K[np.ix_(dofs, dofs)] += k_sp
+        spring_blocks.append((dofs, k_sp))
 
     # Assemble 2-port Craig-Bampton CAD hardware superelements (+ optional internal CB modes)
     internal_dof_cursor = n_nodal_dof
@@ -434,6 +565,7 @@ def assemble_global_matrices(
         n_m_se = max(0, int(getattr(se, "n_internal_modes", max(0, k_se.shape[0] - 12))))
         internal_dof_cursor += n_m_se
         K[np.ix_(se_dofs, se_dofs)] += k_se
+        superelement_blocks.append((se_dofs, k_se, m_se))
         if m_se is not None:
             M[np.ix_(se_dofs, se_dofs)] += m_se
             a_grav = np.zeros(12 + n_m_se, dtype=float)
@@ -465,7 +597,25 @@ def assemble_global_matrices(
                 fixed_dofs.add(6 * i + d)
 
     free_dofs = [d for d in range(n_dof) if d not in fixed_dofs]
-    return K, M, F_grav, node_idx, free_dofs
+    if freeze:
+        for arr in (K, M, F_grav):
+            arr.flags.writeable = False
+        for blocks in (member_blocks, shell_blocks, spring_blocks, superelement_blocks):
+            for blk in blocks:
+                for item in blk[1:]:
+                    if isinstance(item, np.ndarray):
+                        item.flags.writeable = False
+    return GlobalSystem(
+        K,
+        M,
+        F_grav,
+        node_idx,
+        free_dofs,
+        member_blocks,
+        shell_blocks,
+        spring_blocks,
+        superelement_blocks,
+    )
 
 
 def element_internal_forces(

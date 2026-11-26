@@ -23,22 +23,16 @@ from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
 from printsim.fea.beam3d import (
-    assemble_global_matrices,
-    beam_rotation_matrix,
-    beam_shear_coefficients,
-    local_beam_mass,
-    local_beam_stiffness,
+    GlobalSystem,
+    assemble_global_system,
     node_rotational_inertia_xyz,
-    superelement_element_matrices,
-    transformation_12x12,
 )
 from printsim.fea.modal import ModalResult
-from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
 from printsim.fea.solver import (
     StaticFEAResult,
-    _build_factorized_solver,
     build_inertial_load_vectors,
     classify_part_group,
+    shared_factorized_solver,
 )
 from printsim.geometry.builder import AssemblyModel, StructuralMember
 from printsim.schema import PrinterSpec, get_material, resolve_extrusion_filling
@@ -109,16 +103,27 @@ def _solve_eigen_modes(
     K_ff: np.ndarray,
     M_ff: np.ndarray,
     target_scan: int,
+    system: GlobalSystem | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Solve generalized eigenproblem K_ff phi = lam M_ff phi with M-orthonormalization."""
+    """Solve generalized eigenproblem K_ff phi = lam M_ff phi with M-orthonormalization.
+
+    With a shared ``system``, eigenpairs already published by ``solve_modal_fea`` for the same
+    solver path and mode count (same ``K_ff``/``M_ff``, same ARPACK start vector, same
+    normalization) are reused verbatim; otherwise the solve runs here unchanged.
+    """
     n_free = K_ff.shape[0]
     k_scan = min(target_scan, n_free)
+    want_sparse = n_free > 500 and 1 <= k_scan < n_free - 1
+    if system is not None:
+        shared = system.peek(("eigen", "sparse" if want_sparse else "dense", int(k_scan)))
+        if shared is not None:
+            return shared[0].copy(), shared[1].copy()
     used_sparse = False
-    if n_free > 500 and 1 <= k_scan < n_free - 1:
+    if want_sparse:
         try:
-            k_csc = csc_matrix(K_ff)
+            k_csc = system.reduced_stiffness_csc() if system is not None else csc_matrix(K_ff)
             m_csc = csc_matrix(M_ff)
-            lu = splu(k_csc)
+            lu = system.reduced_stiffness_lu() if system is not None else splu(k_csc)
             op = LinearOperator(K_ff.shape, matvec=lu.solve, dtype=float)
             v0 = np.random.default_rng(0).standard_normal(n_free)
             eigvals, eigvecs = eigsh(
@@ -448,10 +453,17 @@ def compute_structural_sensitivities(
     assembly: AssemblyModel,
     static_res: StaticFEAResult | None = None,
     modal_res: ModalResult | None = None,
+    system: GlobalSystem | None = None,
 ) -> SensitivityReport:
-    """Compute exact analytical static adjoint and Fox-Kapoor modal sensitivities."""
+    """Compute exact analytical static adjoint and Fox-Kapoor modal sensitivities.
+
+    Pass the ``system`` already used for the static and modal solves to reuse its global
+    matrices, element blocks, ``K_ff`` factorization, and (when the solver path matches) eigenpairs.
+    """
     _ = static_res  # static fields are solved exactly with one factorization of K_ff
-    K, M, _, node_idx, free_dofs = assemble_global_matrices(assembly)
+    if system is None:
+        system = assemble_global_system(assembly)
+    K, M, _, node_idx, free_dofs = system.as_tuple()
     n_dof = K.shape[0]
     n_free = len(free_dofs)
 
@@ -464,11 +476,8 @@ def compute_structural_sensitivities(
             static_rel_disp_y_um=0.0,
         )
 
-    K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
-    M_ff = 0.5 * (M[np.ix_(free_dofs, free_dofs)] + M[np.ix_(free_dofs, free_dofs)].T)
-    m_diag = np.diag(M_ff)
-    m_floor = max(float(np.max(m_diag)) * 1e-12, 1e-12)
-    M_ff = M_ff + np.diag(np.where(m_diag < m_floor, m_floor, 0.0))
+    K_ff = system.reduced_stiffness()
+    M_ff = system.reduced_mass()
 
     # 1. Static primary solves (X & Y peak acceleration loads) + single-backsub adjoints
     th_idx = node_idx[assembly.toolhead_node_id]
@@ -487,7 +496,7 @@ def compute_structural_sensitivities(
     bed_idx = node_idx.get(assembly.bed_node_id) if assembly.bed_node_id else None
     has_bed = bed_idx is not None
 
-    solve_rhs = _build_factorized_solver(K, free_dofs)
+    solve_rhs = shared_factorized_solver(system)
     accel_m_s2 = assembly.spec.kinematics.max_accel_mm_s2 * 1e-3
 
     F_x, F_y, _, _ = build_inertial_load_vectors(
@@ -524,7 +533,7 @@ def compute_structural_sensitivities(
     has_panels = len(panel_indices) > 0 and len(non_panel_indices) > 0
     target_scan = 56 if has_panels else 24
 
-    eigvals, eigvecs = _solve_eigen_modes(K_ff, M_ff, target_scan=target_scan)
+    eigvals, eigvecs = _solve_eigen_modes(K_ff, M_ff, target_scan=target_scan, system=system)
     n_eig = len(eigvals)
     full_vecs = np.zeros((n_dof, n_eig), dtype=float)
     full_vecs[free_dofs, :] = eigvecs
@@ -727,39 +736,9 @@ def compute_structural_sensitivities(
     nmap = assembly.node_map
     raw_members: list[dict[str, Any]] = []
 
-    for mem in assembly.members:
-        i0 = node_idx[mem.start_id]
-        i1 = node_idx[mem.end_id]
-        p0 = assembly.nodes[i0].position_m
-        p1 = assembly.nodes[i1].position_m
-        r_mat, length = beam_rotation_matrix(p0, p1)
-        t_mat = transformation_12x12(r_mat)
-        bend_scale = 0.08 if mem.is_truss else 1.0
-        kappa_y, kappa_z = beam_shear_coefficients(mem)
-
-        k_loc = local_beam_stiffness(
-            e_pa=mem.material.youngs_modulus_pa,
-            g_pa=mem.material.effective_shear_modulus_pa,
-            area=mem.profile.area_m2,
-            iy=mem.profile.iy_m4,
-            iz=mem.profile.iz_m4,
-            j_torsion=mem.profile.j_m4,
-            length=length,
-            bending_scale=bend_scale,
-            kappa_shear_y=kappa_y,
-            kappa_shear_z=kappa_z,
-        )
-        m_loc = local_beam_mass(
-            rho=mem.material.density_kg_m3,
-            area=mem.profile.area_m2,
-            iy=mem.profile.iy_m4,
-            iz=mem.profile.iz_m4,
-            length=length,
-        )
-        Ke = t_mat.T @ k_loc @ t_mat
-        Me = t_mat.T @ m_loc @ t_mat
-
-        dofs = [6 * i0 + d for d in range(6)] + [6 * i1 + d for d in range(6)]
+    for m_i, mem in enumerate(assembly.members):
+        # Element blocks were computed once during global assembly (identical values)
+        dofs, Ke, Me, length = system.member_blocks[m_i]
 
         # Static adjoint derivatives
         dux = -float(lam_x[dofs] @ Ke @ u_x[dofs])
@@ -827,7 +806,7 @@ def compute_structural_sensitivities(
         for bay in ("left", "right", "rear", "top")
     }
 
-    for sh in assembly.shell_elements:
+    for sh_i, sh in enumerate(assembly.shell_elements):
         bay_key = (
             sh.bay
             if sh.bay in ("top_brace", "front_brace", "backbone")
@@ -835,19 +814,7 @@ def compute_structural_sensitivities(
         )
         if bay_key not in bay_acc:
             bay_acc[bay_key] = {k: 0.0 for k in bay_acc["left"]}
-        n_indices = [node_idx[nid] for nid in sh.node_ids]
-        coords = np.array([assembly.nodes[ni].position_m for ni in n_indices], dtype=float)
-        k_sh, m_sh, _ = mitc4_shell_matrices(
-            coords_3d=coords,
-            e_pa=sh.material.youngs_modulus_pa,
-            nu=sh.material.poisson_ratio,
-            thickness_m=sh.thickness_m,
-            areal_mass_kg_m2=sh.areal_mass_kg_m2,
-            d_bend_nm=sh.d_bend_nm,
-            g_transverse_h_n_m=sh.g_transverse_h_n_m,
-            e_mem_h_n_m=sh.e_mem_h_n_m,
-        )
-        dofs = [6 * ni + d for ni in n_indices for d in range(6)]
+        dofs, k_sh, m_sh = system.shell_blocks[sh_i]
         dux = -float(lam_x[dofs] @ k_sh @ u_x[dofs])
         duy = -float(lam_y[dofs] @ k_sh @ u_y[dofs])
         comp_raw = _axis_comp_share(dux, u_rel_x) + _axis_comp_share(duy, u_rel_y)
@@ -873,23 +840,14 @@ def compute_structural_sensitivities(
         b["n_elements"] += 1
 
     # Fastener & joint springs: fold panel bays into bay_acc, and non-panel springs into raw_members
-    for sp in assembly.fastener_springs:
+    for sp_i, sp in enumerate(assembly.fastener_springs):
         bay_raw = sp.bay
         bay_prefix = (
             bay_raw
             if bay_raw in ("top_brace", "front_brace", "backbone")
             else bay_raw.split("_")[0]
         )
-        i_s = node_idx[sp.shell_node_id]
-        i_f = node_idx[sp.frame_node_id]
-        k_sp = fastener_spring_matrices(
-            k_shear_n_m=sp.k_shear_n_m,
-            k_normal_n_m=sp.k_normal_n_m,
-            k_rot_nm_rad=sp.k_rot_nm_rad,
-            normal_vec=np.asarray(sp.normal_vec, dtype=float),
-            offset_vec=np.asarray(sp.offset_m, dtype=float),
-        )
-        dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
+        dofs, k_sp = system.spring_blocks[sp_i]
         dux = -float(lam_x[dofs] @ k_sp @ u_x[dofs])
         duy = -float(lam_y[dofs] @ k_sp @ u_y[dofs])
         comp_raw = _axis_comp_share(dux, u_rel_x) + _axis_comp_share(duy, u_rel_y)
@@ -949,10 +907,8 @@ def compute_structural_sensitivities(
 
     # 2-port Craig-Bampton CAD superelements: exact static adjoint & Fox-Kapoor derivatives
     internal_dof_cursor = 6 * len(assembly.nodes)
-    for se in getattr(assembly, "superelements", ()):
-        dofs_se, Ke_se, Me_se = superelement_element_matrices(
-            se, assembly, node_idx, internal_dof_cursor
-        )
+    for se_i, se in enumerate(getattr(assembly, "superelements", ())):
+        dofs_se, Ke_se, Me_se = system.superelement_blocks[se_i]
         n_m_se = max(0, int(getattr(se, "n_internal_modes", max(0, Ke_se.shape[0] - 12))))
         internal_dof_cursor += n_m_se
 

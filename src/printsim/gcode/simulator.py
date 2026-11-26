@@ -346,6 +346,8 @@ def simulate_gcode(
         modal.shaper_y, modal.shaper_graph_y, kin.input_shaper, fallback_f, fallback_zeta
     )
 
+    corner_smoothing_um_by_accel: dict[float, tuple[float, float]] = {}
+
     max_motor_accel = kinematics.max_safe_accel_motor_mm_s2
     belt_max_accel = kinematics.belt_max_accel_mm_s2
     max_flow = thermal.max_volumetric_flow_mm3_s
@@ -415,16 +417,21 @@ def simulate_gcode(
                 max_ringing = max(max_ringing, ringing_sev)
 
                 if corner_angles_deg[i] >= 15.0:
-                    sm_x_um = (
-                        get_shaper_smoothing(smooth_sh_x, accel=float(accels[i]), scv=scv) * 1e3
-                        if smooth_sh_x is not None
-                        else 0.0
-                    )
-                    sm_y_um = (
-                        get_shaper_smoothing(smooth_sh_y, accel=float(accels[i]), scv=scv) * 1e3
-                        if smooth_sh_y is not None
-                        else 0.0
-                    )
+                    # Corner smoothing depends only on (axis shaper, accel); G-code uses a handful
+                    # of distinct accelerations, so memoize instead of re-evaluating per corner.
+                    accel_i = float(accels[i])
+                    sm_pair = corner_smoothing_um_by_accel.get(accel_i)
+                    if sm_pair is None:
+                        sm_pair = (
+                            get_shaper_smoothing(smooth_sh_x, accel=accel_i, scv=scv) * 1e3
+                            if smooth_sh_x is not None
+                            else 0.0,
+                            get_shaper_smoothing(smooth_sh_y, accel=accel_i, scv=scv) * 1e3
+                            if smooth_sh_y is not None
+                            else 0.0,
+                        )
+                        corner_smoothing_um_by_accel[accel_i] = sm_pair
+                    sm_x_um, sm_y_um = sm_pair
                     corner_smooth_um = (wx * sm_x_um + wy * sm_y_um) / w_sum
                     max_smoothing_um = max(max_smoothing_um, corner_smooth_um)
 

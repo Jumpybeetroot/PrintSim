@@ -40,6 +40,15 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Evaluation Pipeline Performance
+
+`evaluate_printer` is the hot path for the Studio, optimizer, and the in-browser Pyodide engine (where pure-Python overhead is roughly 3–4× native). These invariants keep it fast as solver load grows:
+
+- **Assemble once, share read-only** (`fea/beam3d.py`): `assemble_global_system(assembly)` returns a `GlobalSystem` holding `K`, `M`, the gravity load, and the per-element blocks (`member_blocks`, `shell_blocks`, `spring_blocks`, `superelement_blocks`). `evaluate_printer` builds it once and passes `system=` to `solve_static_fea`, `solve_modal_fea`, and `compute_structural_sensitivities`, which previously each re-assembled the same matrices and re-derived the same element blocks (five element passes per evaluation). Derived quantities — symmetrized `K_ff`/`M_ff`, the sparse `K_ff` SuperLU factorization, and M-orthonormalized eigenpairs (reused by sensitivity when the solver path and mode count match) — are memoized on the system via `GlobalSystem.cached`. Shared arrays are frozen (`writeable = False`) so an in-place edit raises instead of corrupting another solver. Results are bit-identical to independent solves (`tests/test_shared_fe_system.py`); any new solver that needs global matrices or element blocks should take `system=` rather than call `assemble_global_matrices` again.
+- **Hoist per-call invariants in inner loops**: `prepare_shaper_smoothing` (bisection in `find_shaper_max_accel`), per-acceleration corner-smoothing memoization in `simulate_gcode`, and `cross3` for single 3-vector cross products avoid NumPy call overhead that dominates under WASM. Keep such rewrites exact (same operation order) so benchmarks and pre-baked results do not drift.
+- **Lean engine boot**: modules reachable from `wasm_dispatch.py` import `scipy.signal`, `scipy.optimize`, and `scipy.spatial` inside the functions that use them (ADXL CSV import/fit, SIMP filter); eager imports add ~1 s and ~350 modules to browser engine start (`tests/test_wasm_dispatch.py` guards this).
+- **Browser request path** (`web/src/workers/pyodideWorker.ts`, `web/src/utils/pagesApiBridge.ts`): the worker runs one Python request at a time from an explicit FIFO; an aborted `fetch` (`AbortSignal`) removes a still-queued request, and `App.tsx` aborts the previous `/api/simulate` whenever a newer one starts, so rapid edits cost one or two solves instead of one per edit. Byte-identical requests to deterministic routes (`/api/simulate`, `/api/bom`, `/api/verify/deep`, `/api/fea/solid-part`, `/api/superelement/bracket`) are answered from a bounded in-memory LRU. The PrintSim bundle download overlaps the Pyodide runtime download, and `micropip` loads only when an export needs an optional wheel.
+
 ## Roadmap to Full Industrial Fidelity
 
 ### Phase 1 — Implemented (v0.1 MVP)

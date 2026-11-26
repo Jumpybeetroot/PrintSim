@@ -9,7 +9,9 @@ from .adxl_calibration import (
     parse_adxl_csv,
 )
 from .beam3d import (
+    GlobalSystem,
     assemble_global_matrices,
+    assemble_global_system,
     beam_shear_coefficients,
     element_internal_forces,
     local_beam_mass,
@@ -103,7 +105,9 @@ __all__ = [
     "calibrate_printer_against_adxl",
     "fit_printer_to_adxl",
     "parse_adxl_csv",
+    "GlobalSystem",
     "assemble_global_matrices",
+    "assemble_global_system",
     "beam_shear_coefficients",
     "BedPlateFEAResult",
     "solve_bed_plate_fem",

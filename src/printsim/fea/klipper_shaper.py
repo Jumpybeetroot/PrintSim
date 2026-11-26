@@ -14,7 +14,7 @@ References & Prior Art:
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -447,6 +447,19 @@ def get_shaper_smoothing(
     scv: float = 5.0,
 ) -> float:
     """Compute Klipper trajectory smoothing (mm) for 90-deg and 180-deg corners."""
+    return prepare_shaper_smoothing(shaper)(accel, scv)
+
+
+def prepare_shaper_smoothing(
+    shaper: tuple[np.ndarray, np.ndarray],
+) -> Callable[[float, float], float]:
+    """Return ``smoothing_mm(accel, scv)`` for one shaper with accel-independent terms hoisted.
+
+    Bisection solvers and per-corner G-code checks evaluate the same shaper at many
+    accelerations; the pulse centroid, post-centroid mask, and 180-deg second moment do not depend
+    on ``accel``/``scv``, so they are computed once here. Results are bit-identical to evaluating
+    the full Klipper expression each call.
+    """
     amps, times = shaper
     amps_arr = np.asarray(amps, dtype=float)
     times_arr = np.asarray(times, dtype=float)
@@ -456,13 +469,16 @@ def get_shaper_smoothing(
 
     mask = times_arr >= ts
     dt_pos = times_arr[mask] - ts
-    offset_90 = (
-        math.sqrt(2.0)
-        * inv_d
-        * float(np.sum(amps_arr[mask] * (scv + 0.5 * accel * dt_pos) * dt_pos))
-    )
-    offset_180 = 0.5 * accel * inv_d * float(np.sum(amps_arr * ((times_arr - ts) ** 2)))
-    return max(offset_90, offset_180)
+    amps_pos = amps_arr[mask]
+    second_moment = float(np.sum(amps_arr * ((times_arr - ts) ** 2)))
+    sqrt2 = math.sqrt(2.0)
+
+    def _smoothing(accel: float = 5000.0, scv: float = 5.0) -> float:
+        offset_90 = sqrt2 * inv_d * float(np.sum(amps_pos * (scv + 0.5 * accel * dt_pos) * dt_pos))
+        offset_180 = 0.5 * accel * inv_d * second_moment
+        return max(offset_90, offset_180)
+
+    return _smoothing
 
 
 def find_shaper_max_accel(
@@ -476,17 +492,18 @@ def find_shaper_max_accel(
     if times_arr.size <= 1 or np.allclose(times_arr, times_arr[0]):
         return 0.0
 
-    if get_shaper_smoothing(shaper, accel=100.0, scv=scv) > target_smoothing:
+    smoothing = prepare_shaper_smoothing(shaper)
+    if smoothing(100.0, scv) > target_smoothing:
         return 0.0
 
     lo = 100.0
     hi = 10000.0
-    while get_shaper_smoothing(shaper, accel=hi, scv=scv) <= target_smoothing and hi < 1e7:
+    while smoothing(hi, scv) <= target_smoothing and hi < 1e7:
         hi *= 2.0
 
     for _ in range(40):
         mid = 0.5 * (lo + hi)
-        if get_shaper_smoothing(shaper, accel=mid, scv=scv) <= target_smoothing:
+        if smoothing(mid, scv) <= target_smoothing:
             lo = mid
         else:
             hi = mid

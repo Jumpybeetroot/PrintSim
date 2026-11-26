@@ -7,6 +7,7 @@ import math
 import time
 from typing import Any
 
+from printsim.fea.beam3d import assemble_global_system
 from printsim.fea.bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from printsim.fea.components import ThermalStructuralReport, compute_thermal_structural_report
 from printsim.fea.klipper_shaper import biquad_notch_params_from_db_q
@@ -1102,10 +1103,14 @@ def evaluate_printer(
         panel_mesh_n=panel_mesh_n,
     )
     collision = check_frame_clearance(assembly)
-    static_fea = solve_static_fea(assembly, accel_mm_s2=accel_override_mm_s2)
+    # Assemble K/M and element blocks once; static, modal, and sensitivity solves share them
+    # (plus the K_ff factorization and eigenpairs) instead of rebuilding identical matrices.
+    fe_system = assemble_global_system(assembly)
+    static_fea = solve_static_fea(assembly, accel_mm_s2=accel_override_mm_s2, system=fe_system)
     modal_fea = solve_modal_fea(
         assembly,
         include_adxl_diagnostic=include_advanced_analysis,
+        system=fe_system,
     )
     kinematics = analyze_kinematics(assembly)
     thermal = simulate_hotend_thermal(spec, filament_id=filament_id)
@@ -1137,7 +1142,9 @@ def evaluate_printer(
             assembly, modal_fea, drive_cfg=drive_cfg
         )
         rcsa = analyze_toolhead_rcsa(assembly, modal_fea)
-        sensitivity = compute_structural_sensitivities(assembly, static_fea, modal_fea)
+        sensitivity = compute_structural_sensitivities(
+            assembly, static_fea, modal_fea, system=fe_system
+        )
         bed_plate_fea = solve_bed_plate_fem(spec, mesh_n=max(4, int(bed_mesh_n)))
 
     motion_limits = _compute_motion_limits(spec, modal_fea, kinematics, thermal)
