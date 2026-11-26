@@ -3670,7 +3670,9 @@ export const PrinterViewport: React.FC<Props> = ({
           ? activeToolheadSeSummary.port1_mm
           : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "microwaved_bowden"
             ? ([0, -9.76, 30.5] as [number, number, number])
-            : null;
+            : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "microwaved_bowden_chube"
+              ? ([0, -12.76, 27.5] as [number, number, number])
+              : null;
       const cadPort1Three = cadToolheadPort1Mm
         ? new THREE.Vector3(
             cadToolheadPort1Mm[0] * SCALE,

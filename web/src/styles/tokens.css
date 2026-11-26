@@ -31,6 +31,7 @@
   --red-text: #fca5a5;
   --purple: #a855f7;
   --purple-text: #d4b8fd;
+  --kofi: #ff5e5b;
 
   /* Channel triplets for tints: rgb(var(--accent-rgb) / 0.12) */
   --accent-rgb: 56 189 248;
@@ -39,6 +40,7 @@
   --amber-rgb: 245 158 11;
   --red-rgb: 239 68 68;
   --purple-rgb: 168 85 247;
+  --kofi-rgb: 255 94 91;
   --muted-rgb: 140 155 179;
   --border-rgb: 37 47 66;
   --panel-rgb: 18 24 34;

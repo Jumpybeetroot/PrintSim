@@ -4117,7 +4117,7 @@ export const MetricsPanel: React.FC<Props> = ({
                         <span>Motor Heat</span>
                         <span
                           className={`metric-val ${
-                            kin.motor_overcurrent_risk
+                            kin.motor_overcurrent_risk || kin.motor_thermal_risk
                               ? "tag-bad"
                               : kin.motor_heat_w_each > 8.5
                                 ? "tag-warn"
@@ -4125,6 +4125,12 @@ export const MetricsPanel: React.FC<Props> = ({
                           }`}
                         >
                           {kin.motor_heat_w_each.toFixed(1)} W/motor
+                          {kin.motor_est_temp_c != null && (
+                            <span style={{ color: "var(--muted)", fontWeight: 500, fontSize: 11 }}>
+                              {" "}
+                              (~{Math.round(kin.motor_est_temp_c)}°C / {Math.round(kin.motor_max_winding_temp_c ?? 130)}°C)
+                            </span>
+                          )}
                         </span>
                       </div>
                     )}
@@ -4222,6 +4228,7 @@ export const MetricsPanel: React.FC<Props> = ({
                       </div>
                     )}
                     {(kin.motor_overcurrent_risk ||
+                      kin.motor_thermal_risk ||
                       kin.belt_overtension_risk ||
                       kin.shaft_bending_risk ||
                       kin.bracket_creep_risk ||
@@ -4283,6 +4290,13 @@ export const MetricsPanel: React.FC<Props> = ({
                         {kin.motor_overcurrent_risk && (
                           <div className="warning-pill bad">
                             ⚠ Motor run current exceeds rated Amps — overheating &amp; demagnetization risk
+                          </div>
+                        )}
+                        {kin.motor_thermal_risk && !kin.motor_overcurrent_risk && (
+                          <div className="warning-pill bad">
+                            ⚠ Motor winding temp (~{Math.round(kin.motor_est_temp_c ?? 0)}°C) approaches Class{" "}
+                            {sim.spec.kinematics.xy_stepper.insulation_class ?? "B"} (
+                            {Math.round(kin.motor_max_winding_temp_c ?? 130)}°C) limit — reduce Amps or use a Class H motor
                           </div>
                         )}
                         {kin.belt_overtension_risk && (

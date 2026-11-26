@@ -587,7 +587,7 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
     : 120;
 
   const commitBeltTension = (rawVal: number) => {
-    const val = Math.max(15, Math.min(beltTensionMax, Math.round(rawVal)));
+    const val = Math.max(5, Math.min(beltTensionMax, Math.round(rawVal)));
     if (tensionTimerRef.current != null) {
       window.clearTimeout(tensionTimerRef.current);
       tensionTimerRef.current = null;
@@ -640,8 +640,13 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
     ).toFixed(1)
   );
 
+  const runCurrentMaxA = Math.max(
+    3.2,
+    Math.min(8.0, Math.ceil((spec.kinematics.xy_stepper.rated_current_a || 2.5) * 1.25 * 10) / 10)
+  );
+
   const commitRunCurrent = (rawVal: number) => {
-    const val = Math.max(0.4, Math.min(3.2, Math.round(rawVal * 10) / 10));
+    const val = Math.max(0.4, Math.min(runCurrentMaxA, Math.round(rawVal * 10) / 10));
     if (currentTimerRef.current != null) {
       window.clearTimeout(currentTimerRef.current);
       currentTimerRef.current = null;
@@ -1317,10 +1322,10 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                 <div className="tension-control-row">
                   <input id="dp-belt-tension-n-6"
                     type="range"
-                    min={15}
+                    min={5}
                     max={beltTensionMax}
                     step={1}
-                    value={Math.max(15, Math.min(beltTensionMax, tensionDraft))}
+                    value={Math.max(5, Math.min(beltTensionMax, tensionDraft))}
                     onChange={(e) => handleTensionSliderChange(Number(e.target.value))}
                     onPointerUp={() => commitBeltTension(tensionDraft)}
                     onKeyUp={() => commitBeltTension(tensionDraft)}
@@ -1328,7 +1333,7 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                   <input aria-label="Belt Tension (N) value"
                     type="number"
                     className="tension-num-input"
-                    min={15}
+                    min={5}
                     max={beltTensionMax}
                     step={1}
                     value={tensionDraft}
@@ -1336,7 +1341,7 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                       const v = Number(e.target.value);
                       if (!Number.isFinite(v)) return;
                       setTensionDraft(v);
-                      if (v >= 15 && v <= beltTensionMax) {
+                      if (v >= 5 && v <= beltTensionMax) {
                         commitBeltTension(v);
                       }
                     }}
@@ -1412,6 +1417,10 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                           d.kinematics.xy_stepper.rotor_inertia_kg_m2 = chosen.rotor_inertia_kg_m2;
                           d.kinematics.xy_stepper.motor_mass_g = chosen.motor_mass_g;
                           d.kinematics.xy_stepper.steps_per_rev = chosen.steps_per_rev;
+                          d.kinematics.xy_stepper.nema_size = chosen.nema_size ?? 17;
+                          d.kinematics.xy_stepper.body_length_mm = chosen.body_length_mm ?? 48;
+                          d.kinematics.xy_stepper.insulation_class = chosen.insulation_class ?? "B";
+                          d.kinematics.xy_stepper.has_encoder = Boolean(chosen.has_encoder);
                         },
                         `XY Motor: ${prevName} → ${nextName}`
                       );
@@ -1429,11 +1438,23 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                   <div className="motor-spec-strip">
                     <span>{xyStepper.holding_torque_nm.toFixed(2)} N·m</span>
                     <span>•</span>
-                    <span>{xyStepper.inductance_mh.toFixed(1)} mH</span>
+                    <span>{xyStepper.inductance_mh.toFixed(2).replace(/0$/, "")} mH</span>
                     <span>•</span>
-                    <span>{ratedCurrentA.toFixed(1)}A rated</span>
+                    <span>{phaseResistanceOhm.toFixed(2).replace(/0$/, "")} Ω</span>
+                    <span>•</span>
+                    <span>{ratedCurrentA.toFixed(1)}A</span>
+                    <span>•</span>
+                    <span>{Math.round((xyStepper.rotor_inertia_kg_m2 ?? 8.2e-6) * 1e7)} g·cm²</span>
                     <span>•</span>
                     <span>{xyStepper.steps_per_rev === 400 ? "0.9°" : "1.8°"}</span>
+                    <span>•</span>
+                    <span>Class {xyStepper.insulation_class ?? "B"}</span>
+                    {xyStepper.has_encoder && (
+                      <>
+                        <span>•</span>
+                        <span>1000 PPR</span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1459,9 +1480,9 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                     <input id="dp-run-current-amps-max-a-8"
                       type="range"
                       min={0.4}
-                      max={3.2}
+                      max={runCurrentMaxA}
                       step={0.1}
-                      value={Math.max(0.4, Math.min(3.2, runCurrentDraft))}
+                      value={Math.max(0.4, Math.min(runCurrentMaxA, runCurrentDraft))}
                       onChange={(e) => handleRunCurrentSliderChange(Number(e.target.value))}
                       onPointerUp={() => commitRunCurrent(runCurrentDraft)}
                       onKeyUp={() => commitRunCurrent(runCurrentDraft)}
@@ -1470,14 +1491,14 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                       type="number"
                       className="tension-num-input"
                       min={0.4}
-                      max={3.2}
+                      max={runCurrentMaxA}
                       step={0.1}
                       value={runCurrentDraft}
                       onChange={(e) => {
                         const v = Number(e.target.value);
                         if (!Number.isFinite(v)) return;
                         setRunCurrentDraft(v);
-                        if (v >= 0.4 && v <= 3.2) {
+                        if (v >= 0.4 && v <= runCurrentMaxA) {
                           commitRunCurrent(v);
                         }
                       }}

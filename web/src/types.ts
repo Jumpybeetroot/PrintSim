@@ -46,6 +46,11 @@ export interface StepperCatalogItem {
   rotor_inertia_kg_m2: number;
   motor_mass_g: number;
   steps_per_rev: number;
+  nema_size?: number;
+  body_length_mm?: number;
+  insulation_class?: "B" | "F" | "H";
+  has_encoder?: boolean;
+  unit_cost_usd?: number;
 }
 
 export type ExtrusionFillingType =
@@ -898,6 +903,10 @@ export interface PrinterSpecData {
       rotor_inertia_kg_m2: number;
       motor_mass_g: number;
       steps_per_rev: number;
+      nema_size?: number;
+      body_length_mm?: number;
+      insulation_class?: "B" | "F" | "H";
+      has_encoder?: boolean;
     };
   };
   toolhead: {
@@ -1583,6 +1592,9 @@ export interface KinematicsData {
   drive_stiffness_n_per_mm?: number;
   motor_voltage_efficiency_pct?: number;
   motor_heat_w_each?: number;
+  motor_est_temp_c?: number;
+  motor_max_winding_temp_c?: number;
+  motor_thermal_risk?: boolean;
   motor_overcurrent_risk?: boolean;
   tooth_mesh_stiffness_n_per_mm?: number;
   idler_shaft_stiffness_n_per_mm?: number;

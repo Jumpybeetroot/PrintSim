@@ -162,7 +162,7 @@ const FALLBACK_HOTEND_PRESETS: HotendPresetItem[] = [
     heatbreak_wall_mm: 0.25,
     heatbreak_id_mm: 2.0,
     heatsink_thermal_resistance_k_w: 2.6,
-    structural_stiffness_n_per_mm: 2600,
+    structural_stiffness_n_per_mm: 2975,
     max_temp_c: 500,
   },
   {
@@ -182,7 +182,7 @@ const FALLBACK_HOTEND_PRESETS: HotendPresetItem[] = [
     heatbreak_wall_mm: 0.25,
     heatbreak_id_mm: 2.0,
     heatsink_thermal_resistance_k_w: 2.5,
-    structural_stiffness_n_per_mm: 2250,
+    structural_stiffness_n_per_mm: 560,
     max_temp_c: 500,
   },
   {
@@ -202,7 +202,7 @@ const FALLBACK_HOTEND_PRESETS: HotendPresetItem[] = [
     heatbreak_wall_mm: 0.25,
     heatbreak_id_mm: 2.0,
     heatsink_thermal_resistance_k_w: 2.2,
-    structural_stiffness_n_per_mm: 5670,
+    structural_stiffness_n_per_mm: 815,
     max_temp_c: 500,
   },
   {
