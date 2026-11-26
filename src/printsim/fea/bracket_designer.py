@@ -8,6 +8,7 @@ and an exact OpenCASCADE B-Rep Solid via ``build123d`` (for conformal Tet10 FEA 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import tempfile
 from pathlib import Path
 from typing import Any, Literal
@@ -157,7 +158,7 @@ def _bracket_layout_dims(
 
 
 def _choose_voxel_pitch_mm(Lx: float, Ly: float, Lz: float) -> float:
-    """Choose deterministic cubic voxel size h_mm purely from bounding-box dims (~0.08-0.18s solve)."""
+    """Choose deterministic target brick size h_mm purely from bounding-box dims (~0.08-0.18s solve)."""
     max_dim = max(Lx, Ly, Lz)
     h_box = ((Lx * Ly * Lz) / 4200.0) ** (1.0 / 3.0)
     h_mm = max(max_dim / 20.0, h_box)
@@ -168,44 +169,136 @@ def _choose_voxel_pitch_mm(Lx: float, Ly: float, Lz: float) -> float:
     return float(max(1.25, h_mm))
 
 
-def _build_bracket_voxel_grid(
+def _partition_axis_sizes_mm(
+    total_mm: float,
+    breakpoints_mm: Sequence[float],
+    h_target_mm: float,
+    min_per_segment: int = 1,
+    min_first_segment: int | None = None,
+) -> np.ndarray:
+    """Subdivide [0, total_mm] cleanly at exact interior feature planes with uniform pitches per span."""
+    pts: list[float] = [0.0]
+    for bp in sorted(float(v) for v in breakpoints_mm):
+        if 1e-6 < bp < total_mm - 1e-6 and bp - pts[-1] > 1e-6:
+            pts.append(bp)
+    pts.append(float(total_mm))
+
+    sizes: list[float] = []
+    for seg_idx, (a, b) in enumerate(zip(pts[:-1], pts[1:])):
+        span = b - a
+        min_seg = min_first_segment if (seg_idx == 0 and min_first_segment is not None) else min_per_segment
+        n = max(int(min_seg), int(round(span / max(h_target_mm, 1e-6))))
+        sizes.extend([span / n] * n)
+    return np.asarray(sizes, dtype=float)
+
+
+def _rectilinear_grid_to_trimesh(
+    grid: np.ndarray,
+    dx_mm: np.ndarray,
+    dy_mm: np.ndarray,
+    dz_mm: np.ndarray,
+):
+    """Build a watertight Trimesh with exact rectilinear vertex coordinates (dx_mm, dy_mm, dz_mm)."""
+    mesh = voxel_grid_to_trimesh(grid, voxel_size_mm=(1.0, 1.0, 1.0), smooth_iterations=0)
+    x_edges = np.concatenate([[0.0], np.cumsum(dx_mm)])
+    y_edges = np.concatenate([[0.0], np.cumsum(dy_mm)])
+    z_edges = np.concatenate([[0.0], np.cumsum(dz_mm)])
+    idx = np.rint(mesh.vertices).astype(int)
+    mesh.vertices = np.column_stack(
+        [x_edges[idx[:, 0]], y_edges[idx[:, 1]], z_edges[idx[:, 2]]]
+    )
+    return mesh
+
+
+def _bracket_axis_spacings_mm(
+    bracket_type: str,
+    dims: dict[str, float],
+    h_target_mm: float,
+    min_wall_cells: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Compute feature-aligned (dx, dy, dz) spacing arrays (mm) and realized wall thickness."""
+    Lx, Ly, Lz = dims["Lx"], dims["Ly"], dims["Lz"]
+    if bracket_type == "corner_gusset":
+        w = dims["w"]
+        r_eff = dims["r_eff"]
+        x_bps = [w, dims["px_end"]] if r_eff > 0.0 else [w]
+        y_bps = [w, dims["py_end"]] if r_eff > 0.0 else [w]
+        z_bps = [0.5 * (Lz - r_eff), 0.5 * (Lz + r_eff)] if (0.0 < r_eff < Lz) else []
+        min_wall = min_wall_cells if w >= 2.0 else 1
+        dx = _partition_axis_sizes_mm(Lx, x_bps, h_target_mm, min_per_segment=1, min_first_segment=min_wall)
+        dy = _partition_axis_sizes_mm(Ly, y_bps, h_target_mm, min_per_segment=1, min_first_segment=min_wall)
+        dz = _partition_axis_sizes_mm(Lz, z_bps, h_target_mm, min_per_segment=1)
+        return dx, dy, dz, float(w)
+
+    if bracket_type == "motor_mount":
+        plate_t = dims["plate_t"]
+        flange_t = dims["flange_t"]
+        rib_t = dims["rib_t"]
+        x_bps = [rib_t, Lx - rib_t] if rib_t > 0.0 else []
+        y_bps = [flange_t]
+        z_bps = [0.5 * (Lz - plate_t), 0.5 * (Lz + plate_t)] if plate_t < Lz else []
+        min_flange = min_wall_cells if flange_t >= 2.0 else 1
+        dx = _partition_axis_sizes_mm(Lx, x_bps, h_target_mm, min_per_segment=1)
+        dy = _partition_axis_sizes_mm(Ly, y_bps, h_target_mm, min_per_segment=1, min_first_segment=min_flange)
+        dz = _partition_axis_sizes_mm(Lz, z_bps, h_target_mm, min_per_segment=1)
+        return dx, dy, dz, float(flange_t)
+
+    if bracket_type == "xy_joint_l_bracket":
+        w = dims["w"]
+        r_eff = dims["r_eff"]
+        x_bps = [w, dims["px_end"]] if r_eff > 0.0 else [w]
+        y_bps = [w, dims["py_end"]] if r_eff > 0.0 else [w]
+        z_bps = [r_eff] if (0.0 < r_eff < Lz) else []
+        min_wall = min_wall_cells if w >= 2.0 else 1
+        dx = _partition_axis_sizes_mm(Lx, x_bps, h_target_mm, min_per_segment=1, min_first_segment=min_wall)
+        dy = _partition_axis_sizes_mm(Ly, y_bps, h_target_mm, min_per_segment=1, min_first_segment=min_wall)
+        dz = _partition_axis_sizes_mm(Lz, z_bps, h_target_mm, min_per_segment=1)
+        return dx, dy, dz, float(w)
+
+    raise ValueError(f"Unknown bracket_type '{bracket_type}'")
+
+
+def _build_bracket_rectilinear_grid(
     bracket_type: BracketType,
     dims: dict[str, float],
-) -> tuple[np.ndarray, tuple[float, float, float], FaceName, FaceName]:
-    """Construct exact 3D boolean voxel occupancy grid + ((hx, hy, hz)_mm, fixed_face, load_face)."""
+) -> tuple[
+    np.ndarray,
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    FaceName,
+    FaceName,
+    float,
+]:
+    """Construct feature-aligned 3D boolean grid + exact per-axis brick sizes (dx, dy, dz) in mm.
+
+    Grid planes are placed directly on wall, flange, rib, and outer dimensions so changing
+    ``wall_thickness_mm`` never suffers voxel quantization plateaus or staircase jumps.
+    """
     Lx, Ly, Lz = dims["Lx"], dims["Ly"], dims["Lz"]
     h_mm = _choose_voxel_pitch_mm(Lx, Ly, Lz)
-
-    nx = max(6, int(round(Lx / h_mm)))
-    ny = max(6, int(round(Ly / h_mm)))
-    nz = max(4, int(round(Lz / h_mm)))
-    # Exact rectangular brick dimensions (hx, hy, hz) matching [0..Lx] x [0..Ly] x [0..Lz]
-    hx = Lx / nx
-    hy = Ly / ny
-    hz = Lz / nz
-    xc = (np.arange(nx, dtype=float) + 0.5) * hx
-    yc = (np.arange(ny, dtype=float) + 0.5) * hy
-    zc = (np.arange(nz, dtype=float) + 0.5) * hz
-    X, Y, Z = np.meshgrid(xc, yc, zc, indexing="ij")
-
-    grid = np.zeros((nx, ny, nz), dtype=bool)
     fixed_face: FaceName = "min_y"
     load_face: FaceName = "max_y"
+    dx, dy, dz, realized_w = _bracket_axis_spacings_mm(
+        bracket_type, dims, h_mm, min_wall_cells=2
+    )
+
+    nx, ny, nz = len(dx), len(dy), len(dz)
+    xc = np.cumsum(dx) - 0.5 * dx
+    yc = np.cumsum(dy) - 0.5 * dy
+    zc = np.cumsum(dz) - 0.5 * dz
+    X, Y, Z = np.meshgrid(xc, yc, zc, indexing="ij")
+    grid = np.zeros((nx, ny, nz), dtype=bool)
 
     if bracket_type == "corner_gusset":
         w = dims["w"]
-        w_eff = max(w, hx * 1.05, hy * 1.05)
-        grid |= Y <= w_eff
-        grid |= X <= w_eff
+        grid |= Y <= w
+        grid |= X <= w
 
-        # Concave root fillet at (w_eff, w_eff)
         rf = dims["fillet_eff"]
-        if rf > 0.25 * max(hx, hy):
-            in_fillet_box = (X >= w_eff) & (X <= w_eff + rf) & (Y >= w_eff) & (Y <= w_eff + rf)
-            outside_arc = ((w_eff + rf - X) ** 2 + (w_eff + rf - Y) ** 2) >= (rf**2)
+        if rf > 0.25 * max(float(dx.min()), float(dy.min())):
+            in_fillet_box = (X >= w) & (X <= w + rf) & (Y >= w) & (Y <= w + rf)
+            outside_arc = ((w + rf - X) ** 2 + (w + rf - Y) ** 2) >= (rf**2)
             grid |= in_fillet_box & outside_arc
 
-        # Triangular diagonal stiffening rib centered at Z = Lz/2
         r_eff = dims["r_eff"]
         if r_eff > 0.0:
             p0 = dims["p0"]
@@ -214,44 +307,37 @@ def _build_bracket_voxel_grid(
             tri_x = max(px_end - p0, 1e-6)
             tri_y = max(py_end - p0, 1e-6)
             in_tri = (X >= p0) & (Y >= p0) & (((X - p0) / tri_x + (Y - p0) / tri_y) <= 1.0)
-            half_z = max(0.5 * r_eff, 0.55 * hz)
-            in_z = np.abs(Z - 0.5 * Lz) <= half_z
+            in_z = np.abs(Z - 0.5 * Lz) <= 0.5 * r_eff
             grid |= in_tri & in_z
 
-        # Bolt clearance holes on arms
         d_eff = dims["d_eff"]
         if d_eff > 0.5:
             rad = 0.5 * d_eff
             z_mid = 0.5 * Lz
-            hole_x_arm = (Y <= w_eff) & (((X - dims["hole_x"]) ** 2 + (Z - z_mid) ** 2) <= rad**2)
-            hole_y_arm = (X <= w_eff) & (((Y - dims["hole_y"]) ** 2 + (Z - z_mid) ** 2) <= rad**2)
+            hole_x_arm = (Y <= w) & (((X - dims["hole_x"]) ** 2 + (Z - z_mid) ** 2) <= rad**2)
+            hole_y_arm = (X <= w) & (((Y - dims["hole_y"]) ** 2 + (Z - z_mid) ** 2) <= rad**2)
             grid &= ~(hole_x_arm | hole_y_arm)
 
     elif bracket_type == "motor_mount":
-        plate_t = max(dims["plate_t"], hz * 1.05)
-        flange_t = max(dims["flange_t"], hy * 1.05)
+        plate_t = dims["plate_t"]
+        flange_t = dims["flange_t"]
         rib_t = dims["rib_t"]
 
-        # Mid-plane motor deck (symmetric shear center -> zero twist under lateral X load) & rear flange
         grid |= np.abs(Z - 0.5 * Lz) <= 0.5 * plate_t
         grid |= Y <= flange_t
 
-        # Symmetric upper & lower triangular side gussets (when rib_thickness_mm > 0)
         if rib_t > 0.0:
-            rib_eff = max(rib_t, hx * 1.05)
             y0 = 0.5 * flange_t
             half_span_z = 0.5 * Lz - (0.5 * Lz - 0.5 * plate_t) * np.clip(
                 (Y - y0) / max(Ly - y0, 1e-6), 0.0, 1.0
             )
             in_gusset_profile = (Y >= y0) & (np.abs(Z - 0.5 * Lz) <= half_span_z)
-            grid |= ((X <= rib_eff) | (X >= (Lx - rib_eff))) & in_gusset_profile
+            grid |= ((X <= rib_t) | (X >= (Lx - rib_t))) & in_gusset_profile
 
-        # Central NEMA17 pilot bore cutout through motor deck
         pilot_r = dims["pilot_r"]
         cx, cy = dims["cx"], dims["cy"]
         grid &= ~(((X - cx) ** 2 + (Y - cy) ** 2) <= pilot_r**2)
 
-        # Rear M5 mounting bolt holes (symmetric about Z = Lz/2)
         d_eff = dims["d_eff"]
         if d_eff > 0.5:
             rad = 0.5 * d_eff
@@ -261,17 +347,15 @@ def _build_bracket_voxel_grid(
 
     else:  # xy_joint_l_bracket
         w = dims["w"]
-        w_eff = max(w, hx * 1.05, hy * 1.05)
-        grid |= Y <= w_eff
-        grid |= X <= w_eff
+        grid |= Y <= w
+        grid |= X <= w
 
         rf = dims["fillet_eff"]
-        if rf > 0.25 * max(hx, hy):
-            in_fillet_box = (X >= w_eff) & (X <= w_eff + rf) & (Y >= w_eff) & (Y <= w_eff + rf)
-            outside_arc = ((w_eff + rf - X) ** 2 + (w_eff + rf - Y) ** 2) >= (rf**2)
+        if rf > 0.25 * max(float(dx.min()), float(dy.min())):
+            in_fillet_box = (X >= w) & (X <= w + rf) & (Y >= w) & (Y <= w + rf)
+            outside_arc = ((w + rf - X) ** 2 + (w + rf - Y) ** 2) >= (rf**2)
             grid |= in_fillet_box & outside_arc
 
-        # Bottom-flush triangular gusset web (ideal flat print-bed orientation)
         r_eff = dims["r_eff"]
         if r_eff > 0.0:
             p0 = dims["p0"]
@@ -280,18 +364,33 @@ def _build_bracket_voxel_grid(
             tri_x = max(px_end - p0, 1e-6)
             tri_y = max(py_end - p0, 1e-6)
             in_tri = (X >= p0) & (Y >= p0) & (((X - p0) / tri_x + (Y - p0) / tri_y) <= 1.0)
-            z_rib = max(r_eff, hz * 1.05)
-            grid |= in_tri & (Z <= z_rib)
+            grid |= in_tri & (Z <= r_eff)
 
         d_eff = dims["d_eff"]
         if d_eff > 0.5:
             rad = 0.5 * d_eff
             z_mid = 0.5 * Lz
             for bx in (dims["hx1"], dims["hx2"]):
-                grid &= ~((Y <= w_eff) & (((X - bx) ** 2 + (Z - z_mid) ** 2) <= rad**2))
-            grid &= ~((X <= w_eff) & (((Y - dims["hy"]) ** 2 + (Z - z_mid) ** 2) <= rad**2))
+                grid &= ~((Y <= w) & (((X - bx) ** 2 + (Z - z_mid) ** 2) <= rad**2))
+            grid &= ~((X <= w) & (((Y - dims["hy"]) ** 2 + (Z - z_mid) ** 2) <= rad**2))
 
-    return grid, (float(hx), float(hy), float(hz)), fixed_face, load_face
+    return grid, (dx, dy, dz), fixed_face, load_face, realized_w
+
+
+def _build_bracket_voxel_grid(
+    bracket_type: BracketType,
+    dims: dict[str, float],
+) -> tuple[np.ndarray, tuple[float, float, float], FaceName, FaceName]:
+    """Construct feature-aligned 3D boolean grid + mean brick sizes ((hx, hy, hz)_mm, fixed_face, load_face)."""
+    grid, (dx, dy, dz), fixed_face, load_face, _ = _build_bracket_rectilinear_grid(
+        bracket_type, dims
+    )
+    return (
+        grid,
+        (float(np.mean(dx)), float(np.mean(dy)), float(np.mean(dz))),
+        fixed_face,
+        load_face,
+    )
 
 
 def _build_parametric_bracket_brep(
@@ -510,7 +609,6 @@ def design_and_evaluate_bracket(
     mat = get_material(material_id)
     is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
     f_vec = (float(force_n[0]), float(force_n[1]), float(force_n[2]))
-    f_mag = float(np.linalg.norm(np.asarray(f_vec, dtype=float)))
 
     dims = _bracket_layout_dims(
         bracket_type=bracket_type,
@@ -544,7 +642,8 @@ def design_and_evaluate_bracket(
                 step_bytes = tmp_step.read_bytes()
 
     voxel_grid: np.ndarray | None = None
-    voxel_h_mm: float | tuple[float, float, float] = 0.0
+    voxel_cell_sizes_mm: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    realized_wall_mm = float(dims.get("w", dims.get("flange_t", wall_thickness_mm)))
 
     if engine == "tet10":
         assert brep_tuple is not None and step_bytes is not None
@@ -562,27 +661,37 @@ def design_and_evaluate_bracket(
         mass_g = float(tet_res.mass_g)
         volume_cm3 = float(tet_res.volume_mm3) * 1e-3
         max_disp_um = float(tet_res.max_displacement_um)
+        stiffness_n_per_mm = float(tet_res.stiffness_n_per_mm)
         max_vm_mpa = float(tet_res.max_von_mises_mpa)
         safety_factor = float(tet_res.safety_factor)
         failure_mode = str(tet_res.failure_mode)
         num_elements = int(tet_res.num_elements)
         num_dofs = int(tet_res.num_dofs)
     else:
-        voxel_grid, voxel_h_mm, vox_fixed, vox_load = _build_bracket_voxel_grid(bracket_type, dims)
+        voxel_grid, voxel_cell_sizes_mm, vox_fixed, vox_load, realized_wall_mm = (
+            _build_bracket_rectilinear_grid(bracket_type, dims)
+        )
+        mean_h_mm = (
+            float(np.mean(voxel_cell_sizes_mm[0])),
+            float(np.mean(voxel_cell_sizes_mm[1])),
+            float(np.mean(voxel_cell_sizes_mm[2])),
+        )
         hex_res = solve_solid_voxel_fea(
             grid=voxel_grid,
-            voxel_size_mm=voxel_h_mm,
+            voxel_size_mm=mean_h_mm,
             material_id=material_id,
             fixed_face=vox_fixed,
             load_face=vox_load,
             force_n=f_vec,
             part_name=f"Parametric {bracket_type.replace('_', ' ').title()}",
             fdm_anisotropic=is_fdm,
+            cell_sizes_mm=voxel_cell_sizes_mm,
         )
         mass_g = float(hex_res.mass_g)
         # Convert mass to exact material volume (cm^3) -> mass_g / (density_kg_m3 * 1e-3)
         volume_cm3 = mass_g / max(mat.density_kg_m3 * 1e-3, 1e-9)
         max_disp_um = float(hex_res.max_displacement_um)
+        stiffness_n_per_mm = float(hex_res.stiffness_n_per_mm)
         max_vm_mpa = float(hex_res.max_von_mises_mpa)
         safety_factor = float(hex_res.safety_factor)
         failure_mode = str(hex_res.failure_mode)
@@ -603,12 +712,11 @@ def design_and_evaluate_bracket(
                 ascii_format=False,
             )
         else:
-            assert voxel_grid is not None
-            mesh = voxel_grid_to_trimesh(voxel_grid, voxel_size_mm=voxel_h_mm, smooth_iterations=0)
+            assert voxel_grid is not None and voxel_cell_sizes_mm is not None
+            mesh = _rectilinear_grid_to_trimesh(voxel_grid, *voxel_cell_sizes_mm)
             mesh.export(str(stl_out))
         exported_stl = str(stl_out.resolve())
 
-    stiffness_n_per_mm = f_mag / max(max_disp_um * 1e-3, 1e-9)
     specific_stiffness = stiffness_n_per_mm / max(mass_g, 0.1)
 
     return {
@@ -621,6 +729,7 @@ def design_and_evaluate_bracket(
             "bolt_hole_mm": round(float(bolt_hole_mm), 2),
             "fillet_mm": round(float(fillet_mm), 2),
         },
+        "realized_wall_thickness_mm": round(realized_wall_mm, 3),
         "material_id": material_id,
         "engine": engine,
         "mass_g": round(mass_g, 2),

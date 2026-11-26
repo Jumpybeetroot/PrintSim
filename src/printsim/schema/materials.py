@@ -21,7 +21,7 @@ class MaterialSpec(BaseModel):
     yield_strength_pa: float = Field(..., gt=0, description="Yield / ultimate working stress (Pa)")
     thermal_conductivity_w_mk: float = Field(..., gt=0, description="Thermal conductivity k (W/m·K)")
     specific_heat_j_kgk: float = Field(..., gt=0, description="Specific heat capacity cp (J/kg·K)")
-    thermal_expansion_1_k: float = Field(1e-5, ge=0, description="CTE alpha (1/K)")
+    thermal_expansion_1_k: float = Field(1e-5, ge=-10e-6, description="CTE alpha (1/K)")
     damping_ratio: float = Field(0.015, gt=0, lt=0.5, description="Structural damping ratio zeta")
     cost_per_kg_usd: float = Field(10.0, ge=0, description="Estimated raw material cost (USD/kg)")
     color_hex: str = "#8a95a5"
@@ -37,6 +37,12 @@ class MaterialSpec(BaseModel):
     e_rubbery_ratio: float = Field(
         0.05, gt=0, le=1.0, description="Post-Tg rubbery plateau modulus ratio E_r / E_g"
     )
+    shear_rubbery_ratio: float | None = Field(
+        None,
+        gt=0,
+        le=1.0,
+        description="Optional post-Tg shear modulus plateau G_r / G_g for continuous-fiber composites",
+    )
     mahieux_m: float = Field(
         14.0, gt=1.0, le=40.0, description="Mahieux-Reifsnider Weibull transition exponent m"
     )
@@ -48,21 +54,15 @@ class MaterialSpec(BaseModel):
             return self.shear_modulus_pa
         return self.youngs_modulus_pa / (2.0 * (1.0 + self.poisson_ratio))
 
-    def modulus_retention_at_temp(self, temp_c: float) -> float:
-        """Mahieux-Reifsnider (2002) Weibull E(T)/E(25 C) modulus retention factor.
-
-        Uses Kelvin ratio ``(1 - e_r) * exp(-(T_K / T_ref_K)^m) + e_r`` normalized to 1.0 at 25 C.
-        For semicrystalline CF-reinforced polymers where HDT far exceeds Tg (e.g. annealed PPS-CF),
-        crystalline/fiber load bridging shifts the effective viscoelastic inflection ``T_ref_K``.
-        Metals and thermoset CF plates (``tg_c is None``) return ``1.0``.
-        """
+    def _weibull_retention_at_temp(self, temp_c: float, rubbery_ratio: float) -> float:
+        """Mahieux-Reifsnider (2002) Weibull retention normalized to 1.0 at 25 C."""
         if self.tg_c is None:
             return 1.0
 
         hdt_val = self.hdt_c if self.hdt_c is not None else self.tg_c
         t_ref_c = self.tg_c + 0.32 * max(0.0, hdt_val - self.tg_c - 80.0)
         t_ref_k = max(t_ref_c + 273.15, 200.0)
-        e_r = self.e_rubbery_ratio
+        e_r = rubbery_ratio
         m = self.mahieux_m
 
         def _weibull_val(tc: float) -> float:
@@ -72,9 +72,32 @@ class MaterialSpec(BaseModel):
         ref_25 = max(_weibull_val(25.0), 1e-6)
         return _weibull_val(temp_c) / ref_25
 
+    def modulus_retention_at_temp(self, temp_c: float) -> float:
+        """Mahieux-Reifsnider (2002) Weibull E(T)/E(25 C) modulus retention factor.
+
+        Uses Kelvin ratio ``(1 - e_r) * exp(-(T_K / T_ref_K)^m) + e_r`` normalized to 1.0 at 25 C.
+        For semicrystalline CF-reinforced polymers where HDT far exceeds Tg (e.g. annealed PPS-CF),
+        crystalline/fiber load bridging shifts the effective viscoelastic inflection ``T_ref_K``.
+        Metals and thermoset CF plates (``tg_c is None``) return ``1.0``.
+        """
+        return self._weibull_retention_at_temp(temp_c, self.e_rubbery_ratio)
+
+    def shear_modulus_retention_at_temp(self, temp_c: float) -> float:
+        """Temperature-dependent shear modulus retention G(T)/G(25 C).
+
+        Continuous-fiber laminates with ``shear_rubbery_ratio`` model matrix-dominated shear
+        softening near epoxy Tg separately from fiber-dominated longitudinal modulus retention.
+        """
+        ratio = self.shear_rubbery_ratio if self.shear_rubbery_ratio is not None else self.e_rubbery_ratio
+        return self._weibull_retention_at_temp(temp_c, ratio)
+
     def effective_modulus_pa(self, temp_c: float = 25.0) -> float:
         """Temperature-dependent effective Young's modulus E(T) in Pascals."""
         return self.youngs_modulus_pa * self.modulus_retention_at_temp(temp_c)
+
+    def effective_shear_modulus_at_temp_pa(self, temp_c: float = 25.0) -> float:
+        """Temperature-dependent effective shear modulus G(T) in Pascals."""
+        return self.effective_shear_modulus_pa * self.shear_modulus_retention_at_temp(temp_c)
 
 
 MATERIAL_CATALOG: dict[str, MaterialSpec] = {
@@ -148,37 +171,113 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         cost_per_kg_usd=18.0,
         color_hex="#d1d5db",
     ),
+    # Carbon Fiber X-Gantry Tube Laminates — Classical Lamination Theory (CLT) derived from
+    # Torayca T300 / T700S / M40J epoxy lamina datasheets (~58-60% Vf) and verified against
+    # Rock West Composites, DragonPlate, and Carbonara (Monolith/Brazuka) structural specs.
+    "carbon_fiber_3k_twill": MaterialSpec(
+        id="carbon_fiber_3k_twill",
+        name="Carbon Fiber Tube — 3K Woven 0/90 (Budget, Tg 78°C)",
+        youngs_modulus_pa=64.0e9,  # CLT 50% 0° / 50% 90° Toray T300 3K 2x2 twill (~62-67 GPa)
+        poisson_ratio=0.05,
+        shear_modulus_pa=4.6e9,  # 0/90 woven laminate matrix-dominated in-plane G_xy
+        density_kg_m3=1520.0,
+        yield_strength_pa=420e6,
+        thermal_conductivity_w_mk=5.5,
+        specific_heat_j_kgk=1050.0,
+        thermal_expansion_1_k=2.0e-6,  # CLT 0/90 T300 woven axial CTE ~ +2.0 ppm/K
+        damping_ratio=0.024,
+        cost_per_kg_usd=65.0,
+        color_hex="#2c3138",
+        e2_ratio=1.0,
+        tg_c=78.0,
+        hdt_c=72.0,
+        e_rubbery_ratio=0.68,
+        shear_rubbery_ratio=0.18,
+        mahieux_m=22.0,
+    ),
     "carbon_fiber_tube": MaterialSpec(
         id="carbon_fiber_tube",
-        name="Carbon Fiber Structural Tube (0/90 Roll-Wrapped)",
-        youngs_modulus_pa=115.0e9,
+        name="Carbon Fiber Tube — UD-Rich 0/90 (Std Epoxy, Tg 80°C)",
+        youngs_modulus_pa=115.0e9,  # CLT ~80% 0° T700S UD / 20% 90° 3K outer weave
         poisson_ratio=0.28,
-        shear_modulus_pa=18.0e9,
+        shear_modulus_pa=5.0e9,  # D-02: 0/90 roll-wrapped CF laminate in-plane G_xy ~ 3.5-6.0 GPa
         density_kg_m3=1550.0,
         yield_strength_pa=480e6,
         thermal_conductivity_w_mk=8.0,
         specific_heat_j_kgk=1050.0,
-        thermal_expansion_1_k=1.2e-6,
+        thermal_expansion_1_k=0.6e-6,  # CLT 80/20 T700S/epoxy axial CTE ~ +0.5-0.6 ppm/K
         damping_ratio=0.022,
         cost_per_kg_usd=95.0,
         color_hex="#262a30",
+        e2_ratio=0.31,
+        tg_c=80.0,
+        hdt_c=75.0,
+        e_rubbery_ratio=0.72,
+        shear_rubbery_ratio=0.18,
+        mahieux_m=22.0,
     ),
     "carbon_fiber_high_tg": MaterialSpec(
         id="carbon_fiber_high_tg",
-        name="High-Tg Autoclave Carbon Fiber Tube (Tg 125°C)",
-        youngs_modulus_pa=115.0e9,
+        name="Carbon Fiber Tube — UD-Rich 0/90 (High-Tg 125°C)",
+        youngs_modulus_pa=115.0e9,  # CLT ~80% 0° T700S UD / 20% 90° 3K outer weave
         poisson_ratio=0.28,
-        shear_modulus_pa=18.0e9,
+        shear_modulus_pa=5.0e9,  # D-02: 0/90 roll-wrapped CF laminate in-plane G_xy ~ 3.5-6.0 GPa
         density_kg_m3=1550.0,
         yield_strength_pa=480e6,
         thermal_conductivity_w_mk=8.0,
         specific_heat_j_kgk=1050.0,
-        thermal_expansion_1_k=1.2e-6,
+        thermal_expansion_1_k=0.6e-6,
         damping_ratio=0.022,
         cost_per_kg_usd=135.0,
         color_hex="#1f242b",
+        e2_ratio=0.31,
         tg_c=125.0,
         hdt_c=125.0,
+        e_rubbery_ratio=0.72,
+        shear_rubbery_ratio=0.18,
+        mahieux_m=22.0,
+    ),
+    "carbon_fiber_torsional_45": MaterialSpec(
+        id="carbon_fiber_torsional_45",
+        name="Carbon Fiber Tube — ±45°/0° Torsional High-Tg (Carbonara/T700)",
+        youngs_modulus_pa=87.0e9,  # CLT 55% 0° / 35% ±45° / 10% 90° T700S/epoxy (Rock West / Carbonara)
+        poisson_ratio=0.39,
+        shear_modulus_pa=15.7e9,  # ±45° torsional plies raise G_xy >3x vs 0/90 tubes
+        density_kg_m3=1560.0,
+        yield_strength_pa=540e6,
+        thermal_conductivity_w_mk=7.2,
+        specific_heat_j_kgk=1050.0,
+        thermal_expansion_1_k=0.2e-6,  # CLT balanced ±45°/0° T700S axial CTE ~ +0.17 ppm/K
+        damping_ratio=0.023,
+        cost_per_kg_usd=165.0,
+        color_hex="#1b2028",
+        e2_ratio=0.37,
+        tg_c=125.0,
+        hdt_c=115.0,
+        e_rubbery_ratio=0.62,
+        shear_rubbery_ratio=0.55,
+        mahieux_m=22.0,
+    ),
+    "carbon_fiber_m40j_hm": MaterialSpec(
+        id="carbon_fiber_m40j_hm",
+        name="Carbon Fiber Tube — M40J High-Modulus ±45°/0° (Tg 140°C)",
+        youngs_modulus_pa=136.0e9,  # CLT 55% 0° / 35% ±45° / 10% 90° Toray M40J (377 GPa fiber)
+        poisson_ratio=0.42,
+        shear_modulus_pa=22.6e9,  # High-modulus ±45° plies approach aluminum G at 59% density
+        density_kg_m3=1600.0,
+        yield_strength_pa=580e6,
+        thermal_conductivity_w_mk=18.0,
+        specific_heat_j_kgk=980.0,
+        thermal_expansion_1_k=-0.5e-6,  # CLT M40J negative fiber CTE (-0.83 ppm/K) -> ~ -0.5 ppm/K
+        damping_ratio=0.018,
+        cost_per_kg_usd=340.0,
+        color_hex="#151920",
+        e2_ratio=0.33,
+        tg_c=140.0,
+        hdt_c=135.0,
+        e_rubbery_ratio=0.65,
+        shear_rubbery_ratio=0.55,
+        mahieux_m=22.0,
     ),
     "steel_4140": MaterialSpec(
         id="steel_4140",

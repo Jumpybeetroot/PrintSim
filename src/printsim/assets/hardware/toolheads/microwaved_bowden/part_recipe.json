@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "microwaved_bowden",
+  "source_cad": "mbt_tricorn_v2.step",
+  "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+  "regions": [
+    {
+      "label": "mbt_slm_chassis",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    }
+  ],
+  "chassis_part": "MBTCFD",
+  "carriage_bolt_pattern": "4x M3 (20x20 mm MGN12H)",
+  "hotend_mount_interface": "Tricorn / Dragon 4-bolt crown",
+  "port1_offset_mm": [
+    0.0,
+    -9.76,
+    30.5
+  ]
+}

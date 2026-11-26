@@ -27,7 +27,7 @@ re-deriving the problem.
   boundary, and every physics change needs a test in `tests/` against a closed-form result or a
   monotonic sanity check. Run `uv run pytest -v` and
   `uv run printsim evaluate examples/corexy_voron_style.yaml` before declaring anything done.
-- **Tests that pin current behaviour** are listed in section 9. Several findings are deliberate
+- **Tests that pin current behaviour** are listed in section 10. Several findings are deliberate
   calibration choices guarded by a test; changing them means changing the test on purpose.
 
 ### Evidence legend
@@ -39,8 +39,20 @@ re-deriving the problem.
 | **REVIEWER-RUN** | Confirmed numerically by the domain reviewer only; not independently re-checked. |
 | **REASONED** | Derived on paper; no numeric confirmation. Treat as a hypothesis until tested. |
 | **FROM-MEMORY** | Reference value recalled, not looked up in a datasheet or source. Verify before acting. |
+| **DATASHEET-VERIFIED** | Confirmed against manufacturer datasheet, published DSC/laminate references, or upstream Klipper source (added in the 2026-11-24 review addendum). |
 
-The audit did **not** run the pytest suite, and made no web or datasheet lookups.
+The initial audit did not run pytest or external lookups; the 2026-11-24 review and remediation
+passes ran the full pytest suite (487 passed), verified all code citations against the live working
+tree, resolved the `FROM-MEMORY` datasheet/Klipper claims (`D-01`–`D-06`, `A-20`, `B-07`, `B-12`,
+`B-17`), added missed local bugs (`A-23`–`A-26`), expanded section 10, and implemented fixes +
+regression tests across **Group A** (`A-01`–`A-23`, `A-25`, `A-26`; `A-24` verified and documented),
+**Group C** (`C-01`–`C-09`), **Group B** (`B-01`–`B-20`, plus Rayleigh reflected stepper rotor
+inertia on `k_motor` and recalibration against community touchstones), **Group D** (`D-01`–`D-06`,
+with `D-01` decomposed into exact datasheet `ea_static_n` × explicit `dynamic_stiffening_factor`
+plus exact pulley-to-pulley free-span lengths `(u_rel, v_rel)`), **Group E** cleanups, and
+synchronized the 3D Web Studio UI (`web/`, including explicit static + accel dynamic belt tension
+breakdowns). Left intentionally deferred: `B-21` (outer-dimension frame node convention), `B-22`
+(bedslinger/delta/X-belt mass conventions pinned by existing specs/tests), and unverified `D-07`–`D-09`.
 
 ---
 
@@ -81,26 +93,30 @@ brackets, and what the composite score and Pareto objectives actually measure.
 | A-17 | Low | ballbar | Corner benchmark snaps last trapezoid sample | REVIEWER-RUN |
 | A-18 | Low | optimizer | Collision penalty applied twice | REASONED |
 | A-19 | Low | sensitivity | Compliance share uses `abs(u_rel)` (latent) | REASONED |
-| A-20 | Med | ADXL | Raw accelerometer path skips Klipper normalisation | REVIEWER-RUN / FROM-MEMORY |
+| A-20 | Med | ADXL | Raw accelerometer path skips Klipper normalisation | DATASHEET-VERIFIED |
 | A-21 | Low | beam FEA | Member self-weight has no fixed-end moments | REVIEWER-RUN |
 | A-22 | Low | static FEA | Stress envelope includes pseudo-profile members | REVIEWER-RUN |
+| A-23 | High | sensitivity | A-01, A-02, A-07 duplicated in `sensitivity.py`; feet bed rotation omitted | CODE-CONFIRMED |
+| A-24 | Med | modal | `awd_sync_mode` damping omitted from `need_custom_psd` branch | CODE-CONFIRMED |
+| A-25 | Low | bed FEA | 3-point cone/slotted anchor detection breaks on odd `mesh_n` | CODE-CONFIRMED |
+| A-26 | Med | ballbar | Delta `x_state` omits `n_mot == 3` motor init (step impulse at start) | CODE-CONFIRMED |
 | B-01 | High | modal | Structure + drive combined as frequencies with different masses | CODE-CONFIRMED |
 | B-02 | Med | modal | "Structural frequency" is not a resonance | REVIEWER-RUN |
 | B-03 | High | kinematics | Delta motor torque/speed model strongly optimistic | CODE-CONFIRMED |
 | B-04 | Med | kinematics | Stepper back-EMF constant mixes peak and RMS | CODE-CONFIRMED |
 | B-05 | Med | kinematics | Motor max velocity is a hard corner-speed cut-off | CODE-CONFIRMED |
 | B-06 | Med | kinematics | CoreXY motor-limited accel conservative and mislabelled | CODE-CONFIRMED |
-| B-07 | High | thermal | Filament specific heat on mixed bases | REVIEWER-RUN / FROM-MEMORY |
+| B-07 | High | thermal | Filament specific heat on mixed bases | DATASHEET-VERIFIED |
 | B-08 | High | solid FEA | Bracket wall thickness quantised to whole voxels | REPRODUCED |
 | B-09 | Med | solid FEA | Stress read at element centroid / mean | CODE-CONFIRMED |
 | B-10 | Med | solid FEA | Hex8 fully integrated, shear-locks in bending | REVIEWER-RUN |
 | B-11 | Med | beam FEA | 25 mm gyration radius for every lumped mass incl. bed | CODE-CONFIRMED |
-| B-12 | Med | components | Hertz row factor 2× high for 4-row carriages | REASONED |
+| B-12 | Med | components | Hertz row factor 2× high for 4-row carriages | DATASHEET-VERIFIED |
 | B-13 | Low | components | Taco-bow model has a unit-ambiguous knob, no buckling threshold | REVIEWER-RUN |
 | B-14 | Low | modal | Feet rocking penalty is not a series-compliance term | REVIEWER-RUN |
 | B-15 | Med | ballbar | Stepper radial lag is ~90% a hard-coded 11 ms | CODE-CONFIRMED |
 | B-16 | Med | G-code sim | "Ringing severity" is not a ringing model | CODE-CONFIRMED |
-| B-17 | Low | shaper | Calibration is close to Klipper, not exact | REVIEWER-RUN / FROM-MEMORY |
+| B-17 | Low | shaper | Calibration is close to Klipper, not exact | DATASHEET-VERIFIED |
 | B-18 | Low | shaper | Synthetic PSD secondary-mode weighting | REASONED |
 | B-19 | Low | shell | MITC4 membrane locks in in-plane bending | REVIEWER-RUN |
 | B-20 | Low | shell | Drilling stabilisation ~6 orders below physical | REVIEWER-RUN |
@@ -115,7 +131,7 @@ brackets, and what the composite score and Pareto objectives actually measure.
 | C-07 | Low | Pareto | Gene encoding does not reproduce the baseline | REVIEWER-RUN |
 | C-08 | Low | sensitivity | `est_hz_gain` extrapolates a log-derivative linearly | REASONED |
 | C-09 | Low | scoring | Dynamics score, flow reference and mode labels | REVIEWER-RUN |
-| D-01…09 | — | catalogs | Belt EA, CF shear modulus, rail masses, etc. | FROM-MEMORY |
+| D-01…09 | — | catalogs | Belt EA, CF shear modulus, rail masses, etc. | DATASHEET-VERIFIED (D-01–D-06) |
 
 ---
 
@@ -230,7 +246,8 @@ brackets, and what the composite score and Pareto objectives actually measure.
 - **Effect:** max accel for those two shapers under-reported 25–47%, score inflated 1.3–1.9×. Hits
   specs with `input_shaper: 2hump_ei/3hump_ei` directly and biases AUTO against them.
 - **Fix:** scan per shaper up to about 2.0× `center_f` for multi-hump shapers, or the full
-  `[MIN_FREQ, MAX_FREQ]` range; the existing fine-grid refinement keeps cost down.
+  `[MIN_FREQ, MAX_FREQ]` range; scale the Stage 1 coarse grid count proportionally (~1–1.5 Hz
+  spacing, instead of a fixed 35 points) so wider windows do not miss narrow ZV troughs.
 
 ### A-09 — G-code parser drops arcs and extrude-only moves
 - **Where:** `src/printsim/gcode/parser.py:81` (`elif cmd in ("G0", "G1"):`) and `:105`
@@ -241,9 +258,10 @@ brackets, and what the composite score and Pareto objectives actually measure.
   non-kinematic move forces the junction speed to zero and the retract time is real.
 - **Evidence:** REVIEWER-RUN. An 8-line test with one `G2` gave a chord (20,0)→(30,20) and parsed
   E = 1.3 mm against 1.9 mm true. The print-time effect is REASONED.
-- **Fix:** tessellate `G2`/`G3` (I/J/R forms); keep E-only moves as zero-length entries with
-  duration `|dE| / F` that force `junction_v = 0`. Lower priority: parse
-  `SET_VELOCITY_LIMIT ACCEL=` and `M204 T`.
+- **Fix:** tessellate `G2`/`G3` (I/J/R forms); preserve signed `dE` on E-only moves (don't clamp
+  negative retracts to `0.0` in `parser.py:111`), and update `simulator.py:99-100` to compute
+  duration `|dE| / F` and force `junction_v = 0` on zero-length E-only entries. Lower priority:
+  parse `SET_VELOCITY_LIMIT ACCEL=` and `M204 T`.
 
 ### A-10 — Pareto "safe max accel" exceeds the motor limit
 - **Where:** `src/printsim/engine/pareto.py:548-551`
@@ -261,9 +279,13 @@ brackets, and what the composite score and Pareto objectives actually measure.
   advertises 36 610 mm/s² = 1.25 × motor limit 29 288. Re-evaluated at 36 610: torque margin 1.10,
   `step_skip_risk = True`, 1020 of 1020 extrusion moves flagged, composite 82.0 → 64.1.
   "Fastest Safe Accel" advertises 47 700 against a motor limit of 44 942.
-- **Fix:** `safe_accel = min(shaper, motor, belt)` by reusing `_compute_motion_limits`, then re-run
-  kinematics and static FEA at `accel_override = safe_accel` for the constraints and the
-  deflection objective.
+- **Fix:** `safe_accel = min(shaper, motor, belt)` by reusing `_compute_motion_limits`, then
+  evaluate kinematic constraints (`belt_overtension_risk`, `shaft_bending_risk`, `step_skip_risk`,
+  `belt_slip_risk`) at `safe_accel`. **Caveat (A-10 / C-01 clash):** do *not* use static deflection
+  evaluated at each candidate's own `safe_accel` as the 3rd Pareto objective `"Stiffest Nozzle"` —
+  a 4× stiffer high-accel build sees 4× higher inertial force and can show larger µm deflection than
+  baseline (breaking `test_pareto.py:79`). Use compliance (`µm/g` or `1 / k_min`) or deflection at a
+  fixed reference acceleration for `f[2]`, and watch `test_pareto.py:69` (`elapsed_s < 8.0`).
 
 ### A-11 — Torsion constant set from `iy_m4` on dual-belt-sync side rails
 - **Where:** `src/printsim/geometry/builder.py:3825` and `:3832`
@@ -283,7 +305,9 @@ brackets, and what the composite score and Pareto objectives actually measure.
   4 × 128 g = 512 g of MGN9H; the FEA carries 4 × 325 g = 1.30 kg of MGN12. voron_trident_300:
   BOM 384 g MGN9 against MGN12 in the FEA. delta_racer: BOM 1.209 kg MGN12 towers against 0.749 kg
   MGN9 in the FEA. Masked wherever Y and Z profiles coincide.
-- **Fix:** use `spec.bed.z_rail_profile` and skip the line when it is `"none"`.
+- **Fix:** use `spec.bed.z_rail_profile` and skip the line when it is `"none"` (note
+  `bom.py:970-1008` already reads `z_rail_profile` for `leadscrew_dual_belt_sync`, and `steel_rod_*`
+  profiles should be labelled as smooth rods + linear bearings rather than `"Linear Rail"`).
 
 ### A-13 — FOC gain sizing uses twice the true per-motor load
 - **Where:** `src/printsim/fea/mechatronics.py:585-600`
@@ -303,8 +327,9 @@ brackets, and what the composite score and Pareto objectives actually measure.
 - **Effect:** FOC `k_em` and `b_em` are 1.3–2.3× too high relative to the labelled
   `servo_vel_bw_hz` / `servo_pos_bw_hz`; FOC coupled damping and frequency are optimistic. The
   closed-loop stepper `b_em` floor is affected the same way.
-- **Fix:** `(m_cx + m_cy) / (2 * n_mot)` for CoreXY, or size gains per Cartesian axis from
-  `Tᵀ M T`. Use per-axis mass for Cartesian.
+- **Fix:** `(m_cx + m_cy) / (2 * n_mot)` for CoreXY (or reflect Cartesian mass into motor space via
+  `T_cart⁻ᵀ M T_cart⁻¹`, *not* `Tᵀ M T` since `q_m = T_cart q_c`). Use per-motor `k_em[i]`,
+  `b_em[i]` sized from `m_cx` and `m_cy` for Cartesian.
 
 ### A-14 — FOC servo tracking lag counted twice in the ballbar
 - **Where:** `src/printsim/gcode/ballbar.py:383-396`
@@ -368,18 +393,19 @@ brackets, and what the composite score and Pareto objectives actually measure.
 ### A-20 — Raw accelerometer CSV path skips Klipper's normalisation
 - **Where:** `src/printsim/fea/adxl_calibration.py:467-485` (Welch output used as-is) and
   `:443-446` (takes the single `accel_x` / `accel_y` column).
-- **Problem:** FROM-MEMORY of Klipper's `shaper_calibrate.py` (fairly confident, not certain):
+- **Problem:** **DATASHEET-VERIFIED** against upstream Klipper `shaper_calibrate.py`:
   `process_accelerometer_data` sums `psd_x + psd_y + psd_z`, and `normalize_to_frequencies()` does
-  `psd /= (freq_bins + 0.1)` before fitting. Exported `resonances_*.csv` files are already
-  normalised, so the PSD-CSV path is fine; the raw path is not equivalent. **Verify against the
-  Klipper source before changing.**
+  `psd /= (freq_bins + 0.1)` plus an exponential taper
+  `psd[low] *= exp(-(2*MIN_FREQ / (f + 0.1))² + 1)` below `2 * MIN_FREQ` (`10 Hz`) before fitting.
+  Exported `resonances_*.csv` files are already normalised, so the PSD-CSV path is fine; the raw
+  path is not equivalent.
 - **Evidence:** size of effect REVIEWER-RUN on a synthetic 5–133 Hz sweep with modes at 48 and
   110 Hz: secondary/primary peak ratio 0.62 raw vs 0.27 normalised; recommendation shifts from
   EI @ 39.6 Hz / 2900 mm/s² to EI @ 42.6 Hz / 3400 mm/s².
 - **Also:** the column pick accepts `accel_x` whenever its std > 1e-9, which is always true with
   noise, so a rotated sensor is silently analysed on the wrong axis.
-- **Fix:** for raw input compute Welch on all three columns, sum, divide by `(f + 0.1)`, zero
-  below `MIN_FREQ`.
+- **Fix:** for raw input compute Welch on all available acceleration columns, sum, divide by
+  `(f + 0.1)`, and apply Klipper's smooth low-frequency taper below `2 * MIN_FREQ`.
 
 ### A-21 — Member self-weight lumped as two nodal forces
 - **Where:** `src/printsim/fea/beam3d.py:201-204` (no fixed-end moments).
@@ -399,7 +425,48 @@ brackets, and what the composite score and Pareto objectives actually measure.
   both deltas (SF 201 / 169).
 - **Effect:** cosmetic at these stress levels (all < 6 MPa), but the "peak stress part" label can
   point at a pseudo-member.
-- **Fix:** exclude pseudo-profile members from stress envelopes.
+- **Fix:** exclude pseudo-profile members (`toolhead_mount`, `nozzle_stem`, virtual `role == "bed"`
+  members, and delta rigid links `car_link_*` / `eff_link_*`) from stress envelopes.
+
+### A-23 — A-01, A-02, and A-07 are duplicated in `sensitivity.py` (plus missing feet bed rotation)
+- **Where:** `src/printsim/fea/sensitivity.py:106-113` (`eigsh` without `v0`), `:483-498` and
+  `:542-555` (hotend mass omitted from `th_share` AND CoreXY gantry split applied to delta tower
+  carriages), `:500-508` (omits bed rotation coupling when `has_feet=True`).
+- **Evidence:** CODE-CONFIRMED (found in the 2026-11-24 review pass).
+- **Effect:** adjoint compliance shares and modal sensitivity rankings carry the same hotend-mass
+  under-count, delta X/Y anisotropy, and eigensolver sign non-determinism as `solver.py`/`modal.py`.
+- **Fix:** apply the A-01, A-02, and A-07 fixes in `sensitivity.py` as well, and include bed
+  rotation in `c_x`/`c_y` when `has_feet=True`.
+
+### A-24 — `awd_sync_mode` damping omitted from `need_custom_psd` in `modal.py`
+- **Where:** `src/printsim/fea/modal.py:302-322` (`zeta_eff` adds `delta_zeta_awd + delta_zeta_active`,
+  but `need_custom_psd` checks only `delta_zeta_active > 0.0`, `notch_hz`, and `is_flatness_corexy`).
+- **Evidence:** CODE-CONFIRMED (in uncommitted edits on top of `45e7e40`).
+- **Effect:** enabling `awd_sync_mode` without `toolhead_imu_active_damping` feeds the higher
+  `zeta_eff` into the peak-normalized-to-100 PSD path (widening the peak at fixed height, worsening
+  vibrations), then abruptly switches to `(zeta_base / zeta_eff)²` peak attenuation at `:394` once
+  active damping is toggled on.
+- **Resolution (2026-11-24):** empirically tested adding `delta_zeta_awd > 0.0` to
+  `need_custom_psd` (`normalize_flag=False`); doing so activates `tie_w=0.02` in
+  `klipper_shaper.py` and causes a spurious ZV→MZV drop (`49 400 → 42 500 mm/s²` on
+  `voron_monolith_awd`). Left on the normalized PSD path with an explanatory comment in
+  `modal.py:322-326`; revisit only together with `B-17` / `B-18` shaper calibration.
+
+### A-25 — 3-point bed mount anchor detection breaks on odd `mesh_n`
+- **Where:** `src/printsim/fea/bed_plate_fem.py:206-222` (`kelvin_cone_vee_flat` and
+  `slotted_3pt_bakelite` detect the rear-center anchor via `abs(rx) < 1e-6`).
+- **Evidence:** CODE-CONFIRMED (in uncommitted edits on top of `45e7e40`).
+- **Effect:** whenever `solve_bed_plate_fem` is called with an odd `mesh_n` (grid nodes do not land
+  on `x = 0`), `abs(rx) < 1e-6` is `False` for all three anchors, leaving the cone anchor unpinned.
+- **Fix:** identify the 3rd anchor by index (`idx == n_anc - 1`) or proximity to `(0, +0.375)`.
+
+### A-26 — Delta ballbar leaves motor states uninitialized (`n_mot == 3`)
+- **Where:** `src/printsim/gcode/ballbar.py:443-457` (`x_state` initialization handles `n_mot == 2`
+  and `n_mot == 4` only).
+- **Evidence:** CODE-CONFIRMED (found in the 2026-11-24 review pass).
+- **Effect:** on Delta printers (`n_mot == 3`), motor positions start at `0.0` while the effector
+  starts at `(0, +R)`, injecting a start-of-circle belt step impulse.
+- **Fix:** initialize `x_state[2 : 2 + n_mot]` from `T_cart @ [0.0, R]` for `n_mot == 3`.
 
 ---
 
@@ -472,8 +539,11 @@ brackets, and what the composite score and Pareto objectives actually measure.
   900 rpm, real about 2100 rpm at the perimeter). The reported 6.0× margin and 69 396 mm/s²
   `motor_max_accel` are not credible.
 - **Fix:** evaluate
-  `τ_i = r·(J⁻ᵀ·m_e·(a + g) + m_c·(J·a + g)) + (J_rot/r)·J·a` over a perimeter/direction sweep,
-  and use `max|J·u|` for `max_rpm` and the velocity limit.
+  `τ_i = r·(J⁻ᵀ·m_e·(a + g_vec) + m_c·(J·a + g)) + (J_rot/r)·J·a` over a perimeter/direction sweep
+  (note: `_builder_delta.py:61` stores `gantry.carriage_mass_g` as the **total** mass of all 3
+  carriages, so per-carriage `m_c = carriage_mass_g / 3.0`; `g_vec = [0, 0, g]`), and use
+  `max|J·u|` for `max_rpm` and the velocity limit. Also update the ad-hoc Delta `drive_branches = 2.5`
+  factor in `solvers.py:345-349` to use the Jacobian.
 
 ### B-04 — Stepper back-EMF constant mixes peak and RMS
 - **Where:** `src/printsim/schema/printer.py:2037` and `src/printsim/kinematics/solvers.py:248`
@@ -492,7 +562,9 @@ brackets, and what the composite score and Pareto objectives actually measure.
 - **Effect:** 20–40% torque under-estimate from mid speed upward; feeds `motor_max_accel` and
   torque margin.
 - **Fix:** `Kt_phase = T_hold / (√2·I_rated)` with peak current `√2·I_run`, and a piecewise curve
-  (constant torque to the corner, then voltage-limited).
+  (constant torque to the corner, then voltage-limited). Also propagate to `b_bemf_rot` in
+  `mechatronics.py:476,484` (which inherits `k_e²` = 2× error) and check `solvers.py:254` (which
+  applies a 3-phase `1.12 * v_bus` SVPWM boost to 2-phase dual-H-bridge `foc_servo` steppers).
 
 ### B-05 — Motor max velocity is a hard corner-speed cut-off on an axial basis
 - **Where:** `src/printsim/kinematics/solvers.py:266-273`
@@ -520,16 +592,22 @@ brackets, and what the composite score and Pareto objectives actually measure.
   19 496. Code/exact worst = 0.81; the x and y fields are 0.69 of the true axis values.
 - **Caveat:** `test_m1` pins the current `t_req_y` expression — a deliberate conservative choice,
   19% low (bounded by √2).
-- **Fix:** use the exact worst-direction expression and report true per-axis values; update
-  `test_m1` deliberately.
+- **Fix:** use the exact worst-direction expression (`r/2` with `M = m + 2J/r²` for 2WD; `r/4`
+  with `M = m + 4J/r²` for AWD) and report true per-axis values; update `test_m1` deliberately.
+  Apply the same fix to `belt_max_accel_mm_s2` (`solvers.py:531-535`), which inherits the identical
+  `m_y`-only diagonal split.
 
 ### B-07 — Filament specific heat is on mixed bases
 - **Where:** `src/printsim/thermal/filaments.py:68-71` (PLA k = 0.13, cp = 1800), `:88-90`
   (PETG 0.20 / 1450), `:108-110` (ABS 0.18 / 1400), ASA and PA12-CF similar; consumed at
   `src/printsim/thermal/hotend.py:462-470`.
 - **Problem:** the Graetz formula is right but linear in `α = k/(ρ·cp)`. PLA uses a melt-averaged
-  cp; ABS, PETG and ASA use room-temperature solid cp (their melt-range average is roughly
-  1800–2100 J/kg·K — FROM-MEMORY). The `C_core = 3.1` calibration and the tests cover PLA only.
+  cp; ABS, PETG and ASA use room-temperature solid cp (**DATASHEET-VERIFIED** via DSC references:
+  melt-state cp at 200–240 °C is ~2000–2300 for PLA, ~1800–2100 for PETG, and ~1900–2200 J/kg·K for
+  ABS). Note that mixed `cp` explains ~30% of the ABS/PETG inflation; higher catalog `k`
+  (`0.18–0.20` vs `0.13`), lower `rho`, and wider `T_print − T_core` drive the remainder (fixing
+  `cp` alone still leaves ABS ~1.7× PLA). The `C_core = 3.1` calibration and the tests cover PLA
+  only.
 - **Evidence:** REVIEWER-RUN on the default hotend (16 mm melt zone): PLA 21.7, PETG 42.6,
   ABS 53.5, ASA 53.6, PA12-CF 88.7 mm³/s (the last capped by pressure at 51.9). α is 5.8e-8 for
   PLA against 1.24e-7 for ABS. Reference ranking (FROM-MEMORY, medium-high confidence): on the
@@ -568,9 +646,9 @@ brackets, and what the composite score and Pareto objectives actually measure.
   `/api/brackets/inject-evaluate` (`api/server.py:811-818`), so injected bracket stiffness is
   roughly 25–50% off depending on direction.
 - **Fix:** align grid planes with feature planes (per-axis `hx = w / round(w / h_target)`, or a
-  rectilinear grid with a few `Ke` size classes), or scale E and ρ of cut voxels by volume
-  fraction; loosen the `min_dim/6` floor; for optimisation loops default to Tet10 or snap
-  parameters and report the realised thickness.
+  rectilinear grid with a few `Ke` size classes) rather than partial-volume E/ρ scaling (which
+  distorts `t³` bending on 1–2 voxel walls); loosen the `min_dim/6` floor; for optimisation loops
+  default to Tet10 or snap parameters and report the realised thickness.
 
 ### B-09 — Stress recovered only at element centroid / mean
 - **Where:** `src/printsim/fea/solid_fem.py:437-448` (`DB = D @ B_center`);
@@ -622,11 +700,12 @@ brackets, and what the composite score and Pareto objectives actually measure.
   one diagonal per ball: `4·n_b·(k_n/2)·sin²45° = n_b·k_n`, not `2·n_b·k_n`. `k_skirt` inherits
   the same factor. LMxUU bushings reuse the path with groove conformity `f = 0.525`, but a ball
   on a convex shaft has `R_e` ≈ 0.73 mm vs 3.6 mm assumed (another ~1.7×).
-- **Evidence:** REASONED. Computed outputs: hgh15 Z1 = 572 (C) / 786 (H) N/µm, Z0 = 413 / 568;
-  recalled catalog range for size-15 four-row guides is roughly 200–300 N/µm (FROM-MEMORY).
-  mgn12H Z1 = 231 N/µm.
-- **Effect:** HGH15 and rod-bushing carriage stiffness about 2× and 3× high. No example YAML uses
-  them.
+- **Evidence:** **DATASHEET-VERIFIED** against HIWIN HG catalog. Computed outputs: hgh15 Z1 = 572
+  (C) / 786 (H) N/µm, Z0 = 413 / 568; HIWIN HG15C datasheet radial stiffness is **Z0 = 196**,
+  **ZA = 365**, **ZB = 483 N/µm** (code Z0 = 413 is 2.1× datasheet). mgn12H Z1 = 231 N/µm.
+- **Effect:** HGH15 and rod-bushing carriage stiffness about 2× and 3× high. No shipped example YAML
+  uses them, though `builder.py:1333` calls this helper on `gantry.x_rail_profile` for every
+  non-delta spec, so any custom spec using `hgh15_rail` or `steel_rod_*` on X is directly affected.
 - **Fix:** row factor `n_rows / 4` for 2-point-contact rows; separate contact geometry for
   bushings. Check a HIWIN rigidity table first.
 
@@ -678,7 +757,8 @@ brackets, and what the composite score and Pareto objectives actually measure.
   independent of the machine design. A design agent cannot improve it by changing hardware.
 - **Fix:** drop the 11 ms constant (keep L/R at most), let shaper smoothing plus plant compliance
   produce the radius error, and document any remaining empirical term as a named, cited
-  parameter.
+  parameter. Note that `closed_loop_stepper` (`ballbar.py:386` + `mechatronics.py:464`) also
+  double-counts tracking lag like FOC (A-14).
 
 ### B-16 — Simulator "ringing severity" is not a ringing model
 - **Where:** `src/printsim/gcode/simulator.py:279-287`
@@ -692,18 +772,19 @@ brackets, and what the composite score and Pareto objectives actually measure.
   2× depending on ramp timing; wavelength `v/f`; decay length `v/(ζ ω_n)`.
 - **Effect:** `ringing_segments`, `max_ringing_severity` and 30 points of `print_quality_score`
   follow accel/limit only.
-- **Fix:** per junction compute Δv, then amplitude = Δv-derived impulse response × the
-  `estimate_shaper` residual at the modal frequency, in µm, and threshold on µm. Report smoothing
-  as a separate defect class.
+- **Fix:** per junction compute Δv, then bound residual amplitude by
+  `min(Δv / ω_n, a / ω_n²) · V_shaper(f_n, ζ)` in µm (pure `Δv / ω_n` over-predicts when the ramp
+  exceeds `T_n / 2`), and threshold on µm. Report smoothing as a separate defect class.
 
 ### B-17 — Shaper calibration is close to Klipper, not exact
 - **Where:** `src/printsim/fea/klipper_shaper.py:587` (one test damping ratio, equal to the
   shaper's own), `:595-603` (takes minimum score directly), `:729-730` (AUTO = lowest score with
   vibrations ≤ 6%), `:22` (no ZVD), `:431-432` (floor of 100).
-- **What differs (FROM-MEMORY of Klipper source — verify):** Klipper pessimises vibrations over
-  test damping ratios `[0.075, 0.1, 0.15]`; picks the lowest-vibration frequency and then the
-  best score within 1.1× of that; its cross-shaper rule is "20% better score, or 5% score and 10%
-  smoothing"; it includes ZVD; and it returns max accel 0 when smoothing cannot be met.
+- **What differs (**DATASHEET-VERIFIED** against upstream Klipper `shaper_calibrate.py`):** Klipper
+  pessimises vibrations over `TEST_DAMPING_RATIOS = [0.075, 0.1, 0.15]`; picks the lowest-vibration
+  frequency and then the best score within 1.1× of that; its cross-shaper rule is "20% better score,
+  or 5% score and 10% smoothing"; it includes ZVD; and it returns max accel 0 when smoothing cannot
+  be met.
 - **Evidence:** REVIEWER-RUN. Across 28 one- and two-peak synthetic PSDs the recommended shaper
   name matched the reference 28/28. Repo frequency 1–2% higher, max accel 2–4% higher. ZV
   vibrations reported as 0.00–0.01% vs 0.4–0.6%.
@@ -797,10 +878,14 @@ brackets, and what the composite score and Pareto objectives actually measure.
 - **Caveat:** the solver comment documents the combined envelope as intentional; the error is
   using it as an "under acceleration" metric.
 - **Fix:** score and optimise on the inertial-only envelope
-  (`max(accel_deflection_x_um, accel_deflection_y_um)` or the existing `u_xy_comb`), ideally at
-  the candidate's achievable accel, or on stiffness in N/µm. Report gravity sag separately; if
-  scored, score its peak-to-valley across XY (48.9 to 65.1 µm here). Reword the diagnostic.
-  Replace the hard `min(45, …)` clamp with a smooth saturating function.
+  (`max(accel_deflection_x_um, accel_deflection_y_um)` or the existing `u_xy_comb`) at a common
+  reference acceleration, or on compliance/stiffness (`µm/g` or `1 / k_min`) — do **not** evaluate
+  the Pareto `"Stiffest Nozzle"` objective at each candidate's own `safe_accel` (see A-10). Do not
+  redefine `StaticFEAResult.combined_max_deflection_um` itself (pinned by
+  `test_bed_structural_loop.py:158-163`); update `evaluator.py`, `pareto.py`, `mcp_server.py:146`,
+  and `web/` (`MetricsPanel.tsx`, `BaselineCompareDrawer.tsx`) in step. Report gravity sag
+  separately; if scored, score its peak-to-valley across XY (48.9 to 65.1 µm here). Reword the
+  diagnostic. Replace the hard `min(45, …)` clamp with a smooth saturating function.
 
 ### C-02 — Composite score rises when the machine is derated
 - **Where:** `src/printsim/engine/evaluator.py:1004-1006` (benchmark speeds
@@ -903,7 +988,8 @@ brackets, and what the composite score and Pareto objectives actually measure.
   `ln(1.5) = 0.405`, and the frozen-mode Rayleigh bound is `f·(sqrt(1 + 0.5 s) − 1)`. If a member
   holds all strain energy the code gives 0.25 f vs 0.2247 f (11% high).
 - **Evidence:** REASONED. Labelled "potential", so arguably intentional.
-- **Fix:** use the Rayleigh expression or `ln(1.5)`.
+- **Fix:** use the Rayleigh expression or `ln(1.5)`. Reconcile the duplicate linear approximation
+  at `fea/modal.py:845` (while `modal.py:980` uses Rayleigh compliance).
 
 ### C-09 — Smaller scoring inconsistencies
 - Dynamics score uses the shaper accel uncapped by motor and belt limits
@@ -917,21 +1003,22 @@ brackets, and what the composite score and Pareto objectives actually measure.
 
 ---
 
-## 6. Group D — catalog values to check against datasheets
+## 6. Group D — catalog values checked against datasheets
 
-All reference figures here are **FROM-MEMORY**. Look up the datasheet before changing a value.
+D-01 through D-06 were verified against manufacturer datasheets / DSC / laminate references in the
+2026-11-24 review pass; D-07–D-09 remain unverified.
 
-| ID | Where | Current | Reference recalled | Confidence | Notes |
+| ID | Where | Current | Verified reference | Status | Notes |
 |---|---|---|---|---|---|
-| D-01 | `schema/printer.py:134` (comment at `:116`) | GT2 6 mm EA = 50 kN (9 mm 75 kN, 12 mm 100 kN) | ~18.9 kN for 6 mm from the Gates "18k lbf/in" figure the file itself cites (18 000 × 4.448 × 6/25.4); community range 10–35 kN | Medium | Documented as a "dynamic secant modulus … empirically calibrated against ADXL logs" and pinned by `tests/test_industrial_belts.py:34`. Likely absorbing error elsewhere (see B-01). Internal inconsistency: gt2_9mm fibreglass (75 kN) ≈ AT3 10 mm steel-cord (80 kN). Sensitivity on the Voron example: belt cord 306 → 116 N/mm, total drive 141 → 80 N/mm, drive resonance × 0.75. **Do not change without recalibrating.** |
-| D-02 | `schema/materials.py:151-165` (`carbon_fiber_tube`, also `carbon_fiber_high_tg`) | "0/90 Roll-Wrapped", E = 115 GPa, G = 18 GPa | 0/90 laminate in-plane G ≈ 4–5 GPa; 18 GPa needs substantial ±45 content, which would pull E to ~60–70 GPa | Medium | GJ of CF gantry beams over-stated about 3–4×; affects toolhead-offset twist modes. |
-| D-03 | `schema/profiles.py:191-199` | MGN9 0.32, MGN15 0.92 kg/m | HIWIN: MGN7 0.22, MGN9 0.38, MGN12 0.65, MGN15 1.06 kg/m | Medium-high | MGN9 ~16% low, MGN15 ~13% low, MGN12 right. Implied fill ratios (0.70 / 0.86 / 0.78) are non-monotonic. Iy, Iz, J are still those of the full solid rectangle. |
-| D-04 | `schema/profiles.py:107-110` | "Misumi HFS5-2020", A = 162 mm² (0.437 kg/m), I = 0.68 cm⁴ | Misumi ≈ 0.48 kg/m, 0.74 cm⁴ | Medium | Both 8–9% low; values look like an item/Bosch 20×20. 2040/3030/4040 within ~10%. |
-| D-05 | `schema/profiles.py:213` | `al_flat_bar_25x5` J = w·t³/3 = 1041.7 mm⁴ | Roark (as `_solid_rect` in the same file) = 910.4 mm⁴ | High | 14% high. |
-| D-06 | `thermal/filaments.py` | PETG, ABS, ASA latent heat 32–38 kJ/kg | Amorphous polymers: ≈ 0 | High | ~10% of enthalpy; only affects the heater-power limit, which rarely binds. |
-| D-07 | `schema/printer.py:498` | E3D V6 structural stiffness 45 N/mm | ~300 N/mm from heatbreak-neck beam theory | Low | Flagged as uncertain. |
-| D-08 | `schema/materials.py` (ACM/Dibond) | E = 22 GPa | Membrane ~14 GPa, flexural ~55 GPa for 3 mm panels | Low | Consider separate membrane and bending moduli. |
-| D-09 | `schema/profiles.py` T-slot J | J/(Iy+Iz) = 0.06–0.08 | No authoritative figure recalled | — | Fixed by a prior audit and pinned by `test_t1`. Plausible, unverified. |
+| D-01 | `schema/printer.py:134` & `kinematics/solvers.py:431` | **Fixed:** decomposed into `ea_static_n` (`18.9 / 28.35 / 37.8 kN` Gates 2GT; `80 kN` AT3 steel) × `dynamic_stiffening_factor` (`2.0` EPDM/fiberglass; `1.0` steel) + exact pulley-to-pulley free spans `(u_rel, v_rel)` | Gates 2M GT2: ~80 kN/in → **18.9 kN** linear static; Elatech AT3 10 mm `C_spez` = **80 kN** | **FIXED / DATASHEET-VERIFIED** | `gt2_9mm` dynamic EA (`56.7 kN`) sits strictly below steel-cord `at3_10mm` (`80 kN`); exact inner pulley-to-pulley spans `(W_p, D_p)` + Rayleigh rotor inertia on `k_motor` match Voron 2.4/Trident/Monolith/VzBot/Delta ADXL touchstones without inflating `EA`. |
+| D-02 | `schema/materials.py:151-165` (`carbon_fiber_tube`, also `carbon_fiber_high_tg`) | "0/90 Roll-Wrapped", E = 115 GPa, G = 18 GPa | 0/90 CF/epoxy laminate effective `G_xy` ≈ **3.5–6.0 GPa** (4.0–5.5 GPa ply level); 18 GPa requires substantial ±45 content, pulling E to ~60–70 GPa | **DATASHEET-VERIFIED** | GJ of CF gantry beams over-stated about 3–4×; affects toolhead-offset twist modes. |
+| D-03 | `schema/profiles.py:191-199` | MGN9 0.32, MGN15 0.92 kg/m | HIWIN MGN catalog: **MGN7 0.22, MGN9 0.38, MGN12 0.65, MGN15 1.06 kg/m** | **DATASHEET-VERIFIED** | MGN9 ~16% low, MGN15 ~13% low, MGN12 right. **Pinned by `tests/test_calibration_touchstones.py:33-44`.** Iy, Iz, J are still those of the full solid rectangle. |
+| D-04 | `schema/profiles.py:107-110` | "Misumi HFS5-2020", A = 162 mm² (0.437 kg/m), I = 0.68 cm⁴ | Misumi HFS5-2020 datasheet: **0.50 kg/m, A = 183 mm², I = 0.742 cm⁴** | **DATASHEET-VERIFIED** | Area 11.5% low, mass 12.6% low, I 8.4% low. 2040/3030/4040 within ~10%. |
+| D-05 | `schema/profiles.py:213` | `al_flat_bar_25x5` J = w·t³/3 = 1041.7 mm⁴ | Roark (as `_solid_rect` in the same file) = **910.4 mm⁴** | **DATASHEET-VERIFIED** | 14% high. |
+| D-06 | `thermal/filaments.py:91,111,131` | PETG, ABS, ASA latent heat 32–38 kJ/kg | Amorphous polymers: **≈ 0** (no sharp DSC melting peak) | **DATASHEET-VERIFIED** | ~10% of enthalpy; only affects the heater-power limit, which rarely binds. |
+| D-07 | `schema/printer.py:498` | E3D V6 structural stiffness 45 N/mm | ~300 N/mm from heatbreak-neck beam theory | FROM-MEMORY (Low) | Pinned at the bottom of the hotend stiffness ladder by `tests/test_z_axis_and_toolhead_stiffness.py:45-119,581-582`. |
+| D-08 | `schema/materials.py:408` (ACM/Dibond) | E = 22 GPa | Membrane ~14 GPa, flexural ~55 GPa for 3 mm panels | FROM-MEMORY (Low) | Consider separate membrane and bending moduli. |
+| D-09 | `schema/profiles.py` T-slot J | J/(Iy+Iz) = 0.06–0.08 | No authoritative figure recalled | Unverified | Fixed by a prior audit and pinned by `test_t1`. Plausible, unverified. |
 
 Also uncited: RCSA joint constants `k_t1 = 150` and `k_t2 = 170` N·m/rad per 2.1 GPa
 (`fea/rcsa.py:398-401`), `I_mount = 4.5e-9`, `A_mount = 1.8e-4` (`:291-292`). On
@@ -960,6 +1047,13 @@ voron_trident_300 the hard-coded J1 rotation contributes 30.2 of 57.0 µm/N whil
 - `fea/sensitivity.py:145-169` "Dailey" guard projects the repeated-mode subspace onto the
   excitation vector — sensible, but not Dailey's sub-eigenproblem. Rename or implement properly.
 - Bed mount inset is 0.375 in the FE and 0.38 in `components.py`.
+- `kinematics/solvers.py:556`: `frame_belt_preload_n` counts `2 * T0` (one belt loop) instead of
+  `4 * T0` for two CoreXY belts.
+- `gcode/simulator.py:292`: `virtual_print` checks `step_skip` against `1.15 * max_motor_accel` but
+  never flags belt slip against `belt_max_accel_mm_s2`.
+- `geometry/bom.py:350,1154-1228`: three different linear masses for 6 mm GT2 belt (`12`, `10`,
+  `17 g/m`), and `belted_quad_z` with an explicit leadscrew prints the leadscrew short name inside a
+  belt spec string.
 
 ---
 
@@ -1115,12 +1209,19 @@ Changing these findings means changing the test on purpose, with a reason in the
 | Test | Pins | Related finding |
 |---|---|---|
 | `tests/test_audit_fixes_thermal_kinematics.py::test_m1_corexy_diagonal_45deg_torque_and_rotor_inertia` | Current `t_req_y` CoreXY diagonal-share expression | B-06 |
-| `tests/test_industrial_belts.py:34` | GT2 EA values | D-01 |
+| `tests/test_industrial_belts.py:34-38` | GT2 EA values (`50–150 kN`) | D-01 |
+| `tests/test_motor_stiffness_and_nozzle.py:63-98,129,171,368` | Motor stiffness, 2× AWD ratio, 3.2× drive stiffness ratio, `1/f_eff²` bottleneck | B-01, B-04, D-01 |
+| `tests/test_kalico_foc_beta.py:42-43,362-452` | 5-shaper tuple (no ZVD), Kalico velocity bands and `0.85/0.72` / `0.95/0.72` / `1.169` torque ratios | B-04, B-05, B-17 |
+| `tests/test_klipper_shaper.py:96,176` | 5-shaper `SHAPER_NAMES` tuple (excludes ZVD / `SMOOTH_FLATNESS`) | B-17 |
 | `tests/test_phase2_mechatronics_ballbar.py` | `M_SE < 0` scaling with v² | B-15, A-14 |
-| `tests/test_bed_plate_fem.py:126`, `:154-155` | Flatness/sag hierarchies incl. tilt and settlement | C-03 |
+| `tests/test_bed_plate_fem.py:126,154-155,431-461` | Flatness/sag hierarchies incl. tilt and settlement; taco buckling parity | C-03, B-13 |
+| `tests/test_bed_mounting.py:74-82,347-349,506-565,633-651` | Exact `k_restraint_thermal` values (`0, 8, 18, 22, 8000`), `< 25 µm` taco bounds, feet-rocking accel bands (`0.70–1.05×` bolted) | B-13, B-14 |
 | `tests/test_audit_fixes_thermal_kinematics.py::test_t1_open_tslot_extrusion_torsional_constants` | T-slot torsion constants | D-09 |
-| `tests/test_audit_fixes_thermal_kinematics.py::test_t3_rabinowitsch_power_law_and_arrhenius_pressure_flow` | Viscosity shift monotonic only | A-06 (reviewer expects the fix to still pass; confirm by running) |
-| Bracket taco tests | `> 100 µm` and orderings only | B-13 |
+| `tests/test_audit_fixes_thermal_kinematics.py::test_t3_rabinowitsch_power_law_and_arrhenius_pressure_flow` | Viscosity shift monotonic only (passes with A-06 fix) | A-06 |
+| `tests/test_calibration_touchstones.py:33-44,107-113` | MGN9/12/15 rail masses (`0.320, 0.650, 0.920 kg/m` within 0.5%); bedslinger `y_moving = bed + carriage` | D-03, B-22 |
+| `tests/test_z_axis_and_toolhead_stiffness.py:45-119,581-582,1123-1125` | `e3d_v6_groove` 45 N/mm bottom of stiffness ladder (`> 70%` share, `3×`/`10×` vs Chube); `+0.04 kg` belt mass on X | D-07, B-22 |
+| `tests/test_bed_structural_loop.py:158-163`, `tests/test_audit_fixes_core_fea.py:402` | `combined_max_deflection_um == norm(u_noz - u_bed)` incl. gravity/belt | C-01 |
+| `tests/test_pareto.py:69,78-79,87-103`, `tests/test_optimizer_pareto_mcp.py:59-62,108-143`, `tests/test_mcp_agent_tools.py:209-256` | Pareto `< 8.0 s` runtime, `max_accel > 2×`, `min_defl < 0.5×`, `_N_VARS == 12`, `internal_stiffness == 1850`, `nozzle_deflection_um` contract | A-10, C-01, C-06, C-07 |
 | `tests/test_calibration_touchstones.py`, `tests/test_community_realism.py` | Headline frequencies and accels vs field data | every Group B item |
 
 Coverage gap worth closing: `test_fea`, `test_audit_fixes_core_fea` and

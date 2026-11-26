@@ -20,8 +20,13 @@ from scipy.linalg import block_diag, expm
 
 from printsim.fea.components import hertzian_rail_carriage_stiffness
 from printsim.fea.modal import ModalResult
-from printsim.geometry.builder import AssemblyModel, compute_toolhead_link_props
+from printsim.geometry.builder import (
+    AssemblyModel,
+    compute_toolhead_link_props,
+    resolve_toolhead_hardware_accessories,
+)
 from printsim.schema import get_material
+from printsim.schema.overrides import resolve_rail_quality
 
 
 @dataclass
@@ -281,16 +286,18 @@ def analyze_toolhead_rcsa(
     chamber_c = spec.frame.chamber_temp_c
 
     # 1. Substructure parameters: Mount/Heatsink, Heatbreak, Heater Block + Nozzle
+    acc = resolve_toolhead_hardware_accessories(spec)
     member_scale = _effective_member_stiffness_scale(assembly)
     eff_scale = max(float(mount_stiffness_scale), 1e-4) * member_scale
 
     mmat = get_material(th.mount_material)
     e_mount = mmat.effective_modulus_pa(chamber_c) * eff_scale
     g_mount = e_mount / (2.0 * (1.0 + mmat.poisson_ratio))
-    L_mount = max(abs(float(th.cog_offset_mm[2])) * 1e-3, 0.012)
+    L_mount = max(abs(float(acc["effective_cog_offset_mm"][2])) * 1e-3, 0.012)
     I_mount = 4.5e-9
     A_mount = 1.8e-4
-    m_mount = max(th.total_mass_g * 1e-3 - he.block_mass_g * 1e-3 - 0.05, 0.05)
+    # effective_body_mass_g excludes hotend/block mass; subtract only ~50 g linear carriage on X-rail
+    m_mount = max(float(acc["effective_body_mass_g"]) * 1e-3 - 0.05, 0.05)
     rho_mount = m_mount / (A_mount * L_mount)
     Y_mount = beam_tip_receptance_4x4(
         L_mount, e_mount, I_mount, g_mount, A_mount, rho_mount, f_grid, zeta=mmat.damping_ratio
@@ -322,7 +329,7 @@ def analyze_toolhead_rcsa(
     d_blk = 0.011
     A_blk = math.pi * (0.5 * d_blk) ** 2
     I_blk = 0.25 * math.pi * (0.5 * d_blk) ** 4
-    m_blk = max(he.block_mass_g * 1e-3 + 0.008, 0.010)
+    m_blk = max((float(he.block_mass_g) + float(acc["hotend_delta_g"])) * 1e-3 + 0.008, 0.010)
     rho_blk = m_blk / (A_blk * L_blk)
     Y_blk = beam_tip_receptance_4x4(
         L_blk,
@@ -373,14 +380,23 @@ def analyze_toolhead_rcsa(
     m_bare = max(m_modal - m_attached, 0.10)
 
     if spec.architecture != "delta":
+        rail_qual = resolve_rail_quality(spec)
         car = hertzian_rail_carriage_stiffness(
             spec.gantry.x_rail_profile,
             preload=spec.gantry.rail_preload,
             block_type=spec.gantry.rail_block_type,
             rail_quality=spec.gantry.rail_quality,
+            preload_fraction_override=spec.model_overrides.rail_preload.preload_fraction,
+            stiffness_mult_override=rail_qual["stiffness_mult"],
+            drag_mult_override=rail_qual["drag_mult"],
         )
         car_mult = 2.0 if spec.gantry.effective_dual_x_rails else 1.0
-        k_rot_car = car["k_rx_nm_rad"] * car_mult
+        k_rot_base = (
+            0.5 * (car["k_ry_nm_rad"] + car["k_rz_nm_rad"])
+            if dom_axis == "X"
+            else car["k_rx_nm_rad"]
+        )
+        k_rot_car = k_rot_base * car_mult
     else:
         k_rot_car = 2500.0
     j_car = 0.5 * (0.022**2) * m_bare

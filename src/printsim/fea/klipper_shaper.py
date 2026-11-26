@@ -20,11 +20,13 @@ from dataclasses import dataclass
 import numpy as np
 
 SHAPER_NAMES: tuple[str, ...] = ("ZV", "MZV", "EI", "2HUMP_EI", "3HUMP_EI")
-ADVANCED_SHAPER_NAMES: tuple[str, ...] = ("ZVDD", "SMOOTH_ZV", "SMOOTH_EI")
+ADVANCED_SHAPER_NAMES: tuple[str, ...] = ("ZVD", "ZVDD", "SMOOTH_ZV", "SMOOTH_EI", "SMOOTH_FLATNESS")
 DEFAULT_SHAPER_DAMPING_RATIO: float = 0.1
+TEST_DAMPING_RATIOS: tuple[float, ...] = (0.075, 0.1, 0.15)
 DEFAULT_TARGET_SMOOTHING: float = 0.12
 SHAPER_VIBRATION_REDUCTION: float = 20.0  # Klipper shaper_defs.SHAPER_VIBRATION_REDUCTION
 EI_SHAPER_VIB_TOL: float = 0.05  # Klipper shaper_defs default shaper_vib_tol
+NONE_SHAPER_ALLOWABLE_RINGING_MM: float = 0.0228  # ~22.8 um allowable unshaped ringing (0.9 / (2*pi)^2)
 MIN_FREQ_HZ: float = 5.0
 MAX_FREQ_HZ: float = 220.0
 NUM_FREQ_BINS: int = 108
@@ -84,6 +86,24 @@ class AxisShaperGraph:
         }
 
 
+def get_zvd_shaper(
+    shaper_freq_hz: float,
+    damping_ratio: float = DEFAULT_SHAPER_DAMPING_RATIO,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return exact Klipper ZVD `(A, T)` impulse amplitudes and times (s) from `shaper_defs.py`."""
+    if shaper_freq_hz <= 0.0:
+        raise ValueError(f"shaper_freq_hz must be positive, got {shaper_freq_hz}")
+    if not (0.0 <= damping_ratio < 1.0):
+        raise ValueError(f"damping_ratio must be in [0, 1), got {damping_ratio}")
+
+    df = math.sqrt(1.0 - damping_ratio * damping_ratio)
+    k = math.exp(-damping_ratio * math.pi / df)
+    t_d = 1.0 / (shaper_freq_hz * df)
+    amps = np.array([1.0, 2.0 * k, k * k], dtype=float)
+    times = np.array([0.0, 0.5 * t_d, t_d], dtype=float)
+    return amps, times
+
+
 def get_shaper_pulses(
     name: str,
     shaper_freq_hz: float,
@@ -98,6 +118,9 @@ def get_shaper_pulses(
     key = name.strip().upper()
     if key == "NONE":
         return np.array([1.0], dtype=float), np.array([0.0], dtype=float)
+
+    if key == "ZVD":
+        return get_zvd_shaper(shaper_freq_hz, damping_ratio=damping_ratio)
 
     df = math.sqrt(1.0 - damping_ratio * damping_ratio)
     t_d = 1.0 / (shaper_freq_hz * df)
@@ -161,8 +184,83 @@ def get_shaper_pulses(
         base_name = "ZV" if key == "SMOOTH_ZV" else "EI"
         return _build_smooth_shaper(base_name, shaper_freq_hz, damping_ratio)
 
+    if key == "SMOOTH_FLATNESS":
+        return _build_smooth_flatness_shaper(shaper_freq_hz, damping_ratio)
+
     valid = SHAPER_NAMES + ADVANCED_SHAPER_NAMES
     raise ValueError(f"Unknown Klipper shaper name '{name}'. Expected one of {valid}.")
+
+
+SHAPER_REGISTRY: dict[str, dict[str, object]] = {
+    "NONE": {"min_freq_hz": 5.0, "hi_mult": 1.0, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("NONE", f, d)},
+    "ZV": {"min_freq_hz": 21.0, "hi_mult": 1.35, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("ZV", f, d)},
+    "MZV": {"min_freq_hz": 23.0, "hi_mult": 1.35, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("MZV", f, d)},
+    "ZVD": {"min_freq_hz": 29.0, "hi_mult": 1.50, "builder": get_zvd_shaper},
+    "EI": {"min_freq_hz": 29.0, "hi_mult": 1.50, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("EI", f, d)},
+    "2HUMP_EI": {"min_freq_hz": 39.0, "hi_mult": 2.00, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("2HUMP_EI", f, d)},
+    "3HUMP_EI": {"min_freq_hz": 48.0, "hi_mult": 2.00, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("3HUMP_EI", f, d)},
+    "ZVDD": {"min_freq_hz": 29.0, "hi_mult": 1.50, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("ZVDD", f, d)},
+    "SMOOTH_ZV": {"min_freq_hz": 21.0, "hi_mult": 1.35, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("SMOOTH_ZV", f, d)},
+    "SMOOTH_EI": {"min_freq_hz": 29.0, "hi_mult": 1.50, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("SMOOTH_EI", f, d)},
+    "SMOOTH_FLATNESS": {"min_freq_hz": 21.0, "hi_mult": 1.50, "builder": lambda f, d=DEFAULT_SHAPER_DAMPING_RATIO: get_shaper_pulses("SMOOTH_FLATNESS", f, d)},
+}
+
+
+def _flatness_quadrature(n_taps: int = 65) -> tuple[np.ndarray, np.ndarray]:
+    """Symmetric quadrature nodes on `[-1/2, 1/2]` and composite Simpson/trapezoidal weights."""
+    if n_taps < 3:
+        raise ValueError(f"n_taps must be >= 3, got {n_taps}")
+    tau = np.linspace(-0.5, 0.5, n_taps, dtype=float)
+    weights = np.ones(n_taps, dtype=float)
+    if n_taps % 2 == 1:
+        weights[1:-1:2] = 4.0
+        weights[2:-2:2] = 2.0
+    else:
+        weights[1:-1] = 2.0
+    return tau, weights
+
+
+def get_flatness_toolhead_bell(
+    shaper_freq_hz: float,
+    n_taps: int = 65,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return pure septic bell `w0(tau) = (35/16)(1 - 4*tau^2)^3` traced by the nozzle."""
+    if shaper_freq_hz <= 0.0:
+        raise ValueError(f"shaper_freq_hz must be positive, got {shaper_freq_hz}")
+    alpha = 0.70
+    t_sm = alpha / float(shaper_freq_hz)
+    tau, weights = _flatness_quadrature(n_taps)
+    w0 = (35.0 / 16.0) * ((1.0 - 4.0 * tau * tau) ** 3)
+    amps = w0 * weights
+    amps /= float(np.sum(amps))
+    times = (tau + 0.5) * t_sm
+    return amps, times
+
+
+def _build_smooth_flatness_shaper(
+    shaper_freq_hz: float,
+    damping_ratio: float,
+    n_taps: int = 65,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Exact Kalico `SMOOTH_FLATNESS` inverse-plant kernel over `t_sm = 0.70 / f_n`."""
+    alpha = 0.70
+    t_sm = alpha / float(shaper_freq_hz)
+    c = 1.0 / ((2.0 * math.pi * alpha) ** 2)
+    d = float(damping_ratio) / (math.pi * alpha)
+    tau, weights = _flatness_quadrature(n_taps)
+    w_flat = (35.0 / 16.0) * (
+        -64.0 * (tau**6)
+        - 384.0 * d * (tau**5)
+        + (48.0 - 1920.0 * c) * (tau**4)
+        + 192.0 * d * (tau**3)
+        + (-12.0 + 576.0 * c) * (tau**2)
+        - 24.0 * d * tau
+        + (1.0 - 24.0 * c)
+    )
+    amps = w_flat * weights
+    amps /= float(np.sum(amps))
+    times = (tau + 0.5) * t_sm
+    return amps, times
 
 
 def _build_smooth_shaper(
@@ -292,6 +390,22 @@ def apply_biquad_notch(
     return np.sqrt(num / np.maximum(den, 1e-18))
 
 
+def biquad_notch_params_from_db_q(depth_db: float, q: float) -> tuple[float, float, float]:
+    """Return `(zeta_zero, zeta_pole, max_phase_lag_deg)` for depth-limited TMC4671 `BIQUAD_T` notch."""
+    if q <= 0.0:
+        raise ValueError(f"q must be positive, got {q}")
+    if depth_db < 0.0:
+        raise ValueError(f"depth_db must be non-negative, got {depth_db}")
+    zeta_pole = 1.0 / (2.0 * float(q))
+    zeta_zero = zeta_pole * (10.0 ** (-float(depth_db) / 20.0))
+    if zeta_zero >= zeta_pole:
+        return zeta_zero, zeta_pole, 0.0
+    # Exact peak lag over r in (0, 1) occurs at 2r/(1-r^2) = 1 / sqrt(zeta_zero * zeta_pole)
+    ratio = zeta_pole / max(zeta_zero, 1e-15)
+    max_phase_lag_deg = math.degrees(math.atan(math.sqrt(ratio)) - math.atan(1.0 / math.sqrt(ratio)))
+    return zeta_zero, zeta_pole, max_phase_lag_deg
+
+
 def estimate_shaper(
     shaper: tuple[np.ndarray, np.ndarray],
     test_freqs: np.ndarray | Sequence[float] | float,
@@ -353,7 +467,7 @@ def find_shaper_max_accel(
         return 0.0
 
     if get_shaper_smoothing(shaper, accel=100.0, scv=scv) > target_smoothing:
-        return 100.0
+        return 0.0
 
     lo = 100.0
     hi = 10000.0
@@ -403,9 +517,11 @@ def synthesize_axis_psd(
 
     for mode_freq_hz, participation in secondary_modes:
         if 10.0 <= mode_freq_hz <= 215.0 and abs(mode_freq_hz - f_primary) >= 2.0 and participation > 0.15:
-            # Modal receptance scales inversely with mode stiffness (f_primary / f_mode)^2
-            stiffness_atten = min(1.0, (f_primary / mode_freq_hz) ** 2)
-            weight = (float(participation) ** 2) * 0.45 * stiffness_atten
+            # Align with Klipper's 1/f-normalized acceleration sweep PSD (linear in f/f_primary),
+            # rolled off above ~1.8 * f_primary where belt/gantry compliance isolates local modes.
+            freq_ratio = float(mode_freq_hz) / f_primary
+            drive_isolation = 1.0 / (1.0 + (freq_ratio / 1.80) ** 8)
+            weight = min(0.85, (float(participation) ** 2) * 0.45 * freq_ratio * drive_isolation)
             psd += weight * _mobility_psd(freqs, float(mode_freq_hz), damping_secondary)
 
     peak = float(np.max(psd))
@@ -483,6 +599,46 @@ def estimate_psd_damping_ratio(freqs_hz: np.ndarray, raw_psd: np.ndarray) -> flo
     return float(max(0.02, min(0.25, zeta_est)))
 
 
+_SHAPER_HI_MULT: dict[str, float] = {
+    "ZV": 1.35,
+    "MZV": 1.35,
+    "ZVD": 1.50,
+    "EI": 1.50,
+    "2HUMP_EI": 2.00,
+    "3HUMP_EI": 2.00,
+    "ZVDD": 1.50,
+    "SMOOTH_ZV": 1.35,
+    "SMOOTH_EI": 1.50,
+    "SMOOTH_FLATNESS": 1.50,
+}
+
+
+def _shaper_candidate_freqs(name: str, center_f: float) -> np.ndarray:
+    """Build Stage 1 coarse frequency grid sized proportionally to each shaper's search span."""
+    lo_f = min(max(12.0, center_f * 0.7), 210.0)
+    hi_mult = _SHAPER_HI_MULT.get(name.strip().upper(), 1.50)
+    hi_f = min(215.0, max(lo_f + 4.0, center_f * hi_mult))
+    n_coarse = max(35, int(math.ceil((hi_f - lo_f) / 1.25)) + 1)
+    return np.linspace(lo_f, hi_f, n_coarse, dtype=float)
+
+
+def _select_klipper_best_shaper(candidates: Sequence[ShaperCandidate]) -> ShaperCandidate:
+    """Select best shaper across candidates using exact Klipper `find_best_shaper` tradeoffs."""
+    if not candidates:
+        raise ValueError("candidates must be non-empty.")
+    best = candidates[0]
+    for shaper in candidates[1:]:
+        if (
+            shaper.score * 1.2 < best.score
+            or (
+                shaper.score * 1.05 < best.score
+                and shaper.smoothing * 1.1 < best.smoothing
+            )
+        ):
+            best = shaper
+    return best
+
+
 def _fit_single_shaper(
     name: str,
     freqs_hz: np.ndarray,
@@ -492,48 +648,120 @@ def _fit_single_shaper(
     all_vibrations: float,
     scv: float,
     damping_ratio: float,
+    soft_tiebreak_weight: float = 0.0,
+    test_damping_ratios: Sequence[float] = TEST_DAMPING_RATIOS,
 ) -> ShaperCandidate:
-    """Fit optimal shaper frequency on `candidate_freqs` minimizing Klipper's score."""
-    best_score = math.inf
-    best_freq = float(candidate_freqs[0])
-    best_vib_ratio = 1.0
-    best_smoothing = 0.0
-    best_attenuation: np.ndarray | None = None
-    best_shaper: tuple[np.ndarray, np.ndarray] | None = None
+    """Fit optimal shaper frequency using Klipper `fit_shaper` damping pessimisation & rules."""
+    is_flatness = name.strip().upper() == "SMOOTH_FLATNESS"
+    test_drs = np.asarray(
+        tuple(float(dr) for dr in test_damping_ratios) if test_damping_ratios else TEST_DAMPING_RATIOS,
+        dtype=float,
+    )
+    omega = 2.0 * math.pi * freqs_hz
+    damping_mat = test_drs[:, None] * omega[None, :]  # (N_dr, F)
+    omega_d_mat = np.sqrt(1.0 - test_drs[:, None] ** 2) * omega[None, :]  # (N_dr, F)
+    evaluated: dict[
+        float, tuple[float, float, float, float, np.ndarray, tuple[np.ndarray, np.ndarray]]
+    ] = {}
+    seen_fcs: set[float] = set()
 
     def _eval_grid(grid: np.ndarray) -> None:
-        nonlocal best_score, best_freq, best_vib_ratio, best_smoothing, best_attenuation, best_shaper
+        new_fcs: list[float] = []
+        shapers: list[tuple[np.ndarray, np.ndarray]] = []
         for fc in grid:
-            shaper = get_shaper_pulses(name, float(fc), damping_ratio=damping_ratio)
-            attenuation = estimate_shaper(shaper, freqs_hz, test_damping_ratio=damping_ratio)
-            rem_vib = float(np.sum(np.maximum(raw_psd * attenuation - vibr_threshold, 0.0)))
-            vib_ratio = rem_vib / all_vibrations
-            smoothing = get_shaper_smoothing(shaper, accel=5000.0, scv=scv)
-            score = smoothing * (vib_ratio ** 1.5 + vib_ratio * 0.2 + 0.01)
+            fc_f = round(float(fc), 6)
+            if fc_f in seen_fcs:
+                continue
+            seen_fcs.add(fc_f)
+            new_fcs.append(fc_f)
+            shapers.append(get_shaper_pulses(name, fc_f, damping_ratio=damping_ratio))
+        if not new_fcs:
+            return
 
-            if score < best_score:
-                best_score = score
-                best_freq = float(fc)
-                best_vib_ratio = vib_ratio
-                best_smoothing = smoothing
-                best_attenuation = attenuation
-                best_shaper = shaper
+        amps_batch = np.asarray([s[0] for s in shapers], dtype=float)  # (M, P)
+        times_batch = np.asarray([s[1] for s in shapers], dtype=float)  # (M, P)
+        inv_d = 1.0 / np.sum(amps_batch, axis=1, keepdims=True)
+        w_batch = amps_batch * inv_d  # (M, P)
+        dt_tail = times_batch[:, -1:] - times_batch  # (M, P)
+
+        # Vectorized evaluation across (M, N_dr, F, P)
+        decay = w_batch[:, None, None, :] * np.exp(
+            -damping_mat[None, :, :, None] * dt_tail[:, None, None, :]
+        )
+        phase = omega_d_mat[None, :, :, None] * times_batch[:, None, None, :]
+        s_sum = np.sum(decay * np.sin(phase), axis=3)
+        c_sum = np.sum(decay * np.cos(phase), axis=3)
+        vals_all = np.sqrt(s_sum * s_sum + c_sum * c_sum)  # (M, N_dr, F)
+
+        rem_vibs = np.sum(np.maximum(vals_all * raw_psd[None, None, :] - vibr_threshold, 0.0), axis=2)
+        max_vib_ratios = np.max(rem_vibs / all_vibrations, axis=1)  # (M,)
+        shaper_vals_all = np.max(vals_all, axis=1)  # (M, F)
+
+        if is_flatness:
+            sm_batch = [get_flatness_toolhead_bell(fc_f) for fc_f in new_fcs]
+            sm_amps = np.asarray([s[0] for s in sm_batch], dtype=float)
+            sm_times = np.asarray([s[1] for s in sm_batch], dtype=float)
+            sm_w = sm_amps / np.sum(sm_amps, axis=1, keepdims=True)
+        else:
+            sm_w = w_batch
+            sm_times = times_batch
+
+        ts = np.sum(sm_w * sm_times, axis=1, keepdims=True)  # (M, 1)
+        dt_pos = np.maximum(sm_times - ts, 0.0)
+        offset_90 = math.sqrt(2.0) * np.sum(sm_w * (scv + 2500.0 * dt_pos) * dt_pos, axis=1)
+        offset_180 = 2500.0 * np.sum(sm_w * ((sm_times - ts) ** 2), axis=1)
+        smoothings = np.maximum(offset_90, offset_180)
+
+        vr_eff = max_vib_ratios.copy()
+        if soft_tiebreak_weight > 0.0:
+            vr_eff += soft_tiebreak_weight * np.sum(shaper_vals_all * raw_psd[None, :], axis=1) / all_vibrations
+        scores = smoothings * (vr_eff ** 1.5 + vr_eff * 0.2 + 0.01)
+
+        for idx, fc_f in enumerate(new_fcs):
+            evaluated[fc_f] = (
+                fc_f,
+                float(max_vib_ratios[idx]),
+                float(smoothings[idx]),
+                float(scores[idx]),
+                shaper_vals_all[idx],
+                shapers[idx],
+            )
+
+    def _pick_within_shaper(
+        rows: list[tuple[float, float, float, float, np.ndarray, tuple[np.ndarray, np.ndarray]]],
+    ) -> tuple[float, float, float, float, np.ndarray, tuple[np.ndarray, np.ndarray]]:
+        best_vib_row = min(rows, key=lambda r: r[1])
+        selected = best_vib_row
+        for res in reversed(rows):
+            if res[1] < best_vib_row[1] * 1.1 + 0.0005 and res[3] < selected[3]:
+                selected = res
+        return selected
 
     # Stage 1: coarse sweep across [lo_f, hi_f]
     _eval_grid(candidate_freqs)
 
-    # Stage 2: 0.25 Hz fine local refinement around the best coarse basin
-    # (prevents narrow-notch shapers like ZV from aliasing between coarse grid bins)
+    # Stage 2: 0.25 Hz fine local refinement around min-vibration and min-score basins
     if len(candidate_freqs) >= 2:
+        coarse_rows = sorted(evaluated.values(), key=lambda r: r[0])
+        best_vib_coarse = min(coarse_rows, key=lambda r: r[1])
+        sel_coarse = _pick_within_shaper(coarse_rows)
+        min_score_coarse = min(coarse_rows, key=lambda r: r[3])
         step_coarse = float(candidate_freqs[1] - candidate_freqs[0])
-        fine_lo = max(float(candidate_freqs[0]), best_freq - step_coarse)
-        fine_hi = min(float(candidate_freqs[-1]), best_freq + step_coarse)
-        if fine_hi > fine_lo + 0.1:
-            fine_grid = np.arange(fine_lo, fine_hi + 0.125, 0.25, dtype=float)
-            _eval_grid(fine_grid)
+        lo_bound = float(candidate_freqs[0])
+        hi_bound = float(candidate_freqs[-1])
+        for anchor_f in {best_vib_coarse[0], sel_coarse[0], min_score_coarse[0]}:
+            fine_lo = max(lo_bound, anchor_f - step_coarse)
+            fine_hi = min(hi_bound, anchor_f + step_coarse)
+            if fine_hi > fine_lo + 0.1:
+                fine_grid = np.arange(fine_lo, fine_hi + 0.125, 0.25, dtype=float)
+                _eval_grid(fine_grid)
 
-    assert best_shaper is not None and best_attenuation is not None
-    max_accel = find_shaper_max_accel(best_shaper, scv=scv, target_smoothing=DEFAULT_TARGET_SMOOTHING)
+    all_rows = sorted(evaluated.values(), key=lambda r: r[0])
+    best_freq, best_vib_ratio, best_smoothing, best_score, best_attenuation, best_shaper = (
+        _pick_within_shaper(all_rows)
+    )
+    accel_shaper = get_flatness_toolhead_bell(best_freq) if is_flatness else best_shaper
+    max_accel = find_shaper_max_accel(accel_shaper, scv=scv, target_smoothing=DEFAULT_TARGET_SMOOTHING)
     return ShaperCandidate(
         name=name,
         freq_hz=best_freq,
@@ -555,6 +783,12 @@ def calibrate_axis_shapers(
     freqs_hz: np.ndarray | None = None,
     raw_psd: np.ndarray | None = None,
     psd_damping_ratio: float | None = None,
+    normalize_psd: bool = True,
+    ref_peak: float = 100.0,
+    ref_all_vibrations: float | None = None,
+    measured_damping_override: float | None = None,
+    test_damping_ratios: Sequence[float] = TEST_DAMPING_RATIOS,
+    shaper_names: Sequence[str] | None = None,
 ) -> AxisShaperGraph:
     """Run full Klipper `shaper_calibrate` optimization over `[5, 220] Hz` for one axis."""
     psd_zeta = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
@@ -576,12 +810,15 @@ def calibrate_axis_shapers(
         psd = np.asarray(raw_psd, dtype=float).copy()
         if len(freqs) != len(psd):
             raise ValueError("freqs_hz and raw_psd must have identical lengths.")
-        peak = float(np.max(psd))
-        if peak > 0.0:
-            psd *= 100.0 / peak
+        if normalize_psd:
+            peak = float(np.max(psd))
+            if peak > 0.0:
+                psd *= 100.0 / peak
 
-    peak_freq = float(freqs[int(np.argmax(psd))])
-    if raw_psd is None:
+    peak_freq = float(freqs[int(np.argmax(psd))]) if float(np.max(psd)) > 0.0 else float(primary_freq_hz)
+    if measured_damping_override is not None:
+        measured_zeta = float(max(0.02, min(0.25, measured_damping_override)))
+    elif raw_psd is None:
         # Measure half-power bandwidth on a fine 0.15 Hz local grid around primary_freq_hz
         # so narrow low-frequency peaks (~15-35 Hz, FWHM ~2-4 Hz) never alias on the 2 Hz display grid.
         f_p = max(float(primary_freq_hz), 5.0)
@@ -600,31 +837,41 @@ def calibrate_axis_shapers(
     else:
         measured_zeta = estimate_psd_damping_ratio(freqs, psd)
 
-    vibr_threshold = float(np.max(psd)) / SHAPER_VIBRATION_REDUCTION
-    all_vibrations = max(float(np.sum(np.maximum(psd - vibr_threshold, 0.0))), 1e-12)
+    if normalize_psd:
+        vibr_threshold = float(np.max(psd)) / SHAPER_VIBRATION_REDUCTION
+        all_vibrations = max(float(np.sum(np.maximum(psd - vibr_threshold, 0.0))), 1e-12)
+        tie_w = 0.0
+    else:
+        vibr_threshold = float(ref_peak) / SHAPER_VIBRATION_REDUCTION
+        all_vibrations = (
+            max(float(ref_all_vibrations), 1e-12)
+            if ref_all_vibrations is not None
+            else max(float(np.sum(np.maximum(psd - vibr_threshold, 0.0))), 1e-12)
+        )
+        tie_w = 0.02
 
-    lo_f = min(max(12.0, peak_freq * 0.7), 210.0)
-    hi_f = min(215.0, max(lo_f + 4.0, peak_freq * 1.35))
-    candidate_freqs = np.linspace(lo_f, hi_f, 35, dtype=float)
+    center_f = float(primary_freq_hz) if not normalize_psd else peak_freq
+    eval_names = tuple(shaper_names) if shaper_names is not None else SHAPER_NAMES
 
     candidates = [
         _fit_single_shaper(
             name=name,
             freqs_hz=freqs,
             raw_psd=psd,
-            candidate_freqs=candidate_freqs,
+            candidate_freqs=_shaper_candidate_freqs(name, center_f),
             vibr_threshold=vibr_threshold,
             all_vibrations=all_vibrations,
             scv=scv,
             damping_ratio=damping_ratio,
+            soft_tiebreak_weight=tie_w,
+            test_damping_ratios=test_damping_ratios,
         )
-        for name in SHAPER_NAMES
+        for name in eval_names
     ]
 
     choice_norm = shaper_choice.strip().upper()
     if choice_norm == "AUTO":
-        acceptable = [c for c in candidates if c.vibrations_pct <= 6.0]
-        selected = min(acceptable, key=lambda c: c.score) if acceptable else min(candidates, key=lambda c: c.score)
+        selected = _select_klipper_best_shaper(candidates)
         shaped_psd = psd * selected.attenuation_curve
         rec_name = selected.name
         rec_freq = selected.freq_hz
@@ -632,20 +879,23 @@ def calibrate_axis_shapers(
     elif choice_norm == "NONE":
         shaped_psd = psd.copy()
         rec_name = "NONE"
-        rec_freq = peak_freq
-        rec_accel = 0.9 * (max(float(primary_freq_hz), 5.0) ** 2)
+        rec_freq = center_f
+        omega_none = 2.0 * math.pi * max(float(primary_freq_hz), 5.0)
+        rec_accel = NONE_SHAPER_ALLOWABLE_RINGING_MM * (omega_none * omega_none)
     else:
         matched = next((c for c in candidates if c.name == choice_norm), None)
-        if matched is None and choice_norm in ADVANCED_SHAPER_NAMES:
+        if matched is None and (choice_norm in ADVANCED_SHAPER_NAMES or choice_norm in SHAPER_NAMES):
             matched = _fit_single_shaper(
                 name=choice_norm,
                 freqs_hz=freqs,
                 raw_psd=psd,
-                candidate_freqs=candidate_freqs,
+                candidate_freqs=_shaper_candidate_freqs(choice_norm, center_f),
                 vibr_threshold=vibr_threshold,
                 all_vibrations=all_vibrations,
                 scv=scv,
                 damping_ratio=damping_ratio,
+                soft_tiebreak_weight=tie_w,
+                test_damping_ratios=test_damping_ratios,
             )
         if matched is None:
             raise ValueError(f"Unsupported shaper_choice '{shaper_choice}'.")

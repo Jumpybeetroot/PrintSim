@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from printsim.schema import (
-    GANTRY_BRACKET_CATALOG,
     PrinterSpec,
     ProfileSpec,
     get_material,
+    resolve_gantry_bracket,
 )
 
 if TYPE_CHECKING:
@@ -54,10 +54,8 @@ def _build_delta(
 
     motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     toolhead_kg = _b._effective_toolhead_mass_kg(spec)
-    bkt_info = GANTRY_BRACKET_CATALOG.get(
-        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
-    )
-    bkt_delta_kg = float(bkt_info["carriage_mass_delta_g"]) * 1e-3
+    bkt_resolved = resolve_gantry_bracket(spec)
+    bkt_delta_kg = float(bkt_resolved["carriage_mass_delta_g"]) * 1e-3
     car_kg = (spec.gantry.carriage_mass_g / 3.0) * 1e-3
 
     nodes: list[StructuralNode] = []

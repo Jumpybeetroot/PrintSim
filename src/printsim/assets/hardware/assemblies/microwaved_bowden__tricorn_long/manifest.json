@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "assemblies",
+  "asset_id": "microwaved_bowden__tricorn_long",
+  "name": "Tricorn Long + Microwaved Ti Bottom Brace",
+  "source_cad": "mbt_tricorn_v2.step",
+  "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+  "baked_at": "2026-11-25T18:38:29Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 33421,
+  "num_elements": 125357,
+  "num_dofs": 100263,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.012947,
+  "mass_kg": 0.048013,
+  "com_mm": [
+    -0.0005,
+    0.3355,
+    -31.4476
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -66.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 2284.552,
+    "ky": 2179.039,
+    "kz": 53244.36
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 592.549,
+    "kry": 594.051,
+    "krz": 374.682
+  },
+  "fixed_interface_freqs_hz": [
+    5375.89,
+    5455.27,
+    8364.39,
+    14016.36,
+    14296.78,
+    14344.02,
+    18290.38,
+    20805.92
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23998,
+  "visual_bytes": 864428,
+  "cad_trust_pct": 89,
+  "source_hash": "6b9e2ee50cfd69bce0e14a7f37fbebd5245616c7a0a35ed70b8b621131dbeabc"
+}

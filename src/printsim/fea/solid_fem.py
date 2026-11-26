@@ -177,22 +177,71 @@ def _hex8_b_matrix(
     return B
 
 
+def _hex8_incompat_b_matrix(
+    xi: float,
+    eta: float,
+    zeta: float,
+    h: VoxelSize,
+) -> np.ndarray:
+    """6x9 Wilson-Taylor incompatible bubble strain-displacement matrix B_a for (1-xi^2, 1-eta^2, 1-zeta^2)."""
+    hx, hy, hz = _normalize_voxel_size(h)
+    dm1_dx = -4.0 * xi / hx
+    dm2_dy = -4.0 * eta / hy
+    dm3_dz = -4.0 * zeta / hz
+    Ba = np.zeros((6, 9), dtype=float)
+    # Mode 1: M1(xi) = 1 - xi^2 -> u, v, w DOFs (cols 0, 1, 2)
+    Ba[0, 0] = dm1_dx
+    Ba[3, 1] = dm1_dx
+    Ba[5, 2] = dm1_dx
+    # Mode 2: M2(eta) = 1 - eta^2 -> u, v, w DOFs (cols 3, 4, 5)
+    Ba[3, 3] = dm2_dy
+    Ba[1, 4] = dm2_dy
+    Ba[4, 5] = dm2_dy
+    # Mode 3: M3(zeta) = 1 - zeta^2 -> u, v, w DOFs (cols 6, 7, 8)
+    Ba[5, 6] = dm3_dz
+    Ba[4, 7] = dm3_dz
+    Ba[2, 8] = dm3_dz
+    return Ba
+
+
+def hex8_incompatible_matrices(
+    D: np.ndarray,
+    h: VoxelSize,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute statically condensed Wilson-Taylor (QM6-3D) 24x24 Hex8 stiffness, center B0, and condensation matrix C_a.
+
+    Internal bubble DOFs satisfy ``a_e = C_a @ u_e`` with ``C_a = -K_ii^{-1} K_ie``,
+    eliminating parasitic bending shear locking while keeping constant-strain patch tests
+    exact to machine precision.
+    """
+    hx, hy, hz = _normalize_voxel_size(h)
+    gp = 1.0 / math.sqrt(3.0)
+    det_j = (hx * hy * hz) * 0.125
+    K_ee = np.zeros((24, 24), dtype=float)
+    K_ei = np.zeros((24, 9), dtype=float)
+    K_ii = np.zeros((9, 9), dtype=float)
+    for xi in (-gp, gp):
+        for eta in (-gp, gp):
+            for zeta in (-gp, gp):
+                Bu = _hex8_b_matrix(xi, eta, zeta, (hx, hy, hz))
+                Ba = _hex8_incompat_b_matrix(xi, eta, zeta, (hx, hy, hz))
+                K_ee += (Bu.T @ D @ Bu) * det_j
+                K_ei += (Bu.T @ D @ Ba) * det_j
+                K_ii += (Ba.T @ D @ Ba) * det_j
+    K_ii = 0.5 * (K_ii + K_ii.T)
+    C_a = -np.linalg.solve(K_ii, K_ei.T)
+    Ke = K_ee + K_ei @ C_a
+    B_center = _hex8_b_matrix(0.0, 0.0, 0.0, (hx, hy, hz))
+    return 0.5 * (Ke + Ke.T), B_center, C_a
+
+
 def hex8_element_stiffness(
     D: np.ndarray,
     h: VoxelSize,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Compute exact 24x24 Hex8 stiffness matrix Ke via 2x2x2 Gauss quadrature and center B0."""
-    hx, hy, hz = _normalize_voxel_size(h)
-    gp = 1.0 / math.sqrt(3.0)
-    det_j = (hx * hy * hz) * 0.125
-    Ke = np.zeros((24, 24), dtype=float)
-    for xi in (-gp, gp):
-        for eta in (-gp, gp):
-            for zeta in (-gp, gp):
-                B = _hex8_b_matrix(xi, eta, zeta, (hx, hy, hz))
-                Ke += (B.T @ D @ B) * det_j
-    B_center = _hex8_b_matrix(0.0, 0.0, 0.0, (hx, hy, hz))
-    return 0.5 * (Ke + Ke.T), B_center
+    """Compute 24x24 Wilson-Taylor incompatible-mode Hex8 stiffness matrix Ke and center B0."""
+    Ke, B_center, _ = hex8_incompatible_matrices(D, h)
+    return Ke, B_center
 
 
 def hex8_element_mass(rho_kg_m3: float, h_m: VoxelSize) -> np.ndarray:
@@ -319,6 +368,43 @@ def voxelize_stl_file(path: str | Path, target_max_dim_voxels: int = 18) -> tupl
     return voxelize_stl_bytes(p.read_bytes(), file_type=p.suffix.lstrip(".") or "stl", target_max_dim_voxels=target_max_dim_voxels)
 
 
+_FACE_LOCAL_NODES: dict[FaceName, tuple[int, int, int, int]] = {
+    "min_x": (0, 3, 4, 7),
+    "max_x": (1, 2, 5, 6),
+    "min_y": (0, 1, 4, 5),
+    "max_y": (2, 3, 6, 7),
+    "min_z": (0, 1, 2, 3),
+    "max_z": (4, 5, 6, 7),
+}
+
+
+def _normalize_cell_sizes_mm(
+    grid_shape: tuple[int, int, int],
+    voxel_size_mm: VoxelSize,
+    cell_sizes_mm: tuple[Sequence[float], Sequence[float], Sequence[float]] | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, tuple[float, float, float]]:
+    """Resolve per-axis rectilinear brick edge lengths (mm) for uniform or variable grids."""
+    nx, ny, nz = grid_shape
+    if cell_sizes_mm is None:
+        hx_mm, hy_mm, hz_mm = _normalize_voxel_size(voxel_size_mm)
+        dx = np.full(nx, hx_mm, dtype=float)
+        dy = np.full(ny, hy_mm, dtype=float)
+        dz = np.full(nz, hz_mm, dtype=float)
+        return dx, dy, dz, _scalar_voxel_size_mm(voxel_size_mm), (hx_mm, hy_mm, hz_mm)
+
+    dx = np.asarray(cell_sizes_mm[0], dtype=float)
+    dy = np.asarray(cell_sizes_mm[1], dtype=float)
+    dz = np.asarray(cell_sizes_mm[2], dtype=float)
+    if dx.shape != (nx,) or dy.shape != (ny,) or dz.shape != (nz,):
+        raise ValueError(
+            f"cell_sizes_mm lengths {(dx.shape, dy.shape, dz.shape)} do not match grid shape {grid_shape}"
+        )
+    if np.any(dx <= 0.0) or np.any(dy <= 0.0) or np.any(dz <= 0.0):
+        raise ValueError("All rectilinear cell_sizes_mm entries must be positive")
+    mean_dims = (float(np.mean(dx)), float(np.mean(dy)), float(np.mean(dz)))
+    return dx, dy, dz, _scalar_voxel_size_mm(mean_dims), mean_dims
+
+
 def solve_solid_voxel_fea(
     grid: np.ndarray,
     voxel_size_mm: VoxelSize,
@@ -328,12 +414,11 @@ def solve_solid_voxel_fea(
     force_n: tuple[float, float, float] = (0.0, 0.0, -50.0),
     part_name: str = "Custom Solid Part",
     fdm_anisotropic: bool | None = None,
+    cell_sizes_mm: tuple[Sequence[float], Sequence[float], Sequence[float]] | None = None,
 ) -> SolidFEAResult:
-    """Solve 3D linear elastic Hex8 FEA on a boolean voxel grid using SciPy sparse direct solver."""
+    """Solve 3D linear elastic Hex8 (QM6-3D incompatible-mode) FEA on a voxel or rectilinear grid."""
     mat = get_material(material_id)
     is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
-    hx_mm, hy_mm, hz_mm = _normalize_voxel_size(voxel_size_mm)
-    hx_m, hy_m, hz_m = hx_mm * 1e-3, hy_mm * 1e-3, hz_mm * 1e-3  # strict SI meters
 
     occ = np.argwhere(grid)
     n_elem = len(occ)
@@ -341,6 +426,9 @@ def solve_solid_voxel_fea(
         raise ValueError("Empty voxel grid provided to solid FEA solver")
 
     nx, ny, nz = grid.shape
+    dx_mm, dy_mm, dz_mm, scalar_h_mm, mean_dims_mm = _normalize_cell_sizes_mm(
+        (nx, ny, nz), voxel_size_mm, cell_sizes_mm
+    )
 
     # Map occupied element corner grid coordinates (ix..ix+1, iy..iy+1, iz..iz+1) to compact node IDs
     offsets = np.array(
@@ -374,9 +462,20 @@ def solve_solid_voxel_fea(
     node_iz = rem % (nz + 1)
     node_grid_coords = np.stack([node_ix, node_iy, node_iz], axis=1)  # (n_nodes, 3)
 
-    # Assemble global sparse stiffness matrix K (vectorized COO -> CSR)
+    # Group elements into unique physical brick size classes (hx_m, hy_m, hz_m) in strict SI meters
+    elem_sizes_m = np.stack(
+        [dx_mm[occ[:, 0]], dy_mm[occ[:, 1]], dz_mm[occ[:, 2]]], axis=1
+    ) * 1e-3
+    elem_vols_m3 = np.prod(elem_sizes_m, axis=1)
+    uniq_sizes_m, cls_idx = np.unique(np.round(elem_sizes_m, 9), axis=0, return_inverse=True)
+
     D = constitutive_matrix_3d(mat, fdm_anisotropic=is_fdm)
-    Ke, B_center = hex8_element_stiffness(D, (hx_m, hy_m, hz_m))
+    ke_classes = np.empty((len(uniq_sizes_m), 24, 24), dtype=float)
+    ca_classes = np.empty((len(uniq_sizes_m), 9, 24), dtype=float)
+    for c_i, sz_m in enumerate(uniq_sizes_m):
+        ke_c, _, ca_c = hex8_incompatible_matrices(D, (float(sz_m[0]), float(sz_m[1]), float(sz_m[2])))
+        ke_classes[c_i] = ke_c
+        ca_classes[c_i] = ca_c
 
     elem_dofs = np.empty((n_elem, 24), dtype=int)
     elem_dofs[:, 0::3] = 3 * elem_nodes
@@ -385,7 +484,7 @@ def solve_solid_voxel_fea(
 
     rows = np.repeat(elem_dofs, 24, axis=1).ravel()
     cols = np.tile(elem_dofs, (1, 24)).ravel()
-    vals = np.tile(Ke.ravel(), n_elem)
+    vals = ke_classes[cls_idx].ravel()
     K = sparse.coo_matrix((vals, (rows, cols)), shape=(n_dof, n_dof)).tocsr()
 
     # Determine fixed and loaded node sets from occupied bounding box faces
@@ -409,16 +508,33 @@ def solve_solid_voxel_fea(
     free_mask[fixed_dofs] = False
     free_dofs = np.where(free_mask)[0]
 
-    # Distribute applied force vector using consistent element-face nodal weighting (1:2:4 corner:edge:interior)
+    # Distribute applied force using exact face-element area weighting (consistent with uniform surface traction)
     F = np.zeros(n_dof, dtype=float)
     f_vec = np.asarray(force_n, dtype=float)
     loaded_set_arr = np.zeros(n_nodes, dtype=bool)
     loaded_set_arr[loaded_nodes] = True
-    # Count how many elements touch each loaded node -> exact area-consistent traction weight on regular voxel grid
-    node_weights = np.bincount(elem_nodes.ravel(), minlength=n_nodes).astype(float)
+
+    node_weights = np.zeros(n_nodes, dtype=float)
+    load_axis = {"x": 0, "y": 1, "z": 2}[load_face[-1]]
+    ax_a, ax_b = [a for a in (0, 1, 2) if a != load_axis]
+    sizes_axes_m = (dx_mm * 1e-3, dy_mm * 1e-3, dz_mm * 1e-3)
+    fn_global = elem_nodes[:, _FACE_LOCAL_NODES[load_face]]  # (n_elem, 4)
+    is_face_elem = np.all(loaded_set_arr[fn_global], axis=1)
+    if np.any(is_face_elem):
+        face_areas = (
+            sizes_axes_m[ax_a][occ[is_face_elem, ax_a]]
+            * sizes_axes_m[ax_b][occ[is_face_elem, ax_b]]
+        )
+        for j in range(4):
+            np.add.at(node_weights, fn_global[is_face_elem, j], 0.25 * face_areas)
+
     w_loaded = node_weights[loaded_nodes]
     w_sum = float(np.sum(w_loaded))
-    if w_sum > 0:
+    if w_sum <= 0.0:
+        node_weights = np.bincount(elem_nodes.ravel(), minlength=n_nodes).astype(float)
+        w_loaded = node_weights[loaded_nodes]
+        w_sum = float(np.sum(w_loaded))
+    if w_sum > 0.0:
         fracs = w_loaded / w_sum
         F[3 * loaded_nodes + 0] = f_vec[0] * fracs
         F[3 * loaded_nodes + 1] = f_vec[1] * fracs
@@ -427,24 +543,45 @@ def solve_solid_voxel_fea(
     # Solve K_ff u_f = F_f
     K_ff = K[free_dofs, :][:, free_dofs]
     # Add microscopic diagonal stabilization only for disconnected floating voxels if any
-    diag_floor = float(Ke[0, 0]) * 1e-10
+    diag_floor = float(np.max(ke_classes[:, 0, 0])) * 1e-10
     K_ff = K_ff + sparse.diags(np.full(len(free_dofs), diag_floor), format="csr")
     u_f = spsolve(K_ff, F[free_dofs])
     u = np.zeros(n_dof, dtype=float)
     u[free_dofs] = u_f
 
-    # Element stress recovery at element centroid (DB @ u_e)
-    DB = D @ B_center  # (6, 24)
+    # Nodal-averaged corner stress recovery including incompatible-mode displacement a_e = C_a @ u_e
     u_elem = u[elem_dofs]  # (n_elem, 24)
-    stresses = u_elem @ DB.T  # (n_elem, 6): [sxx, syy, szz, txy, tyz, txz]
+    sig_corners = np.empty((n_elem, 8, 6), dtype=float)
+    for c_i, sz_m in enumerate(uniq_sizes_m):
+        mask = cls_idx == c_i
+        ue = u_elem[mask]
+        ae = ue @ ca_classes[c_i].T
+        h_tup = (float(sz_m[0]), float(sz_m[1]), float(sz_m[2]))
+        for k, (xi, eta, zeta) in enumerate(_HEX8_CORNER_SIGNS):
+            Bu = _hex8_b_matrix(float(xi), float(eta), float(zeta), h_tup)
+            Ba = _hex8_incompat_b_matrix(float(xi), float(eta), float(zeta), h_tup)
+            sig_corners[mask, k, :] = ue @ (D @ Bu).T + ae @ (D @ Ba).T
 
-    sxx, syy, szz = stresses[:, 0], stresses[:, 1], stresses[:, 2]
-    txy, tyz, txz = stresses[:, 3], stresses[:, 4], stresses[:, 5]
-    von_mises = np.sqrt(
-        0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2)
-        + 3.0 * (txy**2 + tyz**2 + txz**2)
+    node_sigma = np.zeros((n_nodes, 6), dtype=float)
+    node_vol = np.zeros(n_nodes, dtype=float)
+    for k in range(8):
+        nds_k = elem_nodes[:, k]
+        np.add.at(node_vol, nds_k, elem_vols_m3)
+        for comp in range(6):
+            np.add.at(node_sigma[:, comp], nds_k, sig_corners[:, k, comp] * elem_vols_m3)
+    node_sigma /= np.maximum(node_vol[:, None], 1e-30)
+
+    sxx, syy, szz = node_sigma[:, 0], node_sigma[:, 1], node_sigma[:, 2]
+    txy, tyz, txz = node_sigma[:, 3], node_sigma[:, 4], node_sigma[:, 5]
+    vm_node = np.sqrt(
+        np.maximum(
+            0.0,
+            0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2)
+            + 3.0 * (txy**2 + tyz**2 + txz**2),
+        )
     )
-    max_vm_mpa = float(np.max(von_mises)) * 1e-6
+    elem_vm_pa = np.max(vm_node[elem_nodes], axis=1)
+    max_vm_mpa = float(np.max(vm_node)) * 1e-6
     max_z_tensile_mpa = float(max(0.0, np.max(szz))) * 1e-6
 
     yield_mpa = mat.yield_strength_pa * 1e-6
@@ -460,17 +597,24 @@ def solve_solid_voxel_fea(
     else:
         failure_mode = "isotropic_yield"
 
-    # Displacement & effective stiffness
+    # Displacement & directional load-aligned effective stiffness: F / mean(u . f_hat)
     u_nodes = u.reshape(n_nodes, 3)
     disp_mags = np.linalg.norm(u_nodes, axis=1)
     max_disp_m = float(np.max(disp_mags))
     f_mag = float(np.linalg.norm(f_vec))
-    avg_load_disp_m = float(np.mean(np.linalg.norm(u_nodes[loaded_nodes], axis=1)))
+    if f_mag > 1e-12:
+        f_hat = f_vec / f_mag
+        avg_load_disp_m = float(np.mean(u_nodes[loaded_nodes] @ f_hat))
+    else:
+        avg_load_disp_m = float(np.mean(np.linalg.norm(u_nodes[loaded_nodes], axis=1)))
     stiffness_n_per_mm = f_mag / max(avg_load_disp_m * 1e3, 1e-9)
 
-    mass_g = n_elem * (hx_m * hy_m * hz_m) * mat.density_kg_m3 * 1000.0
+    mass_g = float(np.sum(elem_vols_m3)) * mat.density_kg_m3 * 1000.0
 
     # Build voxel list for 3D visualization
+    xc_mm = np.cumsum(dx_mm) - 0.5 * dx_mm
+    yc_mm = np.cumsum(dy_mm) - 0.5 * dy_mm
+    zc_mm = np.cumsum(dz_mm) - 0.5 * dz_mm
     fixed_set = set(fixed_nodes.tolist())
     loaded_set = set(loaded_nodes.tolist())
     voxels_out: list[dict] = []
@@ -483,12 +627,12 @@ def solve_solid_voxel_fea(
         voxels_out.append(
             {
                 "center_mm": [
-                    round((float(ix) + 0.5) * hx_mm, 3),
-                    round((float(iy) + 0.5) * hy_mm, 3),
-                    round((float(iz) + 0.5) * hz_mm, 3),
+                    round(float(xc_mm[ix]), 3),
+                    round(float(yc_mm[iy]), 3),
+                    round(float(zc_mm[iz]), 3),
                 ],
                 "disp_mm": [round(float(v), 6) for v in mean_disp_mm],
-                "von_mises_mpa": round(float(von_mises[e_idx]) * 1e-6, 3),
+                "von_mises_mpa": round(float(elem_vm_pa[e_idx]) * 1e-6, 3),
                 "fixed": is_fix,
                 "loaded": is_load,
             }
@@ -498,7 +642,7 @@ def solve_solid_voxel_fea(
         part_name=part_name,
         material_id=material_id,
         is_fdm_anisotropic=is_fdm,
-        voxel_size_mm=_scalar_voxel_size_mm(voxel_size_mm),
+        voxel_size_mm=scalar_h_mm,
         num_elements=n_elem,
         num_nodes=n_nodes,
         num_dofs=n_dof,
@@ -513,7 +657,7 @@ def solve_solid_voxel_fea(
         safety_factor=safety_factor,
         failure_mode=failure_mode,
         voxels=voxels_out,
-        voxel_dims_mm=(hx_mm, hy_mm, hz_mm),
+        voxel_dims_mm=mean_dims_mm,
     )
 
 

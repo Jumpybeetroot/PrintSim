@@ -8,7 +8,13 @@ from .adxl_calibration import (
     fit_printer_to_adxl,
     parse_adxl_csv,
 )
-from .beam3d import assemble_global_matrices, element_internal_forces, local_beam_mass, local_beam_stiffness
+from .beam3d import (
+    assemble_global_matrices,
+    beam_shear_coefficients,
+    element_internal_forces,
+    local_beam_mass,
+    local_beam_stiffness,
+)
 from .bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from .components import (
     ThermalStructuralReport,
@@ -96,6 +102,7 @@ __all__ = [
     "fit_printer_to_adxl",
     "parse_adxl_csv",
     "assemble_global_matrices",
+    "beam_shear_coefficients",
     "BedPlateFEAResult",
     "solve_bed_plate_fem",
     "element_internal_forces",

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from printsim.engine.evaluator import SimulationReport, evaluate_printer
-from printsim.schema import PrinterSpec
+from printsim.schema import HOTEND_CATALOG, TOOLHEAD_PRESETS, PrinterSpec
 
 Objective = Literal["balanced", "speed", "rigidity", "budget"]
 
@@ -72,22 +72,35 @@ class OptimizationResult:
 
 
 def _score_objective(report: SimulationReport, objective: Objective) -> float:
-    if report.collision.has_collision:
-        return report.scores.composite - 30.0
     if objective == "speed":
         # Prioritize high print speed, high recommended acceleration, high melt flow, and quality
-        time_bonus = max(0.0, 40.0 - report.virtual_print.total_time_s * 0.25)
-        return (
+        time_bonus = min(40.0, 40.0 * (120.0 / max(report.virtual_print.total_time_s, 30.0)))
+        score = (
             0.35 * report.scores.dynamics
             + 0.25 * report.scores.thermal
             + 0.25 * report.scores.print_quality
             + 0.15 * min(100.0, time_bonus * 2.5)
         )
-    if objective == "rigidity":
-        return 0.65 * report.scores.structural + 0.20 * report.scores.dynamics + 0.15 * report.scores.print_quality
-    if objective == "budget":
-        return 0.45 * report.scores.efficiency + 0.30 * report.scores.print_quality + 0.25 * report.scores.structural
-    return report.scores.composite
+    elif objective == "rigidity":
+        score = (
+            0.65 * report.scores.structural
+            + 0.20 * report.scores.dynamics
+            + 0.15 * report.scores.print_quality
+        )
+    elif objective == "budget":
+        score = (
+            0.45 * report.scores.efficiency
+            + 0.30 * report.scores.print_quality
+            + 0.25 * report.scores.structural
+        )
+    else:
+        # report.scores.composite already applies the 30-point collision penalty once
+        return report.scores.composite
+
+    if report.collision.has_collision:
+        # Apply the same single 30-point collision penalty as composite (without double-counting)
+        return max(0.0, score - 30.0)
+    return score
 
 
 def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, list[str]]:
@@ -101,15 +114,12 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
         "panel_config",
         "x_beam",
         "belt",
-        "hotend_melt",
-        "hotend_heater",
-        "heatbreak",
-        "toolhead_mass",
+        "hotend_preset",
+        "toolhead_preset",
         "toolhead_mount",
         "bed_mount",
         "gantry_brackets",
         "extrusion_filling",
-        "accel",
     ]
     if child.architecture == "corexy":
         mutation_pool.extend(["drive_mode", "bed_z_drive"])
@@ -153,6 +163,10 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
                 ("extrusion_2020", "aluminum_6063_t5"),
                 ("cf_tube_20x20x1_5", "carbon_fiber_tube"),
                 ("cf_tube_20x20x2", "carbon_fiber_tube"),
+                ("cf_tube_20x20x2", "carbon_fiber_high_tg"),
+                ("cf_tube_20x20_carbonara", "carbon_fiber_torsional_45"),
+                ("cf_tube_30x20x2", "carbon_fiber_torsional_45"),
+                ("cf_tube_20x20_carbonara", "carbon_fiber_m40j_hm"),
                 ("cf_tube_25x25x2", "carbon_fiber_tube"),
                 ("al_tube_20x20x2", "aluminum_6061_t6"),
             ]
@@ -177,23 +191,37 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
             if pret > 45.0:
                 child.gantry.double_shear_pulleys = True
             changes.append(f"belt={btype}/{core}@{pret:.0f}N")
-        elif m == "hotend_melt":
-            val = rng.choice([12.0, 16.0, 20.0, 24.0])
-            child.toolhead.hotend.melt_zone_length_mm = val
-            child.toolhead.hotend.block_material = rng.choice(["aluminum_6061_t6", "copper_c110"])
-            changes.append(f"hotend.melt={val}mm/{child.toolhead.hotend.block_material}")
-        elif m == "hotend_heater":
-            val = rng.choice([40.0, 60.0, 80.0, 100.0])
-            child.toolhead.hotend.heater_power_w = val
-            changes.append(f"hotend.heater={val:.0f}W")
-        elif m == "heatbreak":
-            mat = rng.choice(["stainless_304", "titanium_grade5"])
-            child.toolhead.hotend.heatbreak_material = mat
-            changes.append(f"hotend.heatbreak={mat}")
-        elif m == "toolhead_mass":
-            val = rng.choice([220.0, 280.0, 340.0, 420.0])
-            child.toolhead.total_mass_g = val
-            changes.append(f"toolhead.mass={val:.0f}g")
+        elif m == "hotend_preset":
+            hotend_ids = list(HOTEND_CATALOG.keys())
+            cur_he = child.toolhead.hotend.preset_id
+            alts = [hid for hid in hotend_ids if hid != cur_he] or hotend_ids
+            pid = rng.choice(alts)
+            child.toolhead.hotend.preset_id = pid  # auto-populates full catalog physics/mass/length/stiffness
+            changes.append(f"hotend.preset={pid}")
+        elif m == "toolhead_preset":
+            th_ids = list(TOOLHEAD_PRESETS.keys())
+            cur_th = child.toolhead.preset_id
+            alts = [tid for tid in th_ids if tid != cur_th] or th_ids
+            tid = rng.choice(alts)
+            preset = TOOLHEAD_PRESETS[tid]
+            child.toolhead.preset_id = preset["preset_id"]
+            child.toolhead.name = preset["name"]
+            child.toolhead.total_mass_g = float(preset["total_mass_g"])
+            child.toolhead.cog_offset_mm = tuple(float(v) for v in preset["cog_offset_mm"])  # type: ignore[assignment]
+            child.toolhead.nozzle_offset_mm = tuple(float(v) for v in preset["nozzle_offset_mm"])  # type: ignore[assignment]
+            if "body_construction" in preset:
+                child.toolhead.body_construction = preset["body_construction"]  # type: ignore[assignment]
+            if "z_probe_type" in preset:
+                child.toolhead.z_probe_type = preset["z_probe_type"]  # type: ignore[assignment]
+            if "envelope_mm" in preset:
+                child.toolhead.envelope_mm = tuple(float(v) for v in preset["envelope_mm"])  # type: ignore[assignment]
+            if "mount_material" in preset:
+                child.toolhead.mount_material = preset["mount_material"]  # type: ignore[assignment]
+            child.toolhead.internal_stiffness_n_per_mm = TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM.get(
+                child.toolhead.mount_material,
+                float(preset.get("internal_stiffness_n_per_mm", child.toolhead.internal_stiffness_n_per_mm)),
+            )
+            changes.append(f"toolhead.preset={tid}({child.toolhead.total_mass_g:.0f}g)")
         elif m == "toolhead_mount":
             mount_mats = list(TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM.keys())
             alts = [x for x in mount_mats if x != child.toolhead.mount_material] or mount_mats
@@ -234,10 +262,6 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
             if child.frame.enclosed_panels and child.frame.panel_mounting == "bolted_structural":
                 child.frame.bolt_panels_to_gantry = not child.is_flying_gantry
             changes.append(f"bed.z_drive={val}")
-        elif m == "accel":
-            val = rng.choice([4000.0, 7000.0, 10000.0, 14000.0, 18000.0])
-            child.kinematics.max_accel_mm_s2 = val
-            changes.append(f"kinematics.max_accel={val:.0f}")
 
     return child, changes
 
@@ -269,7 +293,12 @@ def optimize_design(
                 "rec_accel": round(base_report.modal_fea.recommended_max_accel_mm_s2, 0),
                 "max_flow": round(base_report.thermal.max_volumetric_flow_mm3_s, 1),
                 "print_time_s": round(base_report.virtual_print.total_time_s, 1),
-                "cost_usd": round(base_report.assembly.estimated_material_cost_usd, 0),
+                "cost_usd": round(
+                    base_report.bom_total_cost_usd
+                    if base_report.bom_total_cost_usd is not None
+                    else base_report.assembly.estimated_material_cost_usd,
+                    0,
+                ),
             },
         )
     ]
@@ -294,7 +323,12 @@ def optimize_design(
                     "rec_accel": round(rep.modal_fea.recommended_max_accel_mm_s2, 0),
                     "max_flow": round(rep.thermal.max_volumetric_flow_mm3_s, 1),
                     "print_time_s": round(rep.virtual_print.total_time_s, 1),
-                    "cost_usd": round(rep.assembly.estimated_material_cost_usd, 0),
+                    "cost_usd": round(
+                        rep.bom_total_cost_usd
+                        if rep.bom_total_cost_usd is not None
+                        else rep.assembly.estimated_material_cost_usd,
+                        0,
+                    ),
                 },
             )
         )

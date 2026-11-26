@@ -41,12 +41,15 @@ These touchstones complement `docs/monolith_discord_benchmarks.md` by filling ba
 | carriage | MGN12H Carriage Block + Printed Shuttle | 115 | MGN12H stainless carriage block (~65 g) + printed ABS/CF X-carriage shuttle (~50 g) |
 | gantry | 2020 Aluminum 350mm + MGN12H Rail | 460 | Misumi 2020 350 mm extrusion (~195 g) + 350 mm MGN12H steel rail (~265 g) |
 | gantry | 2020 Carbon Tube 350mm + MGN12H Rail | 345 | 20x20x2 mm carbon fiber square tube 350 mm (~80 g) + 350 mm MGN12H steel rail (~265 g) |
+| gantry | Carbonara 20x20 CF X-Beam (330 / 380 / 430 mm bare) | 64.7 / 74.5 / 84.3 | Monolith / Brazuka / Fabreeko high-Tg ±45°/0° CF beam (196.1 g/m, 0.01 g scale); requires internal PET-CF/PPA-CF M3 load-distribution inserts |
 | gantry | CNC Lightweight Al Beam 350mm + MGN12H Rail | 375 | Pocketed CNC 6061-T6 lightweight X-beam 350 mm (~110 g) + 350 mm MGN12H steel rail (~265 g) |
 | hotend | Phaetus Dragon HF | 45 | Phaetus datasheet / community scale check (assembled block, heatbreak, heatsink) |
 | hotend | Phaetus Rapido 2 UHF | 52 | Phaetus datasheet (ceramic heater cartridge + UHF melt zone) |
 | hotend | E3D Revo Voron | 40 | E3D datasheet (rigid Voron heatsink + HeaterCore + brass nozzle) |
 | hotend | Mellow Goliath Air | 96 | Mellow / VzBot datasheet (air-cooled ultra-high-flow hotend assembly) |
-| hotend | Luke's Lab Chube Conduction | 78 | Luke's Laboratory datasheet (conduction-cooled high-flow hotend) |
+| hotend | Luke's Lab Chube Compact | 63 | Official Luke's Lab STEP/datasheet: 50 g bare + 6×16 mm 80W heater + PT1000 + V6 nozzle + silicone sock (47.2 mm OAL, 4×M3 16 mm PCD) |
+| hotend | Luke's Lab Chube Air | 79 | Official Luke's Lab Rev A drawing: 69 g bare (CoM 36.15 mm) + 6×20 mm heater + thermistor + V6 nozzle (66.0 mm OAL, 6×M3 18 mm PCD) |
+| hotend | Luke's Lab Chube Conduction | 90 | Official Luke's Lab Rev A drawing: 74 g bare (CoM 34.82 mm) + 6×47.5 mm 120W Supervolcano heater + thermistor + V6 nozzle (66.0 mm OAL, 6×M3 18 mm PCD) |
 
 ## 3. Verified Structural Filament & Material TDS
 

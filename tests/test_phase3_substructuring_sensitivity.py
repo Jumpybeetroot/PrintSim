@@ -26,7 +26,7 @@ from printsim.fea.rcsa import (
     lm_fbs_couple,
 )
 from printsim.fea.sensitivity import compute_structural_sensitivities
-from printsim.fea.solver import _build_factorized_solver
+from printsim.fea.solver import _build_factorized_solver, build_inertial_load_vectors
 from printsim.fea.superelement import (
     _BRACKET_CACHE,
     assemble_superelement_into_global,
@@ -337,18 +337,9 @@ def test_fox_kapoor_and_adjoint_sensitivity_finite_difference() -> None:
         solve_rhs = _build_factorized_solver(K_p, free_p)
         noz_i = nidx[asm_p.nozzle_node_id]
         bed_i = nidx[asm_p.bed_node_id]
-        cog_i = nidx[asm_p.toolhead_cog_node_id]
         n_dof = K_p.shape[0]
         accel = asm_p.spec.kinematics.max_accel_mm_s2 * 1e-3
-
-        F_x = np.zeros(n_dof)
-        F_x[6 * cog_i + 0] = asm_p.x_moving_mass_kg * accel
-        F_y = np.zeros(n_dof)
-        th_share = asm_p.spec.toolhead.total_mass_g * 1e-3 / asm_p.y_moving_mass_kg
-        F_y[6 * cog_i + 1] = asm_p.y_moving_mass_kg * accel * th_share
-        other_g = [g for g in asm_p.gantry_node_ids if g != asm_p.toolhead_node_id]
-        for gid in other_g:
-            F_y[6 * nidx[gid] + 1] += asm_p.y_moving_mass_kg * accel * (1.0 - th_share) / len(other_g)
+        F_x, F_y, _, _ = build_inertial_load_vectors(asm_p, nidx, n_dof, accel)
 
         u_x = solve_rhs(F_x)
         u_y = solve_rhs(F_y)

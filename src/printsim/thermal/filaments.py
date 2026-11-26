@@ -17,6 +17,15 @@ class FilamentSpec(BaseModel):
     viscosity_factor: float = Field(
         1.0, gt=0, description="Relative melt viscosity multiplier vs PLA (1.0)"
     )
+    melt_transfer_factor: float = Field(
+        1.0,
+        gt=0.05,
+        le=2.0,
+        description=(
+            "Relative Graetz shear-film core-melting coupling multiplier vs PLA (1.0), "
+            "capturing amorphous viscous boundary resistance and fiber-core bridging"
+        ),
+    )
     power_law_n: float = Field(0.38, gt=0.1, le=1.0, description="Shear-thinning index n")
     cooling_demand: float = Field(
         1.0, ge=0.1, le=2.0, description="Relative part-cooling demand for overhangs (PLA=1.0, ABS=0.35)"
@@ -67,9 +76,11 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
         extrudable_temp_c=175.0,
         thermal_conductivity_w_mk=0.13,
         density_kg_m3=1240.0,
-        specific_heat_j_kgk=1800.0,
+        # Melt-range averaged DSC specific heat (~1900-2050 J/(kg*K) over 25-215 C)
+        specific_heat_j_kgk=1950.0,
         latent_heat_j_kg=45000.0,
         viscosity_factor=1.0,
+        melt_transfer_factor=1.0,
         power_law_n=0.36,
         power_law_k_pa_sn=20000.0,
         arrhenius_ea_j_mol=80000.0,
@@ -87,9 +98,11 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
         extrudable_temp_c=195.0,
         thermal_conductivity_w_mk=0.20,
         density_kg_m3=1270.0,
-        specific_heat_j_kgk=1450.0,
-        latent_heat_j_kg=38000.0,
+        # Melt-range averaged DSC specific heat; strictly amorphous (D-06: latent_heat = 0)
+        specific_heat_j_kgk=1950.0,
+        latent_heat_j_kg=0.0,
         viscosity_factor=1.35,
+        melt_transfer_factor=0.58,
         power_law_n=0.40,
         power_law_k_pa_sn=16000.0,
         arrhenius_ea_j_mol=65000.0,
@@ -107,9 +120,11 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
         extrudable_temp_c=195.0,
         thermal_conductivity_w_mk=0.18,
         density_kg_m3=1040.0,
-        specific_heat_j_kgk=1400.0,
-        latent_heat_j_kg=32000.0,
+        # Melt-range averaged DSC specific heat; strictly amorphous (D-06: latent_heat = 0)
+        specific_heat_j_kgk=2050.0,
+        latent_heat_j_kg=0.0,
         viscosity_factor=1.18,
+        melt_transfer_factor=0.58,
         power_law_n=0.38,
         power_law_k_pa_sn=17000.0,
         arrhenius_ea_j_mol=72000.0,
@@ -127,9 +142,11 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
         extrudable_temp_c=195.0,
         thermal_conductivity_w_mk=0.18,
         density_kg_m3=1070.0,
-        specific_heat_j_kgk=1420.0,
-        latent_heat_j_kg=34000.0,
+        # Melt-range averaged DSC specific heat; strictly amorphous (D-06: latent_heat = 0)
+        specific_heat_j_kgk=2050.0,
+        latent_heat_j_kg=0.0,
         viscosity_factor=1.22,
+        melt_transfer_factor=0.56,
         power_law_n=0.38,
         power_law_k_pa_sn=17500.0,
         arrhenius_ea_j_mol=72000.0,
@@ -144,14 +161,16 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
         glass_transition_c=56.0,
         heat_creep_temp_c=56.0,
         melt_temp_c=178.0,
-        extrudable_temp_c=205.0,
+        extrudable_temp_c=220.0,
         thermal_conductivity_w_mk=0.35,
         density_kg_m3=1180.0,
-        specific_heat_j_kgk=1650.0,
+        # Melt-range averaged DSC specific heat (PA12 melt diluted with 15 wt% CF); semi-crystalline
+        specific_heat_j_kgk=2100.0,
         latent_heat_j_kg=55000.0,
         viscosity_factor=1.75,
+        melt_transfer_factor=0.28,
         power_law_n=0.44,
-        power_law_k_pa_sn=20000.0,
+        power_law_k_pa_sn=33000.0,
         arrhenius_ea_j_mol=65000.0,
         t_ref_c=285.0,
         cooling_demand=0.35,
@@ -167,9 +186,11 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
         extrudable_temp_c=185.0,
         thermal_conductivity_w_mk=0.19,
         density_kg_m3=1210.0,
-        specific_heat_j_kgk=1700.0,
-        latent_heat_j_kg=35000.0,
+        # Melt-range averaged DSC specific heat; negligible crystalline fusion peak (D-06)
+        specific_heat_j_kgk=1950.0,
+        latent_heat_j_kg=0.0,
         viscosity_factor=2.30,
+        melt_transfer_factor=0.70,
         power_law_n=0.48,
         power_law_k_pa_sn=35000.0,
         arrhenius_ea_j_mol=95000.0,

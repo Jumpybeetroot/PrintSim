@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "chube_air",
+  "source_cad": "CHUBE_INTEGRATION_REVA.step",
+  "source_url": "https://www.chubehotends.com/",
+  "regions": [
+    {
+      "label": "v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "ti_monocoque_shell",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "copper_melt_core",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    }
+  ],
+  "variant": "air",
+  "overall_length_mm": 66.0,
+  "outer_diameter_mm": 25.4,
+  "wall_thickness_mm": 0.9,
+  "mount_pcd_mm": 18.0,
+  "mount_bolts": "6x M3",
+  "meltzone_length_mm": 42.0
+}

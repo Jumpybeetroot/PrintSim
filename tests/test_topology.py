@@ -57,10 +57,11 @@ def test_cantilever_bar_simp_convergence_and_specific_stiffness() -> None:
     assert res.optimized_elements < res.baseline_elements
 
     # Specific stiffness (stiffness / mass) improves over full solid baseline
+    # (B-10 QM6-3D removes 1-voxel flange shear-locking inflation: gain ~2.0% vs 3.7% locked)
     opt_spec = res.optimized_stiffness_n_per_mm / res.optimized_mass_g
     base_spec = res.baseline_stiffness_n_per_mm / res.baseline_mass_g
     assert opt_spec > base_spec
-    assert res.specific_stiffness_gain_pct > 3.0
+    assert res.specific_stiffness_gain_pct > 1.5
 
     # Voxel payload and serialization invariants
     assert len(res.voxels) == res.baseline_elements

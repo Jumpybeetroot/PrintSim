@@ -35,7 +35,8 @@ def parse_gcode(gcode_text: str) -> list[GCodeMove]:
     feedrate = 60.0  # mm/s default
     abs_xyz = True
     abs_e = True
-    accel_override: float | None = None
+    print_accel_override: float | None = None
+    travel_accel_override: float | None = None
     last_ext_z = -1.0
     layer_idx = 0
 
@@ -45,6 +46,8 @@ def parse_gcode(gcode_text: str) -> list[GCodeMove]:
             continue
         tokens = line.split()
         cmd = tokens[0].upper()
+        if cmd in ("G00", "G01", "G02", "G03"):
+            cmd = f"G{int(cmd[1:])}"
 
         params: dict[str, float] = {}
         for tok in tokens[1:]:
@@ -74,11 +77,26 @@ def parse_gcode(gcode_text: str) -> list[GCodeMove]:
             if "E" in params:
                 e_pos = params["E"]
         elif cmd == "M204":
+            if "S" in params:
+                print_accel_override = params["S"]
+                travel_accel_override = params["S"]
             if "P" in params:
-                accel_override = params["P"]
-            elif "S" in params:
-                accel_override = params["S"]
-        elif cmd in ("G0", "G1"):
+                print_accel_override = params["P"]
+            if "T" in params:
+                travel_accel_override = params["T"]
+        elif cmd == "SET_VELOCITY_LIMIT":
+            for tok in tokens[1:]:
+                if "=" in tok:
+                    key, val_str = tok.split("=", 1)
+                    if key.upper() == "ACCEL":
+                        try:
+                            accel_val = float(val_str)
+                            if accel_val > 0.0:
+                                print_accel_override = accel_val
+                                travel_accel_override = accel_val
+                        except ValueError:
+                            continue
+        elif cmd in ("G0", "G1", "G2", "G3"):
             if "F" in params and params["F"] > 0:
                 feedrate = params["F"] / 60.0  # mm/min -> mm/s
 
@@ -96,25 +114,127 @@ def parse_gcode(gcode_text: str) -> list[GCodeMove]:
                     de = params["E"]
                     e_pos += de
 
-            is_ext = de > 1e-6 and float(np.linalg.norm(new_pos - pos)) > 1e-5
-            if is_ext and new_pos[2] > last_ext_z + 0.02:
-                if last_ext_z >= 0:
-                    layer_idx += 1
-                last_ext_z = float(new_pos[2])
-
-            if float(np.linalg.norm(new_pos - pos)) > 1e-5:
+            def _emit_segment(p0: np.ndarray, p1: np.ndarray, seg_de: float) -> None:
+                nonlocal last_ext_z, layer_idx
+                seg_len = float(np.linalg.norm(p1 - p0))
+                has_xyz = seg_len > 1e-5
+                has_e = abs(seg_de) > 1e-6
+                if not has_xyz and not has_e:
+                    return
+                is_ext = has_xyz and seg_de > 1e-6
+                if is_ext and p1[2] > last_ext_z + 0.02:
+                    if last_ext_z >= 0:
+                        layer_idx += 1
+                    last_ext_z = float(p1[2])
+                seg_accel = (
+                    print_accel_override
+                    if is_ext
+                    else (
+                        travel_accel_override
+                        if travel_accel_override is not None
+                        else print_accel_override
+                    )
+                )
                 moves.append(
                     GCodeMove(
                         index=len(moves),
-                        start_mm=(float(pos[0]), float(pos[1]), float(pos[2])),
-                        end_mm=(float(new_pos[0]), float(new_pos[1]), float(new_pos[2])),
-                        extrude_mm=float(max(de, 0.0)),
+                        start_mm=(float(p0[0]), float(p0[1]), float(p0[2])),
+                        end_mm=(float(p1[0]), float(p1[1]), float(p1[2])),
+                        extrude_mm=float(seg_de),
                         feedrate_mm_s=float(feedrate),
                         is_extrusion=is_ext,
                         layer_index=layer_idx,
-                        accel_override_mm_s2=accel_override,
+                        accel_override_mm_s2=seg_accel,
                     )
                 )
+
+            if cmd in ("G0", "G1"):
+                _emit_segment(pos, new_pos, de)
+            else:
+                has_center = False
+                cx = float(pos[0])
+                cy = float(pos[1])
+                if "I" in params or "J" in params:
+                    cx = float(pos[0]) + params.get("I", 0.0)
+                    cy = float(pos[1]) + params.get("J", 0.0)
+                    has_center = True
+                elif "R" in params:
+                    dx = float(new_pos[0] - pos[0])
+                    dy = float(new_pos[1] - pos[1])
+                    d = math.hypot(dx, dy)
+                    if d > 1e-9:
+                        r_val = params["R"]
+                        r_abs = abs(r_val)
+                        h = math.sqrt(max(0.0, r_abs * r_abs - 0.25 * d * d))
+                        mx = float(pos[0]) + 0.5 * dx
+                        my = float(pos[1]) + 0.5 * dy
+                        is_ccw = cmd == "G3"
+                        sign = 1.0 if (is_ccw == (r_val > 0.0)) else -1.0
+                        cx = mx + sign * h * (-dy / d)
+                        cy = my + sign * h * (dx / d)
+                        has_center = True
+
+                if has_center:
+                    r_start = math.hypot(float(pos[0]) - cx, float(pos[1]) - cy)
+                    r_end = math.hypot(float(new_pos[0]) - cx, float(new_pos[1]) - cy)
+                    if r_start <= 1e-6:
+                        _emit_segment(pos, new_pos, de)
+                    else:
+                        theta0 = math.atan2(float(pos[1]) - cy, float(pos[0]) - cx)
+                        theta1 = math.atan2(float(new_pos[1]) - cy, float(new_pos[0]) - cx)
+                        xy_dist = math.hypot(
+                            float(new_pos[0] - pos[0]), float(new_pos[1] - pos[1])
+                        )
+                        if cmd == "G3":
+                            if xy_dist <= 1e-5:
+                                d_theta = 2.0 * math.pi
+                            else:
+                                d_theta = (theta1 - theta0) % (2.0 * math.pi)
+                                if d_theta <= 1e-9:
+                                    d_theta = 2.0 * math.pi
+                        else:
+                            if xy_dist <= 1e-5:
+                                d_theta = -2.0 * math.pi
+                            else:
+                                d_theta = -((theta0 - theta1) % (2.0 * math.pi))
+                                if d_theta >= -1e-9:
+                                    d_theta = -2.0 * math.pi
+
+                        r_avg = 0.5 * (r_start + r_end)
+                        arc_len = r_avg * abs(d_theta)
+                        n_seg = max(
+                            1,
+                            math.ceil(arc_len / 1.0),
+                            math.ceil(abs(d_theta) / math.radians(5.0)),
+                        )
+                        pts = [pos.copy()]
+                        for k in range(1, n_seg):
+                            t = k / n_seg
+                            th = theta0 + t * d_theta
+                            rk = r_start + t * (r_end - r_start)
+                            zk = float(pos[2]) + t * float(new_pos[2] - pos[2])
+                            pts.append(
+                                np.array(
+                                    [cx + rk * math.cos(th), cy + rk * math.sin(th), zk],
+                                    dtype=float,
+                                )
+                            )
+                        pts.append(new_pos.copy())
+
+                        seg_lens = [
+                            float(np.linalg.norm(pts[k + 1] - pts[k])) for k in range(n_seg)
+                        ]
+                        total_seg_len = sum(seg_lens)
+                        for k in range(n_seg):
+                            seg_de = (
+                                de * (seg_lens[k] / total_seg_len)
+                                if total_seg_len > 1e-12
+                                else (de if k == 0 else 0.0)
+                            )
+                            _emit_segment(pts[k], pts[k + 1], seg_de)
+                else:
+                    _emit_segment(pos, new_pos, de)
+
             pos = new_pos
 
     return moves

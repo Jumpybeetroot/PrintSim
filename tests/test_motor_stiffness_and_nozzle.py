@@ -70,16 +70,41 @@ def test_stepper_electromagnetic_stiffness_analytical_and_current_sweep() -> Non
     assert k_motor_axis == pytest.approx(expected_k_motor_awd, rel=1e-9)
     assert k_drive == pytest.approx(expected_k_drive, rel=1e-9)
 
-    # Verify modal series coupling: 1/f_eff^2 = 1/f_struct^2 + 1/f_belt^2 + 1/f_motor^2 + 1/f_bracket^2
+    # B-01: Verify exact series compliance coupling on moving mass:
+    # c_total = c_struct + 1/k_belt + 1/k_motor + 1/k_bracket, f_eff = 1/(2*pi*sqrt(m_x * c_total))
+    import numpy as np
+
+    from printsim.fea.beam3d import assemble_global_matrices
+
     mod = solve_modal_fea(asm_check)
     assert mod.shaper_x is not None and mod.shaper_y is not None
-    f_bracket_x = (1.0 / (2.0 * math.pi)) * math.sqrt(k_bracket / asm_check.x_moving_mass_kg)
-    expected_f_eff_x = 1.0 / math.sqrt(
-        1.0 / mod.shaper_x.structural_freq_hz**2
-        + 1.0 / mod.shaper_x.belt_freq_hz**2
-        + 1.0 / mod.shaper_x.motor_freq_hz**2
-        + 1.0 / f_bracket_x**2
-    )
+    K, _, _, nidx, free_dofs = assemble_global_matrices(asm_check)
+    K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
+    cog_i = nidx[asm_check.toolhead_cog_node_id]
+    noz_i = nidx[asm_check.nozzle_node_id]
+    bed_i = nidx[asm_check.bed_node_id]
+    dr_noz = asm_check.nodes[noz_i].position_m - asm_check.nodes[bed_i].position_m
+    fx = np.zeros(K.shape[0])
+    m_cog = float(asm_check.nodes[cog_i].lumped_mass_kg)
+    m_noz = float(asm_check.nodes[noz_i].lumped_mass_kg)
+    m_th_tot = m_cog + m_noz
+    if m_th_tot > 1e-9:
+        fx[6 * cog_i + 0] = m_cog / m_th_tot
+        fx[6 * noz_i + 0] = m_noz / m_th_tot
+    else:
+        fx[6 * cog_i + 0] = 1.0
+    cx = np.zeros(K.shape[0])
+    cx[6 * noz_i + 0] = 1.0
+    cx[6 * bed_i + 0] -= 1.0
+    cx[6 * bed_i + 4] -= float(dr_noz[2])
+    cx[6 * bed_i + 5] += float(dr_noz[1])
+    u_x = np.linalg.solve(K_ff, fx[free_dofs])
+    c_struct_x = float(cx[free_dofs] @ u_x)
+    m_rot = 4.0 * (spec.kinematics.xy_stepper.rotor_inertia_kg_m2 / (r_p**2))
+    m_x = asm_check.x_moving_mass_kg
+    k_motor_eff = k_motor_axis * (m_x / (m_x + m_rot))
+    c_total_x = c_struct_x + 1.0 / k_belt + 1.0 / k_motor_eff + 1.0 / k_bracket
+    expected_f_eff_x = 1.0 / (2.0 * math.pi * math.sqrt(m_x * c_total_x))
     assert mod.shaper_x.effective_freq_hz == pytest.approx(expected_f_eff_x, rel=1e-6)
 
     # Increasing run_current_a (0.8 A -> 1.6 A -> 2.4 A) strictly increases motor stiffness & effective shaper freq
@@ -364,8 +389,8 @@ def test_updated_trident_vs_monolith_awd_example_specs() -> None:
     assert not rep_m.kinematics.motor_overcurrent_risk
 
     assert rep_m.kinematics.motor_stiffness_n_per_mm > rep_t.kinematics.motor_stiffness_n_per_mm * 2.0
-    # Calibrated 2WD Gates 2GT-6mm (50 kN EA) + 500 N/mm ABS brackets gives 141.4 N/mm vs 508.7 N/mm Monolith AWD (3.60x)
-    assert rep_m.kinematics.drive_stiffness_n_per_mm > rep_t.kinematics.drive_stiffness_n_per_mm * 3.2
+    # D-01: 2WD Gates 2GT-6mm (22 kN EA) + ABS brackets gives ~88.2 N/mm vs ~272.4 N/mm Monolith AWD (3.09x)
+    assert rep_m.kinematics.drive_stiffness_n_per_mm > rep_t.kinematics.drive_stiffness_n_per_mm * 3.0
     assert rep_m.modal_fea.nozzle_pitch_twist_freq_hz > rep_t.modal_fea.nozzle_pitch_twist_freq_hz
     assert rep_m.modal_fea.recommended_max_accel_mm_s2 > rep_t.modal_fea.recommended_max_accel_mm_s2 * 3.0
     assert rep_m.static_fea.combined_max_deflection_um < rep_t.static_fea.combined_max_deflection_um

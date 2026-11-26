@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "microwaved_bowden",
+  "name": "Microwaved Bowden Toolhead (SLM Ti-6Al-4V)",
+  "source_cad": "mbt_tricorn_v2.step",
+  "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+  "baked_at": "2026-11-25T17:27:12Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 24724,
+  "num_elements": 75638,
+  "num_dofs": 74172,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005813,
+  "mass_kg": 0.071867,
+  "com_mm": [
+    0.0185,
+    -1.9817,
+    5.2708
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -9.76,
+    30.5
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 10727.514,
+    "ky": 3563.141,
+    "kz": 24677.766
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 2185.045,
+    "kry": 12513.718,
+    "krz": 2775.822
+  },
+  "fixed_interface_freqs_hz": [
+    2794.06,
+    3591.6,
+    5514.1,
+    7162.11,
+    8520.7,
+    9317.64,
+    10051.6,
+    10831.13
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23998,
+  "visual_bytes": 777816,
+  "cad_trust_pct": 85,
+  "source_hash": "61b19932e72b92d9013faa614646628fd862250115ff3c81355e78b432eab22b"
+}

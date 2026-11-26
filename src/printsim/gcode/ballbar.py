@@ -26,6 +26,7 @@ from printsim.fea.mechatronics import (
     corexy_belt_span_stiffness_matrix,
 )
 from printsim.schema import get_material
+from printsim.schema.overrides import resolve_rail_quality
 
 if TYPE_CHECKING:
     from printsim.fea.modal import ModalResult
@@ -83,15 +84,14 @@ class TimeDomainMetrologyResult:
         }
 
 
-def _trapezoidal_1d(
+def _trapezoid_params(
     dist_m: float,
     v0: float,
     v_cruise: float,
     v1: float,
     accel: float,
-    dt: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Sample exact 1D trapezoidal velocity profile `(t_local, s_local)` from `0` to `dist_m`."""
+) -> tuple[float, float, float, float, float, float, float, float, float]:
+    """Compute exact analytical 1D trapezoidal velocity profile parameters."""
     v_tri = math.sqrt(max(0.5 * (v0 * v0 + v1 * v1) + accel * dist_m, 0.0))
     v_peak = min(v_cruise, v_tri)
     v_peak = max(v_peak, min(v0, v1))
@@ -104,21 +104,46 @@ def _trapezoidal_1d(
     t_flat = d_flat / max(v_peak, 1e-6)
     t_dec = abs(v_peak - v1) / accel
     t_tot = t_acc + t_flat + t_dec
+    return dist_m, v0, v_peak, accel, d_acc, d_flat, t_acc, t_flat, t_tot
 
-    t_arr = np.arange(0.0, t_tot + 0.5 * dt, dt, dtype=float)
-    s_arr = np.empty_like(t_arr)
 
-    m1 = t_arr <= t_acc
-    m2 = (~m1) & (t_arr <= t_acc + t_flat)
-    m3 = ~(m1 | m2)
+def _eval_trapezoid(
+    t_local: np.ndarray,
+    params: tuple[float, float, float, float, float, float, float, float, float],
+) -> np.ndarray:
+    """Evaluate exact analytical position `s(t_local)` clamped to `[0, dist_m]`."""
+    dist_m, v0, v_peak, accel, d_acc, d_flat, t_acc, t_flat, t_tot = params
+    s_arr = np.empty_like(t_local, dtype=float)
 
-    s_arr[m1] = v0 * t_arr[m1] + 0.5 * accel * (t_arr[m1] ** 2)
-    tau2 = t_arr[m2] - t_acc
+    m0 = t_local <= 0.0
+    m4 = t_local >= t_tot
+    m1 = (~m0) & (t_local <= t_acc)
+    m2 = (~m0) & (~m1) & (t_local <= t_acc + t_flat)
+    m3 = (~m0) & (~m1) & (~m2) & (~m4)
+
+    s_arr[m0] = 0.0
+    s_arr[m4] = dist_m
+    s_arr[m1] = v0 * t_local[m1] + 0.5 * accel * (t_local[m1] ** 2)
+    tau2 = t_local[m2] - t_acc
     s_arr[m2] = d_acc + v_peak * tau2
-    tau3 = np.minimum(t_arr[m3] - (t_acc + t_flat), t_dec)
+    tau3 = t_local[m3] - (t_acc + t_flat)
     s_arr[m3] = d_acc + d_flat + v_peak * tau3 - 0.5 * accel * (tau3**2)
-    s_arr[-1] = dist_m
-    return t_arr, s_arr
+    return s_arr
+
+
+def _trapezoidal_1d(
+    dist_m: float,
+    v0: float,
+    v_cruise: float,
+    v1: float,
+    accel: float,
+    dt: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample exact 1D trapezoidal velocity profile `(t_local, s_local)` from `0` to `dist_m`."""
+    params = _trapezoid_params(dist_m, v0, v_cruise, v1, accel)
+    t_tot = params[-1]
+    t_arr = np.arange(0.0, t_tot + 0.5 * dt, dt, dtype=float)
+    return t_arr, _eval_trapezoid(t_arr, params)
 
 
 def _discretize_zoh(
@@ -258,17 +283,16 @@ def simulate_time_domain_metrology(
     v_scv = min(v_c, max(float(spec.kinematics.square_corner_velocity_mm_s) * 1e-3, 0.001))
 
     leg_len = 0.040
-    t1, s1 = _trapezoidal_1d(leg_len, 0.0, v_c, v_scv, a_c, dt)
-    t2, s2 = _trapezoidal_1d(leg_len, v_scv, v_c, 0.0, a_c, dt)
-    t_corner = float(t1[-1])
+    leg1 = _trapezoid_params(leg_len, 0.0, v_c, v_scv, a_c)
+    leg2 = _trapezoid_params(leg_len, v_scv, v_c, 0.0, a_c)
+    t_corner = float(leg1[-1])
+    t_tot_2 = float(leg2[-1])
     t_shaper_tail = max(float(shaper_x[1][-1]), float(shaper_y[1][-1]))
-    n_dwell = int(round(max(0.06, t_shaper_tail + 0.04) / dt))
+    t_dwell = max(0.06, t_shaper_tail + 0.04)
 
-    x_ideal_a = np.concatenate([s1 - leg_len, np.zeros(len(s2) - 1 + n_dwell, dtype=float)])
-    y_ideal_a = np.concatenate(
-        [np.zeros(len(s1), dtype=float), s2[1:], np.full(n_dwell, leg_len, dtype=float)]
-    )
-    t_a = np.arange(len(x_ideal_a), dtype=float) * dt
+    t_a = np.arange(0.0, t_corner + t_tot_2 + t_dwell + 0.5 * dt, dt, dtype=float)
+    x_ideal_a = _eval_trapezoid(t_a, leg1) - leg_len
+    y_ideal_a = _eval_trapezoid(t_a - t_corner, leg2)
     r_ideal_a = np.column_stack([x_ideal_a, y_ideal_a])
 
     if sh_used == "NONE":
@@ -377,19 +401,35 @@ def simulate_time_domain_metrology(
             ]
         )
 
-    # Effective contouring tracking bandwidth (servo position loop / stepper L/R + interpolator lag)
+    # Effective contouring tracking bandwidth (servo position loop / stepper L/R + interpolator lag).
+    # Note: foc_servo already carries exact plant lag b_em / k_em = 1 / omega_p inside (A, B),
+    # so we skip the redundant 1st-order pre-filter on foc_servo to avoid double counting.
+    is_foc = cfg.drive_type in ("foc_servo", "closed_loop_stepper")
     stepper = spec.kinematics.xy_stepper
+    tau_vff_foc = 0.0
     if cfg.drive_type == "foc_servo":
-        omega_track = 2.0 * math.pi * max(float(cfg.servo_pos_bw_hz), 2.0)
+        omega_p = 2.0 * math.pi * max(float(cfg.servo_pos_bw_hz), 2.0)
+        alpha_trk = 1.0
+        if cfg.mode_space_torque_ff:
+            tau_vff_foc = (1.0 - 1.0 / 1.45) / omega_p
     elif cfg.drive_type == "closed_loop_stepper":
         omega_track = 2.0 * math.pi * max(float(cfg.servo_pos_bw_hz) * 1.25, 22.0)
+        if cfg.mode_space_torque_ff:
+            omega_track *= 1.45
+        tau_target = 1.0 / omega_track
+        tau_plant = coupled.b_em_per_motor_ns_m / max(coupled.k_em_per_motor_n_m, 1e-6)
+        if tau_target > tau_plant:
+            tau_pre = math.sqrt(tau_target * tau_target - tau_plant * tau_plant)
+            alpha_trk = 1.0 - math.exp(-dt / max(tau_pre, 1e-6))
+        else:
+            alpha_trk = 1.0
     else:
+        # Open-loop stepper: keep only electrical winding current lag tau_e = L / R (no artificial
+        # servo following-error constant); shaper smoothing + plant compliance produce radial lag.
         tau_e = (stepper.inductance_mh * 1e-3) / max(stepper.phase_resistance_ohm, 0.05)
-        tau_eff = tau_e + 0.011
+        tau_eff = max(tau_e, 1e-6)
         omega_track = 1.0 / tau_eff
-
-    # Exact causal 1st-order tracking filter for contouring lag (gives M_SE < 0 scaling as v^2)
-    alpha_trk = 1.0 - math.exp(-omega_track * dt)
+        alpha_trk = 1.0 - math.exp(-omega_track * dt)
 
     # Precompute CoreXY LPV delta_K(theta) on 72 angular sectors for fast loop lookup
     bx_m = max(float(spec.kinematics.build_volume_mm[0]) * 1e-3, 0.12)
@@ -403,13 +443,19 @@ def simulate_time_domain_metrology(
             v_sec = float(np.clip(0.5 - (r_ball * math.sin(ang)) / by_m, 0.05, 0.95))
             k_sec, _, _ = corexy_belt_span_stiffness_matrix(assembly, u_sec, v_sec)
             dk_sectors[sec] = k_sec - k_cart_center
+        if is_foc and cfg.mode_space_torque_ff:
+            dk_sectors *= 0.65
 
     # Stribeck rail friction + ISO 5753 bearing radial clearance play
+    rail_qual = resolve_rail_quality(spec)
     rail_info = hertzian_rail_carriage_stiffness(
         spec.gantry.x_rail_profile,
         preload=spec.gantry.rail_preload,
         block_type=spec.gantry.rail_block_type,
         rail_quality=spec.gantry.rail_quality,
+        preload_fraction_override=spec.model_overrides.rail_preload.preload_fraction,
+        stiffness_mult_override=rail_qual["stiffness_mult"],
+        drag_mult_override=rail_qual["drag_mult"],
     )
     f_coulomb = float(rail_info["rolling_friction_n"] + rail_info["seal_drag_n"])
     f_break = float(rail_info["breakaway_friction_n"])
@@ -425,10 +471,18 @@ def simulate_time_domain_metrology(
     )
     half_play_m = 0.5 * float(idler_info["bearing_play_um"]) * 1e-6
 
+    if is_foc and cfg.mode_space_torque_ff:
+        # Mode-space torque FF + AWD direction_split compensates quadrant reversal stiction & play
+        f_coulomb *= 0.55
+        f_break *= 0.55
+        half_play_m *= 0.70
+
     # Initialize state cleanly at phi = -pi/2: pos=(0, +R), vel=(+v_ball, 0)
     x_state = np.zeros(n_state, dtype=float)
     u_start = u_ball_sh[0]
-    if coupled.n_mot == 2 and spec.architecture == "corexy":
+    if coupled.T_cart is not None:
+        x_state[2 : 2 + coupled.n_mot] = coupled.T_cart @ u_start
+    elif coupled.n_mot == 2 and spec.architecture == "corexy":
         x_state[2] = u_start[0] + u_start[1]
         x_state[3] = u_start[0] - u_start[1]
     elif coupled.n_mot == 4 and spec.architecture == "corexy":
@@ -462,10 +516,14 @@ def simulate_time_domain_metrology(
     u_sh_y = u_ball_sh[:, 1]
     u_eff_arr = np.empty((n_b, 2), dtype=float)
     one_m_alpha = 1.0 - alpha_trk
+    prev_sh_x = float(u_sh_x[0])
+    prev_sh_y = float(u_sh_y[0])
 
     for k in range(n_b):
-        u_trk_x = one_m_alpha * u_trk_x + alpha_trk * float(u_sh_x[k])
-        u_trk_y = one_m_alpha * u_trk_y + alpha_trk * float(u_sh_y[k])
+        cur_sh_x = float(u_sh_x[k])
+        cur_sh_y = float(u_sh_y[k])
+        u_trk_x = one_m_alpha * u_trk_x + alpha_trk * cur_sh_x
+        u_trk_y = one_m_alpha * u_trk_y + alpha_trk * cur_sh_y
         if u_trk_x - bx_play > half_play_m:
             bx_play = u_trk_x - half_play_m
         elif bx_play - u_trk_x > half_play_m:
@@ -474,8 +532,16 @@ def simulate_time_domain_metrology(
             by_play = u_trk_y - half_play_m
         elif by_play - u_trk_y > half_play_m:
             by_play = u_trk_y + half_play_m
-        u_eff_arr[k, 0] = bx_play
-        u_eff_arr[k, 1] = by_play
+        if tau_vff_foc > 0.0:
+            vx_ff = (cur_sh_x - prev_sh_x) / dt if k > 0 else v_ball
+            vy_ff = (cur_sh_y - prev_sh_y) / dt if k > 0 else 0.0
+            u_eff_arr[k, 0] = bx_play + tau_vff_foc * vx_ff
+            u_eff_arr[k, 1] = by_play + tau_vff_foc * vy_ff
+        else:
+            u_eff_arr[k, 0] = bx_play
+            u_eff_arr[k, 1] = by_play
+        prev_sh_x = cur_sh_x
+        prev_sh_y = cur_sh_y
 
     u_drive_all = u_eff_arr @ b_t
     sec_all = ((phi_b % two_pi) * inv_5deg).astype(int) % 72

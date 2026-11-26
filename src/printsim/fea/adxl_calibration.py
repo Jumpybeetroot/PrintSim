@@ -453,32 +453,61 @@ def _parse_raw_accel_rows(
     if selected_col is None:
         raise ValueError(f"Raw ADXL CSV for axis {axis} contains no dynamic acceleration signal.")
 
-    signal = series_arrays[selected_col]
-
-    # Resample onto a uniform grid if timestamps exhibit jitter or dropped SPI packets
+    # Resample all available acceleration columns onto a uniform grid if timestamps
+    # exhibit jitter or dropped SPI packets, then sum Welch PSDs across all axes
+    # (matching Klipper shaper_calibrate.process_accelerometer_data).
     rel_dt_jitter = float(np.std(pos_dt)) / dt_med if pos_dt.size > 1 else 0.0
     if rel_dt_jitter > 0.15 or np.any(dt_vals <= 0.0):
         unique_t, unique_idx = np.unique(t_arr, return_index=True)
         if unique_t.size < 16:
             raise ValueError(f"Raw ADXL CSV for axis {axis} has insufficient unique timestamps.")
         uniform_t = np.arange(unique_t[0], unique_t[-1] + 0.25 * dt_med, dt_med, dtype=float)
-        signal = np.interp(uniform_t, unique_t, signal[unique_idx])
+        resampled_arrays = {
+            name: np.interp(uniform_t, unique_t, arr[unique_idx])
+            for name, arr in series_arrays.items()
+        }
+    else:
+        resampled_arrays = series_arrays
 
-    nperseg = _compute_welch_nperseg(len(signal), fs_hz)
-    welch_freqs, welch_psd = welch(
-        signal,
-        fs=fs_hz,
-        window="hann",
-        nperseg=nperseg,
-        detrend="constant",
-        scaling="density",
-    )
+    n_sig = len(next(iter(resampled_arrays.values())))
+    nperseg = _compute_welch_nperseg(n_sig, fs_hz)
+
+    welch_freqs: np.ndarray | None = None
+    psd_sum: np.ndarray | None = None
+    for col_sig in resampled_arrays.values():
+        col_freqs, col_psd = welch(
+            col_sig,
+            fs=fs_hz,
+            window="hann",
+            nperseg=nperseg,
+            detrend="constant",
+            scaling="density",
+        )
+        col_psd_pos = np.maximum(np.asarray(col_psd, dtype=float), 0.0)
+        if welch_freqs is None:
+            welch_freqs = np.asarray(col_freqs, dtype=float)
+            psd_sum = col_psd_pos
+        else:
+            psd_sum = psd_sum + col_psd_pos
+
+    assert welch_freqs is not None and psd_sum is not None
+
+    # Klipper CalibrationData.normalize_to_frequencies(): divide by (f + 0.1) and
+    # smoothly attenuate < 2*MIN_FREQ low-frequency drift.
+    psd_norm = psd_sum / (welch_freqs + 0.1)
+    min_f = max(float(min_freq_hz), 0.0)
+    if min_f > 0.0:
+        low_freqs = welch_freqs < 2.0 * min_f
+        if np.any(low_freqs):
+            psd_norm[low_freqs] *= np.exp(
+                -((2.0 * min_f / (welch_freqs[low_freqs] + 0.1)) ** 2) + 1.0
+            )
 
     return ParsedAdxlData(
         axis=axis,
         source_format="raw_accel_csv",
-        freqs_hz=np.asarray(welch_freqs, dtype=float),
-        psd=np.maximum(np.asarray(welch_psd, dtype=float), 0.0),
+        freqs_hz=welch_freqs,
+        psd=np.maximum(psd_norm, 0.0),
         sample_count=sample_count,
         selected_column=selected_col,
         sample_rate_hz=fs_hz,

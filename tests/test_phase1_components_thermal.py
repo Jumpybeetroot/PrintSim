@@ -60,8 +60,9 @@ def test_timoshenko_bimetallic_bow_analytical_and_backers() -> None:
     assert 100.0 <= rep_none.gantry_bimetallic_bow_um <= 220.0
     assert rep_none.gantry_backer_reduction_pct == pytest.approx(0.0, abs=1e-6)
 
-    # Closed-form Timoshenko (1925) + Newmark partial-interaction cross-check
-    eb, ab, ib, alphab = 68.9e9, 1.62e-4, 0.68e-8, 23.4e-6
+    # Closed-form Timoshenko (1925) + Newmark partial-interaction cross-check (read D-04 profile directly)
+    prof_2020 = get_profile("extrusion_2020")
+    eb, ab, ib, alphab = 68.9e9, prof_2020.area_m2, prof_2020.iy_m4, 23.4e-6
     mgn12 = get_profile("mgn12_rail")
     steel = get_material("steel_4140")
     er, ar, ir, alphar = steel.youngs_modulus_pa, mgn12.area_m2, mgn12.iy_m4, steel.thermal_expansion_1_k
@@ -273,11 +274,22 @@ def test_hertzian_rail_carriage_preload_and_block_type_in_fea() -> None:
     s_c.gantry.rail_block_type = "C"
     s_h = base.model_copy(deep=True)
     s_h.gantry.rail_block_type = "H"
-    st_c = solve_static_fea(build_assembly(s_c))
-    st_h = solve_static_fea(build_assembly(s_h))
+    asm_c = build_assembly(s_c)
+    asm_h = build_assembly(s_h)
+    st_c = solve_static_fea(asm_c)
+    st_h = solve_static_fea(asm_h)
+    assert (asm_h.x_moving_mass_kg - asm_c.x_moving_mass_kg) * 1000.0 == pytest.approx(20.0, abs=1e-9)
     assert st_h.toolhead_stiffness_x_n_per_mm > st_c.toolhead_stiffness_x_n_per_mm
     assert st_h.toolhead_stiffness_y_n_per_mm > st_c.toolhead_stiffness_y_n_per_mm
-    assert st_h.nozzle_twist_angle_mrad < st_c.nozzle_twist_angle_mrad
+    assert (
+        st_h.toolhead_flex_breakdown["rail_carriage_stiffness_n_per_mm"]
+        > st_c.toolhead_flex_breakdown["rail_carriage_stiffness_n_per_mm"] * 1.3
+    )
+    # Equalizing moving mass (+20 g on MGN12C to match 54 g MGN12H) isolates H-block's lower twist angle
+    s_c_eq = s_c.model_copy(deep=True)
+    s_c_eq.toolhead.total_mass_g += 20.0
+    st_c_eq = solve_static_fea(build_assembly(s_c_eq))
+    assert st_h.nozzle_twist_angle_mrad < st_c_eq.nozzle_twist_angle_mrad
 
 
 # ---------------------------------------------------------------------------
@@ -478,9 +490,17 @@ def test_api_phase1_catalog_and_thermal_structural_simulate() -> None:
         "rail_newmark_gamma",
         "rail_carriage_roll_nm_per_rad",
         "rail_carriage_radial_n_per_um",
+        "x_beam_modulus_retention_pct",
+        "x_beam_shear_retention_pct",
+        "x_beam_tg_warning",
+        "x_beam_has_tg",
+        "gantry_bow_direction",
     }
     assert set(ts.keys()) == expected_keys
     assert ts["bracket_tg_warning"] is True
+    assert ts["x_beam_has_tg"] is False
+    assert ts["x_beam_tg_warning"] is False
+    assert ts["gantry_bow_direction"] == "away_from_rail"
     assert ts["bed_buckling_taco_um"] > 100.0
     assert 100.0 <= ts["gantry_bimetallic_bow_um"] <= 220.0
 

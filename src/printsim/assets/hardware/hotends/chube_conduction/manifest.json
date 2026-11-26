@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "chube_conduction",
+  "name": "Luke's Lab Chube Conduction (120W Ti Shell)",
+  "source_cad": "CHUBE_INTEGRATION_REVA.step",
+  "source_url": "https://www.chubehotends.com/",
+  "baked_at": "2026-11-25T17:06:47Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 14679,
+  "num_elements": 56245,
+  "num_dofs": 44037,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.008606,
+  "mass_kg": 0.083224,
+  "com_mm": [
+    0.3658,
+    0.0317,
+    -32.9176
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -66.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 5529.218,
+    "ky": 5820.09,
+    "kz": 188210.409
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1946.042,
+    "kry": 1895.99,
+    "krz": 2502.219
+  },
+  "fixed_interface_freqs_hz": [
+    8100.49,
+    8429.42,
+    10948.36,
+    13217.14,
+    13995.18,
+    16425.66,
+    17243.53,
+    20881.65
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 16610,
+  "visual_bytes": 600200,
+  "cad_trust_pct": 86,
+  "source_hash": "8fa8f7dd252c68548c96ff07a7e4b89b66f2423dd9625caad80ece346a29bd01"
+}

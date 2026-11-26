@@ -9,6 +9,7 @@ from typing import Any
 
 from printsim.fea.bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from printsim.fea.components import ThermalStructuralReport, compute_thermal_structural_report
+from printsim.fea.klipper_shaper import biquad_notch_params_from_db_q
 from printsim.fea.mechatronics import (
     DriveControlConfig,
     WorkspaceFRFMap,
@@ -21,10 +22,17 @@ from printsim.fea.solver import StaticFEAResult, solve_static_fea
 from printsim.gcode.ballbar import TimeDomainMetrologyResult, simulate_time_domain_metrology
 from printsim.gcode.parser import generate_benchmark_gcode
 from printsim.gcode.simulator import VirtualPrintReport, simulate_gcode
+from printsim.geometry.bom import generate_bom
 from printsim.geometry.builder import AssemblyModel, build_assembly
 from printsim.kinematics.collision import CollisionReport, check_frame_clearance
 from printsim.kinematics.solvers import KinematicsReport, analyze_kinematics
-from printsim.schema import GANTRY_BRACKET_CATALOG, PrinterSpec, get_material
+from printsim.schema import (
+    PrinterSpec,
+    build_effective_model_params,
+    build_model_confidence_audit,
+    get_material,
+    resolve_gantry_bracket,
+)
 from printsim.thermal.hotend import HotendThermalReport, simulate_hotend_thermal
 
 
@@ -67,6 +75,11 @@ class SimulationReport:
     sensitivity: SensitivityReport | None = None
     bed_plate_fea: BedPlateFEAResult | None = None
     weight_shaper_gains: dict[str, Any] | None = None
+    motion_limits: dict[str, Any] | None = None
+    bom_total_cost_usd: float | None = None
+    bom_total_mass_kg: float | None = None
+    effective_model_params: dict[str, Any] = field(default_factory=dict)
+    model_confidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self, include_toolpath_segments: bool = True) -> dict:
         vp = self.virtual_print.to_dict(max_segments=1500 if include_toolpath_segments else 0)
@@ -95,7 +108,42 @@ class SimulationReport:
                 self.bed_plate_fea.to_dict() if self.bed_plate_fea is not None else None
             ),
             "weight_shaper_gains": self.weight_shaper_gains,
+            "motion_limits": self.motion_limits,
+            "effective_model_params": self.effective_model_params,
+            "model_confidence": self.model_confidence,
         }
+
+
+def _compute_motion_limits(
+    spec: PrinterSpec,
+    modal_fea: ModalResult,
+    kinematics: KinematicsReport,
+    thermal: HotendThermalReport,
+) -> dict[str, Any]:
+    """Compute unified 3-way achievable acceleration and 2-way achievable speed ceiling."""
+    shaper_a = float(modal_fea.recommended_max_accel_mm_s2)
+    motor_a = float(kinematics.motor_max_accel_mm_s2)
+    belt_a = float(kinematics.belt_max_accel_mm_s2)
+    achievable_a = min(shaper_a, motor_a, belt_a)
+    accel_limiting_factor = min(
+        [("shaper", shaper_a), ("motor", motor_a), ("belt", belt_a)],
+        key=lambda item: item[1],
+    )[0]
+    motor_v = float(kinematics.motor_max_velocity_mm_s)
+    flow_v = float(thermal.max_linear_speed_02x04_mm_s)
+    return {
+        "shaper_max_accel_mm_s2": round(shaper_a, 0),
+        "motor_max_accel_mm_s2": round(motor_a, 0),
+        "belt_max_accel_mm_s2": round(belt_a, 0),
+        "achievable_max_accel_mm_s2": round(achievable_a, 0),
+        "accel_limiting_factor": accel_limiting_factor,
+        "motor_max_velocity_mm_s": round(motor_v, 0),
+        "flow_max_velocity_mm_s": round(flow_v, 0),
+        "configured_max_velocity_mm_s": round(spec.kinematics.max_velocity_mm_s, 0),
+        "configured_max_accel_mm_s2": round(spec.kinematics.max_accel_mm_s2, 0),
+        "speed_limiting_factor": "motor_voltage" if motor_v < flow_v else "hotend_flow",
+        "shaper_l1_accel_factor": round(kinematics.shaper_l1_accel_factor, 3),
+    }
 
 
 def _compute_scores_and_diagnostics(
@@ -111,25 +159,63 @@ def _compute_scores_and_diagnostics(
     workspace_frf: WorkspaceFRFMap | None = None,
     rcsa: RCSAResult | None = None,
     bed_plate_fea: BedPlateFEAResult | None = None,
+    motion_limits: dict[str, Any] | None = None,
+    bom_total_cost_usd: float | None = None,
+    accel_override_mm_s2: float | None = None,
+    is_default_benchmark: bool = False,
 ) -> tuple[ScoreBreakdown, list[str]]:
     diag: list[str] = []
 
-    # 1. Structural score (deflection < 15um ideal, high fundamental freq rewarded up to 200 Hz, SF >= 4)
-    defl_pen = min(45.0, static_fea.combined_max_deflection_um * 0.65)
+    # 1. Structural score (inertial-only dynamic deflection at fixed 10k mm/s^2 reference,
+    #    high fundamental freq rewarded up to 200 Hz, SF >= 4)
+    inertial_defl_um = max(
+        float(static_fea.accel_deflection_x_um),
+        float(static_fea.accel_deflection_y_um),
+    )
+    eval_accel_for_static = max(
+        float(
+            accel_override_mm_s2
+            if accel_override_mm_s2 is not None
+            else spec.kinematics.max_accel_mm_s2
+        ),
+        1.0,
+    )
+    inertial_defl_ref_um = inertial_defl_um * (10000.0 / eval_accel_for_static)
+    # Smooth saturating deflection penalty (avoids hard clamp plateau and excludes static gravity sag)
+    defl_pen = 45.0 * (1.0 - math.exp(-inertial_defl_ref_um / 40.0))
     f0 = modal_fea.fundamental_freq_hz
     freq_bonus = min(36.0, f0 * 0.60) + min(12.0, max(0.0, f0 - 60.0) / 12.0)
     sf_pen = 0.0 if static_fea.min_safety_factor >= 4.0 else (4.0 - static_fea.min_safety_factor) * 10.0
     structural = max(0.0, min(100.0, 52.0 + freq_bonus - defl_pen - sf_pen))
 
     if modal_fea.fundamental_freq_hz < 40.0:
-        diag.append(
-            f"Low frame natural frequency ({modal_fea.fundamental_freq_hz:.1f} Hz): "
-            "main limit is outer frame racking and bending stiffness relative to moving/frame mass."
+        fund_mode = modal_fea.modes[0] if modal_fea.modes else None
+        fund_area = fund_mode.dominant_problem_area if fund_mode is not None else "frame"
+        bed_share = (
+            float(fund_mode.subsystem_share_pct.get("bed", 0.0))
+            if fund_mode is not None
+            else 0.0
         )
-    if static_fea.combined_max_deflection_um > 40.0:
+        if fund_area == "bed" or bed_share >= 50.0:
+            diag.append(
+                f"Low bed/Z-mount natural frequency ({modal_fea.fundamental_freq_hz:.1f} Hz): "
+                f"fundamental mode is a bed/Z-mount compliance mode ('{spec.bed.mount_type}' / '{spec.bed.z_drive}')."
+            )
+        elif fund_area in ("gantry", "toolhead"):
+            diag.append(
+                f"Low {fund_area} natural frequency ({modal_fea.fundamental_freq_hz:.1f} Hz): "
+                f"fundamental mode is dominated by {fund_area} structural compliance relative to moving mass."
+            )
+        else:
+            diag.append(
+                f"Low frame natural frequency ({modal_fea.fundamental_freq_hz:.1f} Hz): "
+                "main limit is outer frame racking and bending stiffness relative to moving/frame mass."
+            )
+    if inertial_defl_um > 35.0:
         diag.append(
-            f"High peak deflection ({static_fea.combined_max_deflection_um:.1f} um) under acceleration: "
-            "main limit is gantry/toolhead structural stiffness relative to moving inertial load."
+            f"High inertial nozzle deflection ({inertial_defl_um:.1f} um under {eval_accel_for_static:.0f} mm/s^2 acceleration, "
+            f"{inertial_defl_ref_um:.1f} um @ 10k mm/s^2; static gravity sag {static_fea.gravity_sag_toolhead_um:.1f} um): "
+            "main limit is gantry/toolhead dynamic structural stiffness relative to moving inertial load."
         )
     if static_fea.nozzle_twist_amplification_pct > 45.0:
         diag.append(
@@ -177,16 +263,42 @@ def _compute_scores_and_diagnostics(
             "and cannot couple into the moving Z gantry beams (main limit: unbraced gantry Y-rail load path)."
         )
 
-    # 2. Dynamics score (effective resonance accel up to high-speed AWD range, motor torque margin, belt integrity)
-    rec_a = modal_fea.recommended_max_accel_mm_s2
-    accel_score = min(45.0, (rec_a / 12000.0) * 45.0) + min(
-        10.0, max(0.0, rec_a - 12000.0) / 6000.0
+    limits = (
+        motion_limits
+        if motion_limits is not None
+        else _compute_motion_limits(spec, modal_fea, kinematics, thermal)
     )
-    torque_score = min(30.0, kinematics.torque_safety_margin * 15.0)
+
+    # 2. Dynamics score (3-way achievable accel capped by shaper/motor/belt & configured limit,
+    #    torque margin at achievable envelope, belt integrity)
+    achievable_a = float(limits["achievable_max_accel_mm_s2"])
+    cfg_a = max(float(spec.kinematics.max_accel_mm_s2), 0.0)
+    # 85% hardware capability + 15% configured utilization: rewards hardware upgrades even when
+    # configured accel is below ceiling, while strictly penalizing derating below achievable limits.
+    eff_a = 0.85 * achievable_a + 0.15 * min(achievable_a, cfg_a)
+    accel_score = min(45.0, (eff_a / 12000.0) * 45.0) + min(
+        10.0, max(0.0, eff_a - 12000.0) / 6000.0
+    )
+    drive_sf = (
+        1.15
+        if spec.kinematics.drive_type == "foc_servo"
+        else (1.20 if spec.kinematics.drive_type == "closed_loop_stepper" else 1.35)
+    )
+    intrinsic_torque_margin = drive_sf * (
+        float(kinematics.motor_max_accel_mm_s2) / max(achievable_a, 1.0)
+    )
+    eff_torque_margin = min(float(kinematics.torque_safety_margin), intrinsic_torque_margin)
+    torque_score = min(30.0, eff_torque_margin * 15.0)
     belt_score = 0.0 if kinematics.belt_slip_risk else 15.0
     belt_overtension_pen = 8.0 if kinematics.belt_overtension_risk else 0.0
     shaft_bend_pen = 6.0 if kinematics.shaft_bending_risk else 0.0
     bracket_creep_pen = 5.0 if kinematics.bracket_creep_risk else 0.0
+    ref_vel = min(450.0, float(kinematics.motor_max_velocity_mm_s))
+    vel_derate_pen = (
+        10.0 * max(0.0, 1.0 - float(spec.kinematics.max_velocity_mm_s) / max(ref_vel, 1.0))
+        if float(spec.kinematics.max_velocity_mm_s) < ref_vel
+        else 0.0
+    )
     dynamics = max(
         0.0,
         min(
@@ -196,7 +308,8 @@ def _compute_scores_and_diagnostics(
             + belt_score
             - belt_overtension_pen
             - shaft_bend_pen
-            - bracket_creep_pen,
+            - bracket_creep_pen
+            - vel_derate_pen,
         ),
     )
     if kinematics.step_skip_risk:
@@ -266,10 +379,7 @@ def _compute_scores_and_diagnostics(
             f"{tier_label} ({kinematics.belt_label}): {kinematics.belt_theoretical_summary}{lead_issue}"
         )
     if kinematics.bracket_creep_risk:
-        bkt_info = GANTRY_BRACKET_CATALOG.get(
-            spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
-        )
-        creep_limit_n = float(bkt_info["creep_tension_limit_n"])
+        creep_limit_n = float(resolve_gantry_bracket(spec)["creep_tension_limit_n"])
         diag.append(
             f"Gantry bracket creep risk ({spec.gantry.belt.pretension_n:.0f} N belt pretension > "
             f"{creep_limit_n:.0f} N sustained limit for '{spec.gantry.bracket_material}'): "
@@ -315,6 +425,61 @@ def _compute_scores_and_diagnostics(
             f"('{spec.toolhead.mount_material}') and CoG/nozzle lever arm."
         )
 
+    kin_spec = spec.kinematics
+    if (
+        kin_spec.input_shaper == "smooth_flatness"
+        and spec.architecture == "corexy"
+        and spec.gantry.drive_mode == "2wd"
+        and not kin_spec.lpv_workspace_scheduling
+    ):
+        diag.append(
+            "SMOOTH_FLATNESS on 2WD CoreXY without LPV 3x3 workspace scheduling: 15-25% corner "
+            "belt-frequency shift across the bed causes ZV-class corner ringing (~13.8% @ -10% detune); "
+            "enable lpv_workspace_scheduling (LPV 3x3 Scheduling) or switch to MZV / SMOOTH_ZV."
+        )
+    if kin_spec.input_shaper == "smooth_flatness" and kinematics.torque_safety_margin < 1.25:
+        diag.append(
+            f"SMOOTH_FLATNESS with low torque safety margin ({kinematics.torque_safety_margin:.2f}x < 1.25x): "
+            "inverse-plant pre-lead creates a 1.169x worst-case L1 motor acceleration peak on tight zig-zags."
+        )
+    if kin_spec.awd_sync_mode == "position_equalizer" and kin_spec.awd_equalizer_bw_hz > 4.0:
+        diag.append(
+            f"AWD position equalizer bandwidth ({kin_spec.awd_equalizer_bw_hz:.1f} Hz > 4.0 Hz) enters Report 1's "
+            "1x/rev pulley runout band (6.25-25 Hz at 300-1000 mm/s): recommend 1.5-2.5 Hz with velocity/accel freeze."
+        )
+    if kin_spec.notch_filter_hz is not None and kin_spec.notch_depth_db > 15.0:
+        _, _, notch_lag_deg = biquad_notch_params_from_db_q(kin_spec.notch_depth_db, kin_spec.notch_q)
+        diag.append(
+            f"Excessive TMC4671 BIQUAD_T notch depth ({kin_spec.notch_depth_db:.1f} dB > 15 dB, Q={kin_spec.notch_q:.2f}) "
+            f"introduces -{notch_lag_deg:.1f} deg (> 50 deg) biquad phase lag, risking velocity-loop instability as belt "
+            "resonance shifts across the bed (recommend 10-12 dB, Q = 1.5-2.0)."
+        )
+    if kin_spec.drive_type == "open_loop_stepper" and (
+        kin_spec.pin_rotor_ff
+        or kin_spec.toolhead_imu_active_damping
+        or kin_spec.awd_sync_mode != "none"
+        or kin_spec.mode_space_torque_ff
+    ):
+        diag.append(
+            "Closed-loop FOC (foc_servo or closed_loop_stepper) is required for real-time 0x65/0x67 firmware loops "
+            "(pin_rotor_ff, toolhead_imu_active_damping, awd_sync_mode, mode_space_torque_ff are ignored on open_loop_stepper)."
+        )
+
+    shaper_a = float(modal_fea.recommended_max_accel_mm_s2)
+    motor_a = float(kinematics.motor_max_accel_mm_s2)
+    if limits["accel_limiting_factor"] == "motor" and motor_a < shaper_a * 0.95:
+        diag.append(
+            f"Acceleration is motor-torque limited ({motor_a:.0f} mm/s^2 vs shaper {shaper_a:.0f} mm/s^2): "
+            "main levers are 48 V bus voltage, AWD / FOC Servo drive, higher run current, "
+            "20T pulleys for torque (vs 24T for top speed), and lighter moving gantry/toolhead mass."
+        )
+    if spec.kinematics.max_velocity_mm_s > kinematics.motor_max_velocity_mm_s * 1.05:
+        diag.append(
+            f"WARN: Configured max velocity ({spec.kinematics.max_velocity_mm_s:.0f} mm/s) exceeds "
+            f"motor back-EMF + w_e*L*i voltage ceiling ({kinematics.motor_max_velocity_mm_s:.0f} mm/s at "
+            f"{spec.kinematics.xy_stepper.supply_voltage_v:.0f} V)."
+        )
+
     # 3. Thermal score (volumetric flow, heatup speed, heat creep safety)
     flow_score = min(55.0, (thermal.max_volumetric_flow_mm3_s / 35.0) * 55.0)
     heatup_score = max(0.0, min(25.0, 25.0 * (1.0 - max(0.0, thermal.heatup_time_215c_s - 25.0) / 140.0)))
@@ -330,10 +495,36 @@ def _compute_scores_and_diagnostics(
             f"Hotend volumetric flow capped at {thermal.max_volumetric_flow_mm3_s:.1f} mm^3/s: "
             f"primary thermal/extrusion bottleneck is {thermal.flow_limiting_factor}."
         )
-    if spec.gantry.x_beam_material == "carbon_fiber_tube" and spec.frame.chamber_temp_c >= 65.0:
+    if thermal_structural is not None and thermal_structural.x_beam_tg_warning:
+        x_beam_mat = get_material(spec.gantry.x_beam_material)
+        tg_note = f" (Tg {x_beam_mat.tg_c:.0f} C)" if x_beam_mat.tg_c is not None else ""
         diag.append(
-            f"Standard epoxy carbon fiber X-beam softening/creep risk at {spec.frame.chamber_temp_c:.0f} C chamber "
-            "(>= 65 C): main limit is epoxy matrix glass-transition temperature (Tg), reducing flexural modulus and creep resistance."
+            f"Composite X-beam epoxy matrix softening at {thermal_structural.chamber_temp_c:.0f} C chamber"
+            f"{tg_note} ('{spec.gantry.x_beam_material}' retains "
+            f"{thermal_structural.x_beam_modulus_retention_pct:.1f}% E / "
+            f"{thermal_structural.x_beam_shear_retention_pct:.1f}% G): "
+            "main limit is matrix glass-transition softening; upgrade to "
+            "'carbon_fiber_torsional_45' or 'carbon_fiber_high_tg' for heated chambers."
+        )
+    if spec.gantry.x_beam_profile == "cf_tube_20x20x1":
+        diag.append(
+            "Thin 1.0 mm carbon fiber X-beam wall ('cf_tube_20x20x1') risks local bolt-bearing "
+            "crushing under M3 rail fasteners and high belt tension: install internal "
+            "PET-CF/PPA-CF nut-bar inserts or step up to a 1.5-2.0 mm wall tube."
+        )
+    x_beam_mat_tip = get_material(spec.gantry.x_beam_material)
+    if (
+        spec.architecture == "corexy"
+        and spec.gantry.x_beam_material
+        in ("carbon_fiber_tube", "carbon_fiber_high_tg", "carbon_fiber_3k_twill")
+        and x_beam_mat_tip.effective_shear_modulus_pa <= 6.0e9
+        and float(spec.toolhead.nozzle_offset_mm[2]) <= -35.0
+    ):
+        diag.append(
+            f"Low-shear 0/90 carbon fiber X-beam (G = {x_beam_mat_tip.effective_shear_modulus_pa * 1e-9:.1f} GPa <= 6 GPa) "
+            f"with cantilevered toolhead (nozzle Z = {spec.toolhead.nozzle_offset_mm[2]:.0f} mm): "
+            "upgrading to ±45°/0° 'carbon_fiber_torsional_45' or 'carbon_fiber_m40j_hm' provides "
+            "3-4.5x higher torsional rigidity against cantilevered toolhead twist."
         )
     if thermal_structural is not None:
         if thermal_structural.gantry_bimetallic_bow_um > 40.0:
@@ -370,25 +561,28 @@ def _compute_scores_and_diagnostics(
                 )
 
     if bed_plate_fea is not None:
-        if bed_plate_fea.total_flatness_error_um >= 120.0:
-            if spec.architecture == "corexy" and spec.bed.z_drive == "leadscrew_single":
+        if bed_plate_fea.plate_flatness_um >= 50.0:
+            if bed_plate_fea.taco_buckling_um >= 30.0:
                 diag.append(
-                    f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
-                    f"({bed_plate_fea.first_layer_risk} first-layer risk, gravity sag {bed_plate_fea.gravity_sag_um:.1f} um): "
-                    "main limit is cantilevered single-Z bed support compliance causing front-edge droop."
-                )
-            elif bed_plate_fea.taco_buckling_um >= 30.0:
-                diag.append(
-                    f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
-                    f"({bed_plate_fea.first_layer_risk} first-layer risk): main limit is over-constrained "
+                    f"Bed plate flatness error is {bed_plate_fea.plate_flatness_um:.1f} um after plane removal "
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk; rigid tilt {bed_plate_fea.rigid_tilt_um:.1f} um, "
+                    f"mount settlement {bed_plate_fea.mount_settlement_um:.1f} um): main limit is over-constrained "
                     f"thermal bow ({bed_plate_fea.taco_buckling_um:.1f} um) from rigid lateral mounting."
                 )
             else:
                 diag.append(
-                    f"Bed plate flatness error is {bed_plate_fea.total_flatness_error_um:.1f} um "
-                    f"({bed_plate_fea.first_layer_risk} first-layer risk): main limit is bed plate flexural "
-                    "rigidity against gravity sag and thermal gradient bow."
+                    f"Bed plate flatness error is {bed_plate_fea.plate_flatness_um:.1f} um after plane removal "
+                    f"({bed_plate_fea.first_layer_risk} first-layer risk; rigid tilt {bed_plate_fea.rigid_tilt_um:.1f} um, "
+                    f"mount settlement {bed_plate_fea.mount_settlement_um:.1f} um): main limit is bed plate flexural "
+                    "rigidity against non-planar gravity sag and thermal gradient bow."
                 )
+        elif bed_plate_fea.rigid_tilt_um >= 120.0:
+            diag.append(
+                f"Large cantilevered bed tilt/droop ({bed_plate_fea.rigid_tilt_um:.1f} um rigid tilt; "
+                f"non-planar plate flatness error {bed_plate_fea.plate_flatness_um:.1f} um after plane removal, "
+                f"{bed_plate_fea.first_layer_risk} first-layer risk): main limit is cantilevered Z-bed support "
+                "compliance causing front-edge droop under load."
+            )
         if bed_plate_fea.plate_first_mode_hz < 60.0:
             if bed_plate_fea.plate_first_mode_type == "cantilever_flap":
                 bed_mode_limit = "cantilevered Z-support pitch compliance"
@@ -401,8 +595,17 @@ def _compute_scores_and_diagnostics(
                 f"{bed_plate_fea.plate_first_mode_type}): main limit is {bed_mode_limit}."
             )
 
-    # 4. Print quality score (directly from virtual G-code print)
-    print_quality = vprint.print_quality_score
+    # 4. Print quality score (directly from virtual G-code print; for default benchmark,
+    #    replace small-cube layer-time artifact with speed-independent part-cooling adequacy)
+    if is_default_benchmark:
+        cool_frac = vprint.cooling_warning_layers / max(1, vprint.layer_count)
+        intrinsic_cool_pen = max(0.0, (8.0 - spec.toolhead.hotend.part_cooling_cfm) / 8.0) * 12.0
+        print_quality = max(
+            0.0,
+            min(100.0, vprint.print_quality_score + 15.0 * cool_frac - intrinsic_cool_pen),
+        )
+    else:
+        print_quality = vprint.print_quality_score
     if vprint.underextrusion_segments > 0:
         diag.append(
             f"Virtual print detected {vprint.underextrusion_segments} under-extruded moves "
@@ -419,7 +622,16 @@ def _compute_scores_and_diagnostics(
     moving_mass_score = max(0.0, min(20.0, 20.0 * (1.0 - max(0.0, assembly.y_moving_mass_kg - 0.35) / 1.5)))
     frame_mass_score = max(0.0, min(10.0, 10.0 * (1.0 - max(0.0, assembly.total_mass_kg - 15.0) / 60.0)))
     mass_score = moving_mass_score + frame_mass_score
-    cost_score = max(0.0, min(25.0, 25.0 * (1.0 - max(0.0, assembly.estimated_material_cost_usd - 220.0) / 800.0)))
+    if bom_total_cost_usd is not None:
+        cost_score = max(
+            0.0,
+            min(25.0, 25.0 * (1.0 - max(0.0, bom_total_cost_usd - 550.0) / 2000.0)),
+        )
+    else:
+        cost_score = max(
+            0.0,
+            min(25.0, 25.0 * (1.0 - max(0.0, assembly.estimated_material_cost_usd - 220.0) / 800.0)),
+        )
     efficiency = max(0.0, min(100.0, pkg_score + mass_score + cost_score))
 
     # Hard collision penalty
@@ -542,22 +754,39 @@ def compute_weight_shaper_gains(
         cut_safe = max(0.0, min(float(cut_g), 0.75 * m_lim_g))
         if cut_safe <= 0.0:
             return 0.0, 0.0
-        f_drive_new = (
-            f_drive * math.sqrt(m_lim_g / max(m_lim_g - cut_safe, 1.0))
-            if moves_on_limiting
-            else f_drive
-        )
-        struct_cap = (
-            f_struct * math.sqrt(m_lim_g / max(m_lim_g - cut_safe, 1.0))
-            if moves_on_limiting
-            else f_struct * 1.35
-        )
-        f_struct_new = min(
-            f_struct + max(0.0, float(struct_hz_per_100g)) * (cut_safe / 100.0),
-            struct_cap,
-        )
+
+        # B-01 consistent moving-mass compliance split:
+        # 1/f_eff^2 = 1/f_struct_m^2 + 1/f_drive^2 on the same moving mass m_lim_g.
+        inv_f_eff2 = 1.0 / (max(f_eff, 1.0) ** 2)
+        inv_f_drv2 = 1.0 / (max(f_drive, 1.0) ** 2)
+        inv_f_str_m2 = max(inv_f_eff2 - inv_f_drv2, 1e-12)
+        f_struct_m = 1.0 / math.sqrt(inv_f_str_m2)
+
+        if moves_on_limiting:
+            mass_boost = math.sqrt(m_lim_g / max(m_lim_g - cut_safe, 1.0))
+            f_drive_new = f_drive * mass_boost
+            # Cutting moving mass on the limiting axis raises both drive and
+            # moving-mass structural compliance frequency; cap structural gain by mass_boost.
+            struct_slope_boost = (
+                1.0 + max(0.0, float(struct_hz_per_100g)) * (cut_safe / 100.0) / max(f_struct, 5.0)
+            )
+            f_struct_m_new = f_struct_m * min(max(struct_slope_boost, 1.0), mass_boost)
+            # If sensitivity slope is unavailable (or small), moving-mass inertia reduction still
+            # lifts the moving-mass compliance mode at least partially via mass_boost.
+            if struct_hz_per_100g <= 0.0:
+                f_struct_m_new = f_struct_m * mass_boost
+        else:
+            f_drive_new = f_drive
+            if struct_hz_per_100g <= 0.0:
+                return 0.0, 0.0
+            struct_slope_boost = min(
+                1.0 + max(0.0, float(struct_hz_per_100g)) * (cut_safe / 100.0) / max(f_struct, 5.0),
+                1.35,
+            )
+            f_struct_m_new = f_struct_m * struct_slope_boost
+
         f_eff_new = 1.0 / math.sqrt(
-            1.0 / (max(f_struct_new, 5.0) ** 2) + 1.0 / (max(f_drive_new, 5.0) ** 2)
+            1.0 / (max(f_struct_m_new, 5.0) ** 2) + 1.0 / (max(f_drive_new, 5.0) ** 2)
         )
         df_hz = max(0.0, f_eff_new - f_eff)
         da = max(0.0, a_max * ((f_eff_new / max(f_eff, 1.0)) ** 2 - 1.0))
@@ -568,10 +797,13 @@ def compute_weight_shaper_gains(
     nmap = assembly.node_map
     gantry_members = [m for m in assembly.members if m.role == "gantry"]
 
-    hotend_mass_g = float(spec.toolhead.hotend.mass_g)
+    from printsim.geometry.builder import resolve_toolhead_hardware_accessories
+
+    th_acc = resolve_toolhead_hardware_accessories(spec)
+    hotend_mass_g = float(th_acc["effective_hotend_mass_g"])
     toolhead_mass_g = float(assembly.x_moving_mass_kg) * 1000.0
     if toolhead_mass_g <= 0.0:
-        toolhead_mass_g = float(spec.toolhead.total_mass_g) + hotend_mass_g
+        toolhead_mass_g = float(th_acc["effective_total_mass_g"])
 
     hotend_slope = _extract_struct_mass_slope(sensitivity, ("nozzle_tip",), (), ms_key)
     toolhead_slope = _extract_struct_mass_slope(
@@ -880,6 +1112,13 @@ def evaluate_printer(
             servo_vel_bw_hz=spec.kinematics.servo_vel_bw_hz,
             servo_pos_bw_hz=spec.kinematics.servo_pos_bw_hz,
             notch_filter_hz=spec.kinematics.notch_filter_hz,
+            notch_depth_db=spec.kinematics.notch_depth_db,
+            notch_q=spec.kinematics.notch_q,
+            awd_sync_mode=spec.kinematics.awd_sync_mode,
+            awd_equalizer_bw_hz=spec.kinematics.awd_equalizer_bw_hz,
+            pin_rotor_ff=spec.kinematics.pin_rotor_ff,
+            toolhead_imu_active_damping=spec.kinematics.toolhead_imu_active_damping,
+            mode_space_torque_ff=spec.kinematics.mode_space_torque_ff,
         )
         workspace_frf = compute_workspace_frf_map(
             assembly, modal_fea, grid_n=5, drive_cfg=drive_cfg
@@ -891,16 +1130,41 @@ def evaluate_printer(
         sensitivity = compute_structural_sensitivities(assembly, static_fea, modal_fea)
         bed_plate_fea = solve_bed_plate_fem(spec, mesh_n=max(4, int(bed_mesh_n)))
 
+    motion_limits = _compute_motion_limits(spec, modal_fea, kinematics, thermal)
+    bom = generate_bom(assembly)
+    bom_total_cost_usd = float(bom.total_cost_usd)
+    bom_total_mass_kg = float(bom.total_mass_kg)
+
+    is_default_benchmark = gcode_text is None
     if gcode_text is None:
         bx, by, _ = spec.kinematics.build_volume_mm
         cube_size = min(40.0, bx * 0.25, by * 0.25)
-        gcode_text = generate_benchmark_gcode(
+        bench_layer_h = 0.25
+        bench_line_w = 0.42
+        flow_v_bench = (float(thermal.max_volumetric_flow_mm3_s) * 0.98) / (
+            bench_line_w * bench_layer_h
+        )
+        achievable_v = max(
+            20.0,
+            min(float(spec.kinematics.max_velocity_mm_s), float(kinematics.motor_max_velocity_mm_s)),
+        )
+        bench_accel = max(
+            500.0,
+            min(
+                float(spec.kinematics.max_accel_mm_s2),
+                float(motion_limits["achievable_max_accel_mm_s2"]),
+            ),
+        )
+        bench_infill_v = max(15.0, min(320.0, achievable_v * 0.85, flow_v_bench))
+        bench_print_v = max(15.0, min(220.0, achievable_v * 0.65, flow_v_bench * 0.85))
+        gcode_text = f"M204 S{bench_accel:.0f}\n" + generate_benchmark_gcode(
             build_center_xy=(bx * 0.5, by * 0.5),
             size_mm=cube_size,
             height_mm=15.0,
-            print_speed_mm_s=min(220.0, spec.kinematics.max_velocity_mm_s * 0.65),
-            infill_speed_mm_s=min(320.0, spec.kinematics.max_velocity_mm_s * 0.85),
-            travel_speed_mm_s=spec.kinematics.max_velocity_mm_s,
+            layer_height_mm=bench_layer_h,
+            print_speed_mm_s=bench_print_v,
+            infill_speed_mm_s=bench_infill_v,
+            travel_speed_mm_s=achievable_v,
         )
 
     vprint = simulate_gcode(gcode_text, assembly, modal_fea, kinematics, thermal)
@@ -917,9 +1181,15 @@ def evaluate_printer(
         workspace_frf=workspace_frf,
         rcsa=rcsa,
         bed_plate_fea=bed_plate_fea,
+        motion_limits=motion_limits,
+        bom_total_cost_usd=bom_total_cost_usd,
+        accel_override_mm_s2=accel_override_mm_s2,
+        is_default_benchmark=is_default_benchmark,
     )
 
     weight_shaper_gains = compute_weight_shaper_gains(assembly, modal_fea, sensitivity)
+    effective_model_params = build_effective_model_params(spec)
+    model_confidence = build_model_confidence_audit(spec)
 
     return SimulationReport(
         spec=spec,
@@ -939,6 +1209,11 @@ def evaluate_printer(
         sensitivity=sensitivity,
         bed_plate_fea=bed_plate_fea,
         weight_shaper_gains=weight_shaper_gains,
+        motion_limits=motion_limits,
+        bom_total_cost_usd=bom_total_cost_usd,
+        bom_total_mass_kg=bom_total_mass_kg,
+        effective_model_params=effective_model_params,
+        model_confidence=model_confidence,
     )
 
 

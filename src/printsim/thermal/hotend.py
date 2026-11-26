@@ -13,6 +13,10 @@ from printsim.thermal.filaments import get_filament
 
 
 _R_GAS_J_MOLK = 8.3144626
+# Reconciled total convective + radiative conductance from nozzle tip (0.020 W/K) and heater block (0.030 W/K)
+_NOZZLE_AMB_LOSS_W_K = 0.020
+_BLOCK_AMB_LOSS_W_K = 0.030
+_BLOCK_NOZZLE_LOSS_W_K = _NOZZLE_AMB_LOSS_W_K + _BLOCK_AMB_LOSS_W_K
 
 
 @dataclass
@@ -147,7 +151,7 @@ def _solve_axial_hotend_fvm(
       ..+22 mm (13 cells): Finned heatsink (convective cooling to ambient)
     """
     he = spec.toolhead.hotend
-    t_amb = he.ambient_temp_c
+    t_amb = max(he.ambient_temp_c, spec.frame.chamber_temp_c)
     z_noz_mm = 5.0
     z_melt_mm = he.melt_zone_length_mm
     z_hb_mm = he.heatbreak_length_mm
@@ -187,10 +191,10 @@ def _solve_axial_hotend_fvm(
             zones.append(zone_name)
             if zone_name == "nozzle":
                 kA[idx] = k_nozzle * a_noz
-                g_amb[idx] = 0.004
+                g_amb[idx] = _NOZZLE_AMB_LOSS_W_K / count
             elif zone_name == "block":
                 kA[idx] = k_block * a_block
-                g_amb[idx] = 0.003
+                g_amb[idx] = _BLOCK_AMB_LOSS_W_K / count
                 block_indices.append(idx)
             elif zone_name == "heatbreak":
                 kA[idx] = k_hb * area_hb + k_filament * a_fil
@@ -239,15 +243,17 @@ def graetz_melt_zone_flow_m3_s(
     t_core_c: float,
     k_block_w_mk: float = 385.0,
     k_nozzle_w_mk: float = 115.0,
+    melt_transfer_factor: float = 1.0,
 ) -> float:
     """Compute Graetz radial-conduction melt-zone volumetric flow limit (m^3/s).
 
-    Q_melt = C_core * f_wall * (pi * Nu * alpha * L) / ln((T_nozzle - T_in) / (T_nozzle - T_core))
-    where Nu = 3.66 (circular tube constant wall temperature) and C_core = 3.1 accounts for
-    partially melted filament core shear-film extrusion (Go et al. 2017; Mackay 2018).
+    Q_melt = C_core * f_mat * f_wall * (pi * Nu * alpha * L) / ln((T_nozzle - T_in) / (T_nozzle - T_core))
+    where Nu = 3.66 (circular tube constant wall temperature), C_core = 3.30 accounts for
+    partially melted PLA core shear-film extrusion on a melt-averaged DSC cp basis
+    (Go et al. 2017; Mackay 2018), and melt_transfer_factor (f_mat) scales per polymer.
     """
     nu = 3.66
-    c_melt_core = 3.1
+    c_melt_core = 3.30 * max(melt_transfer_factor, 0.05)
     alpha = max(thermal_diffusivity_m2_s, 1e-9)
     k_eff = (2.0 * k_block_w_mk * k_nozzle_w_mk) / max(k_block_w_mk + k_nozzle_w_mk, 1e-9)
     wall_factor = (k_eff / 150.0) ** 0.12
@@ -383,7 +389,7 @@ def simulate_hotend_thermal(
     hb_mat = get_material(he.heatbreak_material)
 
     t_target = target_temp_c if target_temp_c is not None else fil.print_temp_c
-    t_amb = he.ambient_temp_c
+    t_amb = max(he.ambient_temp_c, spec.frame.chamber_temp_c)
     delta_t = max(t_target - t_amb, 1.0)
 
     # 1. Heatbreak axial thermal resistance R_hb = L / (k * A)
@@ -412,16 +418,17 @@ def simulate_hotend_thermal(
         fil_diameter_m=ext.filament_diameter_mm * 1e-3,
     )
 
-    # Block external convective + radiative loss
-    q_conv_w = 0.032 * delta_t
+    # Block + nozzle external convective & radiative loss (reconciled with 0.050 W/K FVM conductance)
+    q_conv_w = _BLOCK_NOZZLE_LOSS_W_K * delta_t
     steady_loss_w = q_hb_w + q_conv_w
 
-    # 3. Transient thermal capacitance & heat-up simulation
+    # 3. Transient thermal capacitance & heat-up simulation to target_temp_c
+    #    (stored in heatup_time_215c_s for API/UI schema compatibility)
     c_block = (he.block_mass_g * 1e-3) * block_mat.specific_heat_j_kgk + 0.005 * nozzle_mat.specific_heat_j_kgk + 2.5
     t_cur = t_amb
     dt = 0.25
-    heatup_time = 300.0
-    reached = False
+    heatup_time = 0.0 if t_cur >= t_target - 0.5 else 300.0
+    reached = t_cur >= t_target - 0.5
     curve: list[dict[str, float]] = [{"time_s": 0.0, "temp_c": round(t_amb, 1)}]
 
     for step in range(1, 1200):
@@ -429,7 +436,7 @@ def simulate_hotend_thermal(
         err = t_target - t_cur
         duty = max(0.0, min(1.0, err / 8.0)) if reached else 1.0
         p_in = he.heater_power_w * duty
-        p_loss = (t_cur - t_amb) * (1.0 / (r_hb + r_hs) + 0.032)
+        p_loss = (t_cur - t_amb) * (1.0 / (r_hb + r_hs) + _BLOCK_NOZZLE_LOSS_W_K)
         t_cur += ((p_in - p_loss) / c_block) * dt
         if not reached and t_cur >= t_target - 0.5:
             heatup_time = t_sec
@@ -439,20 +446,24 @@ def simulate_hotend_thermal(
         if reached and t_sec > heatup_time + 15.0:
             break
 
-    # 4. Bed heat-up time (ambient to filament bed_temp_c or 100C benchmark)
+    # 4. Bed heat-up time (ambient to filament bed_target = max(fil.bed_temp_c, 60.0))
+    #    (stored in bed_heatup_time_100c_s for API/UI schema compatibility)
     bed_target = max(fil.bed_temp_c, 60.0)
     bed_mat = get_material(spec.bed.plate_material)
     c_bed = (spec.bed.mass_g * 1e-3) * bed_mat.specific_heat_j_kgk
     bed_area_m2 = (spec.bed.size_mm[0] * spec.bed.size_mm[1]) * 1e-6
     h_bed_loss = 14.0 * bed_area_m2
     t_bed = t_amb
-    bed_time = 600.0
-    for step in range(1, 2400):
-        p_loss_b = (t_bed - t_amb) * h_bed_loss
-        t_bed += ((spec.bed.heater_power_w - p_loss_b) / max(c_bed, 10.0)) * 0.5
-        if t_bed >= 100.0:
-            bed_time = step * 0.5
-            break
+    if t_bed >= bed_target:
+        bed_time = 0.0
+    else:
+        bed_time = 1200.0
+        for step in range(1, 2400):
+            p_loss_b = (t_bed - t_amb) * h_bed_loss
+            t_bed += ((spec.bed.heater_power_w - p_loss_b) / max(c_bed, 10.0)) * 0.5
+            if t_bed >= bed_target:
+                bed_time = step * 0.5
+                break
 
     # 5. Volumetric flow rate limits (strict SI internally, mm^3/s at boundary)
     enthalpy_j_per_m3 = fil.density_kg_m3 * (fil.specific_heat_j_kgk * delta_t + fil.latent_heat_j_kg)
@@ -467,6 +478,7 @@ def simulate_hotend_thermal(
         t_core_c=fil.extrudable_temp_c,
         k_block_w_mk=block_mat.thermal_conductivity_w_mk,
         k_nozzle_w_mk=nozzle_mat.thermal_conductivity_w_mk,
+        melt_transfer_factor=fil.melt_transfer_factor,
     )
 
     # Non-Newtonian Rabinowitsch power-law capillary flow with Arrhenius T-shift
@@ -474,7 +486,7 @@ def simulate_hotend_thermal(
     fil_area_m2 = math.pi * (0.5 * fil_diameter_m) ** 2
     max_pressure_pa = ext.max_push_force_n / fil_area_m2
     a_t = arrhenius_viscosity_shift(t_target, fil.t_ref_c, fil.arrhenius_ea_j_mol)
-    k_melt_pa_sn = fil.power_law_k_pa_sn * a_t
+    k_melt_pa_sn = fil.power_law_k_pa_sn * (a_t ** fil.power_law_n)
     nozzle_d_m = he.nozzle_diameter_mm * 1e-3
     chamber_d_m = he.heatbreak_id_mm * 1e-3
     melt_l_m = he.melt_zone_length_mm * 1e-3
@@ -511,7 +523,7 @@ def simulate_hotend_thermal(
     req_push_force_n = dp_at_max_pa * fil_area_m2
 
     pressure_margin = flow_pressure / max(min(flow_power, flow_melt), 1.0)
-    max_lin_speed = max_flow / (0.20 * 0.42)
+    max_lin_speed = max_flow / (0.20 * 0.40)
 
     # 6. Part-cooling overhang & bridging capability
     eff_cooling = he.part_cooling_cfm / max(fil.cooling_demand, 0.2)

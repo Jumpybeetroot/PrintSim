@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "chube_compact",
+  "name": "Luke's Lab Chube Compact (80W Ti Shell)",
+  "source_cad": "chube_compact.step",
+  "source_url": "https://www.chubehotends.com/",
+  "baked_at": "2026-11-25T17:06:23Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 8365,
+  "num_elements": 31061,
+  "num_dofs": 25095,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.008802,
+  "mass_kg": 0.048007,
+  "com_mm": [
+    0.0005,
+    0.1052,
+    -26.4089
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -47.2
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 3015.254,
+    "ky": 2276.901,
+    "kz": 53950.216
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1284.871,
+    "kry": 1621.599,
+    "krz": 1131.382
+  },
+  "fixed_interface_freqs_hz": [
+    4815.52,
+    5005.63,
+    9643.01,
+    14733.79,
+    14982.97,
+    17779.01,
+    18833.5,
+    20452.14
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23720,
+  "visual_bytes": 877436,
+  "cad_trust_pct": 86,
+  "source_hash": "88ff2ac4c6c56b63d02ddf228be90f68ace037a1a1a74b5bda0ccbb689d387a2"
+}

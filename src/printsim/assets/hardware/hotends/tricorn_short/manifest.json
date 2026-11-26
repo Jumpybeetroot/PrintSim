@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "tricorn_short",
+  "name": "Tricorn Short (120W 3x40W Inverted Ti)",
+  "source_cad": "tricorn_hotends.step",
+  "source_url": "https://tricornhotend.com/",
+  "baked_at": "2026-11-25T17:15:47Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 29631,
+  "num_elements": 112199,
+  "num_dofs": 88893,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.009732,
+  "mass_kg": 0.037762,
+  "com_mm": [
+    0.0008,
+    -0.0014,
+    -25.1013
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -54.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 436.513,
+    "ky": 441.589,
+    "kz": 56496.089
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 367.89,
+    "kry": 368.886,
+    "krz": 390.44
+  },
+  "fixed_interface_freqs_hz": [
+    6921.66,
+    6936.14,
+    9209.56,
+    16502.38,
+    18761.1,
+    19580.82,
+    19607.45,
+    21071.41
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23996,
+  "visual_bytes": 833252,
+  "cad_trust_pct": 87,
+  "source_hash": "852fe4586612e85a14dcadd37bf21429a355789de9f90be5cb5b331ab48fd4a4"
+}

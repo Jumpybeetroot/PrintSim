@@ -30,12 +30,15 @@ def test_belt_catalog_ea_and_datasheet_ratios() -> None:
     b_htd3m_15 = BeltSpec(type="htd3m_15mm")
     b_at5_16 = BeltSpec(type="at5_16mm")
 
-    # Existing GT2 baseline preserved exactly
-    assert b_gt2_6.stiffness_ea_n == pytest.approx(50000.0)
-    assert b_gt2_9.stiffness_ea_n == pytest.approx(75000.0)
-    assert b_gt2_12.stiffness_ea_n == pytest.approx(100000.0)
-    assert b_gt2_15.stiffness_ea_n == pytest.approx(125000.0)
-    assert b_gt2_dual9.stiffness_ea_n == pytest.approx(150000.0)
+    # D-01: Exact Gates 2GT quasi-static catalog EA (18.9 kN/6mm) * 2.0 small-amplitude dynamic factor, below steel-cord AT3 (80 kN)
+    assert b_gt2_6.static_stiffness_ea_n == pytest.approx(18900.0)
+    assert b_gt2_6.dynamic_stiffening_factor == pytest.approx(2.0)
+    assert b_gt2_6.stiffness_ea_n == pytest.approx(37800.0)
+    assert b_gt2_9.stiffness_ea_n == pytest.approx(56700.0)
+    assert b_gt2_12.stiffness_ea_n == pytest.approx(75600.0)
+    assert b_gt2_15.stiffness_ea_n == pytest.approx(94500.0)
+    assert b_gt2_dual9.stiffness_ea_n == pytest.approx(113400.0)
+    assert b_gt2_9.stiffness_ea_n < b_at3_10.stiffness_ea_n
 
     # Gates 3GT / 2GT unit-strain modulus ratio = 30k / 18k = 1.667x per mm width
     assert b_3gt_9.pitch_mm == pytest.approx(3.0)
@@ -43,7 +46,7 @@ def test_belt_catalog_ea_and_datasheet_ratios() -> None:
     assert b_3gt_9.stiffness_ea_n / b_gt2_9.stiffness_ea_n == pytest.approx(30.0 / 18.0, rel=0.01)
     assert b_3gt_15.stiffness_ea_n > b_gt2_15.stiffness_ea_n
 
-    # Elatech / ContiTech steel-cord TPU datasheet C_spez values
+    # Elatech / ContiTech steel-cord TPU exact datasheet C_spez values (Hookean steel -> dynamic factor 1.0)
     assert b_at3_10.pitch_mm == pytest.approx(3.0)
     assert b_at3_10.core == "steel"
     assert b_at3_10.body_material == "tpu"

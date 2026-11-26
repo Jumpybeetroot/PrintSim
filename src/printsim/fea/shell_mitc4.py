@@ -9,8 +9,10 @@ import numpy as np
 _GP_COORDS: tuple[float, float] = (-1.0 / math.sqrt(3.0), 1.0 / math.sqrt(3.0))
 _NODE_XI: tuple[float, ...] = (-1.0, 1.0, 1.0, -1.0)
 _NODE_ETA: tuple[float, ...] = (-1.0, -1.0, 1.0, 1.0)
-# Hughes-Brezzi / MacNeal-Harder frame-invariant drilling stabilization factor
-_ALPHA_DRILL: float = 1e-6
+# Hughes-Brezzi / MacNeal-Harder frame-invariant drilling stabilization factor (1-point at center)
+_ALPHA_DRILL: float = 1e-3
+# Minimal rank-3 orthogonal drilling hourglass guard on (b_d - b_d0) so single quads have 6 exact RBMs
+_ALPHA_DRILL_HG: float = 1e-5
 
 
 def mitc4_local_frame(coords_3d: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -170,7 +172,30 @@ def mitc4_shell_matrices(
     g_b[4] = g_b[7] = -0.25 * (y[2] - y[1])
     g_b[5] = g_b[8] = 0.25 * (x[2] - x[1])
 
-    k_m = np.zeros((8, 8), dtype=float)
+    # Taylor-Beresford-Wilson (1976) modified Jacobian J0 at (0, 0) for QM6 incompatible modes
+    # and center drilling strain vector b_d0 for 1-point Hughes-Brezzi stabilization
+    n0, dn_dxi0, dn_deta0 = _shape_and_derivs(0.0, 0.0)
+    j0_mat = np.array(
+        [
+            [float(np.dot(dn_dxi0, x)), float(np.dot(dn_dxi0, y))],
+            [float(np.dot(dn_deta0, x)), float(np.dot(dn_deta0, y))],
+        ],
+        dtype=float,
+    )
+    det_j0 = float(np.linalg.det(j0_mat))
+    if det_j0 <= 1e-14:
+        raise ValueError(f"Invalid / non-CCW quad center Jacobian detJ0={det_j0:.3e}")
+    inv_j0 = np.linalg.inv(j0_mat)
+    dn0_dx_dy = inv_j0 @ np.vstack([dn_dxi0, dn_deta0])
+    b_d0 = np.zeros(12, dtype=float)
+    for k in range(4):
+        b_d0[3 * k] = 0.5 * dn0_dx_dy[1, k]
+        b_d0[3 * k + 1] = -0.5 * dn0_dx_dy[0, k]
+        b_d0[3 * k + 2] = n0[k]
+
+    k_uu = np.zeros((8, 8), dtype=float)
+    k_ua = np.zeros((8, 4), dtype=float)
+    k_aa = np.zeros((4, 4), dtype=float)
     k_b = np.zeros((12, 12), dtype=float)
     k_drill = np.zeros((12, 12), dtype=float)
     gt_mem = float(d_m[2, 2])
@@ -215,6 +240,16 @@ def mitc4_shell_matrices(
                 b_d[3 * k + 1] = -0.5 * dn_dx[k]
                 b_d[3 * k + 2] = n_vals[k]
 
+            # QM6 incompatible modes: M1(xi)=1-xi^2, M2(eta)=1-eta^2 transformed via (detJ0/detJ) * J0^{-1}
+            dm_dxi_eta = np.array([[-2.0 * xi, 0.0], [0.0, -2.0 * eta]], dtype=float)
+            dm_dx_dy = (inv_j0 @ dm_dxi_eta) * (det_j0 / det_j)
+            b_a = np.zeros((3, 4), dtype=float)
+            for k in range(2):
+                b_a[0, 2 * k] = dm_dx_dy[0, k]
+                b_a[1, 2 * k + 1] = dm_dx_dy[1, k]
+                b_a[2, 2 * k] = dm_dx_dy[1, k]
+                b_a[2, 2 * k + 1] = dm_dx_dy[0, k]
+
             g_cov = np.vstack(
                 [
                     0.5 * (1.0 - eta) * g_a + 0.5 * (1.0 + eta) * g_c,
@@ -223,10 +258,19 @@ def mitc4_shell_matrices(
             )
             b_s = inv_j @ g_cov
 
-            k_m += (b_m.T @ d_m @ b_m) * det_j
+            k_uu += (b_m.T @ d_m @ b_m) * det_j
+            k_ua += (b_m.T @ d_m @ b_a) * det_j
+            k_aa += (b_a.T @ d_m @ b_a) * det_j
             k_b += (b_b.T @ d_b @ b_b + b_s.T @ d_s @ b_s) * det_j
-            k_drill += (_ALPHA_DRILL * gt_mem) * np.outer(b_d, b_d) * det_j
+            b_d_hg = b_d - b_d0
+            k_drill += (_ALPHA_DRILL_HG * gt_mem) * np.outer(b_d_hg, b_d_hg) * det_j
             m_shape_diag += (n_vals * n_vals) * det_j
+
+    # 1-point center integration of physical drilling penalty + static condensation of QM6 internal DOFs
+    k_drill += (_ALPHA_DRILL * gt_mem) * np.outer(b_d0, b_d0) * area
+    k_aa = 0.5 * (k_aa + k_aa.T)
+    k_m = k_uu - k_ua @ np.linalg.solve(k_aa, k_ua.T)
+    k_m = 0.5 * (k_m + k_m.T)
 
     k_loc = np.zeros((24, 24), dtype=float)
     mem_dofs = [6 * k + d for k in range(4) for d in (0, 1)]

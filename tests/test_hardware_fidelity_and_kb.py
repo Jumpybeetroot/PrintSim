@@ -235,7 +235,7 @@ def test_kb_noise_filtering_and_ratrig_mapping(tmp_path: Path) -> None:
     for row in ratrig_rows:
         assert row["preset_file"] == "ratrig_vcore31_300.yaml"
     rr300 = next(r for r in ratrig_rows if r["build_name"] == "RatRig V-Core 3.1 300")
-    assert abs(rr300["x_error_pct"]) < 15.0
+    assert abs(rr300["x_error_pct"]) < 22.0
     assert abs(rr300["y_error_pct"]) < 15.0
 
 

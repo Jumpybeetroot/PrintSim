@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .overrides import ModelOverridesSpec
 
 Architecture = Literal["corexy", "cartesian_bedslinger", "delta"]
 BracingType = Literal[
@@ -52,6 +54,7 @@ DriveModeType = Literal["2wd", "awd"]
 XRailMountType = Literal["front", "top", "bottom", "dual_top_bottom"]
 YRailMountType = Literal["top", "inner", "bottom"]
 DriveType = Literal["open_loop_stepper", "closed_loop_stepper", "foc_servo"]
+AwdSyncMode = Literal["none", "torque_mirror", "position_equalizer"]
 InputShaperType = Literal[
     "auto",
     "none",
@@ -63,6 +66,7 @@ InputShaperType = Literal[
     "zvdd",
     "smooth_zv",
     "smooth_ei",
+    "smooth_flatness",
 ]
 CornerJointType = Literal["rigid", "l_bracket", "blind_joint", "gusset_plate", "corner_cube"]
 RailPreloadType = Literal["ZF", "Z0", "Z1", "ZA", "ZB"]
@@ -74,10 +78,15 @@ RailQualityType = Literal[
 ]
 RailBlockType = Literal["C", "H"]
 RailBackerMaterialType = Literal["none", "steel_4140", "titanium_grade5"]
+CFRailMountingType = Literal["auto", "single_wall_bare", "two_wall_clamped_inserts"]
 BedMountType = Literal[
     "kinematic_3pt",
     "whopping_pochard_kinematic",
     "trident_3pt_standoffs",
+    "cnc_kelvin_magnetic",
+    "captive_belleville_kinematic",
+    "dual_leaf_ti_kinematic",
+    "spherical_3pt_ratrig",
     "rigid_4pt",
     "floating_4pt",
     "silicone_4pt",
@@ -125,7 +134,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 6.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 50000.0,
+        "ea_static_n": 18900.0,  # Exact Gates PowerGrip 2GT quasi-static catalog EA (18,000 lbf/in * 6/25.4 mm)
+        "dynamic_stiffening_factor": 2.0,  # 40-150 Hz preloaded small-amplitude EPDM/fiberglass dynamic tangent ratio
+        "ea_default_core_n": 37800.0,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0083,
         "max_working_tension_n": 58.0,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -134,7 +145,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "max_temp_c": 110.0,
         "cost_usd_per_m": 4.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Empirically calibrated against stock Voron Trident / 2.4 / bedslinger / delta ADXL shaper logs.",
+        "theoretical_summary": "Gates PowerGrip 2GT 6mm (18.9 kN quasi-static datasheet EA x 2.0 dynamic small-amplitude factor, exact pulley-to-pulley spans).",
         "practical_issues": [],
     },
     "gt2_9mm": {
@@ -146,7 +157,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 9.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 75000.0,
+        "ea_static_n": 28350.0,  # Exact Gates PowerGrip 2GT 9mm quasi-static catalog EA (1.5x 6mm)
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 56700.0,  # ea_static_n * dynamic_stiffening_factor (below steel-cord AT3 80 kN)
         "linear_mass_kg_m": 0.01245,
         "max_working_tension_n": 92.8,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -155,7 +168,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "max_temp_c": 110.0,
         "cost_usd_per_m": 6.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Empirically calibrated against Monolith AWD, RatRig V-Core, and VzBot 330 ADXL shaper logs.",
+        "theoretical_summary": "Gates PowerGrip 2GT 9mm (28.35 kN quasi-static datasheet EA x 2.0 dynamic factor, exact pulley-to-pulley spans).",
         "practical_issues": [],
     },
     "gt2_12mm": {
@@ -167,7 +180,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 12.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 100000.0,
+        "ea_static_n": 37800.0,  # Exact Gates PowerGrip 2GT 12mm quasi-static catalog EA (2.0x 6mm)
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 75600.0,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0166,
         "max_working_tension_n": 127.6,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -176,7 +191,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "max_temp_c": 110.0,
         "cost_usd_per_m": 8.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Validated on high-tension Monolith / custom CNC AWD CoreXY builds.",
+        "theoretical_summary": "Gates PowerGrip 2GT 12mm (37.8 kN quasi-static datasheet EA x 2.0 dynamic factor) on high-tension AWD CoreXY builds.",
         "practical_issues": [
             "Requires 12 mm pulleys/idlers, double-shear motor supports, and taller XY-joint belt paths than stock 6 mm Voron kits.",
         ],
@@ -190,7 +205,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 15.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 125000.0,
+        "ea_static_n": 47250.0,
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 94500.0,
         "linear_mass_kg_m": 0.02075,
         "max_working_tension_n": 162.0,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -215,7 +232,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 20.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 150000.0,
+        "ea_static_n": 56700.0,
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 113400.0,
         "linear_mass_kg_m": 0.0249,
         "max_working_tension_n": 185.6,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -240,7 +259,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 9.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 125000.0,
+        "ea_static_n": 47250.0,  # 30/18 = 5/3x Gates 3GT/2GT fiberglass modulus ratio
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 94500.0,
         "linear_mass_kg_m": 0.0180,
         "max_working_tension_n": 180.0,
         "tooth_shear_k_n_per_m_mm": 7.8e4,
@@ -266,7 +287,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 12.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 166700.0,
+        "ea_static_n": 63000.0,
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 126000.0,
         "linear_mass_kg_m": 0.0240,
         "max_working_tension_n": 240.0,
         "tooth_shear_k_n_per_m_mm": 7.8e4,
@@ -292,7 +315,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 15.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_default_core_n": 208300.0,
+        "ea_static_n": 78750.0,
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 157500.0,
         "linear_mass_kg_m": 0.0300,
         "max_working_tension_n": 300.0,
         "tooth_shear_k_n_per_m_mm": 7.8e4,
@@ -317,6 +342,8 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 10.0,
         "default_core": "steel",
         "body_material": "tpu",
+        "ea_static_n": 80000.0,  # Exact Elatech/SIT C_spez = 80 kN (Hookean steel cords -> dynamic factor 1.0)
+        "dynamic_stiffening_factor": 1.0,
         "ea_default_core_n": 80000.0,
         "linear_mass_kg_m": 0.0220,
         "max_working_tension_n": 320.0,
@@ -441,6 +468,39 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
 HotendMountStyleType = Literal[
     "groove_mount", "rigid_4bolt_m3", "dragon_4bolt_m25", "chube_6bolt_m3_18pcd"
 ]
+HOTEND_MOUNT_CLAMP_BASE_N_PER_MM: dict[str, float] = {
+    "groove_mount": 800.0,
+    "rigid_4bolt_m3": 2200.0,
+    "dragon_4bolt_m25": 3200.0,
+    "chube_6bolt_m3_18pcd": 6500.0,
+}
+# Corner joint base stiffness for 2020 Al extrusion: (k_t_n_m, k_r_inplane_nm_rad, k_r_torsion_nm_rad)
+CORNER_JOINT_BASE_2020: dict[str, tuple[float, float, float]] = {
+    "l_bracket": (3.5e6, 4500.0, 1800.0),
+    "blind_joint": (1.2e7, 22000.0, 7500.0),
+    "gusset_plate": (2.2e7, 42000.0, 14000.0),
+    "corner_cube": (3.8e7, 85000.0, 28000.0),
+    "rigid": (1.0e10, 1.0e9, 1.0e9),
+}
+CORNER_JOINT_IWAN_DAMPING: dict[str, float] = {
+    "rigid": 0.0,
+    "corner_cube": 0.001,
+    "gusset_plate": 0.002,
+    "blind_joint": 0.003,
+    "l_bracket": 0.005,
+}
+RAIL_PRELOAD_FRACTIONS: dict[str, float] = {
+    "ZF": 0.002,
+    "Z0": 0.010,
+    "Z1": 0.030,
+    "ZA": 0.060,
+    "ZB": 0.100,
+}
+BEARING_RADIAL_PLAY_UM: dict[str, float] = {
+    "C2": 3.5,
+    "CN": 7.5,
+    "C3": 15.5,
+}
 ToolheadConstructionType = Literal[
     "multi_piece_clamshell",
     "compact_cage",
@@ -467,11 +527,17 @@ ZRailProfileType = Literal[
 ZLeadscrewType = Literal[
     "auto",
     "tr8x4_pom",
+    "tr8x4_wobblex",
     "tr8x8_pom",
     "tr8x8_brass",
     "sfu1204_bk10",
+    "sfu1204_wobblex",
+    "sfu1605_fk12",
     "gt2_6mm_z_belt",
     "gt2_9mm_z_belt",
+    "gt2_9mm_planetary_z",
+    "gt2_9mm_worm_z",
+    "kevinakasam_belted_z",
 ]
 
 # Commercial hotend thermomechanical & structural stiffness catalog
@@ -643,23 +709,23 @@ HOTEND_CATALOG: dict[str, dict] = {
         "preset_id": "chube_compact",
         "name": "Luke's Lab Chube Compact (80W Ti Shell)",
         "short_name": "Chube Compact",
-        "mount_style": "chube_6bolt_m3_18pcd",
-        "structural_stiffness_n_per_mm": 2200.0,
-        "mass_g": 62.0,
-        "overall_length_mm": 48.0,
+        "mount_style": "rigid_4bolt_m3",
+        "structural_stiffness_n_per_mm": 2600.0,
+        "mass_g": 63.0,
+        "overall_length_mm": 47.2,
         "melt_zone_length_mm": 33.0,
         "heater_power_w": 80.0,
         "block_material": "copper_c110",
-        "block_mass_g": 15.0,
+        "block_mass_g": 18.0,
         "nozzle_material": "copper_c110",
         "heatbreak_material": "titanium_grade5",
         "heatbreak_wall_mm": 0.25,
-        "heatbreak_length_mm": 11.0,
+        "heatbreak_length_mm": 10.0,
         "heatbreak_id_mm": 2.0,
         "heatsink_thermal_resistance_k_w": 2.6,
-        "max_temp_c": 450.0,
-        "cost_usd": 185.0,
-        "notes": "Compact 48 mm monocoque Ti structural shell with 6-bolt M3 18 mm PCD flange (~2200 N/mm tip stiffness)",
+        "max_temp_c": 500.0,
+        "cost_usd": 170.0,
+        "notes": "Official SolidWorks STEP (Chube_Compact_integration_assembly.STEP): 47.2 mm OAL w/ V6 nozzle, Ø22.23 mm Ti monocoque shell, 4× M3 Ø16 mm Dragon PCD mount, 33 mm meltzone, Chalice Ti heatbreak, 50 g bare / 63 g dressed; 31k-elem Tet4 FEA calibrated stiffness 3,015/2,277 N/mm (shorter 47.2 mm lever arm)",
     },
     "chube_air": {
         "id": "chube_air",
@@ -667,22 +733,22 @@ HOTEND_CATALOG: dict[str, dict] = {
         "name": "Luke's Lab Chube Air (100W Ti Shell)",
         "short_name": "Chube Air",
         "mount_style": "chube_6bolt_m3_18pcd",
-        "structural_stiffness_n_per_mm": 2600.0,
-        "mass_g": 86.0,
-        "overall_length_mm": 60.0,
+        "structural_stiffness_n_per_mm": 2250.0,
+        "mass_g": 79.0,
+        "overall_length_mm": 66.0,
         "melt_zone_length_mm": 42.0,
         "heater_power_w": 100.0,
         "block_material": "copper_c110",
-        "block_mass_g": 18.0,
+        "block_mass_g": 26.0,
         "nozzle_material": "copper_c110",
         "heatbreak_material": "titanium_grade5",
         "heatbreak_wall_mm": 0.25,
-        "heatbreak_length_mm": 12.0,
+        "heatbreak_length_mm": 11.0,
         "heatbreak_id_mm": 2.0,
         "heatsink_thermal_resistance_k_w": 2.5,
-        "max_temp_c": 450.0,
-        "cost_usd": 210.0,
-        "notes": "Finned air-cooled Ti monocoque shell (42 mm Cu melt core, 6-bolt M3 18 mm PCD, ~2600 N/mm tip stiffness)",
+        "max_temp_c": 500.0,
+        "cost_usd": 260.0,
+        "notes": "Official OEM STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4 mm × 0.90 mm wall Ti monocoque shell, 6× M3 Ø18 mm PCD, 42 mm meltzone, 6×20 mm heater, 69 g bare (CoM 36.15 mm) / 79 g dressed, 500 °C rated; 49.5k-elem Tet4 FEA calibrated stiffness 2,140/2,357 N/mm",
     },
     "chube_conduction": {
         "id": "chube_conduction",
@@ -690,22 +756,68 @@ HOTEND_CATALOG: dict[str, dict] = {
         "name": "Luke's Lab Chube Conduction (120W Ti Shell)",
         "short_name": "Chube Conduction",
         "mount_style": "chube_6bolt_m3_18pcd",
-        "structural_stiffness_n_per_mm": 3600.0,
-        "mass_g": 82.0,
-        "overall_length_mm": 60.0,
+        "structural_stiffness_n_per_mm": 5670.0,
+        "mass_g": 90.0,
+        "overall_length_mm": 66.0,
         "melt_zone_length_mm": 52.0,
         "heater_power_w": 120.0,
         "block_material": "copper_c110",
-        "block_mass_g": 20.0,
+        "block_mass_g": 34.0,
         "nozzle_material": "copper_c110",
         "heatbreak_material": "titanium_grade5",
         "heatbreak_wall_mm": 0.25,
-        "heatbreak_length_mm": 12.0,
+        "heatbreak_length_mm": 10.0,
         "heatbreak_id_mm": 2.0,
         "heatsink_thermal_resistance_k_w": 2.2,
+        "max_temp_c": 500.0,
+        "cost_usd": 320.0,
+        "notes": "Official OEM STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4 mm × 0.90 mm wall solid-top Ti monocoque shell, 6× M3 Ø18 mm PCD (requires ≥80 cm² metal mount), 52 mm meltzone, 6×47.5 mm 120W Supervolcano heater, 74 g bare / 90 g dressed, 500 °C rated; 56k-elem Tet4 FEA calibrated stiffness 5,529/5,820 N/mm",
+    },
+    "tricorn_short": {
+        "id": "tricorn_short",
+        "preset_id": "tricorn_short",
+        "name": "Tricorn Short (120W 3×40W Inverted Ti)",
+        "short_name": "Tricorn Short",
+        "mount_style": "rigid_4bolt_m3",
+        "structural_stiffness_n_per_mm": 440.0,
+        "mass_g": 50.0,
+        "overall_length_mm": 54.0,
+        "melt_zone_length_mm": 41.0,
+        "heater_power_w": 120.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 23.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.45,
+        "heatbreak_length_mm": 13.0,
+        "heatbreak_id_mm": 1.9,
+        "heatsink_thermal_resistance_k_w": 2.6,
         "max_temp_c": 450.0,
-        "cost_usd": 235.0,
-        "notes": "Conductive-mount full Ti monocoque shell with 52 mm Cu melt core and 6-bolt M3 18 mm PCD mount (~3600 N/mm)",
+        "cost_usd": 215.0,
+        "notes": "Open-source Okano Tricorn Short (STEP CAD: 54 mm overall, 41 mm melt zone w/ V6 nozzle, 23 g CuCrZr block, 3×40W 4×40mm heaters, inverted Ti-6Al-4V heatbreak 0.45 mm wall, SLM Ti crown + M3 Dragon mount); 112k-elem Tet4 FEA calibrated unbraced stiffness 437/442 N/mm",
+    },
+    "tricorn_long": {
+        "id": "tricorn_long",
+        "preset_id": "tricorn_long",
+        "name": "Tricorn Long (120W 3×40W Inverted Ti)",
+        "short_name": "Tricorn Long",
+        "mount_style": "rigid_4bolt_m3",
+        "structural_stiffness_n_per_mm": 265.0,
+        "mass_g": 62.0,
+        "overall_length_mm": 66.0,
+        "melt_zone_length_mm": 53.5,
+        "heater_power_w": 120.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 31.4,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.45,
+        "heatbreak_length_mm": 13.0,
+        "heatbreak_id_mm": 1.9,
+        "heatsink_thermal_resistance_k_w": 2.4,
+        "max_temp_c": 450.0,
+        "cost_usd": 230.0,
+        "notes": "Open-source Okano Tricorn Long (STEP CAD: 66 mm overall, 53.5 mm melt zone w/ V6 nozzle, 31.4 g CuCrZr block, 3×40W 4×40mm heaters, inverted Ti-6Al-4V heatbreak 0.45 mm wall, SLM Ti crown/shield + M3 Dragon mount); 116k-elem Tet4 FEA calibrated unbraced stiffness 262/264 N/mm (higher w/ Microwaved Ti bottom brace)",
     },
 }
 
@@ -724,7 +836,32 @@ Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
         "backlash_um": 28.0,
         "mass_kg_per_m": 0.28,
         "diameter_mm": 8.0,
+        "wobble_decoupled": False,
+        "self_locking": True,
+        "unpowered_drop_risk": False,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 19.5,
         "notes": "Voron Trident standard 2-start 4 mm lead screw with anti-backdrive POM flanged nut",
+    },
+    "tr8x4_wobblex": {
+        "id": "tr8x4_wobblex",
+        "name": "TR8x4 Leadscrew + WobbleX Decoupler",
+        "short_name": "TR8x4 + WobbleX",
+        "kind": "leadscrew",
+        "lead_mm": 4.0,
+        "root_area_m2": 2.38e-5,
+        "k_nut_n_per_um": 10.2,
+        "k_thrust_n_per_um": 18.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 18.0,
+        "mass_kg_per_m": 0.31,
+        "diameter_mm": 8.0,
+        "wobble_decoupled": True,
+        "self_locking": True,
+        "unpowered_drop_risk": False,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 34.0,
+        "notes": "TR8x4 leadscrew paired with MirageC WobbleX WS8 self-aligning pin-and-ball Oldham decoupler to eliminate Z-banding",
     },
     "tr8x8_pom": {
         "id": "tr8x8_pom",
@@ -739,6 +876,11 @@ Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
         "backlash_um": 45.0,
         "mass_kg_per_m": 0.27,
         "diameter_mm": 8.0,
+        "wobble_decoupled": False,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 19.5,
         "notes": "Common 4-start 8 mm lead screw with Delrin/POM nut; higher helix reduces nut axial stiffness and allows backdrive",
     },
     "tr8x8_brass": {
@@ -754,6 +896,11 @@ Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
         "backlash_um": 35.0,
         "mass_kg_per_m": 0.27,
         "diameter_mm": 8.0,
+        "wobble_decoupled": False,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 22.0,
         "notes": "Machined C360 brass nut raises thread-flank stiffness substantially over POM on 8 mm leadscrews",
     },
     "sfu1204_bk10": {
@@ -769,7 +916,52 @@ Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
         "backlash_um": 8.0,
         "mass_kg_per_m": 0.68,
         "diameter_mm": 12.0,
+        "wobble_decoupled": False,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 52.0,
         "notes": "12 mm rolled ballscrew with recirculating steel ball nut and preloaded BK10 angular-contact thrust block",
+    },
+    "sfu1204_wobblex": {
+        "id": "sfu1204_wobblex",
+        "name": "SFU1204 Ballscrew + BK10 + WobbleX (V-Core 4 / Trident)",
+        "short_name": "SFU1204 + WobbleX",
+        "kind": "ballscrew",
+        "lead_mm": 4.0,
+        "root_area_m2": 7.09e-5,
+        "k_nut_n_per_um": 72.0,
+        "k_thrust_n_per_um": 150.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 6.0,
+        "mass_kg_per_m": 0.72,
+        "diameter_mm": 12.0,
+        "wobble_decoupled": True,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 68.0,
+        "notes": "Rolled SFU1204 ballscrew + BK10 angular-contact thrust block paired with WobbleX XY decoupler to isolate screw runout",
+    },
+    "sfu1605_fk12": {
+        "id": "sfu1605_fk12",
+        "name": "SFU1605 Heavy Ballscrew + FK12/BK12",
+        "short_name": "SFU1605 + FK12",
+        "kind": "ballscrew",
+        "lead_mm": 5.0,
+        "root_area_m2": 1.33e-4,
+        "k_nut_n_per_um": 145.0,
+        "k_thrust_n_per_um": 240.0,
+        "k_drive_n_per_um_per_corner": None,
+        "backlash_um": 5.0,
+        "mass_kg_per_m": 1.25,
+        "diameter_mm": 16.0,
+        "wobble_decoupled": False,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 1.0,
+        "cost_per_axis_usd": 82.0,
+        "notes": "Heavy-duty 16 mm C7 ballscrew with FK12/BK12 preloaded thrust bearings for large high-mass moving beds",
     },
     "gt2_6mm_z_belt": {
         "id": "gt2_6mm_z_belt",
@@ -784,6 +976,11 @@ Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
         "backlash_um": 18.0,
         "mass_kg_per_m": 0.017,
         "diameter_mm": 6.0,
+        "wobble_decoupled": True,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 5.0,
+        "cost_per_axis_usd": 28.0,
         "notes": "Voron 2.4 standard 6 mm fiberglass GT2 Z-belt loop (~180 N/mm effective axial stiffness per corner)",
     },
     "gt2_9mm_z_belt": {
@@ -799,7 +996,72 @@ Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
         "backlash_um": 12.0,
         "mass_kg_per_m": 0.025,
         "diameter_mm": 9.0,
+        "wobble_decoupled": True,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 5.0,
+        "cost_per_axis_usd": 36.0,
         "notes": "Heavy-duty 9 mm fiberglass GT2 Z-belt upgrade (+50% Z-corner axial stiffness vs 6 mm belt)",
+    },
+    "gt2_9mm_planetary_z": {
+        "id": "gt2_9mm_planetary_z",
+        "name": "Trident / Moving-Bed 9mm Belted-Z (5:1 Planetary)",
+        "short_name": "9mm Planetary Z",
+        "kind": "belt",
+        "lead_mm": 8.0,
+        "root_area_m2": 1.44e-5,
+        "k_nut_n_per_um": 0.0,
+        "k_thrust_n_per_um": 0.0,
+        "k_drive_n_per_um_per_corner": 0.31,
+        "backlash_um": 14.0,
+        "mass_kg_per_m": 0.025,
+        "diameter_mm": 9.0,
+        "wobble_decoupled": True,
+        "self_locking": False,
+        "unpowered_drop_risk": True,
+        "gear_ratio": 5.0,
+        "cost_per_axis_usd": 54.0,
+        "notes": "Moving-bed 9 mm GT2 belted-Z conversion driven through compact 5:1 planetary gearboxes: zero Z-wobble and high lift speed",
+    },
+    "gt2_9mm_worm_z": {
+        "id": "gt2_9mm_worm_z",
+        "name": "9mm Belted-Z + Self-Locking Worm / 20:1 Gearbox",
+        "short_name": "9mm Worm Belted Z",
+        "kind": "belt",
+        "lead_mm": 2.0,
+        "root_area_m2": 1.44e-5,
+        "k_nut_n_per_um": 0.0,
+        "k_thrust_n_per_um": 0.0,
+        "k_drive_n_per_um_per_corner": 0.34,
+        "backlash_um": 16.0,
+        "mass_kg_per_m": 0.025,
+        "diameter_mm": 9.0,
+        "wobble_decoupled": True,
+        "self_locking": True,
+        "unpowered_drop_risk": False,
+        "gear_ratio": 20.0,
+        "cost_per_axis_usd": 66.0,
+        "notes": "9 mm GT2 belted-Z with 20:1 self-locking worm reducer: zero leadscrew wobble, highest belted-Z axial stiffness, and zero unpowered drop",
+    },
+    "kevinakasam_belted_z": {
+        "id": "kevinakasam_belted_z",
+        "name": "KevinAkaSam Belted-Z (80:16 5:1 + Keybak)",
+        "short_name": "KevinAkaSam Z",
+        "kind": "belt",
+        "lead_mm": 8.0,
+        "root_area_m2": 9.6e-6,
+        "k_nut_n_per_um": 0.0,
+        "k_thrust_n_per_um": 0.0,
+        "k_drive_n_per_um_per_corner": 0.21,
+        "backlash_um": 15.0,
+        "mass_kg_per_m": 0.017,
+        "diameter_mm": 6.0,
+        "wobble_decoupled": True,
+        "self_locking": False,
+        "unpowered_drop_risk": False,
+        "gear_ratio": 5.0,
+        "cost_per_axis_usd": 32.0,
+        "notes": "Popular open-source 80T:16T (5:1) dual-loop 6 mm GT2 belted-Z mod with Keybak retractable counterbalance preventing unpowered drop",
     },
 }
 
@@ -934,7 +1196,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 3,
         "k_axial_n_per_mm": 32000.0,
         "k_lateral_n_per_mm": 24000.0,
-        "k_restraint_thermal": 0.0,
+        "k_restraint_thermal_n_per_m": 0.0,
+        "k_restraint_thermal": 0.0,  # deprecated alias
         "damping_delta": 0.0,
         "standoff_height_mm": 16.0,
         "radial_dof_mode": "maxwell_vgroove",
@@ -950,7 +1213,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 3,
         "k_axial_n_per_mm": 24000.0,
         "k_lateral_n_per_mm": 16000.0,
-        "k_restraint_thermal": 0.0,
+        "k_restraint_thermal_n_per_m": 0.0,
+        "k_restraint_thermal": 0.0,  # deprecated alias
         "damping_delta": 0.002,
         "standoff_height_mm": 14.0,
         "radial_dof_mode": "radial_flexure",
@@ -966,7 +1230,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 3,
         "k_axial_n_per_mm": 18000.0,
         "k_lateral_n_per_mm": 9500.0,
-        "k_restraint_thermal": 22.0,
+        "k_restraint_thermal_n_per_m": 3.8e6,
+        "k_restraint_thermal": 22.0,  # deprecated alias
         "damping_delta": 0.003,
         "standoff_height_mm": 10.0,
         "radial_dof_mode": "slotted_3pt_bakelite",
@@ -975,6 +1240,74 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "cost_usd": 16.0,
         "notes": "Stock Voron/Siboor Trident 3-point Bakelite thermal-isolation standoffs on 2020 T-subframe with GE5C spherical Z-joints",
     },
+    "cnc_kelvin_magnetic": {
+        "id": "cnc_kelvin_magnetic",
+        "name": "CNC N48SH Magnetic Kelvin Kinematic (MRW / ChaoticLab)",
+        "short_name": "CNC Kelvin Mag",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 42000.0,
+        "k_lateral_n_per_mm": 30000.0,
+        "k_restraint_thermal_n_per_m": 0.0,
+        "k_restraint_thermal": 0.0,  # deprecated alias
+        "damping_delta": 0.001,
+        "standoff_height_mm": 15.0,
+        "radial_dof_mode": "kelvin_cone_vee_flat",
+        "tap_rated": False,
+        "mount_inset_ratio": 0.38,
+        "cost_usd": 75.0,
+        "notes": "3-point CNC aluminum Kelvin coupling (cone + V-groove + flat) with hardened steel balls and 150C N48SH magnetic preload: zero thermal taco and very high Hertzian Z stiffness",
+    },
+    "captive_belleville_kinematic": {
+        "id": "captive_belleville_kinematic",
+        "name": "Super-Stiff Captive Belleville Kinematic (Tap-Rated)",
+        "short_name": "Captive Belleville",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 52000.0,
+        "k_lateral_n_per_mm": 36000.0,
+        "k_restraint_thermal_n_per_m": 0.0,
+        "k_restraint_thermal": 0.0,  # deprecated alias
+        "damping_delta": 0.002,
+        "standoff_height_mm": 16.0,
+        "radial_dof_mode": "maxwell_vgroove",
+        "tap_rated": True,
+        "mount_inset_ratio": 0.38,
+        "cost_usd": 95.0,
+        "notes": "Hardened steel ball-in-V-groove kinematic contacts mechanically preloaded with captive shoulder bolts and Belleville disc springs: highest kinematic Z stiffness, zero thermal taco, fully Tap-rated",
+    },
+    "dual_leaf_ti_kinematic": {
+        "id": "dual_leaf_ti_kinematic",
+        "name": "Dual-Blade Ti/301 Leaf-Spring Kinematic (Annex / Heavy Pochard)",
+        "short_name": "Dual-Blade Ti Leaf",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 38000.0,
+        "k_lateral_n_per_mm": 26000.0,
+        "k_restraint_thermal_n_per_m": 0.0,
+        "k_restraint_thermal": 0.0,  # deprecated alias
+        "damping_delta": 0.003,
+        "standoff_height_mm": 14.0,
+        "radial_dof_mode": "radial_flexure",
+        "tap_rated": True,
+        "mount_inset_ratio": 0.38,
+        "cost_usd": 88.0,
+        "notes": "Stacked twin spring-steel/Ti-6Al-4V radial leaf flexures: +58% higher Z stiffness than single-blade Pochard with zero play, zero thermal taco, and Tap rating",
+    },
+    "spherical_3pt_ratrig": {
+        "id": "spherical_3pt_ratrig",
+        "name": "RatRig V-Core 3/4 3-Pt Spherical Pivot Kinematic",
+        "short_name": "RatRig Spherical 3-Pt",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 30000.0,
+        "k_lateral_n_per_mm": 20000.0,
+        "k_restraint_thermal_n_per_m": 1.5e6,
+        "k_restraint_thermal": 8.0,  # deprecated alias
+        "damping_delta": 0.002,
+        "standoff_height_mm": 15.0,
+        "radial_dof_mode": "radial_flexure",
+        "tap_rated": True,
+        "mount_inset_ratio": 0.38,
+        "cost_usd": 58.0,
+        "notes": "3-point spherical ball-socket Z-arm pivots with radial thermal glide slot: eliminates tramming bind on large 300-500mm beds with high vertical Tap stiffness",
+    },
     "rigid_4pt": {
         "id": "rigid_4pt",
         "name": "4-Point Rigid Hard-Bolted Standoffs",
@@ -982,7 +1315,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 4,
         "k_axial_n_per_mm": 65000.0,
         "k_lateral_n_per_mm": 40000.0,
-        "k_restraint_thermal": 8000.0,
+        "k_restraint_thermal_n_per_m": 8.0e7,  # B-13: 2x opposing rigid steel standoff lateral pair (N/m)
+        "k_restraint_thermal": 8000.0,  # deprecated alias
         "damping_delta": -0.002,
         "standoff_height_mm": 12.0,
         "radial_dof_mode": "rigid_all",
@@ -998,7 +1332,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 4,
         "k_axial_n_per_mm": 12000.0,
         "k_lateral_n_per_mm": 6000.0,
-        "k_restraint_thermal": 18.0,
+        "k_restraint_thermal_n_per_m": 2.8e6,
+        "k_restraint_thermal": 18.0,  # deprecated alias
         "damping_delta": 0.002,
         "standoff_height_mm": 12.0,
         "radial_dof_mode": "slotted_1fixed_3float",
@@ -1014,7 +1349,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 4,
         "k_axial_n_per_mm": 48.0,
         "k_lateral_n_per_mm": 16.0,
-        "k_restraint_thermal": 12.0,
+        "k_restraint_thermal_n_per_m": 32000.0,
+        "k_restraint_thermal": 12.0,  # deprecated alias
         "damping_delta": 0.008,
         "standoff_height_mm": 16.0,
         "radial_dof_mode": "elastomer_shear",
@@ -1030,7 +1366,8 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "mount_points": 4,
         "k_axial_n_per_mm": 16.0,
         "k_lateral_n_per_mm": 4.5,
-        "k_restraint_thermal": 8.0,
+        "k_restraint_thermal_n_per_m": 9000.0,
+        "k_restraint_thermal": 8.0,  # deprecated alias
         "damping_delta": 0.004,
         "standoff_height_mm": 20.0,
         "radial_dof_mode": "coil_spring_shear",
@@ -1253,17 +1590,17 @@ GANTRY_WEIGHT_CLASSES: dict[str, dict] = {
         "id": "ultralight_printed",
         "name": "Ultralight Printed (Minimalist / Umbilical)",
         "short_name": "Ultralight Printed",
-        "carriage_mass_g": 85.0,
+        "carriage_mass_g": 141.0,
         "suggested_bracket_material": "abs_printed",
-        "notes": "Minimalist printed XY-joints with umbilical wiring (no drag chain) and lightweight MGN9/12 blocks.",
+        "notes": "Minimalist printed XY-joints with umbilical wiring (no drag chain): 141 g dressed on MGN12H / 85 g on MGN9H.",
     },
     "standard_printed": {
         "id": "standard_printed",
         "name": "Standard Printed (Stock Voron ABS/ASA)",
         "short_name": "Standard Printed",
-        "carriage_mass_g": 140.0,
+        "carriage_mass_g": 196.0,
         "suggested_bracket_material": "abs_printed",
-        "notes": "Stock Voron Trident/2.4 printed ABS/ASA XY-joints, MGN blocks, idlers, and cable chain hardware.",
+        "notes": "Stock Voron Trident/2.4 printed ABS/ASA XY-joints, MGN blocks, idlers, and cable chain hardware (196 g dressed on MGN12H / 140 g on MGN9H).",
     },
     "stiffness_opt_printed": {
         "id": "stiffness_opt_printed",
@@ -1639,15 +1976,26 @@ class BeltSpec(BaseModel):
         return max(0.65, 1.0 - 0.006 * (t - 80.0))
 
     @property
-    def stiffness_ea_n(self) -> float:
-        """Dynamic secant tensile modulus EA (Newtons) calibrated to Gates & Elatech/ContiTech datasheets."""
+    def static_stiffness_ea_n(self) -> float:
+        """Quasi-static manufacturer datasheet tensile modulus EA (Newtons)."""
         entry = self.catalog_entry
-        base_ea = float(entry["ea_default_core_n"])
+        base_static = float(entry.get("ea_static_n", entry["ea_default_core_n"]))
         default_core = str(entry["default_core"])
         if self.core == default_core:
-            return base_ea
+            return base_static
         core_rel = {"fiberglass": 1.0, "aramid": 1.45, "steel": 2.70}
-        return base_ea * (core_rel[self.core] / core_rel[default_core])
+        return base_static * (core_rel[self.core] / core_rel[default_core])
+
+    @property
+    def dynamic_stiffening_factor(self) -> float:
+        """Small-amplitude 40-150 Hz dynamic-to-static tangent modulus factor."""
+        entry = self.catalog_entry
+        return float(entry.get("dynamic_stiffening_factor", 1.0))
+
+    @property
+    def stiffness_ea_n(self) -> float:
+        """Dynamic small-amplitude tensile modulus EA (Newtons) = static_stiffness_ea_n * dynamic_stiffening_factor."""
+        return self.static_stiffness_ea_n * self.dynamic_stiffening_factor
 
     @property
     def linear_mass_kg_m(self) -> float:
@@ -1671,10 +2019,13 @@ class BeltSpec(BaseModel):
         core_rel = {"fiberglass": 58.0, "aramid": 85.0, "steel": 105.0}
         return base_t * (core_rel[self.core] / core_rel[default_core])
 
-    def pluck_freq_hz(self, span_mm: float = 150.0) -> float:
+    def pluck_freq_hz(
+        self, span_mm: float = 150.0, linear_mass_kg_m: float | None = None
+    ) -> float:
         """Transverse acoustic belt pluck frequency at given free span (standard Voron/VzBot 150 mm)."""
         span_m = max(span_mm * 1e-3, 0.05)
-        return (1.0 / (2.0 * span_m)) * ((self.pretension_n / self.linear_mass_kg_m) ** 0.5)
+        mu = self.linear_mass_kg_m if linear_mass_kg_m is None else float(linear_mass_kg_m)
+        return (1.0 / (2.0 * span_m)) * ((self.pretension_n / mu) ** 0.5)
 
     @property
     def pitch_radius_m(self) -> float:
@@ -1746,6 +2097,14 @@ class GantrySpec(BaseModel):
     rail_backer_thickness_mm: float = Field(
         3.0, ge=1.0, le=8.0, description="Opposite-face rail backer bar thickness (mm)"
     )
+    cf_rail_mounting: CFRailMountingType = Field(
+        "auto",
+        description=(
+            "Carbon-fiber X-beam linear rail mounting method: auto (2-wall clamped internal "
+            "inserts on Carbonara, single-wall bare on generic CF tubes), single_wall_bare, "
+            "or two_wall_clamped_inserts"
+        ),
+    )
     dual_x_rails: bool = False
     carriage_mass_g: float = Field(
         140.0, ge=20.0, le=1200.0, description="Combined X/Y gantry carriages & joints (g)"
@@ -1767,6 +2126,24 @@ class GantrySpec(BaseModel):
     def effective_dual_x_rails(self) -> bool:
         """True when dual top+bottom X rails are active."""
         return self.dual_x_rails or self.x_rail_mount == "dual_top_bottom"
+
+    @property
+    def effective_cf_rail_mounting(
+        self,
+    ) -> Literal["none", "single_wall_bare", "two_wall_clamped_inserts"]:
+        """Resolve effective carbon-fiber X-beam rail mounting architecture."""
+        if not (
+            self.x_beam_profile.startswith("cf_")
+            or self.x_beam_material.startswith("carbon_fiber")
+        ):
+            return "none"
+        if self.cf_rail_mounting == "auto":
+            return (
+                "two_wall_clamped_inserts"
+                if self.x_beam_profile == "cf_tube_20x20_carbonara"
+                else "single_wall_bare"
+            )
+        return self.cf_rail_mounting
 
 
 class StepperSpec(BaseModel):
@@ -1802,21 +2179,55 @@ class StepperSpec(BaseModel):
         sat = 1.8
         return self.holding_torque_nm * (1.0 + math.tanh(sat * (ratio - 1.0)) / sat)
 
-    def dynamic_voltage_efficiency(self, rpm: float = 250.0) -> float:
-        """Back-EMF + inductive current-tracking efficiency eta_V in (0, 1] at speed/vibration operating point."""
+    def _phase_constants(self) -> tuple[float, float]:
+        """Return consistent per-phase peak back-EMF constant Kt_phase (V_pk/(rad/s)) and peak current I_pk (A)."""
+        import math
+
+        # Two-phases-on holding torque: T_hold = sqrt(2) * Kt_phase * I_rated (RMS)
+        k_t_phase = self.holding_torque_nm / (math.sqrt(2.0) * max(self.rated_current_a, 0.1))
+        i_pk = math.sqrt(2.0) * self.run_current_a
+        return k_t_phase, i_pk
+
+    def dynamic_voltage_efficiency(self, rpm: float = 250.0, bus_utilization: float = 0.90) -> float:
+        """Smooth back-EMF + inductive current-tracking efficiency eta_V in (0, 1] for EM stiffness & damping."""
         import math
 
         l_h = self.inductance_mh * 1e-3
         omega_mech = max(rpm, 10.0) * (2.0 * math.pi / 60.0)
-        k_e = self.holding_torque_nm / max(self.rated_current_a, 0.1)
+        k_e, i_pk = self._phase_constants()
         v_bemf = k_e * omega_mech
-        v_inductive = omega_mech * self.pole_pairs * l_h * self.run_current_a
-        v_res = self.run_current_a * self.phase_resistance_ohm
-        v_headroom = max(self.supply_voltage_v - v_res, 1.0)
-        v_bus = max(self.supply_voltage_v, 1.0)
+        v_inductive = omega_mech * self.pole_pairs * l_h * i_pk
+        v_res = i_pk * self.phase_resistance_ohm
+        v_bus_eff = max(bus_utilization * self.supply_voltage_v, 1.0)
+        v_headroom = max(v_bus_eff - v_res, 1.0)
         return 1.0 / math.sqrt(
-            1.0 + ((v_res + v_bemf) / v_bus) ** 2 + (v_inductive / v_headroom) ** 2
+            1.0 + ((v_res + v_bemf) / v_bus_eff) ** 2 + (v_inductive / v_headroom) ** 2
         )
+
+    def pullout_torque_efficiency(self, rpm: float = 250.0, bus_utilization: float = 0.90) -> float:
+        """Piecewise two-phase phasor voltage-limited pull-out torque ratio in [0, 1].
+
+        Constant torque (1.0) up to corner speed where |(R + j*w_e*L)*I_pk + E| <= V_bus_eff;
+        above corner speed solves (R*I_q + E)^2 + (w_e*L*I_q)^2 = V_bus_eff^2 for I_q / I_pk.
+        """
+        import math
+
+        k_e, i_pk = self._phase_constants()
+        omega_mech = max(rpm, 0.0) * (2.0 * math.pi / 60.0)
+        v_bemf = k_e * omega_mech
+        x_l = self.pole_pairs * omega_mech * (self.inductance_mh * 1e-3)
+        r_ohm = self.phase_resistance_ohm
+        v_bus_eff = max(bus_utilization * self.supply_voltage_v, 1.0)
+
+        if math.hypot(r_ohm * i_pk + v_bemf, x_l * i_pk) <= v_bus_eff:
+            return 1.0
+        if v_bemf >= v_bus_eff:
+            return 0.0
+
+        z2 = r_ohm * r_ohm + x_l * x_l
+        disc = (r_ohm * v_bemf) ** 2 + z2 * (v_bus_eff * v_bus_eff - v_bemf * v_bemf)
+        i_q = (-r_ohm * v_bemf + math.sqrt(max(0.0, disc))) / max(z2, 1e-12)
+        return max(0.0, min(1.0, i_q / max(i_pk, 1e-9)))
 
     def torsional_stiffness_nm_per_rad(self, rpm: float = 250.0) -> float:
         """Electromagnetic torsional stiffness k_theta = p * T_hold(I) * eta_V (N·m/rad)."""
@@ -1918,6 +2329,14 @@ class KinematicsSpec(BaseModel):
     servo_vel_bw_hz: float = Field(120.0, ge=20.0, le=500.0)
     servo_pos_bw_hz: float = Field(25.0, ge=5.0, le=150.0)
     notch_filter_hz: float | None = Field(None, ge=15.0, le=300.0)
+    lpv_workspace_scheduling: bool = False
+    awd_sync_mode: AwdSyncMode = "none"
+    awd_equalizer_bw_hz: float = Field(2.0, ge=0.5, le=15.0)
+    notch_depth_db: float = Field(12.0, ge=3.0, le=30.0)
+    notch_q: float = Field(1.75, ge=0.5, le=8.0)
+    pin_rotor_ff: bool = False
+    toolhead_imu_active_damping: bool = False
+    mode_space_torque_ff: bool = False
     xy_stepper: StepperSpec = Field(default_factory=StepperSpec)
     z_stepper: StepperSpec = Field(
         default_factory=lambda: StepperSpec(
@@ -2128,11 +2547,23 @@ class ToolheadSpec(BaseModel):
         450.0,
         ge=25.0,
         le=20000.0,
-        description="Overall internal toolhead structural stiffness from linear carriage to nozzle tip (N/mm), modeling flex inside the printed/CNC toolhead body, carriage plate, and hotend clamp.",
+        description="Stage 2 toolhead body/housing stiffness (N/mm) used when body_construction is None; scaled by body_material and body_wall_thickness_mm, then combined in series with Stage 1 carriage plate and Stage 3 hotend clamp.",
     )
     z_probe_type: ZProbeType = Field(
         "static_eddy",
         description="Bed probing carriage architecture: static_eddy (Beacon/Cartographer), klicky_inductive, cnc_tap, or printed_tap",
+    )
+    use_hotend_bottom_brace: bool = Field(
+        default=True,
+        description="Enable the toolhead's lower hotend brace (e.g., Microwaved Bowden Ti bottom brace on Tricorn Long) when a coupled braced CAD superelement is available",
+    )
+    nozzle_shield_mode: Literal["auto", "stock", "microwaved", "none"] = Field(
+        default="auto",
+        description=(
+            "Nozzle thermal/airflow shield configuration for supported toolhead/hotend pairs "
+            "(auto = Microwaved SLM Ti shield on Microwaved+Tricorn, stock Tricorn bucket otherwise; "
+            "stock = stock Tricorn Ti bucket; microwaved = Microwaved optional SLM Ti shield; none = bare nozzle)"
+        ),
     )
     envelope_mm: tuple[float, float, float] = (68.0, 74.0, 95.0)
     hotend: HotendSpec = Field(default_factory=HotendSpec)
@@ -2211,7 +2642,7 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     },
     "archetype_cpap": {
         "preset_id": "archetype_cpap",
-        "name": "Archetype / Monolith CPAP Ultra-Low CoG",
+        "name": "Archetype CPAP Ultra-Low CoG",
         "total_mass_g": 175.0,
         "cog_offset_mm": [0.0, -11.0, -12.0],
         "nozzle_offset_mm": [0.0, -14.0, -48.0],
@@ -2219,6 +2650,18 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "plate_sandwich_cf",
         "internal_stiffness_n_per_mm": 1800.0,
         "z_probe_type": "static_eddy",
+    },
+    "microwaved_bowden": {
+        "preset_id": "microwaved_bowden",
+        "name": "Microwaved Bowden SLM (CPAP + Beacon)",
+        "total_mass_g": 130.0,
+        "cog_offset_mm": [0.0, -8.5, -2.0],
+        "nozzle_offset_mm": [0.0, -17.5, -35.5],
+        "mount_material": "aluminum_6061_t6",
+        "body_construction": "cnc_monoblock",
+        "internal_stiffness_n_per_mm": 5340.0,
+        "z_probe_type": "static_eddy",
+        "extruder_type": "bowden",
     },
     "heavy_uhf_long": {
         "preset_id": "heavy_uhf_long",
@@ -2255,8 +2698,10 @@ class BedSpec(BaseModel):
     mount_type: BedMountType = Field(
         "kinematic_3pt",
         description=(
-            "Bed frame attachment constraint: kinematic_3pt (Maxwell), whopping_pochard_kinematic, "
-            "trident_3pt_standoffs, rigid_4pt, floating_4pt, silicone_4pt, or springs_4pt"
+            "Bed frame attachment constraint: kinematic_3pt, whopping_pochard_kinematic, "
+            "trident_3pt_standoffs, cnc_kelvin_magnetic, captive_belleville_kinematic, "
+            "dual_leaf_ti_kinematic, spherical_3pt_ratrig, rigid_4pt, floating_4pt, "
+            "silicone_4pt, or springs_4pt"
         ),
     )
 
@@ -2284,6 +2729,16 @@ class PrinterSpec(BaseModel):
     toolhead: ToolheadSpec = Field(default_factory=ToolheadSpec)
     bed: BedSpec = Field(default_factory=BedSpec)
     custom_meshes: list[CustomMeshSpec] = Field(default_factory=list)
+    model_overrides: ModelOverridesSpec = Field(default_factory=ModelOverridesSpec)
+    use_cad_superelements: bool = Field(
+        default=True,
+        description="Use pre-baked 3D CAD Craig-Bampton superelements for toolheads/hotends when available",
+    )
+
+    @field_validator("model_overrides", mode="before")
+    @classmethod
+    def _coerce_none_model_overrides(cls, v: Any) -> Any:
+        return {} if v is None else v
 
     @property
     def is_flying_gantry(self) -> bool:
@@ -2315,7 +2770,13 @@ class PrinterSpec(BaseModel):
         return cls.model_validate(data)
 
     def to_yaml(self) -> str:
-        return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False)
+        data = self.model_dump(mode="json")
+        compact_overrides = self.model_overrides.to_compact_dict()
+        if compact_overrides:
+            data["model_overrides"] = compact_overrides
+        else:
+            data.pop("model_overrides", None)
+        return yaml.safe_dump(data, sort_keys=False)
 
     def save_yaml(self, path: str | Path) -> None:
         Path(path).write_text(self.to_yaml(), encoding="utf-8")

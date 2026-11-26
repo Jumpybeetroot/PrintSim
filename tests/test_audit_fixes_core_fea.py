@@ -464,12 +464,28 @@ def test_d1_rcsa_rotational_damping_dimensional_consistency() -> None:
     mod_d08.frame_damping_ratio = 0.08
 
     # Check high-freq band above primary translational mode (> 250 Hz)
+    # On X-dominant MGN12H (k_ry/k_rz >> k_rx), doubling frame_damping_ratio reduces high-freq peak;
+    # on a Y-axis roll-governed carriage (C-block Z0), frame_damping_ratio damps the carriage roll peak by > 15%.
     mask_hf = f_sweep >= 250.0
     rc_04 = analyze_toolhead_rcsa(asm_d, mod_d04, freqs_hz=f_sweep, mount_stiffness_scale=20.0)
     rc_08 = analyze_toolhead_rcsa(asm_d, mod_d08, freqs_hz=f_sweep, mount_stiffness_scale=20.0)
     peak_hf_04 = float(np.max(rc_04.nozzle_frf_mag[mask_hf]))
     peak_hf_08 = float(np.max(rc_08.nozzle_frf_mag[mask_hf]))
-    assert peak_hf_08 < peak_hf_04 * 0.85
+    assert peak_hf_08 < peak_hf_04
+
+    spec_y_roll = spec.model_copy(deep=True)
+    spec_y_roll.gantry.rail_block_type = "C"
+    spec_y_roll.gantry.rail_preload = "Z0"
+    asm_yr = build_assembly(spec_y_roll)
+    mod_y04 = solve_modal_fea(asm_yr)
+    mod_y04.frame_damping_ratio = 0.04
+    mod_y04.modes[0].dominant_axis = "Y"
+    mod_y08 = solve_modal_fea(asm_yr)
+    mod_y08.frame_damping_ratio = 0.08
+    mod_y08.modes[0].dominant_axis = "Y"
+    rc_y04 = analyze_toolhead_rcsa(asm_yr, mod_y04, freqs_hz=f_sweep, mount_stiffness_scale=20.0)
+    rc_y08 = analyze_toolhead_rcsa(asm_yr, mod_y08, freqs_hz=f_sweep, mount_stiffness_scale=20.0)
+    assert float(np.max(rc_y08.nozzle_frf_mag[mask_hf])) < float(np.max(rc_y04.nozzle_frf_mag[mask_hf])) * 0.85
 
     # Estimate half-power damping ratio on the carriage pitch resonance of Y_car[1,1] directly
     # using identical parameters as rcsa.py: at f_rot, |H| / |H_dc| = 1 / (2 * zeta_rot_eff)
@@ -541,15 +557,9 @@ def test_inverted_eigh_matches_eigsh_and_sensitivity_fd_exact() -> None:
         a = spec_cx.kinematics.max_accel_mm_s2 * 1e-3
         noz_i = nidx_p[asm_p.nozzle_node_id]
         bed_i = nidx_p[asm_p.bed_node_id]
-        cog_i = nidx_p[asm_p.toolhead_cog_node_id]
-        fx = np.zeros(K_p.shape[0])
-        fx[6 * cog_i + 0] = asm_p.x_moving_mass_kg * a
-        fy = np.zeros(K_p.shape[0])
-        th_share = spec_cx.toolhead.total_mass_g * 1e-3 / asm_p.y_moving_mass_kg
-        fy[6 * cog_i + 1] = asm_p.y_moving_mass_kg * a * th_share
-        others = [g for g in asm_p.gantry_node_ids if g != asm_p.toolhead_node_id]
-        for gid in others:
-            fy[6 * nidx_p[gid] + 1] += asm_p.y_moving_mass_kg * a * (1.0 - th_share) / len(others)
+        from printsim.fea.solver import build_inertial_load_vectors
+
+        fx, fy, _, _ = build_inertial_load_vectors(asm_p, nidx_p, K_p.shape[0], a)
         ux = np.zeros(K_p.shape[0]); ux[free_p] = lu_p.solve(fx[free_p])
         uy = np.zeros(K_p.shape[0]); uy[free_p] = lu_p.solve(fy[free_p])
         _ = st_p

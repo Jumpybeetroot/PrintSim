@@ -23,7 +23,7 @@ gantry:
   y_rail_profile: mgn9_rail
   rail_material: steel_4140
   dual_x_rails: false
-  carriage_mass_g: 140
+  carriage_mass_g: 196  # 196 g MGN12H-base - 56 g MGN9H pair delta = 140 g dressed
   belt:
     type: gt2_6mm
     core: fiberglass

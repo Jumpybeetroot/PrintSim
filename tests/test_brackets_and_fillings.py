@@ -246,15 +246,15 @@ def test_monolith_awd_preset_and_bracket_upgrade_jump() -> None:
     assert rep_ppa.kinematics.bracket_creep_risk is False
     assert rep_cnc.kinematics.bracket_creep_risk is False
 
-    # Drive stiffness & effective frequency jump significantly over calibrated ABS (500 N/mm base)
-    assert rep_ppa.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.30
-    assert rep_cnc.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.38
+    # Drive stiffness & effective frequency jump significantly over calibrated ABS (D-01 datasheet belt EA)
+    assert rep_ppa.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.12
+    assert rep_cnc.kinematics.drive_stiffness_n_per_mm > rep_abs.kinematics.drive_stiffness_n_per_mm * 1.15
     assert rep_ppa.modal_fea.shaper_x is not None and rep_abs.modal_fea.shaper_x is not None
     assert rep_cnc.modal_fea.shaper_x is not None and rep_cnc.modal_fea.shaper_y is not None
-    assert rep_ppa.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 8.0
-    assert rep_cnc.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 10.0
-    assert rep_cnc.modal_fea.shaper_y.effective_freq_hz > rep_abs.modal_fea.shaper_y.effective_freq_hz + 12.0
-    assert rep_cnc.modal_fea.recommended_max_accel_mm_s2 > rep_abs.modal_fea.recommended_max_accel_mm_s2 * 1.2
+    assert rep_ppa.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 5.0
+    assert rep_cnc.modal_fea.shaper_x.effective_freq_hz > rep_abs.modal_fea.shaper_x.effective_freq_hz + 7.0
+    assert rep_cnc.modal_fea.shaper_y.effective_freq_hz > rep_abs.modal_fea.shaper_y.effective_freq_hz + 5.0
+    assert rep_cnc.modal_fea.recommended_max_accel_mm_s2 > rep_abs.modal_fea.recommended_max_accel_mm_s2 * 1.10
 
 
 # ---------------------------------------------------------------------------
@@ -268,10 +268,10 @@ def test_extrusion_filling_cavity_mass_cost_and_moving_gantry_exclusion() -> Non
     asm_none = build_assembly(spec_none)
     nmap_none = asm_none.node_map
 
-    # Verify exact 2020 cavity geometry: A_cav = 0.58 * (20*20 - 162) mm^2 = 138.04 mm^2
+    # Verify exact 2020 cavity geometry (D-04 Misumi HFS5-2020 A=183 mm^2): A_cav = 0.58 * (20*20 - 183) = 125.86 mm^2
     prof_2020 = get_profile("extrusion_2020")
     a_cav_2020 = 0.58 * (prof_2020.width_m * prof_2020.height_m - prof_2020.area_m2)
-    assert a_cav_2020 * 1e6 == pytest.approx(138.04, rel=1e-4)
+    assert a_cav_2020 * 1e6 == pytest.approx(125.86, rel=1e-4)
 
     # Stationary extrusions on CoreXY (frame + rail); moving X-beam (role="gantry") + braces must NOT be filled
     stationary_extr_len_m = sum(

@@ -18,14 +18,17 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 
 def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> None:
-    """F2: bed_mount_spring uses exact physical Z-stack offset (t_bed + standoff + half 2020) so rigid pitch has zero spurious energy."""
+    """F2: bed_mount springs use exact physical 3D offsets (including Z-stack t_bed + standoff + half 2020) with zero rigid pitch/roll energy."""
     spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
     asm = build_assembly(spec)
     nmap = asm.node_map
 
-    sp = next(s for s in asm.fastener_springs if s.id == "bed_mount_spring")
-    assert sp.shell_node_id == "bed_frame"
-    assert sp.frame_node_id == "bed_surface"
+    bed_springs = [s for s in asm.fastener_springs if s.bay == "bed_mount"]
+    assert {s.id for s in bed_springs} == {
+        "bed_mount_spring_fl",
+        "bed_mount_spring_fr",
+        "bed_mount_spring_r",
+    }
 
     t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
     h_standoff_m = float(BED_MOUNT_CATALOG[spec.bed.mount_type]["standoff_height_mm"]) * 1e-3
@@ -33,25 +36,30 @@ def test_f2_bed_mount_spring_eccentric_offset_and_zero_rigid_pitch_energy() -> N
     expected_dz = -(t_bed_m + h_standoff_m + half_subframe_m)
     dz_actual = float(nmap["bed_frame"].position_m[2] - nmap["bed_surface"].position_m[2])
     assert dz_actual == pytest.approx(expected_dz, abs=1e-9)
-    assert sp.offset_m == pytest.approx((0.0, 0.0, expected_dz), abs=1e-9)
 
-    K_sp = fastener_spring_matrices(
-        sp.k_shear_n_m,
-        sp.k_normal_n_m,
-        sp.k_rot_nm_rad,
-        np.array(sp.normal_vec, dtype=float),
-        np.array(sp.offset_m, dtype=float),
-    )
-    # Apply pure rigid-body rotation around Y (pitch theta_y) centered at bed_surface:
-    # u_bed_surface = (0, 0, 0), theta_bed_surface = (0, theta_y, 0)
-    # r = p_bed_frame - p_bed_surface = (0, 0, expected_dz) -> dr = theta x r = (expected_dz * theta_y, 0, 0)
-    theta_y = 0.02  # rad
-    u_rigid = np.zeros(12, dtype=float)
-    u_rigid[0] = expected_dz * theta_y  # bed_frame ux
-    u_rigid[4] = theta_y                # bed_frame ry
-    u_rigid[10] = theta_y               # bed_surface ry
-    strain_energy_j = 0.5 * float(u_rigid @ K_sp @ u_rigid)
-    assert strain_energy_j == pytest.approx(0.0, abs=1e-10)
+    for sp in bed_springs:
+        assert sp.frame_node_id == "bed_surface"
+        r_vec = nmap[sp.shell_node_id].position_m - nmap["bed_surface"].position_m
+        assert sp.offset_m == pytest.approx(tuple(float(c) for c in r_vec), abs=1e-9)
+        assert sp.offset_m[2] == pytest.approx(expected_dz, abs=1e-9)
+
+        K_sp = fastener_spring_matrices(
+            sp.k_shear_n_m,
+            sp.k_normal_n_m,
+            sp.k_rot_nm_rad,
+            np.array(sp.normal_vec, dtype=float),
+            np.array(sp.offset_m, dtype=float),
+        )
+        # Pure 3D rigid-body rotation theta = (theta_x, theta_y, 0) centered at bed_surface:
+        # u_anchor = theta x r_vec -> zero strain energy across the eccentric 6-DOF spring.
+        theta = np.array([0.015, 0.02, 0.0], dtype=float)
+        u_anchor = np.cross(theta, r_vec)
+        u_rigid = np.zeros(12, dtype=float)
+        u_rigid[0:3] = u_anchor
+        u_rigid[3:6] = theta
+        u_rigid[9:12] = theta
+        strain_energy_j = 0.5 * float(u_rigid @ K_sp @ u_rigid)
+        assert strain_energy_j == pytest.approx(0.0, abs=1e-10)
 
 
 def test_h1_voron_v24_flying_gantry_joints_z_variation_and_trident_comparison() -> None:
@@ -96,6 +104,7 @@ def test_h1_voron_v24_flying_gantry_joints_z_variation_and_trident_comparison() 
     # Equally framed fixed-gantry Trident is stiffer than flying-gantry Voron 2.4
     trid_eq = v24.model_copy(deep=True)
     trid_eq.bed.z_drive = "leadscrew_triple"
+    trid_eq.bed.z_leadscrew_type = "auto"
     asm_trid = build_assembly(trid_eq)
     asm_v24 = build_assembly(v24)
     st_trid, mo_trid = solve_static_fea(asm_trid), solve_modal_fea(asm_trid)

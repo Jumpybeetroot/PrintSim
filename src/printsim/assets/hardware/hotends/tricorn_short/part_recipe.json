@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "tricorn_short",
+  "source_cad": "tricorn_hotends.step",
+  "source_url": "https://tricornhotend.com/",
+  "regions": [
+    {
+      "label": "v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "ti_crown_heatbreak",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "m3_crown_screws",
+      "material_id": "stainless_304",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "cucrzr_hotblock",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    }
+  ],
+  "variant": "short",
+  "overall_length_mm": 54.0,
+  "meltzone_length_mm": 41.0,
+  "mount_style": "rigid_4bolt_m3",
+  "heaters": "3x 40W (4x40 mm)"
+}

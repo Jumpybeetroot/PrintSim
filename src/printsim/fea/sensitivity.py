@@ -25,15 +25,23 @@ from scipy.sparse.linalg import LinearOperator, eigsh, splu
 from printsim.fea.beam3d import (
     assemble_global_matrices,
     beam_rotation_matrix,
+    beam_shear_coefficients,
     local_beam_mass,
     local_beam_stiffness,
+    node_rotational_inertia_xyz,
+    superelement_element_matrices,
     transformation_12x12,
 )
 from printsim.fea.modal import ModalResult
 from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
-from printsim.fea.solver import StaticFEAResult, _build_factorized_solver, classify_part_group
+from printsim.fea.solver import (
+    StaticFEAResult,
+    _build_factorized_solver,
+    build_inertial_load_vectors,
+    classify_part_group,
+)
 from printsim.geometry.builder import AssemblyModel, StructuralMember
-from printsim.schema import EXTRUSION_FILLINGS, PrinterSpec, get_material
+from printsim.schema import PrinterSpec, get_material, resolve_extrusion_filling
 
 
 @dataclass
@@ -81,11 +89,20 @@ def _classify_sensitivity_group(
         return "frame_feet", "Machine Feet & Benchtop Pads"
     if bay == "z_joint" or mid.startswith("z_joint"):
         return "z_gantry_joints", "Z-Axis Gantry Joints"
+    if bay in ("bed_z_drive", "z_guide") or mid.startswith(("z_bed_drive_", "z_rod_brg_")):
+        return "bed_support", "Bed Support & Z Arms"
     if bay == "top_brace" or mid.startswith(("bay_top_brace", "top_brace")):
         return "top_brace", "Top Open-Center Brace"
     if bay == "front_brace" or mid.startswith(("bay_front_brace", "front_brace")):
         return "front_brace", "Front Open-Door Brace"
     return classify_part_group(member_id, role)
+
+
+def _axis_comp_share(du: float, u_rel: float) -> float:
+    """Signed static adjoint compliance share max(0, -du / u_rel), guarded for tiny u_rel."""
+    if abs(u_rel) < 1e-12:
+        return 0.0
+    return max(0.0, -du / u_rel)
 
 
 def _solve_eigen_modes(
@@ -103,6 +120,7 @@ def _solve_eigen_modes(
             m_csc = csc_matrix(M_ff)
             lu = splu(k_csc)
             op = LinearOperator(K_ff.shape, matvec=lu.solve, dtype=float)
+            v0 = np.random.default_rng(0).standard_normal(n_free)
             eigvals, eigvecs = eigsh(
                 k_csc,
                 k=k_scan,
@@ -110,6 +128,7 @@ def _solve_eigen_modes(
                 sigma=0.0,
                 which="LM",
                 OPinv=op,
+                v0=v0,
             )
             order = np.argsort(eigvals)
             eigvals = eigvals[order]
@@ -138,7 +157,13 @@ def _solve_eigen_modes(
         v = eigvecs[:, j]
         m_gen = float(v @ M_ff @ v)
         if m_gen > 1e-24:
-            eigvecs[:, j] = v / math.sqrt(m_gen)
+            v = v / math.sqrt(m_gen)
+        max_abs = float(np.max(np.abs(v)))
+        if max_abs > 0.0:
+            lead_idx = int(np.flatnonzero(np.abs(v) >= 0.99 * max_abs)[0])
+            if v[lead_idx] < 0.0:
+                v = -v
+        eigvecs[:, j] = v
     return eigvals, eigvecs
 
 
@@ -189,9 +214,7 @@ def _member_mass_and_cost(
         if member.backer_mass_kg > 0.0 and member.backer_material_id:
             cost += member.backer_mass_kg * get_material(member.backer_material_id).cost_per_kg_usd
         if member.fill_mass_kg > 0.0:
-            fill_spec = EXTRUSION_FILLINGS.get(
-                spec.frame.extrusion_filling, EXTRUSION_FILLINGS["none"]
-            )
+            fill_spec = resolve_extrusion_filling(spec)
             cost += member.fill_mass_kg * float(fill_spec["cost_per_kg_usd"])
         eff_cost_kg = cost / max(m_exact, 1e-6) if cost > 0.0 else member.material.cost_per_kg_usd
         return m_exact, max(m_exact, 1e-4), cost, max(eff_cost_kg, 0.5)
@@ -461,42 +484,17 @@ def compute_structural_sensitivities(
     )
     cog_idx = node_idx[cog_id]
     noz_idx = node_idx[noz_id]
-    has_explicit_cog = cog_idx != th_idx
     bed_idx = node_idx.get(assembly.bed_node_id) if assembly.bed_node_id else None
     has_bed = bed_idx is not None
 
     solve_rhs = _build_factorized_solver(K, free_dofs)
     accel_m_s2 = assembly.spec.kinematics.max_accel_mm_s2 * 1e-3
-    cog_z_m = assembly.spec.toolhead.cog_offset_mm[2] * 1e-3
 
-    F_x = np.zeros(n_dof, dtype=float)
-    f_inertial_x = assembly.x_moving_mass_kg * accel_m_s2
-    F_x[6 * cog_idx + 0] = f_inertial_x
-    if not has_explicit_cog:
-        F_x[6 * th_idx + 4] = f_inertial_x * cog_z_m
+    F_x, F_y, _, _ = build_inertial_load_vectors(
+        assembly, node_idx, n_dof, accel_m_s2
+    )
 
-    F_y = np.zeros(n_dof, dtype=float)
-    f_inertial_y = assembly.y_moving_mass_kg * accel_m_s2
-    if assembly.spec.architecture == "cartesian_bedslinger":
-        if has_bed and bed_idx is not None:
-            F_y[6 * bed_idx + 1] = -f_inertial_y
-    else:
-        th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
-        F_y[6 * cog_idx + 1] = f_inertial_y * th_share
-        if not has_explicit_cog:
-            F_y[6 * th_idx + 3] = -f_inertial_y * th_share * cog_z_m
-        other_gantry = [
-            gid
-            for gid in assembly.gantry_node_ids
-            if gid != assembly.toolhead_node_id and gid in node_idx
-        ]
-        if other_gantry:
-            rem = f_inertial_y * (1.0 - th_share) / len(other_gantry)
-            for gid in other_gantry:
-                F_y[6 * node_idx[gid] + 1] += rem
-        else:
-            F_y[6 * cog_idx + 1] = f_inertial_y
-
+    # Translational nozzle-to-bed adjoint probes (keeps frame_feet rocking compliance visible)
     c_x = np.zeros(n_dof, dtype=float)
     c_x[6 * noz_idx + 0] = 1.0
     if has_bed and bed_idx is not None:
@@ -531,28 +529,52 @@ def compute_structural_sensitivities(
     full_vecs = np.zeros((n_dof, n_eig), dtype=float)
     full_vecs[free_dofs, :] = eigvecs
 
+    m_cog_lumped = max(float(assembly.nodes[cog_idx].lumped_mass_kg), 0.0)
+    m_noz_lumped = max(float(assembly.nodes[noz_idx].lumped_mass_kg), 0.0) if noz_idx != cog_idx else 0.0
+    if noz_idx != cog_idx and (m_cog_lumped + m_noz_lumped) > 1e-9:
+        noz_inertia_frac = m_noz_lumped / (m_cog_lumped + m_noz_lumped)
+        cog_inertia_frac = 1.0 - noz_inertia_frac
+    else:
+        noz_inertia_frac = 0.0
+        cog_inertia_frac = 1.0
+
     fx_exc = np.zeros(n_dof, dtype=float)
-    fx_exc[6 * cog_idx + 0] = 1.0
+    fx_exc[6 * cog_idx + 0] = cog_inertia_frac
+    if noz_inertia_frac > 0.0:
+        fx_exc[6 * noz_idx + 0] += noz_inertia_frac
     fy_exc = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "cartesian_bedslinger":
         if has_bed and bed_idx is not None:
             fy_exc[6 * bed_idx + 1] = -1.0
         else:
-            fy_exc[6 * cog_idx + 1] = 1.0
+            fy_exc[6 * cog_idx + 1] = cog_inertia_frac
+            if noz_inertia_frac > 0.0:
+                fy_exc[6 * noz_idx + 1] += noz_inertia_frac
+    elif assembly.spec.architecture == "delta":
+        fy_exc[6 * cog_idx + 1] = cog_inertia_frac
+        if noz_inertia_frac > 0.0:
+            fy_exc[6 * noz_idx + 1] += noz_inertia_frac
     else:
-        th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
-        fy_exc[6 * cog_idx + 1] = th_share
+        th_share = min(
+            1.0,
+            max(0.0, assembly.toolhead_moving_mass_kg / max(assembly.y_moving_mass_kg, 1e-6)),
+        )
         other_gantry = [
             gid
             for gid in assembly.gantry_node_ids
             if gid != assembly.toolhead_node_id and gid in node_idx
         ]
         if other_gantry:
+            fy_exc[6 * cog_idx + 1] = th_share * cog_inertia_frac
+            if noz_inertia_frac > 0.0:
+                fy_exc[6 * noz_idx + 1] += th_share * noz_inertia_frac
             rem = (1.0 - th_share) / len(other_gantry)
             for gid in other_gantry:
                 fy_exc[6 * node_idx[gid] + 1] += rem
         else:
-            fy_exc[6 * cog_idx + 1] = 1.0
+            fy_exc[6 * cog_idx + 1] = cog_inertia_frac
+            if noz_inertia_frac > 0.0:
+                fy_exc[6 * noz_idx + 1] += noz_inertia_frac
 
     free_panel_mask = np.zeros(n_free, dtype=bool)
     if has_panels:
@@ -713,6 +735,7 @@ def compute_structural_sensitivities(
         r_mat, length = beam_rotation_matrix(p0, p1)
         t_mat = transformation_12x12(r_mat)
         bend_scale = 0.08 if mem.is_truss else 1.0
+        kappa_y, kappa_z = beam_shear_coefficients(mem)
 
         k_loc = local_beam_stiffness(
             e_pa=mem.material.youngs_modulus_pa,
@@ -723,6 +746,8 @@ def compute_structural_sensitivities(
             j_torsion=mem.profile.j_m4,
             length=length,
             bending_scale=bend_scale,
+            kappa_shear_y=kappa_y,
+            kappa_shear_z=kappa_z,
         )
         m_loc = local_beam_mass(
             rho=mem.material.density_kg_m3,
@@ -739,9 +764,7 @@ def compute_structural_sensitivities(
         # Static adjoint derivatives
         dux = -float(lam_x[dofs] @ Ke @ u_x[dofs])
         duy = -float(lam_y[dofs] @ Ke @ u_y[dofs])
-        comp_raw = max(0.0, -dux / max(abs(u_rel_x), 1e-12)) + max(
-            0.0, -duy / max(abs(u_rel_y), 1e-12)
-        )
+        comp_raw = _axis_comp_share(dux, u_rel_x) + _axis_comp_share(duy, u_rel_y)
 
         # Modal Fox-Kapoor derivatives
         pf = phi_fund[dofs]
@@ -827,9 +850,7 @@ def compute_structural_sensitivities(
         dofs = [6 * ni + d for ni in n_indices for d in range(6)]
         dux = -float(lam_x[dofs] @ k_sh @ u_x[dofs])
         duy = -float(lam_y[dofs] @ k_sh @ u_y[dofs])
-        comp_raw = max(0.0, -dux / max(abs(u_rel_x), 1e-12)) + max(
-            0.0, -duy / max(abs(u_rel_y), 1e-12)
-        )
+        comp_raw = _axis_comp_share(dux, u_rel_x) + _axis_comp_share(duy, u_rel_y)
 
         pf = phi_fund[dofs]
         px = phi_x[dofs]
@@ -871,9 +892,7 @@ def compute_structural_sensitivities(
         dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
         dux = -float(lam_x[dofs] @ k_sp @ u_x[dofs])
         duy = -float(lam_y[dofs] @ k_sp @ u_y[dofs])
-        comp_raw = max(0.0, -dux / max(abs(u_rel_x), 1e-12)) + max(
-            0.0, -duy / max(abs(u_rel_y), 1e-12)
-        )
+        comp_raw = _axis_comp_share(dux, u_rel_x) + _axis_comp_share(duy, u_rel_y)
         pf = phi_fund[dofs]
         px = phi_x[dofs]
         py = phi_y[dofs]
@@ -881,7 +900,7 @@ def compute_structural_sensitivities(
         stiff_x = float(px @ k_sp @ px) * inv_8pi2_x
         stiff_y = float(py @ k_sp @ py) * inv_8pi2_y
 
-        if bay_raw not in ("bed_mount", "toolhead", "feet", "z_joint") and bay_prefix in bay_acc:
+        if bay_raw not in ("bed_mount", "bed_z_drive", "z_guide", "toolhead", "feet", "z_joint") and bay_prefix in bay_acc:
             b = bay_acc[bay_prefix]
             b["du_rel_x_dlnE_m"] += dux
             b["du_rel_y_dlnE_m"] += duy
@@ -894,6 +913,8 @@ def compute_structural_sensitivities(
 
         if bay_raw == "bed_mount":
             sp_role, sp_cost, sp_ref_mass = "bed", 20.0, 0.25
+        elif bay_raw in ("bed_z_drive", "z_guide"):
+            sp_role, sp_cost, sp_ref_mass = "bed", 25.0, 0.20
         elif bay_raw == "toolhead":
             sp_role, sp_cost, sp_ref_mass = "toolhead", 25.0, 0.06
         elif bay_raw == "z_joint":
@@ -923,6 +944,79 @@ def compute_structural_sensitivities(
                 "hz_per_usd": stiff_f / sp_cost,
                 "_comp_raw": comp_raw,
                 "_net_sens": stiff_f,
+            }
+        )
+
+    # 2-port Craig-Bampton CAD superelements: exact static adjoint & Fox-Kapoor derivatives
+    internal_dof_cursor = 6 * len(assembly.nodes)
+    for se in getattr(assembly, "superelements", ()):
+        dofs_se, Ke_se, Me_se = superelement_element_matrices(
+            se, assembly, node_idx, internal_dof_cursor
+        )
+        n_m_se = max(0, int(getattr(se, "n_internal_modes", max(0, Ke_se.shape[0] - 12))))
+        internal_dof_cursor += n_m_se
+
+        dux = -float(lam_x[dofs_se] @ Ke_se @ u_x[dofs_se])
+        duy = -float(lam_y[dofs_se] @ Ke_se @ u_y[dofs_se])
+        comp_raw = _axis_comp_share(dux, u_rel_x) + _axis_comp_share(duy, u_rel_y)
+
+        pf = phi_fund[dofs_se]
+        px = phi_x[dofs_se]
+        py = phi_y[dofs_se]
+
+        stiff_f = float(pf @ Ke_se @ pf) * inv_8pi2_fund
+        stiff_x = float(px @ Ke_se @ px) * inv_8pi2_x
+        stiff_y = float(py @ Ke_se @ py) * inv_8pi2_y
+        if Me_se is not None:
+            mass_f = -eig_fund * float(pf @ Me_se @ pf) * inv_8pi2_fund
+            mass_x = -eig_x * float(px @ Me_se @ px) * inv_8pi2_x
+            mass_y = -eig_y * float(py @ Me_se @ py) * inv_8pi2_y
+        else:
+            mass_f = 0.0
+            mass_x = 0.0
+            mass_y = 0.0
+
+        se_role = getattr(se, "role", "toolhead") or "toolhead"
+        if se.id == "toolhead_mount":
+            ref_mat = get_material(assembly.spec.toolhead.effective_body_material)
+            m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.06)
+        elif se.id == "nozzle_stem":
+            ref_mat = get_material("aluminum_6061_t6")
+            m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.025)
+        else:
+            ref_mat = get_material(assembly.spec.toolhead.mount_material)
+            m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.05)
+
+        m_exact = float(getattr(se, "mass_kg", 0.0)) if Me_se is not None else 0.0
+        cost_per_kg = max(ref_mat.cost_per_kg_usd, 1.0)
+        cost_usd = m_ref * cost_per_kg
+        net_f = stiff_f + mass_f
+        df_dm = net_f / max(m_ref, 1e-6)
+
+        raw_members.append(
+            {
+                "member_id": se.id,
+                "role": se_role,
+                "mass_kg": m_exact,
+                "ref_mass_kg": m_ref,
+                "cost_usd": cost_usd,
+                "cost_per_kg": cost_per_kg,
+                "stiffness_sens_hz": stiff_f,
+                "mass_sens_hz": mass_f,
+                "stiffness_sens_x_hz": stiff_x,
+                "mass_sens_x_hz": mass_x,
+                "stiffness_sens_y_hz": stiff_y,
+                "mass_sens_y_hz": mass_y,
+                "du_rel_x_dlnE_m": dux,
+                "du_rel_y_dlnE_m": duy,
+                "du_rel_dlnE_m": dux + duy,
+                "hz_per_100g": 0.1 * df_dm,
+                "hz_per_usd": df_dm / max(cost_per_kg, 0.5),
+                "_comp_raw": comp_raw,
+                "_net_sens": net_f,
+                "_part_group_id": getattr(se, "part_group_id", "") or "toolhead_mount",
+                "_part_group_label": getattr(se, "part_group_label", "")
+                or "Toolhead & Nozzle Mount",
             }
         )
 
@@ -967,9 +1061,9 @@ def compute_structural_sensitivities(
         if node.lumped_mass_kg <= 0.0 or node.fixed:
             continue
         base = 6 * i
-        rot_i = node.lumped_mass_kg * (0.025**2)
+        ixx, iyy, izz = node_rotational_inertia_xyz(node, assembly)
         m_diag_nd = np.array(
-            [node.lumped_mass_kg, node.lumped_mass_kg, node.lumped_mass_kg, rot_i, rot_i, rot_i],
+            [node.lumped_mass_kg, node.lumped_mass_kg, node.lumped_mass_kg, ixx, iyy, izz],
             dtype=float,
         )
         pf = phi_fund[base : base + 6]
@@ -1220,7 +1314,11 @@ def compute_structural_sensitivities(
     spec = assembly.spec
     group_acc: dict[str, dict[str, Any]] = {}
     for m in raw_members:
-        gid, label = _classify_sensitivity_group(m["member_id"], m["role"], m.get("_bay", ""))
+        if m.get("_part_group_id"):
+            gid = str(m["_part_group_id"])
+            label = str(m.get("_part_group_label") or gid)
+        else:
+            gid, label = _classify_sensitivity_group(m["member_id"], m["role"], m.get("_bay", ""))
         g = group_acc.setdefault(
             gid,
             {
@@ -1290,21 +1388,35 @@ def compute_structural_sensitivities(
         net_fund = stiff_fund + mass_fund
         xy_net = w_x * (stiff_x + mass_x) + w_y * (stiff_y + mass_y)
         f_min_xy = min(f_x, f_y)
-        eff_stiff_hz = max(
-            stiff_fund,
-            w_x * max(stiff_x, 0.0) + w_y * max(stiff_y, 0.0),
+        stiff_xy_blend = w_x * max(stiff_x, 0.0) + w_y * max(stiff_y, 0.0)
+        stiff_xy_scaled = (
             max(
                 stiff_x * (f_min_xy / max(f_x, 1.0)),
                 stiff_y * (f_min_xy / max(f_y, 1.0)),
             )
-            * 0.75,
+            * 0.75
+        )
+        eff_stiff_hz, f_ref_hz = max(
+            (
+                (stiff_fund, f_fund),
+                (stiff_xy_blend, w_x * f_x + w_y * f_y),
+                (stiff_xy_scaled, f_min_xy),
+            ),
+            key=lambda pair: pair[0],
         )
         eff_net_hz = max(net_fund, xy_net)
         comp_pct = float(g["compliance_share_pct"])
         cost_usd = max(float(g["cost_usd"]), 1.0)
         if not ((eff_stiff_hz > 1e-4 and (eff_net_hz > 0.0 or comp_pct > 0.5)) or comp_pct > 1.0):
             continue
-        est_hz_gain = round(0.5 * max(eff_stiff_hz, 0.0), 1)
+        # Frozen-mode Rayleigh quotient gain for +50% stiffness:
+        # Since df/d(ln E) = (f / 2) * s_e, 0.5 * s_e = eff_stiff_hz / f_ref_hz,
+        # giving exact df = f * (sqrt(1 + 0.5 * s_e) - 1) = f * (sqrt(1 + eff_stiff_hz / f) - 1).
+        f_ref_safe = max(float(f_ref_hz), 1e-6)
+        rayleigh_gain_hz = f_ref_safe * (
+            math.sqrt(1.0 + max(eff_stiff_hz, 0.0) / f_ref_safe) - 1.0
+        )
+        est_hz_gain = round(rayleigh_gain_hz, 1)
         hz_per_usd = eff_net_hz / cost_usd
         impact_score = comp_pct * 0.65 + est_hz_gain * (1.2 + comp_pct / 20.0)
         stiffen_pool.append(
@@ -1428,6 +1540,8 @@ def compute_structural_sensitivities(
             continue
         hz_per_100g = 0.1 * lg["net_hz"] / lg["mass_kg"]
         hz_gain_100g = round(abs(hz_per_100g), 2)
+        if hz_gain_100g <= 0.0:
+            continue
         lighten_pool.append(
             {
                 "id": gid,

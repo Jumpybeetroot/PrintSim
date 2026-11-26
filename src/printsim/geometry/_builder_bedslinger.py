@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from printsim.schema import (
-    GANTRY_BRACKET_CATALOG,
     PrinterSpec,
     ProfileSpec,
     get_material,
     get_profile,
+    resolve_belt,
+    resolve_gantry_bracket,
 )
 
 if TYPE_CHECKING:
@@ -41,11 +42,12 @@ def _build_cartesian_bedslinger(
 
     xy_motor_kg = spec.kinematics.xy_stepper.motor_mass_g * 1e-3
     z_motor_kg = spec.kinematics.z_stepper.motor_mass_g * 1e-3
-    bkt_info = GANTRY_BRACKET_CATALOG.get(
-        spec.gantry.bracket_material, GANTRY_BRACKET_CATALOG["abs_printed"]
-    )
-    bkt_delta_kg = float(bkt_info["carriage_mass_delta_g"]) * 1e-3
-    carriage_side_kg = (spec.gantry.carriage_mass_g * 0.5) * 1e-3
+    bkt_resolved = resolve_gantry_bracket(spec)
+    bkt_delta_kg = float(bkt_resolved["carriage_mass_delta_g"]) * 1e-3
+    _, y_block_delta_g = _b.y_carriage_block_mass_delta_g(spec)
+    y_block_delta_kg = y_block_delta_g * 1e-3
+    y_carriage_total_kg = max(spec.gantry.carriage_mass_g * 1e-3 + y_block_delta_kg, 0.04)
+    carriage_side_kg = 0.5 * y_carriage_total_kg
     toolhead_kg = _b._effective_toolhead_mass_kg(spec)
 
     nodes = [
@@ -129,8 +131,23 @@ def _build_cartesian_bedslinger(
     x_normals = _b._x_rail_mount_normals(spec.gantry.effective_x_rail_mount)
     bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
     member_by_id = {m.id: m for m in members}
+    chamber_c = float(spec.frame.chamber_temp_c)
+    x_beam_mat = get_material(xm)
+    if x_beam_mat.tg_c is not None and abs(chamber_c - 25.0) > 1e-6:
+        eff_e = x_beam_mat.effective_modulus_pa(chamber_c)
+        eff_g = x_beam_mat.effective_shear_modulus_at_temp_pa(chamber_c)
+        for mid in ("x_gantry_l", "x_gantry_r"):
+            m_xb = member_by_id[mid]
+            m_xb.material = m_xb.material.model_copy(
+                update={
+                    "youngs_modulus_pa": eff_e,
+                    "shear_modulus_pa": eff_g,
+                }
+            )
+
     x_boost_iy = 0.0
     x_boost_iz = 0.0
+    cf_mount = spec.gantry.effective_cf_rail_mounting
     for mid in ("x_gantry_l", "x_gantry_r"):
         d_iy_x, d_iz_x, _ = _b._apply_bolted_linear_rail(
             member_by_id[mid],
@@ -141,6 +158,8 @@ def _build_cartesian_bedslinger(
             beam_shape=base_x_prof.shape,
             bolt_pitch_m=bolt_pitch_m,
             l_eff_m=w,
+            chamber_temp_c=chamber_c,
+            cf_rail_mounting=cf_mount,
         )
         x_boost_iy += d_iy_x
         x_boost_iz += d_iz_x
@@ -166,12 +185,17 @@ def _build_cartesian_bedslinger(
                 bolt_pitch_m=bolt_pitch_m,
                 l_eff_m=w,
                 track_as_rail=False,
+                chamber_temp_c=chamber_c,
+                cf_rail_mounting=cf_mount,
             )
             bk_iy_acc += d_iy_b
             bk_iz_acc += d_iz_b
         x_boost_iy += 0.5 * bk_iy_acc
         x_boost_iz += 0.5 * bk_iz_acc
 
+    x_beam_insert_mass_kg = _b._apply_cf_two_wall_clamped_inserts(
+        member_by_id, nmap, spec, w
+    )
     x_rail_ei_y_boost_pct = 100.0 * x_boost_iz / max(base_x_prof.iz_m4, 1e-18)
     x_rail_ei_z_boost_pct = 100.0 * x_boost_iy / max(base_x_prof.iy_m4, 1e-18)
 
@@ -190,7 +214,14 @@ def _build_cartesian_bedslinger(
     # Bedslinger: X moves toolhead (+ bracket delta); Y moves bed + carriage (+ bracket delta when specified)
     bed_kg = spec.bed.mass_g * 1e-3
     x_beam_mass = sum(
-        max(m.mass_kg(nmap) - m.rail_mass_kg - m.backer_mass_kg - m.fill_mass_kg, 0.0)
+        max(
+            m.mass_kg(nmap)
+            - m.rail_mass_kg
+            - m.backer_mass_kg
+            - m.fill_mass_kg
+            - m.insert_mass_kg,
+            0.0,
+        )
         for m in members
         if m.role == "gantry"
     )
@@ -199,7 +230,7 @@ def _build_cartesian_bedslinger(
     if spec.gantry.effective_dual_x_rails:
         x_rail_mass *= 2.0
     x_moving = toolhead_kg + 0.03 + bkt_delta_kg
-    y_moving = bed_kg + spec.gantry.carriage_mass_g * 1e-3 + bkt_delta_kg
+    y_moving = bed_kg + y_carriage_total_kg + bkt_delta_kg
 
     # Explicit bedslinger Y-bed node mounted to base-level Y-rails (z=0.015 m, split at y_bed)
     bed_center = np.array([w * 0.5, y_bed, orig_z])
@@ -255,7 +286,8 @@ def _build_cartesian_bedslinger(
         )
 
     l_arm = max(w * 0.5, 0.05)
-    k_y_target = 1.15e6 * ((spec.gantry.belt.stiffness_ea_n / 50000.0) ** 0.35)
+    belt_ea_n = float(resolve_belt(spec)["stiffness_ea_n"])
+    k_y_target = 1.15e6 * ((belt_ea_n / 50000.0) ** 0.35)
     iz_y_carriage = k_y_target * (l_arm**3) / (24.0 * max(bed_vmat.youngs_modulus_pa, 1e6))
     bed_car_prof = ProfileSpec.model_construct(
         id="bed_carriage_arm_profile",
@@ -303,7 +335,9 @@ def _build_cartesian_bedslinger(
         x_beam_mass_kg=x_beam_mass,
         x_rail_mass_kg=x_rail_mass,
         x_backer_mass_kg=x_backer_mass,
-        y_carriage_joints_mass_kg=spec.gantry.carriage_mass_g * 1e-3,
+        x_beam_insert_mass_kg=x_beam_insert_mass_kg,
+        y_carriage_joints_mass_kg=y_carriage_total_kg,
+        y_carriage_block_delta_g=y_block_delta_g,
         toolhead_moving_mass_kg=toolhead_kg,
         x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
         x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,

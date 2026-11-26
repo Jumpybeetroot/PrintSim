@@ -33,6 +33,9 @@ _REQUIRED_KEYS = {
     "z_total_um",
     "mode1_shape_z",
     "gravity_sag_um",
+    "mount_settlement_um",
+    "rigid_tilt_um",
+    "plate_flatness_um",
     "thermal_peak_to_valley_um",
     "taco_buckling_um",
     "total_flatness_error_um",
@@ -236,7 +239,15 @@ def test_mesh_refinement_and_runtime() -> None:
 
 @pytest.mark.parametrize(
     "mount_type",
-    ["kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs"],
+    [
+        "kinematic_3pt",
+        "whopping_pochard_kinematic",
+        "trident_3pt_standoffs",
+        "cnc_kelvin_magnetic",
+        "captive_belleville_kinematic",
+        "dual_leaf_ti_kinematic",
+        "spherical_3pt_ratrig",
+    ],
 )
 def test_3pt_inset_cantilevered_rear_corners_vs_supported_front_corners(mount_type: str) -> None:
     """3-point inset mounts give >3x higher probe deflection on cantilevered rear corners than supported front corners."""
@@ -331,6 +342,28 @@ def test_directional_inplane_mount_springs_rank_eigenvalues_and_silicone_temp_so
         assert evals[0] == pytest.approx(5000.0, rel=1e-9)
         assert evals[1] == pytest.approx(1.6e7, rel=1e-9)
 
+    # 2b. CNC N48SH Magnetic Kelvin: exact 6-DOF cone (rear) + V-groove (idx 0) + flat (idx 1)
+    blocks_kelvin, mpts_kelvin, _, _ = _extract_mount_blocks("cnc_kelvin_magnetic")
+    assert len(blocks_kelvin) == 3
+    evals_v, evecs_v = np.linalg.eigh(blocks_kelvin[0])
+    assert evals_v == pytest.approx([500.0, 3.0e7], rel=1e-9)
+    rx0, ry0 = mpts_kelvin[0]
+    r_hat0 = np.array([rx0, ry0], dtype=float) / math.hypot(rx0, ry0)
+    assert abs(float(np.dot(evecs_v[:, 0], r_hat0))) == pytest.approx(1.0, abs=1e-9)
+    assert np.linalg.eigvalsh(blocks_kelvin[1]) == pytest.approx([500.0, 500.0], rel=1e-9)
+    assert np.linalg.eigvalsh(blocks_kelvin[2]) == pytest.approx([3.0e7, 3.0e7], rel=1e-9)
+
+    # 2c. Captive Belleville (maxwell_vgroove) & Dual-Blade Ti / RatRig Spherical (radial_flexure)
+    blocks_cb, _, _, _ = _extract_mount_blocks("captive_belleville_kinematic")
+    for k_xy in blocks_cb:
+        assert np.linalg.eigvalsh(k_xy) == pytest.approx([500.0, 3.6e7], rel=1e-9)
+    blocks_dl, _, _, _ = _extract_mount_blocks("dual_leaf_ti_kinematic")
+    for k_xy in blocks_dl:
+        assert np.linalg.eigvalsh(k_xy) == pytest.approx([5000.0, 2.6e7], rel=1e-9)
+    blocks_rr, _, _, _ = _extract_mount_blocks("spherical_3pt_ratrig")
+    for k_xy in blocks_rr:
+        assert np.linalg.eigvalsh(k_xy) == pytest.approx([5000.0, 2.0e7], rel=1e-9)
+
     # 3. Floating 4-pt: anchor #0 isotropic (6000 N/mm), anchors #1-3 slotted radial (0.08 * 6000)
     blocks_flt, _, _, _ = _extract_mount_blocks("floating_4pt")
     assert np.linalg.eigvalsh(blocks_flt[0]) == pytest.approx([6.0e6, 6.0e6], rel=1e-9)
@@ -404,19 +437,27 @@ def test_thermal_warp_ordering_at_100c_and_components_parity() -> None:
 
     assert tacos["kinematic_3pt"] == pytest.approx(0.0, abs=1e-9)
     assert tacos["whopping_pochard_kinematic"] == pytest.approx(0.0, abs=1e-9)
+    assert tacos["cnc_kelvin_magnetic"] == pytest.approx(0.0, abs=1e-9)
+    assert tacos["captive_belleville_kinematic"] == pytest.approx(0.0, abs=1e-9)
+    assert tacos["dual_leaf_ti_kinematic"] == pytest.approx(0.0, abs=1e-9)
     assert (
         tacos["kinematic_3pt"]
         == tacos["whopping_pochard_kinematic"]
+        == tacos["cnc_kelvin_magnetic"]
+        == tacos["captive_belleville_kinematic"]
+        == tacos["dual_leaf_ti_kinematic"]
+        < tacos["spherical_3pt_ratrig"]
         < tacos["floating_4pt"]
         < tacos["trident_3pt_standoffs"]
         < tacos["rigid_4pt"]
     )
+    assert ptvs["kinematic_3pt"] == pytest.approx(ptvs["whopping_pochard_kinematic"], rel=1e-9)
+    assert ptvs["kinematic_3pt"] == pytest.approx(ptvs["cnc_kelvin_magnetic"], rel=1e-9)
+    assert ptvs["kinematic_3pt"] == pytest.approx(ptvs["captive_belleville_kinematic"], rel=1e-9)
+    assert ptvs["kinematic_3pt"] == pytest.approx(ptvs["dual_leaf_ti_kinematic"], rel=1e-9)
     assert (
         ptvs["kinematic_3pt"]
-        == pytest.approx(ptvs["whopping_pochard_kinematic"], rel=1e-9)
-    )
-    assert (
-        ptvs["kinematic_3pt"]
+        < ptvs["spherical_3pt_ratrig"]
         < ptvs["floating_4pt"]
         < ptvs["trident_3pt_standoffs"]
         < ptvs["rigid_4pt"]
@@ -478,3 +519,69 @@ def test_evaluator_integration_all_example_presets_and_diagnostics() -> None:
     joined = " ".join(rep_bad.diagnostics).lower()
     assert "flatness error" in joined
     assert "bed plate natural frequency" in joined
+
+
+def test_new_kinematic_mounts_and_z_drives_plate_fem_monotonic_stiffness() -> None:
+    """Verify monotonic plate FEM stiffness across new kinematic mounts, belted-Z mods, and ballscrews."""
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    base.bed.target_temp_c = 100.0
+
+    # 1. Kinematic 3-pt mounts (with stiff sfu1605_fk12 Z-drive so mount compliance stands out)
+    kin_ordered = (
+        "trident_3pt_standoffs",
+        "whopping_pochard_kinematic",
+        "kinematic_3pt",
+        "dual_leaf_ti_kinematic",
+        "cnc_kelvin_magnetic",
+        "captive_belleville_kinematic",
+    )
+    kin_res = []
+    for mt in kin_ordered:
+        s = base.model_copy(deep=True)
+        s.bed.z_leadscrew_type = "sfu1605_fk12"
+        s.bed.mount_type = mt  # type: ignore[assignment]
+        r = solve_bed_plate_fem(s)
+        assert len(r.mount_points_rel) == 3
+        if mt != "trident_3pt_standoffs":
+            assert r.taco_buckling_um == 0.0
+        kin_res.append(r)
+
+    for i in range(len(kin_ordered) - 1):
+        assert kin_res[i + 1].probe_center_deflection_um < kin_res[i].probe_center_deflection_um
+        assert kin_res[i + 1].plate_first_mode_hz > kin_res[i].plate_first_mode_hz
+
+    # 2. Moving-bed belted-Z mods monotonic axial stiffness
+    belts_ordered = (
+        "gt2_6mm_z_belt",
+        "kevinakasam_belted_z",
+        "gt2_9mm_z_belt",
+        "gt2_9mm_planetary_z",
+        "gt2_9mm_worm_z",
+    )
+    belt_res = []
+    for b_id in belts_ordered:
+        s = base.model_copy(deep=True)
+        s.bed.z_leadscrew_type = b_id  # type: ignore[assignment]
+        belt_res.append(solve_bed_plate_fem(s))
+    for i in range(len(belts_ordered) - 1):
+        assert belt_res[i + 1].probe_center_deflection_um < belt_res[i].probe_center_deflection_um
+        assert belt_res[i + 1].gravity_sag_um < belt_res[i].gravity_sag_um
+        assert belt_res[i + 1].plate_first_mode_hz > belt_res[i].plate_first_mode_hz
+
+    # 3. Screw & ballscrew Z-drives monotonic axial stiffness (including WobbleX & SFU1605)
+    screws_ordered = (
+        "tr8x4_wobblex",
+        "tr8x4_pom",
+        "sfu1204_wobblex",
+        "sfu1204_bk10",
+        "sfu1605_fk12",
+    )
+    screw_res = []
+    for s_id in screws_ordered:
+        s = base.model_copy(deep=True)
+        s.bed.z_leadscrew_type = s_id  # type: ignore[assignment]
+        screw_res.append(solve_bed_plate_fem(s))
+    for i in range(len(screws_ordered) - 1):
+        assert screw_res[i + 1].probe_center_deflection_um < screw_res[i].probe_center_deflection_um
+        assert screw_res[i + 1].gravity_sag_um < screw_res[i].gravity_sag_um
+        assert screw_res[i + 1].plate_first_mode_hz > screw_res[i].plate_first_mode_hz

@@ -350,7 +350,7 @@ def test_m3_standalone_kinematics_import_no_circular_error() -> None:
 
 
 def test_m1_corexy_diagonal_45deg_torque_and_rotor_inertia() -> None:
-    """CoreXY torque demand uses 45-deg worst-case 1/sqrt(2) (2WD), 1/(2*sqrt(2)) (AWD), and sqrt(2)*a."""
+    """CoreXY per-axis X/Y torque (2WD 1/2, AWD 1/4, rotor accel a/r) & worst-direction margin (B-06)."""
     spec_2wd = PrinterSpec(architecture="corexy")
     spec_2wd.gantry.drive_mode = "2wd"
     asm_2wd = build_assembly(spec_2wd)
@@ -359,18 +359,28 @@ def test_m1_corexy_diagonal_45deg_torque_and_rotor_inertia() -> None:
     r_p = spec_2wd.gantry.belt.pitch_radius_m
     a_m_s2 = spec_2wd.kinematics.max_accel_mm_s2 * 1e-3
     j_rot = spec_2wd.kinematics.xy_stepper.rotor_inertia_kg_m2
-    alpha_diag = math.sqrt(2.0) * a_m_s2 / r_p
+    alpha_axis = a_m_s2 / r_p
 
-    expected_ty_2wd = ((asm_2wd.y_moving_mass_kg * a_m_s2 + 2.5) / math.sqrt(2.0)) * r_p + j_rot * alpha_diag
+    # B-06 upgrade: required_torque_x_nm / _y_nm report true per-axis (pure X / pure Y) motor demand:
+    # 2WD pure-axis: F_mot = 0.5 * (m_axis * a + f_fric) + (J_rot / r_p) * (a / r_p)
+    expected_tx_2wd = 0.5 * (asm_2wd.x_moving_mass_kg * a_m_s2 + 2.5) * r_p + j_rot * alpha_axis
+    expected_ty_2wd = 0.5 * (asm_2wd.y_moving_mass_kg * a_m_s2 + 2.5) * r_p + j_rot * alpha_axis
+    assert kin_2wd.required_torque_x_nm == pytest.approx(expected_tx_2wd, rel=1e-6)
     assert kin_2wd.required_torque_y_nm == pytest.approx(expected_ty_2wd, rel=1e-6)
+
+    # Worst-direction torque governs torque_safety_margin: T_worst = 0.5 * hypot(M_x*a + f, M_y*a + f) * r_p
+    mx_2wd = asm_2wd.x_moving_mass_kg + 2.0 * j_rot / (r_p**2)
+    my_2wd = asm_2wd.y_moving_mass_kg + 2.0 * j_rot / (r_p**2)
+    t_worst_2wd = 0.5 * math.hypot(mx_2wd * a_m_s2 + 2.5, my_2wd * a_m_s2 + 2.5) * r_p
+    assert kin_2wd.torque_safety_margin == pytest.approx(
+        kin_2wd.available_torque_at_vmax_nm / t_worst_2wd, rel=1e-4
+    )
 
     spec_awd = spec_2wd.model_copy(deep=True)
     spec_awd.gantry.drive_mode = "awd"
     asm_awd = build_assembly(spec_awd)
     kin_awd = analyze_kinematics(asm_awd)
-    expected_ty_awd = (
-        (asm_awd.y_moving_mass_kg * a_m_s2 + 3.6) / (2.0 * math.sqrt(2.0))
-    ) * r_p + j_rot * alpha_diag
+    expected_ty_awd = 0.25 * (asm_awd.y_moving_mass_kg * a_m_s2 + 3.6) * r_p + j_rot * alpha_axis
     assert kin_awd.required_torque_y_nm == pytest.approx(expected_ty_awd, rel=1e-6)
 
 

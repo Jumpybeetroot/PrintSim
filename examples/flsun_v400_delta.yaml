@@ -14,7 +14,7 @@ frame:
   panel_mounting: none
   corner_joint_type: corner_cube
 gantry:
-  bracket_material: abs_printed
+  bracket_material: aluminum_6061_t6
   x_beam_profile: cf_tube_20x20x1_5
   x_beam_material: carbon_fiber_tube
   x_rail_profile: mgn12_rail
@@ -24,7 +24,7 @@ gantry:
   carriage_mass_g: 210
   belt:
     type: gt2_9mm
-    core: fiberglass
+    core: aramid
     pulley_teeth: 20
     pitch_mm: 2.0
     pretension_n: 34.0

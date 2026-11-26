@@ -7,14 +7,21 @@ design while preserving the user's architecture, build volume, and outer frame d
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
 
 from printsim.engine.evaluator import SimulationReport, evaluate_printer
 from printsim.geometry.bom import PrinterBOM, generate_bom
-from printsim.schema import STEPPER_CATALOG, TOOLHEAD_PRESETS, PrinterSpec, StepperSpec
+from printsim.kinematics import analyze_kinematics
+from printsim.schema import (
+    HOTEND_CATALOG,
+    STEPPER_CATALOG,
+    TOOLHEAD_PRESETS,
+    PrinterSpec,
+    StepperSpec,
+)
 
 # ---------------------------------------------------------------------------
 # Discrete Engineering Design Space (12 hardware upgrade genes)
@@ -46,6 +53,10 @@ PANEL_CONFIGS: tuple[tuple[str, str, bool, str, str, float], ...] = (
 X_BEAM_OPTIONS: tuple[tuple[str, str, str, str], ...] = (
     ("al_2020", "Aluminum 2020 extrusion", "extrusion_2020", "aluminum_6063_t5"),
     ("cf_tube_20x20x2", "Carbon Fiber 20x20x2mm tube", "cf_tube_20x20x2", "carbon_fiber_tube"),
+    ("cf_20x20x2_high_tg", "Carbon Fiber 20x20x2mm (High-Tg 125C)", "cf_tube_20x20x2", "carbon_fiber_high_tg"),
+    ("cf_carbonara_torsional_45", "Carbonara 20x20mm (±45°/0° High-Tg)", "cf_tube_20x20_carbonara", "carbon_fiber_torsional_45"),
+    ("cf_30x20x2_torsional_45", "Carbon Fiber 30x20x2mm Wide-Y (±45°/0°)", "cf_tube_30x20x2", "carbon_fiber_torsional_45"),
+    ("cf_carbonara_m40j_hm", "Carbonara 20x20mm (M40J High-Modulus)", "cf_tube_20x20_carbonara", "carbon_fiber_m40j_hm"),
 )
 
 DRIVE_MODES: tuple[str, ...] = ("2wd", "awd")
@@ -73,12 +84,23 @@ TOOLHEAD_OPTIONS: tuple[str, ...] = (
     "archetype_cpap",
 )
 
-# (melt_zone_length_mm, heater_power_w)
-HOTEND_TIERS: tuple[tuple[float, float], ...] = (
-    (16.0, 60.0),
-    (22.0, 80.0),
-    (26.0, 100.0),
+# Realistic catalog hotend tiers (mass, stiffness, length, melt zone, power, & cost coupled)
+HOTEND_PRESET_OPTIONS: tuple[str, ...] = (
+    "phaetus_dragon_hf",
+    "phaetus_rapido_2_hf",
+    "phaetus_rapido_2_uhf",
 )
+
+# (melt_zone_length_mm, heater_power_w) kept for backward-compatible inspection
+HOTEND_TIERS: tuple[tuple[float, float], ...] = tuple(
+    (
+        float(HOTEND_CATALOG[pid]["melt_zone_length_mm"]),
+        float(HOTEND_CATALOG[pid]["heater_power_w"]),
+    )
+    for pid in HOTEND_PRESET_OPTIONS
+)
+
+_PARETO_REF_ACCEL_MM_S2 = 10000.0
 
 TOOLHEAD_MOUNT_OPTIONS: tuple[str, ...] = (
     "abs_printed",
@@ -258,7 +280,23 @@ def _encode_baseline_vector(spec: PrinterSpec) -> tuple[int, ...]:
     else:
         x2 = 2
     # x[3] x-beam
-    x3 = 1 if "cf_" in spec.gantry.x_beam_profile or "carbon" in spec.gantry.x_beam_material else 0
+    x3 = 0
+    for idx_xb, (_, _, xb_prof, xb_mat) in enumerate(X_BEAM_OPTIONS):
+        if spec.gantry.x_beam_profile == xb_prof and spec.gantry.x_beam_material == xb_mat:
+            x3 = idx_xb
+            break
+    else:
+        if "cf_" in spec.gantry.x_beam_profile or "carbon" in spec.gantry.x_beam_material:
+            if spec.gantry.x_beam_material == "carbon_fiber_m40j_hm":
+                x3 = 5
+            elif spec.gantry.x_beam_profile == "cf_tube_30x20x2":
+                x3 = 4
+            elif spec.gantry.x_beam_material == "carbon_fiber_torsional_45":
+                x3 = 3
+            elif spec.gantry.x_beam_material == "carbon_fiber_high_tg":
+                x3 = 2
+            else:
+                x3 = 1
     # x[4] drive mode (CoreXY only)
     x4 = 1 if (spec.architecture == "corexy" and spec.gantry.drive_mode == "awd") else 0
     # x[5] belt
@@ -329,16 +367,16 @@ def _build_seed_vectors(baseline_spec: PrinterSpec, population_size: int, seed: 
         (0, 1, 0, 0, 0, 0, 0, 2, 0, 1, 2, 1),
         # Balanced structural ACM + CF X-beam + 9mm FG (48N) + 48V + Archetype + Kinematic 3-pt
         (0, 2, 2, 1, 0, 1, 1, 2, 1, 1, 3, 1),
-        # Mid-high 3030 + rear cross + bolted ACM + 9mm FG (62N) + low-L 48V + CNC toolhead mount
-        (1, 2, 2, 1, 0, 2, 2, 2, 2, 2, 3, 1),
-        # Fast AWD (or fast 2WD for non-CoreXY): 3030 + full truss + ACM + AWD + 9mm FG (62N) + 0.9deg 48V
-        (1, 3, 2, 1, 1 if is_corexy else 0, 2, 4, 2, 2, 2, 3, 2),
-        # High-stiffness AWD Al5052: 3030 + full truss + Al5052 + AWD + 12mm FG (80N) + Kraken 48V
-        (1, 3, 3, 1, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
-        # Max-stiffness 4040 fortress + Al5052 + AWD + 12mm FG (80N) + 0.9deg 48V + rigid bed mount
-        (2, 3, 3, 1, 1 if is_corexy else 0, 3, 4, 2, 2, 2, 4, 2),
-        # Max-stiffness 4040 + bolted CF + AWD + 12mm FG (80N) + Kraken 48V + kinematic 3-pt
-        (2, 3, 4, 1, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
+        # Mid-high 3030 + rear cross + bolted ACM + high-Tg CF + 9mm FG (62N) + low-L 48V + CNC toolhead mount
+        (1, 2, 2, 2, 0, 2, 2, 2, 2, 2, 3, 1),
+        # Fast AWD (or fast 2WD for non-CoreXY): 3030 + full truss + ACM + Carbonara ±45/0 + AWD + 9mm FG (62N) + 0.9deg 48V
+        (1, 3, 2, 3, 1 if is_corexy else 0, 2, 4, 2, 2, 2, 3, 2),
+        # High-stiffness AWD Al5052: 3030 + full truss + Al5052 + Wide-Y 30x20 CF + AWD + 12mm FG (80N) + Kraken 48V
+        (1, 3, 3, 4, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
+        # Max-stiffness 4040 fortress + Al5052 + Wide-Y 30x20 CF + AWD + 12mm FG (80N) + 0.9deg 48V + rigid bed mount
+        (2, 3, 3, 4, 1 if is_corexy else 0, 3, 4, 2, 2, 2, 4, 2),
+        # Max-stiffness 4040 + bolted CF + Carbonara M40J + AWD + 12mm FG (80N) + Kraken 48V + kinematic 3-pt
+        (2, 3, 4, 5, 1 if is_corexy else 0, 3, 3, 2, 2, 2, 3, 2),
     ]
 
     unique_seeds: list[tuple[int, ...]] = []
@@ -374,147 +412,178 @@ def _decode_candidate(
     baseline_spec: PrinterSpec,
     x: tuple[int, ...],
 ) -> tuple[PrinterSpec, list[str]]:
-    """Apply 12 discrete engineering choices onto a deep copy of baseline_spec and record diffs."""
+    """Apply 12 discrete engineering choices onto a deep copy of baseline_spec and record diffs.
+
+    When a gene matches the baseline's encoded index ``base_vec[i]``, baseline's exact original
+    fields for that gene are preserved (exact as-baseline fidelity).
+    """
     spec = copy.deepcopy(baseline_spec)
+    base_vec = _encode_baseline_vector(baseline_spec)
     changes: list[str] = []
 
     # x[0]: Frame profile
-    frame_prof = FRAME_PROFILES[x[0]]
-    spec.frame.profile = frame_prof
-    if frame_prof != baseline_spec.frame.profile:
-        short = frame_prof.replace("extrusion_", "")
-        changes.append(f"Frame: {short} extrusion")
+    if x[0] != base_vec[0]:
+        frame_prof = FRAME_PROFILES[x[0]]
+        spec.frame.profile = frame_prof
+        if frame_prof != baseline_spec.frame.profile:
+            short = frame_prof.replace("extrusion_", "")
+            changes.append(f"Frame: {short} extrusion")
 
     # x[1]: Bracing
-    bracing = BRACING_OPTIONS[x[1]]
-    spec.frame.bracing = bracing  # type: ignore[assignment]
-    if bracing != baseline_spec.frame.bracing:
-        changes.append(f"Bracing: {bracing}")
+    if x[1] != base_vec[1]:
+        bracing = BRACING_OPTIONS[x[1]]
+        spec.frame.bracing = bracing  # type: ignore[assignment]
+        if bracing != baseline_spec.frame.bracing:
+            changes.append(f"Bracing: {bracing}")
 
     # x[2]: Panel config
-    panel_id, panel_label, enclosed, mounting, p_mat, p_thick = PANEL_CONFIGS[x[2]]
-    spec.frame.enclosed_panels = enclosed
-    spec.frame.panel_mounting = mounting  # type: ignore[assignment]
-    spec.frame.panel_material = p_mat
-    spec.frame.panel_thickness_mm = p_thick
-    bolt_gantry = (mounting == "bolted_structural") and (not spec.is_flying_gantry)
-    spec.frame.bolt_panels_to_gantry = bolt_gantry
+    if x[2] != base_vec[2]:
+        panel_id, panel_label, enclosed, mounting, p_mat, p_thick = PANEL_CONFIGS[x[2]]
+        spec.frame.enclosed_panels = enclosed
+        spec.frame.panel_mounting = mounting  # type: ignore[assignment]
+        spec.frame.panel_material = p_mat
+        spec.frame.panel_thickness_mm = p_thick
+        bolt_gantry = (mounting == "bolted_structural") and (not spec.is_flying_gantry)
+        spec.frame.bolt_panels_to_gantry = bolt_gantry
 
-    base_panel_sig = (
-        baseline_spec.frame.enclosed_panels,
-        baseline_spec.frame.panel_mounting,
-        baseline_spec.frame.panel_material if baseline_spec.frame.enclosed_panels else "",
-        round(baseline_spec.frame.panel_thickness_mm, 1) if baseline_spec.frame.enclosed_panels else 0.0,
-        baseline_spec.panels_bolted_to_gantry_effective,
-    )
-    cand_panel_sig = (
-        spec.frame.enclosed_panels,
-        spec.frame.panel_mounting,
-        spec.frame.panel_material if spec.frame.enclosed_panels else "",
-        round(spec.frame.panel_thickness_mm, 1) if spec.frame.enclosed_panels else 0.0,
-        spec.panels_bolted_to_gantry_effective,
-    )
-    if cand_panel_sig != base_panel_sig:
-        suffix = " (+gantry bolts)" if spec.panels_bolted_to_gantry_effective else ""
-        changes.append(f"Panels: {panel_label}{suffix}")
+        base_panel_sig = (
+            baseline_spec.frame.enclosed_panels,
+            baseline_spec.frame.panel_mounting,
+            baseline_spec.frame.panel_material if baseline_spec.frame.enclosed_panels else "",
+            round(baseline_spec.frame.panel_thickness_mm, 1) if baseline_spec.frame.enclosed_panels else 0.0,
+            baseline_spec.panels_bolted_to_gantry_effective,
+        )
+        cand_panel_sig = (
+            spec.frame.enclosed_panels,
+            spec.frame.panel_mounting,
+            spec.frame.panel_material if spec.frame.enclosed_panels else "",
+            round(spec.frame.panel_thickness_mm, 1) if spec.frame.enclosed_panels else 0.0,
+            spec.panels_bolted_to_gantry_effective,
+        )
+        if cand_panel_sig != base_panel_sig:
+            suffix = " (+gantry bolts)" if spec.panels_bolted_to_gantry_effective else ""
+            changes.append(f"Panels: {panel_label}{suffix}")
 
     # x[3]: X-beam
-    _, x_beam_label, xb_prof, xb_mat = X_BEAM_OPTIONS[x[3]]
-    spec.gantry.x_beam_profile = xb_prof
-    spec.gantry.x_beam_material = xb_mat
-    if (xb_prof, xb_mat) != (
-        baseline_spec.gantry.x_beam_profile,
-        baseline_spec.gantry.x_beam_material,
-    ):
-        changes.append(f"X-beam: {x_beam_label}")
+    if x[3] != base_vec[3]:
+        _, x_beam_label, xb_prof, xb_mat = X_BEAM_OPTIONS[x[3]]
+        spec.gantry.x_beam_profile = xb_prof
+        spec.gantry.x_beam_material = xb_mat
+        if (xb_prof, xb_mat) != (
+            baseline_spec.gantry.x_beam_profile,
+            baseline_spec.gantry.x_beam_material,
+        ):
+            changes.append(f"X-beam: {x_beam_label}")
 
     # x[4]: Drive mode (CoreXY only)
-    if spec.architecture == "corexy":
+    if spec.architecture == "corexy" and x[4] != base_vec[4]:
         drive_mode = DRIVE_MODES[x[4]]
         spec.gantry.drive_mode = drive_mode  # type: ignore[assignment]
         if drive_mode != baseline_spec.gantry.drive_mode:
             changes.append("Drive: 4-motor AWD" if drive_mode == "awd" else "Drive: 2-motor 2WD")
 
     # x[5]: Belt setup (+ automatic double-shear pulley support when tension > 45N or AWD)
-    _, belt_label, b_type, b_core, b_pret = BELT_OPTIONS[x[5]]
-    spec.gantry.belt.type = b_type  # type: ignore[assignment]
-    spec.gantry.belt.core = b_core  # type: ignore[assignment]
-    spec.gantry.belt.pretension_n = b_pret
-    use_double_shear = (b_pret > 45.0) or (
-        spec.architecture == "corexy" and spec.gantry.drive_mode == "awd"
-    )
-    spec.gantry.double_shear_pulleys = use_double_shear
+    if x[5] != base_vec[5]:
+        _, belt_label, b_type, b_core, b_pret = BELT_OPTIONS[x[5]]
+        spec.gantry.belt.type = b_type  # type: ignore[assignment]
+        spec.gantry.belt.core = b_core  # type: ignore[assignment]
+        spec.gantry.belt.pretension_n = b_pret
+        use_double_shear = (b_pret > 45.0) or (
+            spec.architecture == "corexy" and spec.gantry.drive_mode == "awd"
+        )
+        spec.gantry.double_shear_pulleys = use_double_shear
 
-    base_belt = baseline_spec.gantry.belt
-    if (
-        b_type != base_belt.type
-        or b_core != base_belt.core
-        or abs(b_pret - base_belt.pretension_n) > 1.0
-        or use_double_shear != baseline_spec.gantry.double_shear_pulleys
+        base_belt = baseline_spec.gantry.belt
+        if (
+            b_type != base_belt.type
+            or b_core != base_belt.core
+            or abs(b_pret - base_belt.pretension_n) > 1.0
+            or use_double_shear != baseline_spec.gantry.double_shear_pulleys
+        ):
+            ds_suffix = " (+double-shear)" if use_double_shear else ""
+            changes.append(f"Belt: {belt_label}{ds_suffix}")
+    elif (
+        spec.architecture == "corexy"
+        and spec.gantry.drive_mode == "awd"
+        and not spec.gantry.double_shear_pulleys
     ):
-        ds_suffix = " (+double-shear)" if use_double_shear else ""
-        changes.append(f"Belt: {belt_label}{ds_suffix}")
+        # Upgrading drive_mode to AWD automatically pairs with double-shear pulley support
+        spec.gantry.double_shear_pulleys = True
 
     # x[6]: Stepper + voltage/current
-    st_id, st_v, st_i = STEPPER_SETUPS[x[6]]
-    st_data = {
-        **STEPPER_CATALOG[st_id],
-        "supply_voltage_v": st_v,
-        "run_current_a": st_i,
-    }
-    spec.kinematics.xy_stepper = StepperSpec(**st_data)
-    base_st = baseline_spec.kinematics.xy_stepper
-    if (
-        st_id != base_st.preset_id
-        or abs(st_v - base_st.supply_voltage_v) > 1.0
-        or abs(st_i - base_st.run_current_a) > 0.05
-    ):
-        changes.append(f"XY Motors: {st_id} @ {st_v:.0f}V/{st_i:.1f}A")
+    if x[6] != base_vec[6]:
+        st_id, st_v, st_i = STEPPER_SETUPS[x[6]]
+        st_data = {
+            **STEPPER_CATALOG[st_id],
+            "supply_voltage_v": st_v,
+            "run_current_a": st_i,
+        }
+        spec.kinematics.xy_stepper = StepperSpec(**st_data)
+        base_st = baseline_spec.kinematics.xy_stepper
+        if (
+            st_id != base_st.preset_id
+            or abs(st_v - base_st.supply_voltage_v) > 1.0
+            or abs(st_i - base_st.run_current_a) > 0.05
+        ):
+            changes.append(f"XY Motors: {st_id} @ {st_v:.0f}V/{st_i:.1f}A")
 
-    # x[7]: Toolhead preset
-    th_id = TOOLHEAD_OPTIONS[x[7]]
-    th_preset = TOOLHEAD_PRESETS[th_id]
-    spec.toolhead.preset_id = th_preset["preset_id"]
-    spec.toolhead.name = th_preset["name"]
-    spec.toolhead.total_mass_g = float(th_preset["total_mass_g"])
-    spec.toolhead.cog_offset_mm = tuple(float(v) for v in th_preset["cog_offset_mm"])  # type: ignore[assignment]
-    spec.toolhead.nozzle_offset_mm = tuple(float(v) for v in th_preset["nozzle_offset_mm"])  # type: ignore[assignment]
+    # x[7]: Toolhead preset (copy full preset fields including construction, probe, envelope & mount)
+    if x[7] != base_vec[7]:
+        th_id = TOOLHEAD_OPTIONS[x[7]]
+        th_preset = TOOLHEAD_PRESETS[th_id]
+        spec.toolhead.preset_id = th_preset["preset_id"]
+        spec.toolhead.name = th_preset["name"]
+        spec.toolhead.total_mass_g = float(th_preset["total_mass_g"])
+        spec.toolhead.cog_offset_mm = tuple(float(v) for v in th_preset["cog_offset_mm"])  # type: ignore[assignment]
+        spec.toolhead.nozzle_offset_mm = tuple(float(v) for v in th_preset["nozzle_offset_mm"])  # type: ignore[assignment]
+        if "body_construction" in th_preset:
+            spec.toolhead.body_construction = th_preset["body_construction"]  # type: ignore[assignment]
+        if "z_probe_type" in th_preset:
+            spec.toolhead.z_probe_type = th_preset["z_probe_type"]  # type: ignore[assignment]
+        if "envelope_mm" in th_preset:
+            spec.toolhead.envelope_mm = tuple(float(v) for v in th_preset["envelope_mm"])  # type: ignore[assignment]
+        if "mount_material" in th_preset:
+            spec.toolhead.mount_material = th_preset["mount_material"]  # type: ignore[assignment]
+        if "internal_stiffness_n_per_mm" in th_preset:
+            spec.toolhead.internal_stiffness_n_per_mm = float(th_preset["internal_stiffness_n_per_mm"])
 
-    if (
-        th_id != baseline_spec.toolhead.preset_id
-        or abs(spec.toolhead.total_mass_g - baseline_spec.toolhead.total_mass_g) > 1.0
-    ):
-        changes.append(f"Toolhead: {th_id} ({spec.toolhead.total_mass_g:.0f}g)")
+        if (
+            th_id != baseline_spec.toolhead.preset_id
+            or abs(spec.toolhead.total_mass_g - baseline_spec.toolhead.total_mass_g) > 1.0
+        ):
+            changes.append(f"Toolhead: {th_id} ({spec.toolhead.total_mass_g:.0f}g)")
 
-    # x[8]: Hotend melt/power tier
-    melt_mm, heater_w = HOTEND_TIERS[x[8]]
-    spec.toolhead.hotend.melt_zone_length_mm = melt_mm
-    spec.toolhead.hotend.heater_power_w = heater_w
-    base_he = baseline_spec.toolhead.hotend
-    if (
-        abs(melt_mm - base_he.melt_zone_length_mm) > 0.5
-        or abs(heater_w - base_he.heater_power_w) > 1.0
-    ):
-        changes.append(f"Hotend: {melt_mm:.0f}mm melt / {heater_w:.0f}W")
+    # x[8]: Hotend catalog preset swap (couples melt zone, heater power, mass, stiffness, & cost)
+    if x[8] != base_vec[8]:
+        he_id = HOTEND_PRESET_OPTIONS[x[8]]
+        spec.toolhead.hotend.preset_id = he_id
+        if he_id != baseline_spec.toolhead.hotend.preset_id:
+            he_meta = HOTEND_CATALOG[he_id]
+            changes.append(
+                f"Hotend: {he_meta['short_name']} ({he_meta['melt_zone_length_mm']:.0f}mm / {he_meta['heater_power_w']:.0f}W)"
+            )
 
     # x[9]: Toolhead mount material & internal carriage-to-nozzle stiffness
-    th_mount = TOOLHEAD_MOUNT_OPTIONS[x[9]]
-    spec.toolhead.mount_material = th_mount  # type: ignore[assignment]
-    spec.toolhead.internal_stiffness_n_per_mm = TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM[th_mount]
-    if th_mount != baseline_spec.toolhead.mount_material:
-        changes.append(f"toolhead mount -> {th_mount}")
+    if x[9] != base_vec[9]:
+        th_mount = TOOLHEAD_MOUNT_OPTIONS[x[9]]
+        spec.toolhead.mount_material = th_mount  # type: ignore[assignment]
+        spec.toolhead.internal_stiffness_n_per_mm = TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM[th_mount]
+        if th_mount != baseline_spec.toolhead.mount_material:
+            changes.append(f"toolhead mount -> {th_mount}")
 
     # x[10]: Bed mount type
-    bed_mount = BED_MOUNT_OPTIONS[x[10]]
-    spec.bed.mount_type = bed_mount  # type: ignore[assignment]
-    if bed_mount != baseline_spec.bed.mount_type:
-        changes.append(f"bed mount -> {bed_mount}")
+    if x[10] != base_vec[10]:
+        bed_mount = BED_MOUNT_OPTIONS[x[10]]
+        spec.bed.mount_type = bed_mount  # type: ignore[assignment]
+        if bed_mount != baseline_spec.bed.mount_type:
+            changes.append(f"bed mount -> {bed_mount}")
 
     # x[11]: Gantry bracket material
-    bracket_mat = BRACKET_OPTIONS[x[11]]
-    spec.gantry.bracket_material = bracket_mat  # type: ignore[assignment]
-    if bracket_mat != baseline_spec.gantry.bracket_material:
-        changes.append(f"brackets -> {bracket_mat}")
+    if x[11] != base_vec[11]:
+        bracket_mat = BRACKET_OPTIONS[x[11]]
+        spec.gantry.bracket_material = bracket_mat  # type: ignore[assignment]
+        if bracket_mat != baseline_spec.gantry.bracket_material:
+            changes.append(f"brackets -> {bracket_mat}")
 
     if not changes:
         changes.append("Baseline (unchanged)")
@@ -526,7 +595,7 @@ def _decode_candidate(
 class _EvaluatedCandidate:
     point: ParetoPoint
     f: tuple[float, float, float]  # (cost, -safe_accel, deflection)
-    g: tuple[float, float, float]  # (collision, overtension, shaft_bending)
+    g: tuple[float, float, float, float, float]  # (collision, overtension, shaft_bending, step_skip, belt_slip)
     feasible: bool
 
 
@@ -543,19 +612,49 @@ def _evaluate_spec_candidate(
         panel_mesh_n=2,
         include_advanced_analysis=False,
     )
-    bom: PrinterBOM = generate_bom(report.assembly)
+    if report.bom_total_cost_usd is not None and report.bom_total_mass_kg is not None:
+        cost = float(report.bom_total_cost_usd)
+        bom_mass_kg = float(report.bom_total_mass_kg)
+    else:
+        bom: PrinterBOM = generate_bom(report.assembly)
+        cost = float(bom.total_cost_usd)
+        bom_mass_kg = float(bom.total_mass_kg)
 
+    # Consistent 3-way 1.0x achievable acceleration ceiling: min(shaper, motor, belt)
     safe_accel = min(
         float(report.modal_fea.recommended_max_accel_mm_s2),
-        float(report.kinematics.max_safe_accel_motor_mm_s2) * 1.25,
+        float(report.kinematics.motor_max_accel_mm_s2),
+        float(report.kinematics.belt_max_accel_mm_s2),
     )
-    cost = float(bom.total_cost_usd)
-    defl = float(report.static_fea.combined_max_deflection_um)
+
+    # Evaluate kinematic constraints at the advertised safe_accel (not baseline max_accel_mm_s2).
+    # Use a tiny 1e-9 interior tolerance so candidates exactly on the motor/belt boundary do not
+    # trip due to 1-ULP floating-point rounding.
+    eval_accel = max(safe_accel * (1.0 - 1e-9), 1.0)
+    spec_at_safe = spec.model_copy(
+        update={
+            "kinematics": spec.kinematics.model_copy(
+                update={"max_accel_mm_s2": eval_accel}
+            )
+        }
+    )
+    kin_at_safe = analyze_kinematics(replace(report.assembly, spec=spec_at_safe))
+
+    # Inertial-only dynamic nozzle deflection normalized to fixed 10,000 mm/s^2 reference accel:
+    # excludes static gravity sag (C-01) and decouples from candidate safe_accel (A-10).
+    raw_inertial_defl = max(
+        float(report.static_fea.accel_deflection_x_um),
+        float(report.static_fea.accel_deflection_y_um),
+    )
+    spec_accel = max(float(spec.kinematics.max_accel_mm_s2), 1.0)
+    defl = raw_inertial_defl * (_PARETO_REF_ACCEL_MM_S2 / spec_accel)
 
     g1 = 1.0 if report.collision.has_collision else -1.0
-    g2 = 1.0 if report.kinematics.belt_overtension_risk else -1.0
-    g3 = 1.0 if report.kinematics.shaft_bending_risk else -1.0
-    feasible = (g1 <= 0.0) and (g2 <= 0.0) and (g3 <= 0.0)
+    g2 = 1.0 if kin_at_safe.belt_overtension_risk else -1.0
+    g3 = 1.0 if kin_at_safe.shaft_bending_risk else -1.0
+    g4 = 1.0 if kin_at_safe.step_skip_risk else -1.0
+    g5 = 1.0 if kin_at_safe.belt_slip_risk else -1.0
+    feasible = (g1 <= 0.0) and (g2 <= 0.0) and (g3 <= 0.0) and (g4 <= 0.0) and (g5 <= 0.0)
 
     primary_subsystem: str | None = None
     if report.sensitivity is not None:
@@ -580,7 +679,7 @@ def _evaluate_spec_candidate(
         nozzle_deflection_um=defl,
         fundamental_freq_hz=float(report.modal_fea.fundamental_freq_hz),
         max_flow_mm3_s=float(report.thermal.max_volumetric_flow_mm3_s),
-        total_mass_kg=float(bom.total_mass_kg),
+        total_mass_kg=bom_mass_kg,
         composite_score=float(report.scores.composite),
         spec=spec,
         primary_problem_subsystem=primary_subsystem,
@@ -588,7 +687,7 @@ def _evaluate_spec_candidate(
     return _EvaluatedCandidate(
         point=point,
         f=(cost, -safe_accel, defl),
-        g=(g1, g2, g3),
+        g=(g1, g2, g3, g4, g5),
         feasible=feasible,
     )
 
@@ -981,7 +1080,7 @@ def optimize_pareto_front(
                 super().__init__(
                     n_var=_N_VARS,
                     n_obj=3,
-                    n_ieq_constr=3,
+                    n_ieq_constr=5,
                     xl=_XL,
                     xu=_XU,
                     vtype=int,

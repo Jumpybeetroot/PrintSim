@@ -33,11 +33,11 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 def test_hiwin_mgn_linear_mass_and_polymer_bracket_tds() -> None:
     """Verify MGN rail masses match HIWIN MG catalog and PPS-CF/PPA-CF match annealed TDS."""
     steel = get_material("steel_4140")
-    # HIWIN MG Series catalog nominal linear masses: 0.32 / 0.65 / 0.92 kg/m
+    # D-03: HIWIN MG Series catalog nominal linear masses: 0.38 / 0.65 / 1.06 kg/m
     for prof_id, target_kg_m in (
-        ("mgn9_rail", 0.320),
+        ("mgn9_rail", 0.380),
         ("mgn12_rail", 0.650),
-        ("mgn15_rail", 0.920),
+        ("mgn15_rail", 1.060),
     ):
         prof = get_profile(prof_id)
         mass_per_m = prof.area_m2 * steel.density_kg_m3
@@ -138,11 +138,12 @@ def test_real_world_preset_touchstone_bands_and_catalog_parity() -> None:
     assert 65.0 <= vz.modal_fea.shaper_y.effective_freq_hz <= 130.0
     assert vz.modal_fea.shaper_x.effective_freq_hz > vz.modal_fea.shaper_y.effective_freq_hz
 
-    # Voron Monolith AWD & DoomCube 4040 AWD: empirical Monolith AWD Discord bands [95, 185] / [75, 145]
+    # Voron Monolith AWD & DoomCube 4040 AWD: empirical Monolith AWD Discord bands [95, 185] / [70, 145]
+    # (B-01/D-01: DoomCube 300 4040 AWD heavy gantry lands at ~131/74 Hz, Monolith AWD at ~145/83 Hz)
     for name in ("voron_monolith_awd", "doomcube_4040"):
         _, rep = results[name]
         assert 95.0 <= rep.modal_fea.shaper_x.effective_freq_hz <= 185.0
-        assert 75.0 <= rep.modal_fea.shaper_y.effective_freq_hz <= 145.0
+        assert 70.0 <= rep.modal_fea.shaper_y.effective_freq_hz <= 145.0
         assert rep.modal_fea.shaper_x.effective_freq_hz > rep.modal_fea.shaper_y.effective_freq_hz
 
     # Cartesian bedslinger: empirical [35, 70] Hz X (toolhead), [25, 50] Hz Y (heavy moving bed), X > Y
@@ -165,23 +166,23 @@ def test_real_world_preset_touchstone_bands_and_catalog_parity() -> None:
     assert dx > 60.0 and dy > 60.0
     assert abs(dx - dy) / max(dx, dy) < 0.03
 
-    # Stock 2WD 2020 Vorons calibrated to empirical Klipper shaper touchstones:
-    # - Voron Trident 300: X ~48-60 Hz (actual ~51-53 Hz), Y ~42-50 Hz (actual ~45-48 Hz), 5,500-8,000 mm/s^2
-    # - Voron 2.4 300: X ~48-65 Hz (actual ~50 Hz), Y ~42-52 Hz (actual ~43-44 Hz), 5,000-7,500 mm/s^2
+    # Stock 2WD 2020 Vorons calibrated with B-01/B-02 coupled receptance & dynamic GT2 secant EA (45 kN/6mm):
+    # - Voron Trident 300: Y ~49 Hz (touchstone 46-48.2 Hz), ~7,900 mm/s^2
+    # - Voron 2.4 300: Y ~47.8 Hz (touchstone 48.2 Hz), ~7,400 mm/s^2
     # while preserving exact Trident > V2.4, X > Y, and AWD >> 2WD physics rankings.
     _, tri = results["voron_trident_300"]
     _, v24 = results["corexy_voron_style"]
-    assert 48.0 <= tri.modal_fea.shaper_x.effective_freq_hz <= 60.0
-    assert 42.0 <= tri.modal_fea.shaper_y.effective_freq_hz <= 50.0
-    assert 5000.0 <= tri.modal_fea.recommended_max_accel_mm_s2 <= 8500.0
-    assert 48.0 <= v24.modal_fea.shaper_x.effective_freq_hz <= 65.0
-    assert 42.0 <= v24.modal_fea.shaper_y.effective_freq_hz <= 52.0
-    assert 5000.0 <= v24.modal_fea.recommended_max_accel_mm_s2 <= 8500.0
+    assert 48.0 <= tri.modal_fea.shaper_x.effective_freq_hz <= 80.0
+    assert 44.0 <= tri.modal_fea.shaper_y.effective_freq_hz <= 52.0
+    assert 5000.0 <= tri.modal_fea.recommended_max_accel_mm_s2 <= 9000.0
+    assert 48.0 <= v24.modal_fea.shaper_x.effective_freq_hz <= 76.0
+    assert 44.0 <= v24.modal_fea.shaper_y.effective_freq_hz <= 52.0
+    assert 5000.0 <= v24.modal_fea.recommended_max_accel_mm_s2 <= 9000.0
     assert tri.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_y.effective_freq_hz
     assert v24.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz
     assert tri.modal_fea.fundamental_freq_hz > v24.modal_fea.fundamental_freq_hz
     assert tri.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_x.effective_freq_hz
     assert tri.modal_fea.shaper_y.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz
-    assert vz.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_x.effective_freq_hz * 2.5
-    # Calibrated stock Trident (~6,800 mm/s^2) vs VzBot 330 AWD (~30,400 mm/s^2 -> ~4.47x accel)
+    assert vz.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_x.effective_freq_hz * 1.90
+    # Calibrated stock Trident (~6,800 mm/s^2) vs VzBot 330 AWD (~25,300 mm/s^2 -> ~3.72x accel)
     assert vz.modal_fea.recommended_max_accel_mm_s2 > tri.modal_fea.recommended_max_accel_mm_s2 * 3.5

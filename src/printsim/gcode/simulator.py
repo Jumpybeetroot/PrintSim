@@ -7,12 +7,25 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from printsim.fea.klipper_shaper import (
+    DEFAULT_SHAPER_DAMPING_RATIO,
+    DEFAULT_TARGET_SMOOTHING,
+    estimate_shaper,
+    get_flatness_toolhead_bell,
+    get_shaper_pulses,
+    get_shaper_smoothing,
+)
 from printsim.fea.modal import ModalResult
 from printsim.gcode.parser import GCodeMove, parse_gcode
 from printsim.geometry.builder import AssemblyModel
 from printsim.kinematics.collision import check_trajectory_bounds
 from printsim.kinematics.solvers import KinematicsReport
+from printsim.thermal.filaments import FILAMENT_CATALOG, get_filament
 from printsim.thermal.hotend import HotendThermalReport
+
+RINGING_VISIBLE_AMPLITUDE_UM: float = 15.0  # Physical onset of visible ghosting (~15-20 um)
+RINGING_SEVERE_AMPLITUDE_UM: float = 50.0  # Severe ringing reference scale (severity = 1.0)
+CORNER_SMOOTHING_LIMIT_UM: float = DEFAULT_TARGET_SMOOTHING * 1e3  # 120 um Klipper smoothing limit
 
 
 @dataclass
@@ -25,8 +38,10 @@ class ToolpathSegmentResult:
     duration_s: float
     peak_speed_mm_s: float
     volumetric_flow_mm3_s: float
-    ringing_severity: float  # 0..1+
-    defect: str  # "ok", "travel", "ringing", "underextrusion", "step_skip", "cooling"
+    ringing_severity: float  # physical amplitude / RINGING_SEVERE_AMPLITUDE_UM
+    defect: str  # "ok", "travel", "ringing", "smoothing", "underextrusion", "step_skip", "belt_slip", "cooling"
+    ringing_amplitude_um: float = 0.0
+    corner_smoothing_um: float = 0.0
 
 
 @dataclass
@@ -48,6 +63,10 @@ class VirtualPrintReport:
     out_of_bounds_issues: list[str]
     print_quality_score: float  # 0..100
     segments: list[ToolpathSegmentResult] = field(default_factory=list)
+    max_ringing_amplitude_um: float = 0.0
+    max_corner_smoothing_um: float = 0.0
+    smoothing_segments: int = 0
+    belt_slip_segments: int = 0
 
     def to_dict(self, max_segments: int = 1500) -> dict:
         # Downsample very large G-code toolpaths for responsive JSON API responses
@@ -69,9 +88,13 @@ class VirtualPrintReport:
             "peak_print_speed_mm_s": round(self.peak_print_speed_mm_s, 1),
             "peak_volumetric_flow_mm3_s": round(self.peak_volumetric_flow_mm3_s, 2),
             "max_ringing_severity": round(self.max_ringing_severity, 3),
+            "max_ringing_amplitude_um": round(self.max_ringing_amplitude_um, 2),
+            "max_corner_smoothing_um": round(self.max_corner_smoothing_um, 2),
             "underextrusion_segments": self.underextrusion_segments,
             "ringing_segments": self.ringing_segments,
+            "smoothing_segments": self.smoothing_segments,
             "step_skip_segments": self.step_skip_segments,
+            "belt_slip_segments": self.belt_slip_segments,
             "cooling_warning_layers": self.cooling_warning_layers,
             "out_of_bounds_issues": self.out_of_bounds_issues,
             "print_quality_score": round(self.print_quality_score, 1),
@@ -85,6 +108,8 @@ class VirtualPrintReport:
                     "peak_speed_mm_s": round(s.peak_speed_mm_s, 1),
                     "volumetric_flow_mm3_s": round(s.volumetric_flow_mm3_s, 2),
                     "ringing_severity": round(s.ringing_severity, 3),
+                    "ringing_amplitude_um": round(s.ringing_amplitude_um, 2),
+                    "corner_smoothing_um": round(s.corner_smoothing_um, 2),
                     "defect": s.defect,
                 }
                 for s in segs
@@ -154,6 +179,43 @@ def _klipper_junction_speed_mm_s(
     return min(v_prev, v_next, math.sqrt(max(v_j_sq, 0.0)))
 
 
+def _resolve_axis_shaper_response(
+    axis_rec: object | None,
+    axis_graph: object | None,
+    shaper_choice: str,
+    fallback_freq_hz: float,
+    fallback_zeta: float,
+) -> tuple[float, float, float, tuple[np.ndarray, np.ndarray] | None]:
+    """Return `(f_n_hz, zeta, V_shaper(f_n, zeta), smoothing_shaper)` for one XY axis."""
+    eff_f = getattr(axis_rec, "effective_freq_hz", 0.0) if axis_rec is not None else 0.0
+    f_n = float(eff_f) if eff_f and eff_f > 0.0 else max(float(fallback_freq_hz), 5.0)
+
+    graph_zeta = getattr(axis_graph, "damping_ratio", 0.0) if axis_graph is not None else 0.0
+    zeta_raw = float(graph_zeta) if graph_zeta and graph_zeta > 0.0 else float(fallback_zeta)
+    zeta = min(0.25, max(0.02, zeta_raw))
+
+    choice_norm = shaper_choice.strip().upper()
+    rec_shaper = getattr(axis_rec, "recommended_shaper", "") if axis_rec is not None else ""
+    if choice_norm == "NONE":
+        sh_name = "NONE"
+    elif rec_shaper:
+        sh_name = str(rec_shaper).strip().upper()
+    elif choice_norm == "AUTO":
+        sh_name = "MZV"
+    else:
+        sh_name = choice_norm
+
+    if sh_name == "NONE":
+        return f_n, zeta, 1.0, None
+
+    rec_freq = getattr(axis_graph, "recommended_freq_hz", 0.0) if axis_graph is not None else 0.0
+    sh_freq = float(rec_freq) if rec_freq and rec_freq > 0.0 else f_n
+    sh_pulses = get_shaper_pulses(sh_name, sh_freq, damping_ratio=DEFAULT_SHAPER_DAMPING_RATIO)
+    v_shaper = float(estimate_shaper(sh_pulses, [f_n], test_damping_ratio=zeta)[0])
+    smooth_shaper = get_flatness_toolhead_bell(sh_freq) if sh_name == "SMOOTH_FLATNESS" else sh_pulses
+    return f_n, zeta, v_shaper, smooth_shaper
+
+
 def simulate_gcode(
     gcode_text: str,
     assembly: AssemblyModel,
@@ -182,6 +244,10 @@ def simulate_gcode(
             out_of_bounds_issues=[],
             print_quality_score=100.0,
             segments=[],
+            max_ringing_amplitude_um=0.0,
+            max_corner_smoothing_um=0.0,
+            smoothing_segments=0,
+            belt_slip_segments=0,
         )
 
     spec = assembly.spec
@@ -205,18 +271,26 @@ def simulate_gcode(
         lengths[i] = dist
         if dist > 1e-6:
             dirs[i] = d_vec / dist
-        # Clamp requested feedrate to machine max velocity (Z-only moves clamped to max_z_vel)
-        is_z_only = abs(dirs[i, 2]) > 0.9
-        v_cap = kin.max_z_velocity_mm_s if is_z_only else kin.max_velocity_mm_s
-        v_targets[i] = min(m.feedrate_mm_s, v_cap)
-        a_base = m.accel_override_mm_s2 if m.accel_override_mm_s2 else kin.max_accel_mm_s2
-        accels[i] = min(a_base, kin.max_z_accel_mm_s2 if is_z_only else kin.max_accel_mm_s2)
+            # Clamp requested feedrate to machine max velocity (Z-only moves clamped to max_z_vel)
+            is_z_only = abs(dirs[i, 2]) > 0.9
+            v_cap = kin.max_z_velocity_mm_s if is_z_only else kin.max_velocity_mm_s
+            v_targets[i] = min(m.feedrate_mm_s, v_cap)
+            a_base = m.accel_override_mm_s2 if m.accel_override_mm_s2 else kin.max_accel_mm_s2
+            accels[i] = min(a_base, kin.max_z_accel_mm_s2 if is_z_only else kin.max_accel_mm_s2)
+        else:
+            # Zero-length E-only move (retract / unretract) stops XY motion at both ends
+            v_targets[i] = 0.0
+            accels[i] = kin.max_accel_mm_s2
 
     # Junction speed calculation between consecutive moves
     scv = kin.square_corner_velocity_mm_s
     junction_v = np.zeros(n + 1, dtype=float)
     corner_angles_deg = np.zeros(n, dtype=float)
     for i in range(1, n):
+        if lengths[i - 1] <= 1e-6 or lengths[i] <= 1e-6:
+            corner_angles_deg[i] = 0.0
+            junction_v[i] = 0.0
+            continue
         cos_turn = float(np.clip(np.dot(dirs[i - 1], dirs[i]), -1.0, 1.0))
         corner_angles_deg[i] = math.degrees(math.acos(cos_turn))
         junction_v[i] = _klipper_junction_speed_mm_s(
@@ -232,16 +306,48 @@ def simulate_gcode(
 
     # Backward + forward lookahead pass so segments can decelerate/accelerate smoothly
     for i in range(n - 1, 0, -1):
+        if lengths[i] <= 1e-6:
+            junction_v[i] = 0.0
+            junction_v[i + 1] = 0.0
+            continue
         v_max_entry = math.sqrt(junction_v[i + 1] ** 2 + 2.0 * accels[i] * lengths[i])
         junction_v[i] = min(junction_v[i], v_max_entry)
     for i in range(n):
+        if lengths[i] <= 1e-6:
+            junction_v[i] = 0.0
+            junction_v[i + 1] = 0.0
+            continue
         v_max_exit = math.sqrt(junction_v[i] ** 2 + 2.0 * accels[i] * lengths[i])
         junction_v[i + 1] = min(junction_v[i + 1], v_max_exit)
 
-    # Effective ringing thresholds from modal FEA
-    rec_accel_x = modal.shaper_x.max_accel_mm_s2 if modal.shaper_x else 4000.0
-    rec_accel_y = modal.shaper_y.max_accel_mm_s2 if modal.shaper_y else 4000.0
+    # Precompute segment durations and actual peak velocities before junction impulse evaluation
+    durations = np.zeros(n, dtype=float)
+    v_peaks = np.zeros(n, dtype=float)
+    for i, m in enumerate(moves):
+        if lengths[i] <= 1e-6:
+            durations[i] = (
+                abs(m.extrude_mm) / max(m.feedrate_mm_s, 1e-6)
+                if abs(m.extrude_mm) > 1e-6
+                else 0.0
+            )
+            v_peaks[i] = 0.0
+        else:
+            durations[i], v_peaks[i] = _trapezoidal_segment_time(
+                lengths[i], junction_v[i], v_targets[i], junction_v[i + 1], accels[i]
+            )
+
+    # Physical modal & input-shaper response per axis for junction ringing + corner smoothing
+    fallback_f = max(float(modal.fundamental_freq_hz), 5.0)
+    fallback_zeta = max(float(modal.frame_damping_ratio), 0.02)
+    f_nx, _, v_sh_x, smooth_sh_x = _resolve_axis_shaper_response(
+        modal.shaper_x, modal.shaper_graph_x, kin.input_shaper, fallback_f, fallback_zeta
+    )
+    f_ny, _, v_sh_y, smooth_sh_y = _resolve_axis_shaper_response(
+        modal.shaper_y, modal.shaper_graph_y, kin.input_shaper, fallback_f, fallback_zeta
+    )
+
     max_motor_accel = kinematics.max_safe_accel_motor_mm_s2
+    belt_max_accel = kinematics.belt_max_accel_mm_s2
     max_flow = thermal.max_volumetric_flow_mm3_s
 
     segments: list[ToolpathSegmentResult] = []
@@ -252,52 +358,101 @@ def simulate_gcode(
     peak_speed = 0.0
     peak_flow = 0.0
     max_ringing = 0.0
+    max_ringing_um = 0.0
+    max_smoothing_um = 0.0
     underext_count = 0
     ringing_count = 0
+    smoothing_count = 0
     step_skip_count = 0
+    belt_slip_count = 0
+    motion_fault_count = 0
     layer_times: dict[int, float] = {}
 
     for i, m in enumerate(moves):
-        dt, v_peak = _trapezoidal_segment_time(
-            lengths[i], junction_v[i], v_targets[i], junction_v[i + 1], accels[i]
-        )
+        dt = float(durations[i])
+        v_peak = float(v_peaks[i])
         total_time += dt
         layer_times[m.layer_index] = layer_times.get(m.layer_index, 0.0) + dt
 
-        # Volumetric flow (mm^3/s)
-        vol_flow = (m.extrude_mm * fil_area) / max(dt, 1e-4) if m.is_extrusion else 0.0
+        # Volumetric flow (mm^3/s) & junction ringing / smoothing (skip zero-length E-only moves)
+        is_xy_ext = m.is_extrusion and lengths[i] > 1e-6
+        vol_flow = (m.extrude_mm * fil_area) / max(dt, 1e-4) if is_xy_ext else 0.0
 
-        # Directional ringing impulse after corners
+        amp_um = 0.0
         ringing_sev = 0.0
-        if m.is_extrusion:
+        corner_smooth_um = 0.0
+        if is_xy_ext:
             ext_dist += lengths[i]
             ext_time += dt
             total_fil_mm += m.extrude_mm
             peak_speed = max(peak_speed, v_peak)
             peak_flow = max(peak_flow, vol_flow)
 
-            # Directional allowable accel along this move
-            ax_weight = abs(dirs[i, 0])
-            ay_weight = abs(dirs[i, 1])
-            denom = max(ax_weight + ay_weight, 1e-6)
-            allow_a = (ax_weight * rec_accel_x + ay_weight * rec_accel_y) / denom
-            corner_factor = min(1.0, corner_angles_deg[i] / 75.0)
-            # Short moves after sharp corners show strongest ghosting
-            ringing_sev = max(0.0, (accels[i] / max(allow_a, 200.0) - 0.85)) * (0.45 + 0.55 * corner_factor)
-            max_ringing = max(max_ringing, ringing_sev)
+            v_in_xy = (
+                v_peaks[i - 1] * dirs[i - 1, :2]
+                if i > 0 and lengths[i - 1] > 1e-6
+                else np.zeros(2, dtype=float)
+            )
+            v_out_xy = v_peak * dirs[i, :2]
+            dv_xy = v_out_xy - v_in_xy
+            dv_mm_s = float(np.linalg.norm(dv_xy))
+
+            if dv_mm_s > 1e-6:
+                wx = abs(float(dv_xy[0]))
+                wy = abs(float(dv_xy[1]))
+                if wx + wy <= 1e-9:
+                    wx = abs(float(dirs[i, 0]))
+                    wy = abs(float(dirs[i, 1]))
+                w_sum = max(wx + wy, 1e-9)
+                f_n = (wx * f_nx + wy * f_ny) / w_sum
+                v_shaper = (wx * v_sh_x + wy * v_sh_y) / w_sum
+                omega_n = 2.0 * math.pi * f_n
+                dv_m_s = dv_mm_s * 1e-3
+                a_m_s2 = float(accels[i]) * 1e-3
+                amp_um = min(dv_m_s / omega_n, a_m_s2 / (omega_n * omega_n)) * v_shaper * 1e6
+                ringing_sev = amp_um / RINGING_SEVERE_AMPLITUDE_UM
+                max_ringing_um = max(max_ringing_um, amp_um)
+                max_ringing = max(max_ringing, ringing_sev)
+
+                if corner_angles_deg[i] >= 15.0:
+                    sm_x_um = (
+                        get_shaper_smoothing(smooth_sh_x, accel=float(accels[i]), scv=scv) * 1e3
+                        if smooth_sh_x is not None
+                        else 0.0
+                    )
+                    sm_y_um = (
+                        get_shaper_smoothing(smooth_sh_y, accel=float(accels[i]), scv=scv) * 1e3
+                        if smooth_sh_y is not None
+                        else 0.0
+                    )
+                    corner_smooth_um = (wx * sm_x_um + wy * sm_y_um) / w_sum
+                    max_smoothing_um = max(max_smoothing_um, corner_smooth_um)
 
         # Classify primary defect for segment heatmap
-        defect = "travel" if not m.is_extrusion else "ok"
-        if m.is_extrusion:
-            if accels[i] > max_motor_accel * 1.15:
-                defect = "step_skip"
+        defect = "travel" if not is_xy_ext else "ok"
+        if is_xy_ext:
+            exceeds_motor = max_motor_accel > 0.0 and accels[i] > max_motor_accel * 1.15
+            exceeds_belt = (belt_max_accel > 0.0 or kinematics.belt_slip_risk) and accels[i] > belt_max_accel
+            if exceeds_motor:
                 step_skip_count += 1
+            if exceeds_belt:
+                belt_slip_count += 1
+            if exceeds_motor or exceeds_belt:
+                motion_fault_count += 1
+
+            if exceeds_motor:
+                defect = "step_skip"
+            elif exceeds_belt:
+                defect = "belt_slip"
             elif vol_flow > max_flow * 1.03:
                 defect = "underextrusion"
                 underext_count += 1
-            elif ringing_sev > 0.35:
+            elif amp_um >= RINGING_VISIBLE_AMPLITUDE_UM:
                 defect = "ringing"
                 ringing_count += 1
+            elif corner_smooth_um > CORNER_SMOOTHING_LIMIT_UM:
+                defect = "smoothing"
+                smoothing_count += 1
 
         segments.append(
             ToolpathSegmentResult(
@@ -311,6 +466,8 @@ def simulate_gcode(
                 volumetric_flow_mm3_s=vol_flow,
                 ringing_severity=ringing_sev,
                 defect=defect,
+                ringing_amplitude_um=amp_um,
+                corner_smoothing_um=corner_smooth_um,
             )
         )
 
@@ -321,22 +478,26 @@ def simulate_gcode(
     n_ext = max(1, sum(1 for m in moves if m.is_extrusion))
     underext_frac = underext_count / n_ext
     ringing_frac = ringing_count / n_ext
-    skip_frac = step_skip_count / n_ext
+    smooth_frac = smoothing_count / n_ext
+    motion_fault_frac = motion_fault_count / n_ext
     cool_frac = cooling_warn_layers / max(1, len(layer_times))
 
     # Composite virtual print quality score (0..100)
     penalty = (
-        65.0 * skip_frac
+        65.0 * motion_fault_frac
         + 45.0 * underext_frac
         + 30.0 * ringing_frac
+        + 12.0 * smooth_frac
         + 15.0 * cool_frac
         + (25.0 if oob_issues else 0.0)
         + (20.0 if thermal.heat_creep_risk else 0.0)
     )
     quality = max(0.0, min(100.0, 100.0 - penalty))
 
-    # Filament mass (PLA 1.24 g/cm^3)
-    fil_g = (total_fil_mm * fil_area * 1e-3) * 1.24
+    # Filament mass using selected filament density from FILAMENT_CATALOG
+    fil_spec = FILAMENT_CATALOG.get(thermal.filament_id) or get_filament("pla")
+    fil_density_g_cm3 = fil_spec.density_kg_m3 * 1e-3
+    fil_g = (total_fil_mm * fil_area * 1e-3) * fil_density_g_cm3
 
     return VirtualPrintReport(
         total_time_s=total_time,
@@ -356,4 +517,8 @@ def simulate_gcode(
         out_of_bounds_issues=oob_issues,
         print_quality_score=quality,
         segments=segments,
+        max_ringing_amplitude_um=max_ringing_um,
+        max_corner_smoothing_um=max_smoothing_um,
+        smoothing_segments=smoothing_count,
+        belt_slip_segments=belt_slip_count,
     )

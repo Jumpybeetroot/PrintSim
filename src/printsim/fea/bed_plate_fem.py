@@ -11,10 +11,10 @@ from scipy.linalg import cho_factor, cho_solve, eigh, solve
 from printsim.fea.components import compute_bed_thermal_bow_and_taco_um
 from printsim.fea.shell_mitc4 import mitc4_shell_matrices
 from printsim.schema import (
-    BED_MOUNT_CATALOG,
-    Z_DRIVE_MECHANISM_CATALOG,
     PrinterSpec,
     get_material,
+    resolve_bed_mount,
+    resolve_z_drive_mechanism,
 )
 
 _PROBE_FORCE_N = 2.0
@@ -44,6 +44,9 @@ class BedPlateFEAResult:
     z_total_um: list[float]
     mode1_shape_z: list[float]
     gravity_sag_um: float
+    mount_settlement_um: float
+    rigid_tilt_um: float
+    plate_flatness_um: float
     thermal_peak_to_valley_um: float
     taco_buckling_um: float
     total_flatness_error_um: float
@@ -70,6 +73,9 @@ class BedPlateFEAResult:
             "z_total_um": [round(float(v), 2) for v in self.z_total_um],
             "mode1_shape_z": [round(float(v), 4) for v in self.mode1_shape_z],
             "gravity_sag_um": round(float(self.gravity_sag_um), 2),
+            "mount_settlement_um": round(float(self.mount_settlement_um), 2),
+            "rigid_tilt_um": round(float(self.rigid_tilt_um), 2),
+            "plate_flatness_um": round(float(self.plate_flatness_um), 2),
             "thermal_peak_to_valley_um": round(float(self.thermal_peak_to_valley_um), 2),
             "taco_buckling_um": round(float(self.taco_buckling_um), 2),
             "total_flatness_error_um": round(float(self.total_flatness_error_um), 2),
@@ -93,8 +99,7 @@ def _compute_carrier_z_stiffness(spec: PrinterSpec) -> float:
     if arch == "cartesian_bedslinger":
         return 2.5e6
 
-    mech_id = spec.bed.effective_z_leadscrew_type
-    z_mech = Z_DRIVE_MECHANISM_CATALOG.get(mech_id, Z_DRIVE_MECHANISM_CATALOG["tr8x4_pom"])
+    z_mech = resolve_z_drive_mechanism(spec)
     if z_drive == "belted_quad_z" and str(z_mech["kind"]) == "belt":
         # Flying-gantry CoreXY bed bolts directly to 4x 2020 base extrusions (belts lift gantry).
         return 2.0e7
@@ -142,7 +147,7 @@ def _resolve_mount_layout(
     elif arch == "corexy" and z_drive == "leadscrew_dual":
         target_pts = [(-0.5, 0.0), (0.5, 0.0)]
     elif (
-        mount_type in ("kinematic_3pt", "whopping_pochard_kinematic", "trident_3pt_standoffs")
+        int(resolve_bed_mount(spec)["mount_points"]) == 3
         or arch == "delta"
     ):
         target_pts = [
@@ -184,6 +189,8 @@ def _anchor_inplane_stiffness_2x2(
     k_xy_each: float,
     radial_mode: str,
     is_bracket_line: bool,
+    rear_center_idx: int | None = None,
+    first_front_idx: int | None = None,
 ) -> np.ndarray:
     """Build exact 2x2 rotated in-plane anchor stiffness K_xy = k_r r r^T + k_t t t^T (N/m)."""
     px = rx * lx_m
@@ -191,6 +198,7 @@ def _anchor_inplane_stiffness_2x2(
     rnorm = math.hypot(px, py)
     directional_modes = (
         "maxwell_vgroove",
+        "kelvin_cone_vee_flat",
         "radial_flexure",
         "slotted_1fixed_3float",
         "slotted_3pt_bakelite",
@@ -200,16 +208,29 @@ def _anchor_inplane_stiffness_2x2(
 
     r_hat = np.array([px / rnorm, py / rnorm], dtype=float)
     t_hat = np.array([-r_hat[1], r_hat[0]], dtype=float)
+    if rear_center_idx is not None:
+        is_rear_center = idx == rear_center_idx
+    elif n_anc == 3:
+        is_rear_center = (idx == n_anc - 1) or (ry > 0.0 and abs(rx) < 0.25)
+    else:
+        is_rear_center = idx == n_anc - 1
+    vee_idx = first_front_idx if first_front_idx is not None else 0
+
     if radial_mode == "maxwell_vgroove":
         k_r, k_t = 500.0, k_xy_each
+    elif radial_mode == "kelvin_cone_vee_flat":
+        # Exact 6-DOF Kelvin constraint: rear-center cone pinned in X/Y, one front anchor V-groove, other flat.
+        if is_rear_center:
+            k_r, k_t = k_xy_each, k_xy_each
+        elif idx == vee_idx:
+            k_r, k_t = 500.0, k_xy_each
+        else:
+            k_r, k_t = 500.0, 500.0
     elif radial_mode == "radial_flexure":
         k_r, k_t = 5000.0, k_xy_each
     elif radial_mode == "slotted_1fixed_3float":
         k_r, k_t = (k_xy_each, k_xy_each) if idx == 0 else (0.08 * k_xy_each, k_xy_each)
     else:  # slotted_3pt_bakelite: rear-center anchor pinned, front two slotted
-        is_rear_center = (n_anc == 3 and abs(rx) < 1e-6 and ry > 0.0) or (
-            n_anc != 3 and idx == n_anc - 1
-        )
         k_r, k_t = (k_xy_each, k_xy_each) if is_rear_center else (0.15 * k_xy_each, k_xy_each)
 
     return k_r * np.outer(r_hat, r_hat) + k_t * np.outer(t_hat, t_hat)
@@ -226,7 +247,7 @@ def _apply_mount_springs(
     ly_m: float | None = None,
 ) -> None:
     """Add grounded directional/rotational mount & Z-carrier springs to global K (in-place)."""
-    cfg = BED_MOUNT_CATALOG.get(spec.bed.mount_type, BED_MOUNT_CATALOG["kinematic_3pt"])
+    cfg = resolve_bed_mount(spec)
     radial_mode = str(cfg.get("radial_dof_mode", "maxwell_vgroove"))
     temp_soft = (
         max(0.75, 1.0 - 0.004 * max(0.0, float(spec.bed.target_temp_c) - 70.0))
@@ -266,6 +287,16 @@ def _apply_mount_springs(
     )
     k_clamp_local = _RIGID_FLANGE_CLAMP_NM_RAD if radial_mode == "rigid_all" else 0.0
 
+    rear_center_idx: int | None = None
+    first_front_idx: int | None = None
+    if n_anc == 3 and len(rel_pts) == 3:
+        rear_center_idx = min(
+            range(len(rel_pts)),
+            key=lambda k: (rel_pts[k][0] ** 2) + ((rel_pts[k][1] - _MOUNT_INSET_REL) ** 2),
+        )
+        front_indices = [k for k in range(len(rel_pts)) if k != rear_center_idx]
+        first_front_idx = front_indices[0] if front_indices else 0
+
     for idx, (nid, (rx, ry)) in enumerate(zip(anchor_ids, rel_pts)):
         base = 6 * nid
         k_xy_2x2 = _anchor_inplane_stiffness_2x2(
@@ -278,6 +309,8 @@ def _apply_mount_springs(
             k_xy_each=k_xy_each,
             radial_mode=radial_mode,
             is_bracket_line=is_bracket_line,
+            rear_center_idx=rear_center_idx,
+            first_front_idx=first_front_idx,
         )
         k_mat[base : base + 2, base : base + 2] += k_xy_2x2
         k_mat[base + 2, base + 2] += k_z_each
@@ -506,15 +539,32 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult
     )
 
     mean_grav_at_anchors = float(np.mean(z_gravity_um[anchor_ids]))
+    mount_settlement_um = abs(mean_grav_at_anchors)
     z_total_um = (z_gravity_um - mean_grav_at_anchors) + z_thermal_um
     total_flatness_error_um = float(np.max(z_total_um) - np.min(z_total_um))
-    mesh_req = total_flatness_error_um > 50.0
 
-    if total_flatness_error_um >= 180.0:
+    # Decompose static deformation via least-squares best-fit rigid plane:
+    # - mount_settlement_um: uniform vertical settlement at mounts (removed by Z-homing)
+    # - rigid_tilt_um: peak-to-valley of best-fit rigid plane (removed by tramming / QGL / Z-tilt)
+    # - plate_flatness_um: peak-to-valley non-planar residual requiring mesh bed leveling
+    rx_all = np.array([gx for _ in grid_y_rel for gx in grid_x_rel], dtype=float)
+    ry_all = np.array([gy for gy in grid_y_rel for _ in grid_x_rel], dtype=float)
+    plane_basis = np.column_stack([np.ones_like(rx_all), rx_all, ry_all])
+    plane_coeffs, _, _, _ = np.linalg.lstsq(plane_basis, z_total_um, rcond=None)
+    z_tilt_only_um = plane_coeffs[1] * rx_all + plane_coeffs[2] * ry_all
+    rigid_tilt_um = float(np.max(z_tilt_only_um) - np.min(z_tilt_only_um))
+    z_flatness_residual_um = z_total_um - (plane_basis @ plane_coeffs)
+    plate_flatness_um = float(
+        np.max(z_flatness_residual_um) - np.min(z_flatness_residual_um)
+    )
+
+    mesh_req = plate_flatness_um > 50.0
+
+    if plate_flatness_um >= 180.0:
         risk = "critical"
-    elif total_flatness_error_um >= 100.0:
+    elif plate_flatness_um >= 100.0:
         risk = "high"
-    elif total_flatness_error_um >= 45.0:
+    elif plate_flatness_um >= 45.0:
         risk = "moderate"
     else:
         risk = "low"
@@ -525,13 +575,13 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult
     first_mode_hz = plate_modes_hz[0]
 
     bed_limit_note = ""
-    if total_flatness_error_um >= 120.0:
-        if spec.architecture == "corexy" and spec.bed.z_drive == "leadscrew_single":
-            bed_limit_note = " Main limit: cantilevered single-Z bed support compliance."
-        elif taco_buckling_um >= 30.0:
+    if plate_flatness_um >= 50.0:
+        if taco_buckling_um >= 30.0:
             bed_limit_note = " Main limit: over-constrained thermal expansion causing bed taco buckling."
         else:
-            bed_limit_note = " Main limit: bed plate flexural rigidity against gravity sag and thermal bow."
+            bed_limit_note = " Main limit: bed plate flexural rigidity against non-planar gravity sag and thermal bow."
+    elif rigid_tilt_um >= 120.0:
+        bed_limit_note = " Main limit: cantilevered single-Z bed support compliance causing front-edge tilt/droop."
     elif first_mode_hz < 60.0:
         bed_limit_note = (
             " Main limit: cantilevered Z support compliance."
@@ -546,8 +596,9 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult
     summary = (
         f"{spec.bed.size_mm[0]:.0f}x{spec.bed.size_mm[1]:.0f}x{spec.bed.plate_thickness_mm:.1f}mm "
         f"{spec.bed.plate_material} ({spec.bed.mount_type} / {spec.bed.z_drive}): "
-        f"total flatness error {total_flatness_error_um:.1f} um ({risk} first-layer risk, "
-        f"taco {taco_buckling_um:.1f} um, grav sag {gravity_sag_um:.1f} um), "
+        f"plate flatness {plate_flatness_um:.1f} um ({risk} first-layer risk; "
+        f"rigid tilt {rigid_tilt_um:.1f} um, mount settlement {mount_settlement_um:.1f} um, "
+        f"taco {taco_buckling_um:.1f} um), "
         f"2N probe {probe_center_um:.1f} um center / {probe_corner_um:.1f} um corner, "
         f"f1 = {first_mode_hz:.1f} Hz ({mode_type}).{bed_limit_note}"
     )
@@ -563,6 +614,9 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult
         z_total_um=z_total_um.tolist(),
         mode1_shape_z=mode1_shape_z.tolist(),
         gravity_sag_um=gravity_sag_um,
+        mount_settlement_um=mount_settlement_um,
+        rigid_tilt_um=rigid_tilt_um,
+        plate_flatness_um=plate_flatness_um,
         thermal_peak_to_valley_um=thermal_ptv_um,
         taco_buckling_um=taco_buckling_um,
         total_flatness_error_um=total_flatness_error_um,

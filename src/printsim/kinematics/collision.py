@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -42,9 +43,33 @@ def check_frame_clearance(assembly: AssemblyModel) -> CollisionReport:
     # Usable interior span after deducting frame beam thickness and toolhead half-widths on both sides
     clear_x = (fw - 2.0 * beam_w) - (bx + ex)
     clear_y = (fd - 2.0 * beam_w) - (by + ey)
-    # Z clearance: bed assembly (~75mm) + build Z + gantry/toolhead overhead (~80mm)
-    overhead_z = 85.0 + 0.5 * ez
-    clear_z = fh - (bz + overhead_z)
+    max_z_car = bz
+    if spec.architecture == "delta":
+        from printsim.kinematics.solvers import inverse_kinematics
+
+        r_bed = 0.5 * min(bx, by)
+        cx_bed, cy_bed = 0.5 * bx, 0.5 * by
+        r_test = min(r_bed, spec.kinematics.delta_radius_mm)
+        max_z_car = bz + spec.kinematics.delta_arm_length_mm
+        z_candidates: list[float] = []
+        for ang_deg in (90.0, 210.0, 330.0):
+            ang = math.radians(ang_deg)
+            px = cx_bed + r_test * math.cos(ang)
+            py = cy_bed + r_test * math.sin(ang)
+            try:
+                z_candidates.extend(inverse_kinematics(spec, (px, py, bz)))
+            except ValueError:
+                pass
+        if z_candidates:
+            max_z_car = max(z_candidates)
+        # Delta tower stack: bed height above base + top carriage/pulley/frame clearances
+        carriage_clearance = beam_w + 18.0
+        effector_top_clearance = beam_w + 25.0
+        clear_z = fh - (max_z_car + carriage_clearance + effector_top_clearance)
+    else:
+        # Z clearance: bed + top frame stack (~85 mm) + build Z + upper toolhead half-height (0.5 * ez)
+        overhead_z = 85.0 + 0.5 * ez
+        clear_z = fh - (bz + overhead_z)
 
     if spec.architecture == "cartesian_bedslinger":
         # Bedslinger bed sweeps front-to-back beyond frame depth; frame width still constrains X
@@ -60,9 +85,15 @@ def check_frame_clearance(assembly: AssemblyModel) -> CollisionReport:
             f"Y interference: toolhead/gantry collides with front/rear frame by {abs(clear_y):.1f} mm."
         )
     if clear_z < 0:
-        issues.append(
-            f"Z interference: insufficient frame height by {abs(clear_z):.1f} mm for Z={bz:.0f}mm build height."
-        )
+        if spec.architecture == "delta":
+            issues.append(
+                f"Z interference: delta frame height {fh:.0f}mm is {abs(clear_z):.1f} mm too short "
+                f"for max carriage height {max_z_car:.1f}mm at Z={bz:.0f}mm."
+            )
+        else:
+            issues.append(
+                f"Z interference: insufficient frame height by {abs(clear_z):.1f} mm for Z={bz:.0f}mm build height."
+            )
 
     # Check bed fits build volume
     bed_x, bed_y = spec.bed.size_mm
@@ -86,14 +117,24 @@ def check_trajectory_bounds(
     """Check an Nx3 array of toolpath coordinates (mm) against build volume bounds."""
     if points_mm.size == 0:
         return []
+    pts = np.atleast_2d(points_mm)
     bx, by, bz = assembly.spec.kinematics.build_volume_mm
     issues: list[str] = []
-    min_pt = np.min(points_mm, axis=0)
-    max_pt = np.max(points_mm, axis=0)
-    if min_pt[0] < -0.5 or max_pt[0] > bx + 0.5:
-        issues.append(f"Toolpath X range [{min_pt[0]:.1f}, {max_pt[0]:.1f}] exceeds [0, {bx:.0f}] mm")
-    if min_pt[1] < -0.5 or max_pt[1] > by + 0.5:
-        issues.append(f"Toolpath Y range [{min_pt[1]:.1f}, {max_pt[1]:.1f}] exceeds [0, {by:.0f}] mm")
+    min_pt = np.min(pts, axis=0)
+    max_pt = np.max(pts, axis=0)
+    if assembly.spec.architecture == "delta":
+        r_bed = 0.5 * min(bx, by)
+        radial_dist = np.hypot(pts[:, 0] - 0.5 * bx, pts[:, 1] - 0.5 * by)
+        max_r = float(np.max(radial_dist))
+        if max_r > r_bed + 0.5:
+            issues.append(
+                f"Toolpath radial reach {max_r:.1f} mm exceeds delta circular bed radius {r_bed:.1f} mm"
+            )
+    else:
+        if min_pt[0] < -0.5 or max_pt[0] > bx + 0.5:
+            issues.append(f"Toolpath X range [{min_pt[0]:.1f}, {max_pt[0]:.1f}] exceeds [0, {bx:.0f}] mm")
+        if min_pt[1] < -0.5 or max_pt[1] > by + 0.5:
+            issues.append(f"Toolpath Y range [{min_pt[1]:.1f}, {max_pt[1]:.1f}] exceeds [0, {by:.0f}] mm")
     if min_pt[2] < -0.5 or max_pt[2] > bz + 0.5:
         issues.append(f"Toolpath Z range [{min_pt[2]:.1f}, {max_pt[2]:.1f}] exceeds [0, {bz:.0f}] mm")
     return issues

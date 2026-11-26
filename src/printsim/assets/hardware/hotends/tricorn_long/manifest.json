@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "tricorn_long",
+  "name": "Tricorn Long (120W 3x40W Inverted Ti)",
+  "source_cad": "tricorn_hotends.step",
+  "source_url": "https://tricornhotend.com/",
+  "baked_at": "2026-11-25T17:16:24Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 30807,
+  "num_elements": 116445,
+  "num_dofs": 92421,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.009095,
+  "mass_kg": 0.046387,
+  "com_mm": [
+    0.0005,
+    -0.0007,
+    -30.8681
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -66.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 262.228,
+    "ky": 263.712,
+    "kz": 52757.659
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 353.427,
+    "kry": 353.922,
+    "krz": 356.184
+  },
+  "fixed_interface_freqs_hz": [
+    5148.33,
+    5154.91,
+    7911.22,
+    14089.03,
+    14137.68,
+    14150.36,
+    18356.4,
+    20821.61
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23996,
+  "visual_bytes": 835848,
+  "cad_trust_pct": 88,
+  "source_hash": "d24c35d747e2d4af0fca0cf73acc87c7487c034cc7e0bdfaf150fd19d5c3bf45"
+}

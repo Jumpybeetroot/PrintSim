@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "category": "assemblies",
+  "asset_id": "microwaved_bowden__tricorn_long",
+  "source_cad": "mbt_tricorn_v2.step",
+  "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+  "regions": [
+    {
+      "label": "v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "ti_crown_heatbreak_brace",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "m3_crown_and_brace_screws",
+      "material_id": "stainless_304",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "cucrzr_hotblock",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    }
+  ],
+  "toolhead_id": "microwaved_bowden",
+  "hotend_id": "tricorn_long",
+  "brace_part": "Hotend_Brace (Ti-6Al-4V, 0.32 g)",
+  "overall_length_mm": 66.0,
+  "meltzone_length_mm": 53.5,
+  "brace_outer_bolt_centers_xz_mm": [
+    [
+      -11.0,
+      -48.0
+    ],
+    [
+      11.0,
+      -48.0
+    ]
+  ]
+}

@@ -24,6 +24,7 @@ from printsim.fea.components import (
     gerbert_tooth_mesh_stiffness_n_m,
     idler_shaft_and_bearing_stiffness,
 )
+from printsim.fea.klipper_shaper import biquad_notch_params_from_db_q
 from printsim.kinematics.solvers import (
     compute_bracket_stiffness_n_per_m,
     compute_drive_stiffness_details_n_per_m,
@@ -35,7 +36,10 @@ if TYPE_CHECKING:
     from printsim.geometry.builder import AssemblyModel
 
 
-@dataclass
+_UNSET_CFG = object()
+
+
+@dataclass(init=False)
 class DriveControlConfig:
     """Motor drive topology & control-loop bandwidth configuration."""
 
@@ -45,6 +49,46 @@ class DriveControlConfig:
     notch_filter_hz: float | None = None
     notch_zeta_zero: float = 0.03
     notch_zeta_pole: float = 0.35
+    notch_depth_db: float = 12.0
+    notch_q: float = 1.75
+    awd_sync_mode: str = "none"
+    awd_equalizer_bw_hz: float = 2.0
+    pin_rotor_ff: bool = False
+    toolhead_imu_active_damping: bool = False
+    mode_space_torque_ff: bool = False
+
+    def __init__(
+        self,
+        drive_type: Literal["open_loop_stepper", "closed_loop_stepper", "foc_servo"] = "open_loop_stepper",
+        servo_vel_bw_hz: float = 120.0,
+        servo_pos_bw_hz: float = 25.0,
+        notch_filter_hz: float | None = None,
+        notch_zeta_zero: float | object = _UNSET_CFG,
+        notch_zeta_pole: float | object = _UNSET_CFG,
+        notch_depth_db: float | object = _UNSET_CFG,
+        notch_q: float | object = _UNSET_CFG,
+        awd_sync_mode: str = "none",
+        awd_equalizer_bw_hz: float = 2.0,
+        pin_rotor_ff: bool = False,
+        toolhead_imu_active_damping: bool = False,
+        mode_space_torque_ff: bool = False,
+    ) -> None:
+        self.drive_type = drive_type
+        self.servo_vel_bw_hz = float(servo_vel_bw_hz)
+        self.servo_pos_bw_hz = float(servo_pos_bw_hz)
+        self.notch_filter_hz = notch_filter_hz
+        has_db_q = (notch_depth_db is not _UNSET_CFG) or (notch_q is not _UNSET_CFG)
+        has_zeta = (notch_zeta_zero is not _UNSET_CFG) or (notch_zeta_pole is not _UNSET_CFG)
+        self.notch_zeta_zero = 0.03 if notch_zeta_zero is _UNSET_CFG else float(notch_zeta_zero)  # type: ignore[arg-type]
+        self.notch_zeta_pole = 0.35 if notch_zeta_pole is _UNSET_CFG else float(notch_zeta_pole)  # type: ignore[arg-type]
+        self.notch_depth_db = 12.0 if notch_depth_db is _UNSET_CFG else float(notch_depth_db)  # type: ignore[arg-type]
+        self.notch_q = 1.75 if notch_q is _UNSET_CFG else float(notch_q)  # type: ignore[arg-type]
+        self._use_db_q_notch = bool(has_db_q and not has_zeta)
+        self.awd_sync_mode = str(awd_sync_mode)
+        self.awd_equalizer_bw_hz = float(awd_equalizer_bw_hz)
+        self.pin_rotor_ff = bool(pin_rotor_ff)
+        self.toolhead_imu_active_damping = bool(toolhead_imu_active_damping)
+        self.mode_space_torque_ff = bool(mode_space_torque_ff)
 
 
 @dataclass
@@ -77,6 +121,9 @@ class CoupledMechatronicsModel:
     H_frf: np.ndarray
     xy_cross_coupling_pct: float
     midband_instability_risk: bool
+    T_cart: np.ndarray | None = None
+    k_em_per_motor_arr: np.ndarray | None = None
+    b_em_per_motor_arr: np.ndarray | None = None
 
     @property
     def state_dim(self) -> int:
@@ -429,7 +476,7 @@ def _stepper_em_params(
     omega_e = stepper.pole_pairs * omega_m0
     wt = omega_e * tau_e
     eta_v = stepper.dynamic_voltage_efficiency(rpm=rpm_op)
-    k_e = stepper.holding_torque_nm / max(stepper.rated_current_a, 0.1)
+    k_e = stepper.holding_torque_nm / (math.sqrt(2.0) * max(stepper.rated_current_a, 0.1))
 
     # Mechanical + microstepping hysteresis baseline damping (~5.5% critical)
     b_mech_rot = 2.0 * 0.055 * math.sqrt(max(k_theta * j_m, 1e-12))
@@ -538,24 +585,99 @@ def build_coupled_state_space(
     k_b = float(branch_info["k_B"])
     branches = branch_info["branches"]
 
+    # Belt coupling matrix T_cart (n_mot x 2) and branch stiffnesses first so Delta Jacobian
+    # j_norm is available for motor load sizing, reflected rotor mass, and active damping.
+    j_norm = 1.0
     if arch_kind == "corexy_awd":
         n_mot = 4
-        m_car_per_mot = 0.25 * (m_cx + m_cy)
+        T_cart = np.array([[1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [1.0, -1.0]], dtype=float)
+        k_branches = np.array(branches, dtype=float)
+        m_car_per_mot = (m_cx + m_cy) / (2.0 * n_mot)
         reflected_per_axis = 4.0 * m_ref_1
+        k_em_1, b_em_1, midband_risk = _stepper_em_params(assembly, m_ref_1, m_car_per_mot, cfg)
+        k_em_arr = np.full(n_mot, k_em_1, dtype=float)
+        b_em_arr = np.full(n_mot, b_em_1, dtype=float)
     elif arch_kind == "corexy_2wd":
         n_mot = 2
-        m_car_per_mot = 0.5 * (m_cx + m_cy)
+        T_cart = np.array([[1.0, 1.0], [1.0, -1.0]], dtype=float)
+        k_branches = np.array(branches, dtype=float)
+        m_car_per_mot = (m_cx + m_cy) / (2.0 * n_mot)
         reflected_per_axis = 2.0 * m_ref_1
+        k_em_1, b_em_1, midband_risk = _stepper_em_params(assembly, m_ref_1, m_car_per_mot, cfg)
+        k_em_arr = np.full(n_mot, k_em_1, dtype=float)
+        b_em_arr = np.full(n_mot, b_em_1, dtype=float)
     elif arch_kind == "cartesian":
         n_mot = 2
-        m_car_per_mot = 0.5 * (m_cx + m_cy)
+        T_cart = np.eye(2, dtype=float)
+        k_branches = np.array(branches, dtype=float)
         reflected_per_axis = 1.0 * m_ref_1
+        k_em_x, b_em_x, risk_x = _stepper_em_params(assembly, m_ref_1, m_cx, cfg)
+        k_em_y, b_em_y, risk_y = _stepper_em_params(assembly, m_ref_1, m_cy, cfg)
+        midband_risk = risk_x or risk_y
+        k_em_arr = np.array([k_em_x, k_em_y], dtype=float)
+        b_em_arr = np.array([b_em_x, b_em_y], dtype=float)
     else:
         n_mot = 3
-        m_car_per_mot = (m_cx + m_cy) / 3.0
-        reflected_per_axis = 1.5 * m_ref_1
+        # Delta tower Jacobian J_delta (3x2) evaluated within circular build disk (r <= 0.45 * min(bx, by))
+        x_m, y_m, w_g, d_g = _xy_coordinates_m(assembly, u_rel, v_rel)
+        cx, cy = x_m - 0.5 * w_g, y_m - 0.5 * d_g
+        r_bed_max = 0.45 * min(
+            max(spec.kinematics.build_volume_mm[0] * 1e-3, 0.05),
+            max(spec.kinematics.build_volume_mm[1] * 1e-3, 0.05),
+        )
+        r_cur = math.hypot(cx, cy)
+        if r_cur > r_bed_max and r_cur > 1e-9:
+            cx *= r_bed_max / r_cur
+            cy *= r_bed_max / r_cur
+        r_del = max(spec.kinematics.delta_radius_mm * 1e-3, 0.10)
+        l_arm = max(spec.kinematics.delta_arm_length_mm * 1e-3, r_del * 1.6)
+        j_rows = []
+        for ang_deg in (90.0, 210.0, 330.0):
+            ang = math.radians(ang_deg)
+            dx = cx - r_del * math.cos(ang)
+            dy = cy - r_del * math.sin(ang)
+            z_arm = math.sqrt(max(l_arm**2 - dx * dx - dy * dy, 0.02))
+            j_rows.append([-dx / z_arm, -dy / z_arm])
+        T_cart = np.asarray(j_rows, dtype=float)
+        # Scale diagonal stiffness so T_cart^T diag(k_b) T_cart matches k_cart at center
+        cx0, cy0 = 0.0, 0.0
+        j0_rows = []
+        for ang_deg in (90.0, 210.0, 330.0):
+            ang = math.radians(ang_deg)
+            dx0 = cx0 - r_del * math.cos(ang)
+            dy0 = cy0 - r_del * math.sin(ang)
+            z_arm0 = math.sqrt(max(l_arm**2 - dx0 * dx0 - dy0 * dy0, 0.02))
+            j0_rows.append([-dx0 / z_arm0, -dy0 / z_arm0])
+        j0 = np.asarray(j0_rows, dtype=float)
+        j0_norm = float(np.mean(np.diag(j0.T @ j0)))
+        k_diag_b = float(k_cart[0, 0]) / max(j0_norm, 1e-6)
+        k_branches = np.full(3, k_diag_b, dtype=float)
 
-    k_em_1, b_em_1, midband_risk = _stepper_em_params(assembly, m_ref_1, m_car_per_mot, cfg)
+        j_norm = float(np.mean(np.diag(T_cart.T @ T_cart)))
+        m_car_per_mot = 0.5 * (m_cx + m_cy) / max(j_norm, 1e-6)
+        reflected_per_axis = j_norm * m_ref_1
+        k_em_1, b_em_1, midband_risk = _stepper_em_params(assembly, m_ref_1, m_car_per_mot, cfg)
+        k_em_arr = np.full(n_mot, k_em_1, dtype=float)
+        b_em_arr = np.full(n_mot, b_em_1, dtype=float)
+
+    # Closed-loop / FOC beta control laws (gracefully no-op on open_loop_stepper)
+    is_foc = cfg.drive_type in ("foc_servo", "closed_loop_stepper")
+    delta_zeta_belt = 0.0
+    if is_foc:
+        k_em_mult = 1.0
+        if cfg.pin_rotor_ff:
+            k_em_mult *= 3.5
+        if arch_kind == "corexy_awd":
+            sync_mode = str(cfg.awd_sync_mode).strip().lower()
+            if sync_mode == "position_equalizer":
+                k_em_mult *= 1.12
+                excess_bw = max(0.0, float(cfg.awd_equalizer_bw_hz) - 5.0)
+                delta_zeta_belt = max(0.004, 0.015 - 0.0012 * excess_bw)
+            elif sync_mode == "torque_mirror":
+                k_em_mult *= 1.06
+                delta_zeta_belt = 0.008
+        k_em_arr *= k_em_mult
+        b_em_arr *= k_em_mult
 
     # Mechanical coordinates q = [q_fx, q_fy, q_m(0..N_mot-1), q_cx, q_cy]
     # Total mechanical DOFs = n_mot + m_struct (m_struct = 4: 2 frame modal + 2 carriage XY)
@@ -590,74 +712,56 @@ def build_coupled_state_space(
 
     # Motor electromagnetic stiffness & damping relative to motor housing on frame
     for i in range(n_mot):
-        K[2 + i, 2 + i] += k_em_1
-        C[2 + i, 2 + i] += b_em_1
+        K[2 + i, 2 + i] += k_em_arr[i]
+        C[2 + i, 2 + i] += b_em_arr[i]
 
-    # Belt coupling matrix E_belt @ q = T_cart @ (q_c - q_f) - q_m
-    if arch_kind == "corexy_awd":
-        T_cart = np.array([[1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [1.0, -1.0]], dtype=float)
-        k_branches = np.array(branches, dtype=float)
-    elif arch_kind == "corexy_2wd":
-        T_cart = np.array([[1.0, 1.0], [1.0, -1.0]], dtype=float)
-        k_branches = np.array(branches, dtype=float)
-    elif arch_kind == "cartesian":
-        T_cart = np.eye(2, dtype=float)
-        k_branches = np.array(branches, dtype=float)
-    else:
-        # Delta tower Jacobian J_delta (3x2) evaluated within circular build disk (r <= 0.45 * min(bx, by))
-        x_m, y_m, w_g, d_g = _xy_coordinates_m(assembly, u_rel, v_rel)
-        cx, cy = x_m - 0.5 * w_g, y_m - 0.5 * d_g
-        r_bed_max = 0.45 * min(
-            max(spec.kinematics.build_volume_mm[0] * 1e-3, 0.05),
-            max(spec.kinematics.build_volume_mm[1] * 1e-3, 0.05),
-        )
-        r_cur = math.hypot(cx, cy)
-        if r_cur > r_bed_max and r_cur > 1e-9:
-            cx *= r_bed_max / r_cur
-            cy *= r_bed_max / r_cur
-        r_del = max(spec.kinematics.delta_radius_mm * 1e-3, 0.10)
-        l_arm = max(spec.kinematics.delta_arm_length_mm * 1e-3, r_del * 1.6)
-        j_rows = []
-        for ang_deg in (90.0, 210.0, 330.0):
-            ang = math.radians(ang_deg)
-            dx = cx - r_del * math.cos(ang)
-            dy = cy - r_del * math.sin(ang)
-            z_arm = math.sqrt(max(l_arm**2 - dx * dx - dy * dy, 0.02))
-            j_rows.append([-dx / z_arm, -dy / z_arm])
-        T_cart = np.asarray(j_rows, dtype=float)
-        # Scale diagonal stiffness so T_cart^T diag(k_b) T_cart matches k_cart at center
-        cx0, cy0 = 0.0, 0.0
-        j0_rows = []
-        for ang_deg in (90.0, 210.0, 330.0):
-            ang = math.radians(ang_deg)
-            dx0 = cx0 - r_del * math.cos(ang)
-            dy0 = cy0 - r_del * math.sin(ang)
-            z_arm0 = math.sqrt(max(l_arm**2 - dx0 * dx0 - dy0 * dy0, 0.02))
-            j0_rows.append([-dx0 / z_arm0, -dy0 / z_arm0])
-        j0 = np.asarray(j0_rows, dtype=float)
-        j_norm = float(np.mean(np.diag(j0.T @ j0)))
-        k_diag_b = float(k_cart[0, 0]) / max(j_norm, 1e-6)
-        k_branches = np.full(3, k_diag_b, dtype=float)
+    # Mode-space torque FF compensates CoreXY branch pulling/pushing asymmetry (~35% cross-coupling reduction)
+    k_branches_eff = k_branches.copy()
+    if is_foc and cfg.mode_space_torque_ff and arch_kind in ("corexy_awd", "corexy_2wd"):
+        k_mean = float(np.mean(k_branches_eff))
+        k_branches_eff = k_mean + 0.65 * (k_branches_eff - k_mean)
 
     # Assemble K_belt = E^T diag(k_branches) E where E = [-T_cart, -I_nmot, +T_cart]
     E_belt = np.zeros((n_mot, n_dof), dtype=float)
     E_belt[:, idx_f] = -T_cart
     E_belt[:, idx_m] = -np.eye(n_mot, dtype=float)
     E_belt[:, idx_c] = T_cart
-    K_belt_full = E_belt.T @ np.diag(k_branches) @ E_belt
+    K_belt_full = E_belt.T @ np.diag(k_branches_eff) @ E_belt
     K += K_belt_full
 
-    # Elastomer belt hysteresis damping proportional to K_belt (zeta_belt ~ 0.045 at drive mode)
+    # Elastomer belt hysteresis damping proportional to K_belt (zeta_belt ~ 0.045 + AWD sync delta)
     k_drive_ref = max(float(np.mean(np.diag(k_cart))), 1e3)
     m_avg = 0.5 * (m_cx + m_cy)
     omega_drive_ref = math.sqrt(k_drive_ref / max(m_avg, 0.05))
-    zeta_belt = 0.045
+    zeta_belt = 0.045 + delta_zeta_belt
     beta_belt = (2.0 * zeta_belt) / max(omega_drive_ref, 10.0)
     C += beta_belt * K_belt_full
 
+    # Toolhead IMU skyhook velocity feedback damping on carriage/nozzle DOFs (idx_c)
+    if is_foc and cfg.toolhead_imu_active_damping:
+        if arch_kind == "cartesian":
+            k_em_axis_x = max(float(k_em_arr[0]), 1.0)
+            k_em_axis_y = max(float(k_em_arr[1]), 1.0)
+        else:
+            n_mot_axis = (
+                4.0
+                if arch_kind == "corexy_awd"
+                else (2.0 if arch_kind == "corexy_2wd" else (j_norm if arch_kind == "delta" else 1.0))
+            )
+            k_em_axis_x = max(n_mot_axis * float(k_em_arr[0]), 1.0)
+            k_em_axis_y = k_em_axis_x
+        k_drv_x = 1.0 / (1.0 / max(float(k_cart[0, 0]), 1.0) + 1.0 / k_em_axis_x)
+        k_drv_y = 1.0 / (1.0 / max(float(k_cart[1, 1]), 1.0) + 1.0 / k_em_axis_y)
+        omega_dx = math.sqrt(k_drv_x / max(m_cx, 0.05))
+        omega_dy = math.sqrt(k_drv_y / max(m_cy, 0.05))
+        omega_eff_x = 1.0 / math.sqrt(1.0 / (omega_sx**2) + 1.0 / (omega_dx**2))
+        omega_eff_y = 1.0 / math.sqrt(1.0 / (omega_sy**2) + 1.0 / (omega_dy**2))
+        C[2 + n_mot, 2 + n_mot] += 2.0 * 0.07 * m_cx * omega_eff_x
+        C[3 + n_mot, 3 + n_mot] += 2.0 * 0.07 * m_cy * omega_eff_y
+
     # Input matrix F_cmd (n_dof x 2): motor command u_cart = [u_x, u_y] -> T_cart @ u_cart
     F_cmd = np.zeros((n_dof, 2), dtype=float)
-    F_cmd[idx_m, :] = k_em_1 * T_cart
+    F_cmd[idx_m, :] = k_em_arr[:, None] * T_cart
 
     M_inv = np.diag(1.0 / np.diag(M))
     A_mech = np.zeros((2 * n_dof, 2 * n_dof), dtype=float)
@@ -674,14 +778,23 @@ def build_coupled_state_space(
     D_mech = np.zeros((2, 2), dtype=float)
 
     if cfg.notch_filter_hz is not None and cfg.notch_filter_hz > 0.0:
+        use_db_q = getattr(cfg, "_use_db_q_notch", False) or (
+            cfg.notch_zeta_zero == 0.03
+            and cfg.notch_zeta_pole == 0.35
+            and (cfg.notch_depth_db != 12.0 or cfg.notch_q != 1.75)
+        )
+        if use_db_q:
+            zz, zp, _ = biquad_notch_params_from_db_q(cfg.notch_depth_db, cfg.notch_q)
+        else:
+            zz, zp = cfg.notch_zeta_zero, cfg.notch_zeta_pole
         A, B, C_noz, D = _cascade_biquad_notch(
             A_mech,
             B_mech,
             C_mech,
             D_mech,
             f_notch_hz=cfg.notch_filter_hz,
-            zeta_zero=cfg.notch_zeta_zero,
-            zeta_pole=cfg.notch_zeta_pole,
+            zeta_zero=zz,
+            zeta_pole=zp,
         )
     else:
         A, B, C_noz, D = A_mech, B_mech, C_mech, D_mech
@@ -739,8 +852,8 @@ def build_coupled_state_space(
         k_belt_cart=k_cart,
         k_A_n_m=k_a,
         k_B_n_m=k_b,
-        k_em_per_motor_n_m=k_em_1,
-        b_em_per_motor_ns_m=b_em_1,
+        k_em_per_motor_n_m=float(np.mean(k_em_arr)),
+        b_em_per_motor_ns_m=float(np.mean(b_em_arr)),
         reflected_rotor_mass_per_motor_g=m_ref_1 * 1e3,
         reflected_rotor_mass_g=reflected_per_axis * 1e3,
         coupled_freq_x_hz=freq_x,
@@ -753,6 +866,9 @@ def build_coupled_state_space(
         H_frf=h_frf,
         xy_cross_coupling_pct=xy_cross_coupling_pct,
         midband_instability_risk=midband_risk,
+        T_cart=T_cart,
+        k_em_per_motor_arr=k_em_arr,
+        b_em_per_motor_arr=b_em_arr,
     )
 
 

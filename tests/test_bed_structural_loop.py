@@ -315,13 +315,14 @@ def test_api_simulate_exposes_bed_structural_loop_fields() -> None:
 
 def test_accel_bottleneck_compliance_shares_sum_to_100_and_track_upgrades() -> None:
     """Series compliance shares (frame + belt + motor + bracket) sum to 100% and shift accurately."""
-    # 1. Stock unpaneled Trident -> Frame (~33%) and 2WD 6mm Belt (~34%) share top bottleneck parity
+    # 1. Stock unpaneled Trident -> Frame (~16-20% under B-01 moving-mass compliance + D-01 22 kN belt)
+    # and 2WD 6mm Belt (~57%) dominate; bolted panels strictly drop frame share further.
     s_stock = _load("voron_trident_300")
     mo_stock = solve_modal_fea(build_assembly(s_stock))
     bn_stock = mo_stock.accel_bottleneck
     assert bn_stock is not None
     assert sum(bn_stock["shares_pct"].values()) == pytest.approx(100.0, abs=0.2)
-    assert bn_stock["shares_pct"]["frame"] > 30.0
+    assert bn_stock["shares_pct"]["frame"] > 12.0
     assert bn_stock["primary_source"] in ("frame", "belt")
 
     # 2. Bolted 4mm Al panels on 2WD 6mm Trident -> Belt Stretch becomes #1 bottleneck
@@ -336,12 +337,13 @@ def test_accel_bottleneck_compliance_shares_sum_to_100_and_track_upgrades() -> N
     assert bn_pan["primary_source"] == "belt"
     assert bn_pan["shares_pct"]["frame"] < bn_stock["shares_pct"]["frame"]
 
-    # 3. Monolith AWD with ABS brackets -> Bracket Flex >25% share; upgrading to CNC 6061 drops bracket share < 15%
+    # 3. Monolith AWD with ABS brackets -> Bracket Flex >15% share (D-01 9mm aramid EA);
+    # upgrading to CNC 6061 drops bracket share < 15%
     s_abs = _load("voron_monolith_awd")
     s_abs.gantry.bracket_material = "abs_printed"
     mo_abs = solve_modal_fea(build_assembly(s_abs))
     assert mo_abs.accel_bottleneck is not None
-    assert mo_abs.accel_bottleneck["shares_pct"]["bracket"] > 25.0
+    assert mo_abs.accel_bottleneck["shares_pct"]["bracket"] > 15.0
     assert mo_abs.accel_bottleneck["primary_source"] in ("bracket", "belt")
 
     s_cnc = _load("voron_monolith_awd")
@@ -350,3 +352,33 @@ def test_accel_bottleneck_compliance_shares_sum_to_100_and_track_upgrades() -> N
     assert sum(mo_cnc.accel_bottleneck["shares_pct"].values()) == pytest.approx(100.0, abs=0.2)
     assert mo_cnc.accel_bottleneck["shares_pct"]["bracket"] < 15.0
     assert mo_cnc.accel_bottleneck["primary_source"] != "bracket"
+
+
+def test_bed_z_drive_bay_classified_in_modal_and_sensitivity() -> None:
+    """z_bed_drive_* springs are grouped into bed_support/bed (never panel bays) and export Z-carriage rotations."""
+    from printsim.fea.sensitivity import compute_structural_sensitivities
+
+    for preset_name, tags in (
+        ("voron_trident_300", ("fl", "fr", "r")),
+        ("vzbot_330_awd", ("l", "r")),
+    ):
+        spec = _load(preset_name)
+        asm = build_assembly(spec)
+        mod = solve_modal_fea(asm)
+        sen = compute_structural_sensitivities(asm, mod)
+
+        assert "bed_z_drive" not in sen.panel_bay_sensitivities
+        assert "z_guide" not in sen.panel_bay_sensitivities
+        for tag in tags:
+            sp_id = f"z_bed_drive_{tag}"
+            assert sp_id in sen.member_sensitivities
+            assert sen.member_sensitivities[sp_id]["role"] == "bed"
+            assert f"z_bed_{tag}" in mod.modes[0].nodal_rotations
+
+        if preset_name == "voron_trident_300":
+            assert sen.member_sensitivities["z_bed_drive_fl"]["stiffness_sens_hz"] > 0.1
+            causes = {c["id"]: c for c in mod.modes[0].top_causes}
+            assert "bed_support" in causes
+            assert causes["bed_support"]["subsystem"] == "bed"
+            assert causes["bed_support"]["share_pct"] > 5.0
+

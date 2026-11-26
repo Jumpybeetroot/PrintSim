@@ -58,23 +58,24 @@ toolhead:
   envelope_mm: [58, 62, 82]
   hotend:
     preset_id: chube_compact
-    mount_style: chube_6bolt_m3_18pcd
-    structural_stiffness_n_per_mm: 2200.0
-    overall_length_mm: 48.0
+    mount_style: rigid_4bolt_m3
+    structural_stiffness_n_per_mm: 2600.0
+    overall_length_mm: 47.2
+    mass_g: 63.0
     name: Luke's Lab Chube Compact
     heater_power_w: 80
     block_material: copper_c110
-    block_mass_g: 15
+    block_mass_g: 18
     nozzle_material: copper_c110
     nozzle_diameter_mm: 0.4
     melt_zone_length_mm: 33
     heatbreak_material: titanium_grade5
-    heatbreak_length_mm: 11
+    heatbreak_length_mm: 10
     heatbreak_wall_mm: 0.25
     heatbreak_id_mm: 2.0
     heatsink_thermal_resistance_k_w: 2.6
     part_cooling_cfm: 14.0
-    max_temp_c: 450
+    max_temp_c: 500
     ambient_temp_c: 25
   extruder:
     type: direct_drive

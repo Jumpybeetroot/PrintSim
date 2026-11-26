@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from printsim.fea.components import _RAIL_BLOCK_MASS_G
 from printsim.geometry.builder import (
     AssemblyModel,
     build_assembly,
@@ -18,10 +19,12 @@ from printsim.geometry.builder import (
     top_brace_dimensions_mm,
 )
 from printsim.schema import (
+    BED_MOUNT_CATALOG,
     EXTRUSION_FILLINGS,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
     TOP_BRACE_CATALOG,
+    Z_DRIVE_MECHANISM_CATALOG,
     PrinterSpec,
     get_material,
     get_profile,
@@ -45,6 +48,7 @@ class CutListItem:
     unit_cost_usd: float
     total_cost_usd: float
     notes: str = ""
+    net_length_mm: float = 0.0
 
 
 @dataclass
@@ -120,6 +124,7 @@ class PrinterBOM:
                     "material_id": c.material_id,
                     "role": c.role,
                     "length_mm": round(float(c.length_mm), 1),
+                    "net_length_mm": round(float(c.net_length_mm or c.length_mm), 1),
                     "quantity": int(c.quantity),
                     "total_length_mm": round(float(c.total_length_mm), 1),
                     "unit_mass_g": round(float(c.unit_mass_g), 1),
@@ -322,14 +327,15 @@ _PROFILE_MFG_MULTIPLIER: dict[str, float] = {
 
 _CUT_FEE_USD = 0.75
 
-_RAIL_HARDWARE: dict[str, tuple[str, float, float, float]] = {
-    # profile_id -> (carriage_name, rail_usd_per_m, carriage_usd, carriage_mass_g)
-    "mgn9_rail": ("MGN9H Linear Rail Carriage", 32.0, 12.0, 35.0),
-    "mgn12_rail": ("MGN12H Linear Rail Carriage", 42.0, 16.0, 65.0),
-    "mgn15_rail": ("MGN15H Linear Rail Carriage", 58.0, 22.0, 110.0),
-    "steel_rod_8mm": ("LM8UU Linear Ball Bearing", 14.0, 4.5, 18.0),
-    "steel_rod_10mm": ("LM10UU Linear Ball Bearing", 18.0, 6.0, 28.0),
-    "steel_rod_12mm": ("LM12UU Linear Ball Bearing", 24.0, 8.0, 42.0),
+_RAIL_HARDWARE: dict[str, tuple[str, float, float, float, float]] = {
+    # profile_id -> (series_label, rail_usd_per_m, carriage_usd, mass_c_g, mass_h_g)
+    "mgn9_rail": ("MGN9", 32.0, 12.0, *_RAIL_BLOCK_MASS_G["mgn9_rail"]),
+    "mgn12_rail": ("MGN12", 42.0, 16.0, *_RAIL_BLOCK_MASS_G["mgn12_rail"]),
+    "mgn15_rail": ("MGN15", 58.0, 22.0, *_RAIL_BLOCK_MASS_G["mgn15_rail"]),
+    "hgh15_rail": ("HGH15CA", 72.0, 32.0, *_RAIL_BLOCK_MASS_G["hgh15_rail"]),
+    "steel_rod_8mm": ("LM8UU", 14.0, 4.5, *_RAIL_BLOCK_MASS_G["steel_rod_8mm"]),
+    "steel_rod_10mm": ("LM10UU", 18.0, 6.0, *_RAIL_BLOCK_MASS_G["steel_rod_10mm"]),
+    "steel_rod_12mm": ("LM12UU", 24.0, 8.0, *_RAIL_BLOCK_MASS_G["steel_rod_12mm"]),
 }
 
 _BELT_COST_USD_PER_M: dict[tuple[str, str], float] = {
@@ -523,25 +529,55 @@ def _describe_cut_group(role: str, profile_id: str, member_ids: list[str]) -> st
     return f"Frame Member ({profile_name})"
 
 
-def _build_cut_list(assembly: AssemblyModel) -> list[CutListItem]:
+def _compute_net_cut_length_mm(
+    assembly: AssemblyModel,
+    seg: _MergedSegment,
+    centerline_mm: float,
+) -> float:
+    """Compute non-overlapping buildable butt-joint cut length (mm) for a merged member."""
+    spec = assembly.spec
+    role = seg.canonical_role
+    ids_lower = [mid.lower() for mid in seg.member_ids]
+    # Vertical columns/towers, diagonal braces, and delta arms keep full length
+    if (
+        role in ("brace", "tower")
+        or all(mid.startswith(("col_", "tower_", "z_col_", "arm_")) for mid in ids_lower)
+    ):
+        return round(centerline_mm, 1)
+
+    upright_prof = get_profile(spec.frame.effective_upright_profile)
+    upright_w_mm = upright_prof.width_m * 1000.0
+    if spec.architecture == "corexy" and role in ("frame", "gantry", "rail"):
+        return round(max(centerline_mm - 2.0 * upright_w_mm, 10.0), 1)
+    if spec.architecture == "cartesian_bedslinger" and role in ("gantry",):
+        return round(max(centerline_mm - 2.0 * upright_w_mm, 10.0), 1)
+    return round(centerline_mm, 1)
+
+
+def _build_cut_list(
+    assembly: AssemblyModel,
+    clip_corner_overlaps: bool = False,
+) -> list[CutListItem]:
     """Generate sorted, deduplicated manufacturable CutListItem list."""
     merged_segments = _merge_collinear_members(assembly)
-    grouped: dict[tuple[str, str, float, str], list[_MergedSegment]] = defaultdict(list)
+    grouped: dict[tuple[str, str, float, float, str], list[_MergedSegment]] = defaultdict(list)
 
     for seg in merged_segments:
-        length_mm = round(seg.length_m * 1000.0, 1)
-        key = (seg.profile_id, seg.material_id, length_mm, seg.canonical_role)
+        centerline_mm = round(seg.length_m * 1000.0, 1)
+        net_mm = _compute_net_cut_length_mm(assembly, seg, centerline_mm)
+        length_mm = net_mm if clip_corner_overlaps else centerline_mm
+        key = (seg.profile_id, seg.material_id, length_mm, net_mm, seg.canonical_role)
         grouped[key].append(seg)
 
     # Sort by role (asc), profile_id (asc), length_mm (desc), material_id (asc)
     sorted_keys = sorted(
         grouped.keys(),
-        key=lambda k: (k[3], k[0], -k[2], k[1]),
+        key=lambda k: (k[4], k[0], -k[2], k[1]),
     )
 
     cut_list: list[CutListItem] = []
     for idx, key in enumerate(sorted_keys, start=1):
-        profile_id, material_id, length_mm, role = key
+        profile_id, material_id, length_mm, net_mm, role = key
         segs = grouped[key]
         qty = len(segs)
         profile = get_profile(profile_id)
@@ -558,7 +594,13 @@ def _build_cut_list(assembly: AssemblyModel) -> list[CutListItem]:
 
         all_member_ids = [mid for s in segs for mid in s.member_ids]
         name = _describe_cut_group(role, profile_id, all_member_ids)
-        notes = f"Saw cut ±0.5 mm; from {len(all_member_ids)} FEA segment(s)"
+        if not clip_corner_overlaps and net_mm < length_mm - 0.1:
+            notes = (
+                f"Saw cut ±0.5 mm (net butt-joint {net_mm:.1f} mm); "
+                f"from {len(all_member_ids)} FEA segment(s)"
+            )
+        else:
+            notes = f"Saw cut ±0.5 mm; from {len(all_member_ids)} FEA segment(s)"
 
         cut_list.append(
             CutListItem(
@@ -575,6 +617,7 @@ def _build_cut_list(assembly: AssemblyModel) -> list[CutListItem]:
                 unit_cost_usd=round(unit_cost_usd, 2),
                 total_cost_usd=round(total_cost_usd, 2),
                 notes=notes,
+                net_length_mm=round(net_mm, 1),
             )
         )
 
@@ -680,9 +723,18 @@ def _z_motor_count(architecture: str, z_drive: str) -> int:
     }.get(norm, 2)
 
 
-def _rail_hw_info(profile_id: str) -> tuple[str, float, float, float]:
+def _rail_hw_info(profile_id: str, block_type: str = "H") -> tuple[str, float, float, float]:
+    bt = "C" if str(block_type).upper().strip() == "C" else "H"
     if profile_id in _RAIL_HARDWARE:
-        return _RAIL_HARDWARE[profile_id]
+        series, rail_usd_m, car_usd, mass_c_g, mass_h_g = _RAIL_HARDWARE[profile_id]
+        car_mass_g = float(mass_h_g if bt == "H" else mass_c_g)
+        if profile_id.startswith("steel_rod_"):
+            car_name = f"{series} Linear Ball Bearing"
+        elif profile_id == "hgh15_rail":
+            car_name = "HGH15CA Heavy Linear Carriage"
+        else:
+            car_name = f"{series}{bt} Linear Rail Carriage"
+        return (car_name, rail_usd_m, car_usd, car_mass_g)
     prof = get_profile(profile_id)
     return (f"{prof.name} Carriage", 35.0, 15.0, 60.0)
 
@@ -719,6 +771,7 @@ def generate_bom(
     spec_or_assembly: PrinterSpec | AssemblyModel,
     stock_length_mm: float = 1000.0,
     kerf_mm: float = 3.0,
+    clip_corner_overlaps: bool = False,
 ) -> PrinterBOM:
     """Generate a manufacturable cut-list, 1D stock nesting plan, and complete hardware BOM.
 
@@ -730,6 +783,10 @@ def generate_bom(
         Standard raw bar length in mm for 1D stock nesting (default 1000.0 mm).
     kerf_mm:
         Saw blade kerf allowance in mm between cuts (default 3.0 mm).
+    clip_corner_overlaps:
+        When True, shorten horizontal extrusions to net non-overlapping butt-joint cut
+        lengths; when False (default), preserve FEA centerline spans in ``length_mm``
+        while still reporting exact ``net_length_mm`` on every ``CutListItem``.
     """
     if stock_length_mm <= 0:
         raise ValueError("stock_length_mm must be positive")
@@ -743,7 +800,7 @@ def generate_bom(
         spec = spec_or_assembly
         assembly = build_assembly(spec)
 
-    cut_list = _build_cut_list(assembly)
+    cut_list = _build_cut_list(assembly, clip_corner_overlaps=clip_corner_overlaps)
     stock_nesting = _nest_stock_bars(
         cut_list, stock_length_mm=stock_length_mm, kerf_mm=kerf_mm
     )
@@ -862,6 +919,27 @@ def generate_bom(
         unit_cost_usd=float(bkt_info["kit_cost_usd"]),
         unit_mass_g=bkt_kit_mass_g,
     )
+    if spec.gantry.effective_cf_rail_mounting == "two_wall_clamped_inserts":
+        insert_mass_g = round(
+            assembly.x_beam_insert_mass_kg * 1000.0
+            if assembly.x_beam_insert_mass_kg > 0.0
+            else (4.0 + 18.0 * (w * 1e-3)),
+            1,
+        )
+        _add_bom_item(
+            items,
+            sku="GNT-CF-INSERTS",
+            category="gantry",
+            name="Carbonara 2-Wall CF X-Beam Internal Insert & Ti Bolt Kit",
+            specification=(
+                f"100%-infill annealed CF/GF internal rail inserts + XY-joint end inserts, "
+                f"M5 hex standoffs & Grade 5 Ti M3x28 clamped hardware (L={w:.0f} mm)"
+            ),
+            quantity=1,
+            unit="kit",
+            unit_cost_usd=18.00,
+            unit_mass_g=insert_mass_g,
+        )
 
     # ------------------------------------------------------------------
     # 2. MOTION (linear rails, carriages, belts, pulleys, idlers, Z-drive)
@@ -869,6 +947,7 @@ def generate_bom(
     rail_mat = get_material(spec.gantry.rail_material)
     x_rail_prof = get_profile(spec.gantry.x_rail_profile)
     y_rail_prof = get_profile(spec.gantry.y_rail_profile)
+    z_rail_prof_id = (spec.bed.z_rail_profile or "").strip() or y_rail_prof.id
 
     # Track total linear rail length (mm) and carriage count for fasteners
     total_bolted_rail_mm = 0.0
@@ -882,42 +961,76 @@ def generate_bom(
         rail_len_mm: float,
         carriage_qty: int,
         mount_note: str = "",
+        block_type: str = "H",
     ) -> None:
         nonlocal total_bolted_rail_mm, total_carriages
         prof = get_profile(rail_prof_id)
-        car_name, rail_usd_m, car_usd, car_mass_g = _rail_hw_info(rail_prof_id)
+        car_name, rail_usd_m, car_usd, car_mass_g = _rail_hw_info(
+            rail_prof_id, block_type=block_type
+        )
         rail_len_m = rail_len_mm * 1e-3
         rail_unit_mass_g = prof.area_m2 * rail_len_m * rail_mat.density_kg_m3 * 1000.0
-        rail_unit_cost = rail_len_m * rail_usd_m + 4.0
+        is_rod = rail_prof_id.startswith("steel_rod_") or prof.shape == "rod"
+        rail_unit_cost = rail_len_m * rail_usd_m + (3.0 if is_rod else 4.0)
 
         spec_str = f"{rail_mat.name}, L={rail_len_mm:.0f} mm"
         if mount_note:
             spec_str += f", {mount_note}"
 
-        _add_bom_item(
-            items,
-            sku=f"MOT-{sku_prefix}-RAIL",
-            category="motion",
-            name=f"{axis_label} Linear Rail ({prof.name})",
-            specification=spec_str,
-            quantity=rail_qty,
-            unit="pcs",
-            unit_cost_usd=rail_unit_cost,
-            unit_mass_g=rail_unit_mass_g,
-        )
-        _add_bom_item(
-            items,
-            sku=f"MOT-{sku_prefix}-CAR",
-            category="motion",
-            name=f"{axis_label} {car_name}",
-            specification=f"Preloaded block for {prof.id}",
-            quantity=carriage_qty,
-            unit="pcs",
-            unit_cost_usd=car_usd,
-            unit_mass_g=car_mass_g,
-        )
-        if prof.shape == "rail":
-            total_bolted_rail_mm += rail_len_mm * rail_qty
+        if is_rod:
+            rod_diam_mm = round(prof.width_m * 1e3)
+            rod_spec_str = (
+                f"{rail_mat.name}, Ø{rod_diam_mm:.0f}mm h6 chrome-plated shaft, L={rail_len_mm:.0f} mm"
+            )
+            if mount_note:
+                rod_spec_str += f", {mount_note}"
+            _add_bom_item(
+                items,
+                sku=f"MOT-{sku_prefix}-ROD",
+                category="motion",
+                name=f"{axis_label} Hardened Chrome Steel Smooth Rod ({prof.name})",
+                specification=rod_spec_str,
+                quantity=rail_qty,
+                unit="pcs",
+                unit_cost_usd=rail_unit_cost,
+                unit_mass_g=rail_unit_mass_g,
+            )
+            _add_bom_item(
+                items,
+                sku=f"MOT-{sku_prefix}-BRG",
+                category="motion",
+                name=f"{axis_label} {car_name}",
+                specification=f"Linear ball bearing for Ø{rod_diam_mm:.0f}mm smooth rod ({prof.id})",
+                quantity=carriage_qty,
+                unit="pcs",
+                unit_cost_usd=car_usd,
+                unit_mass_g=car_mass_g,
+            )
+        else:
+            _add_bom_item(
+                items,
+                sku=f"MOT-{sku_prefix}-RAIL",
+                category="motion",
+                name=f"{axis_label} Linear Rail ({prof.name})",
+                specification=spec_str,
+                quantity=rail_qty,
+                unit="pcs",
+                unit_cost_usd=rail_unit_cost,
+                unit_mass_g=rail_unit_mass_g,
+            )
+            _add_bom_item(
+                items,
+                sku=f"MOT-{sku_prefix}-CAR",
+                category="motion",
+                name=f"{axis_label} {car_name}",
+                specification=f"Preloaded block for {prof.id}",
+                quantity=carriage_qty,
+                unit="pcs",
+                unit_cost_usd=car_usd,
+                unit_mass_g=car_mass_g,
+            )
+            if prof.shape == "rail":
+                total_bolted_rail_mm += rail_len_mm * rail_qty
         total_carriages += carriage_qty
 
     z_norm = _normalize_z_drive(spec.bed.z_drive)
@@ -955,6 +1068,7 @@ def generate_bom(
             x_rail_len,
             x_rail_qty,
             mount_note=x_mount_note,
+            block_type=spec.gantry.rail_block_type,
         )
         _add_rail_and_carriage(
             "Y",
@@ -964,6 +1078,7 @@ def generate_bom(
             y_rail_len,
             2,
             mount_note=y_mount_note,
+            block_type=spec.gantry.rail_block_type,
         )
         if z_norm == "leadscrew_dual_belt_sync":
             z_rod_prof_id = (
@@ -1004,8 +1119,8 @@ def generate_bom(
                 unit_mass_g=lmk_info[2],
             )
             total_carriages += 4
-        else:
-            _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, z_rail_qty, z_rail_len, z_rail_qty)
+        elif z_rail_prof_id != "none":
+            _add_rail_and_carriage("Z", "Z-Axis", z_rail_prof_id, z_rail_qty, z_rail_len, z_rail_qty)
 
     elif arch == "cartesian_bedslinger":
         x_rail_len = round(min(w - 30.0, max(bx + 60.0, w - 50.0)), 0)
@@ -1022,13 +1137,24 @@ def generate_bom(
             x_rail_len,
             x_rail_qty,
             mount_note=x_mount_note,
+            block_type=spec.gantry.rail_block_type,
         )
-        _add_rail_and_carriage("Y", "Y-Bed", y_rail_prof.id, 2, y_rail_len, y_car_qty)
-        _add_rail_and_carriage("Z", "Z-Axis", y_rail_prof.id, 2, z_rail_len, 2)
+        _add_rail_and_carriage(
+            "Y",
+            "Y-Bed",
+            y_rail_prof.id,
+            2,
+            y_rail_len,
+            y_car_qty,
+            block_type=spec.gantry.rail_block_type,
+        )
+        if z_rail_prof_id != "none":
+            _add_rail_and_carriage("Z", "Z-Axis", z_rail_prof_id, 2, z_rail_len, 2)
 
     elif arch == "delta":
         tower_rail_len = round(min(h - 60.0, max(bz + 180.0, h - 160.0)), 0)
-        _add_rail_and_carriage("TWR", "Delta Tower", y_rail_prof.id, 3, tower_rail_len, 3)
+        if z_rail_prof_id != "none":
+            _add_rail_and_carriage("TWR", "Delta Tower", z_rail_prof_id, 3, tower_rail_len, 3)
 
     # Drive belts, pulleys, idlers (architecture-specific exact formulas)
     belt = spec.gantry.belt
@@ -1037,7 +1163,9 @@ def generate_bom(
         (belt.type, belt.core),
         float(belt.catalog_entry.get("cost_usd_per_m", 6.0)),
     )
-    belt_mass_g_m = round(belt.linear_mass_kg_m * 1000.0, 2)
+    belt_mass_g_m = _BELT_MASS_G_PER_M.get(
+        belt.type, round(belt.linear_mass_kg_m * 1000.0, 2)
+    )
     belt_width_hw_scale = max(1.0, round(0.7 + 0.05 * belt.hardware_width_mm, 2))
 
     if arch == "corexy":
@@ -1133,31 +1261,116 @@ def generate_bom(
 
     # Z-drive hardware (CoreXY & Cartesian)
     if arch != "delta":
-        if z_norm in ("belted_quad_z", "belted_z"):
-            z_axes = 4 if z_norm == "belted_quad_z" else 2
+        z_mech_id = spec.bed.effective_z_leadscrew_type
+        z_mech = Z_DRIVE_MECHANISM_CATALOG.get(z_mech_id, Z_DRIVE_MECHANISM_CATALOG["tr8x4_pom"])
+        z_kind = str(z_mech["kind"])
+
+        if z_norm in ("belted_quad_z", "belted_z") or z_kind == "belt":
+            z_axes = (
+                4
+                if z_norm == "belted_quad_z"
+                else {
+                    "belted_z": 2,
+                    "leadscrew_triple": 3,
+                    "leadscrew_dual": 2,
+                    "leadscrew_dual_belt_sync": 2,
+                    "leadscrew_single": 1,
+                }.get(z_norm, 2)
+            )
+            belt_w_mm = int(round(float(z_mech.get("diameter_mm", 6.0)))) if z_kind == "belt" else 6
+            belt_mass_g = _BELT_MASS_G_PER_M.get(
+                f"gt2_{belt_w_mm}mm", round(float(belt_w_mm) * 2.0, 1)
+            )
+            belt_cost_usd = 4.50 if belt_w_mm <= 6 else 6.80
             z_belt_m = round(z_axes * (h + 120.0) / 1000.0, 2)
+            z_belt_label = (
+                str(z_mech["short_name"])
+                if z_kind == "belt"
+                else f"GT2 {belt_w_mm}mm Z-Belt"
+            )
             _add_bom_item(
                 items,
                 sku="MOT-Z-BELT",
                 category="motion",
-                name="Z-Drive GT2 6mm Belt",
-                specification=f"{z_axes}x vertical Z drive belts (fiberglass core)",
+                name=f"Z-Drive GT2 {belt_w_mm}mm Belt",
+                specification=f"{z_axes}x vertical Z drive belts (fiberglass core, {z_belt_label})",
                 quantity=z_belt_m,
                 unit="m",
-                unit_cost_usd=4.50,
-                unit_mass_g=12.0,
+                unit_cost_usd=belt_cost_usd,
+                unit_mass_g=belt_mass_g,
             )
+            if z_mech_id == "gt2_9mm_planetary_z":
+                gear_name = "5:1 Planetary Z-Drive Gearbox & 9mm Pulley Kit"
+                gear_spec = "5:1 planetary reduction gearbox, 20T 9mm GT2 drive pulley, idlers & shaft kit"
+                gear_cost = 38.00
+                gear_mass = 190.0
+            elif z_mech_id == "gt2_9mm_worm_z":
+                gear_name = "20:1 Self-Locking Worm Z-Drive Gearbox & 9mm Pulley Kit"
+                gear_spec = "Self-locking 20:1 worm reduction gearbox (anti-drop), 20T 9mm GT2 pulley & idlers"
+                gear_cost = 48.00
+                gear_mass = 240.0
+            elif z_mech_id == "kevinakasam_belted_z":
+                gear_name = "KevinAkaSam 80T/16T (5:1) Belted-Z Pulley & Shaft Kit"
+                gear_spec = "80T + 16T GT2 6mm pulleys, 188mm closed-loop belt, 5mm shaft & bearings"
+                gear_cost = 16.50
+                gear_mass = 85.0
+            else:
+                gear_name = (
+                    "Z-Drive 80T/16T Reduction Pulley & Shaft Kit"
+                    if belt_w_mm <= 6
+                    else f"Z-Drive 80T/16T ({belt_w_mm}mm) Reduction Pulley & Shaft Kit"
+                )
+                gear_spec = f"80T + 16T GT2 ({belt_w_mm}mm) pulleys, 188mm closed loop belt, 5mm shaft & bearings"
+                gear_cost = 16.50 if belt_w_mm <= 6 else 22.00
+                gear_mass = 85.0 if belt_w_mm <= 6 else 105.0
             _add_bom_item(
                 items,
                 sku="MOT-Z-GEAR",
                 category="motion",
-                name="Z-Drive 80T/16T Reduction Pulley & Shaft Kit",
-                specification="80T + 16T GT2 pulleys, 188mm closed loop belt, 5mm shaft & bearings",
+                name=gear_name,
+                specification=gear_spec,
                 quantity=z_axes,
                 unit="sets",
-                unit_cost_usd=16.50,
-                unit_mass_g=85.0,
+                unit_cost_usd=gear_cost,
+                unit_mass_g=gear_mass,
             )
+            if z_mech_id == "kevinakasam_belted_z":
+                keybak_qty = 1 if z_axes <= 2 else 2
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-KEYBAK",
+                    category="motion",
+                    name="Keybak Retractable Z-Axis Counterbalance Reel",
+                    specification="Constant-force retractable Z tether preventing unpowered bed/gantry drop",
+                    quantity=keybak_qty,
+                    unit="pcs",
+                    unit_cost_usd=14.00,
+                    unit_mass_g=85.0,
+                )
+            if z_norm == "leadscrew_dual_belt_sync":
+                z_sync_belt_mm = round(2.0 * w + d + 200.0, 0)
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-SYNC-BELT",
+                    category="motion",
+                    name="Z-Axis Closed-Loop GT2 Z-Sync Belt",
+                    specification=f"Closed-loop 2GT {belt_w_mm}mm fiberglass belt, L={z_sync_belt_mm:.0f} mm",
+                    quantity=1,
+                    unit="pcs",
+                    unit_cost_usd=7.50,
+                    unit_mass_g=round((z_sync_belt_mm * 1e-3) * belt_mass_g, 1),
+                )
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-SYNC-PULLEY",
+                    category="motion",
+                    name="Z-Sync GT2 20T Pulley",
+                    specification="1x 5mm bore (Z stepper) + 2x 5mm/8mm bore (belted Z shafts), aluminum",
+                    quantity=3,
+                    unit="pcs",
+                    unit_cost_usd=4.20,
+                    unit_mass_g=12.0,
+                )
         else:
             ls_qty = {
                 "leadscrew_triple": 3,
@@ -1166,41 +1379,97 @@ def generate_bom(
                 "leadscrew_single": 1,
             }.get(z_norm, 2)
             ls_len_mm = round(min(h - 40.0, bz + 100.0), 0)
-            ls_mass_g = (ls_len_mm * 1e-3) * 320.0  # TR8 stainless ~320 g/m
-            z_mech_id = spec.bed.effective_z_leadscrew_type
-            is_tr8x4 = z_mech_id == "tr8x4_pom"
-            ls_label = "TR8x4" if is_tr8x4 else "TR8x8"
-            ls_starts = "2-start" if is_tr8x4 else "4-start"
-            _add_bom_item(
-                items,
-                sku="MOT-Z-LS",
-                category="motion",
-                name=f"{ls_label} Stainless Leadscrew",
-                specification=f"8mm dia, 2mm pitch, {ls_starts}, L={ls_len_mm:.0f} mm",
-                quantity=ls_qty,
-                unit="pcs",
-                unit_cost_usd=11.00 + (ls_len_mm * 1e-3) * 14.0,
-                unit_mass_g=ls_mass_g,
-            )
-            _add_bom_item(
-                items,
-                sku="MOT-Z-NUT",
-                category="motion",
-                name=(
-                    f"{ls_label} POM Anti-Backlash Leadscrew Nut & Pillow-Block Bearing"
-                    if z_norm == "leadscrew_dual_belt_sync"
-                    else f"{ls_label} POM Anti-Backlash Leadscrew Nut & 5x8mm Coupler"
-                ),
-                specification=(
-                    "Spring-loaded POM nut + KFL08/608 pillow-block thrust bearings"
-                    if z_norm == "leadscrew_dual_belt_sync"
-                    else "Spring-loaded POM nut + flexible aluminum shaft coupler"
-                ),
-                quantity=ls_qty,
-                unit="sets",
-                unit_cost_usd=8.50,
-                unit_mass_g=35.0,
-            )
+            if z_kind == "ballscrew":
+                diam_mm = int(round(float(z_mech.get("diameter_mm", 12.0))))
+                lead_mm = float(z_mech.get("lead_mm", 4.0))
+                is_1605 = z_mech_id == "sfu1605_fk12" or diam_mm >= 16
+                bs_code = "SFU1605" if is_1605 else "SFU1204"
+                brg_code = "FK12/BK12" if is_1605 else "BK10"
+                ls_label = bs_code
+                ls_mass_g = round((ls_len_mm * 1e-3) * float(z_mech.get("mass_kg_per_m", 0.68)) * 1000.0, 1)
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-LS",
+                    category="motion",
+                    name=f"{bs_code} Rolled Ballscrew & Ball Nut",
+                    specification=f"{diam_mm}mm dia, {lead_mm:.0f}mm lead C7 ballscrew w/ recirculating ball nut, L={ls_len_mm:.0f} mm",
+                    quantity=ls_qty,
+                    unit="pcs",
+                    unit_cost_usd=(44.00 if is_1605 else 32.00) + (ls_len_mm * 1e-3) * (32.0 if is_1605 else 24.0),
+                    unit_mass_g=ls_mass_g,
+                )
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-BK",
+                    category="motion",
+                    name=f"{brg_code} Angular-Contact Thrust Block & Coupler",
+                    specification=f"Preloaded {brg_code} angular-contact thrust bearing block + diaphragm coupler",
+                    quantity=ls_qty,
+                    unit="sets",
+                    unit_cost_usd=26.00 if is_1605 else 18.00,
+                    unit_mass_g=240.0 if is_1605 else 160.0,
+                )
+                if bool(z_mech.get("wobble_decoupled", False)):
+                    _add_bom_item(
+                        items,
+                        sku="MOT-Z-WOBBLEX",
+                        category="motion",
+                        name="WobbleX WS12 Oldham Z-Wobble Decoupler Kit",
+                        specification=f"Self-aligning hardened steel pin-and-ball Z-wobble decoupler for {bs_code} nut",
+                        quantity=ls_qty,
+                        unit="sets",
+                        unit_cost_usd=16.00,
+                        unit_mass_g=48.0,
+                    )
+            else:
+                is_tr8x4 = abs(float(z_mech.get("lead_mm", 8.0)) - 4.0) < 0.5
+                ls_label = "TR8x4" if is_tr8x4 else "TR8x8"
+                ls_starts = "2-start" if is_tr8x4 else "4-start"
+                ls_mass_g = (ls_len_mm * 1e-3) * 320.0  # TR8 stainless ~320 g/m
+                is_brass = "brass" in z_mech_id
+                nut_mat = "Machined C360 Brass" if is_brass else "POM Anti-Backlash"
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-LS",
+                    category="motion",
+                    name=f"{ls_label} Stainless Leadscrew",
+                    specification=f"8mm dia, 2mm pitch, {ls_starts}, L={ls_len_mm:.0f} mm",
+                    quantity=ls_qty,
+                    unit="pcs",
+                    unit_cost_usd=11.00 + (ls_len_mm * 1e-3) * 14.0,
+                    unit_mass_g=ls_mass_g,
+                )
+                _add_bom_item(
+                    items,
+                    sku="MOT-Z-NUT",
+                    category="motion",
+                    name=(
+                        f"{ls_label} {nut_mat} Leadscrew Nut & Pillow-Block Bearing"
+                        if z_norm == "leadscrew_dual_belt_sync"
+                        else f"{ls_label} {nut_mat} Leadscrew Nut & 5x8mm Coupler"
+                    ),
+                    specification=(
+                        f"{nut_mat} nut + KFL08/608 pillow-block thrust bearings"
+                        if z_norm == "leadscrew_dual_belt_sync"
+                        else f"{nut_mat} nut + flexible aluminum shaft coupler"
+                    ),
+                    quantity=ls_qty,
+                    unit="sets",
+                    unit_cost_usd=11.00 if is_brass else 8.50,
+                    unit_mass_g=45.0 if is_brass else 35.0,
+                )
+                if bool(z_mech.get("wobble_decoupled", False)):
+                    _add_bom_item(
+                        items,
+                        sku="MOT-Z-WOBBLEX",
+                        category="motion",
+                        name="WobbleX WS8 Oldham Z-Wobble Decoupler Kit",
+                        specification=f"Self-aligning hardened steel pin-and-ball Z-wobble decoupler for {ls_label} nut",
+                        quantity=ls_qty,
+                        unit="sets",
+                        unit_cost_usd=14.50,
+                        unit_mass_g=42.0,
+                    )
             if z_norm == "leadscrew_dual_belt_sync":
                 z_sync_belt_mm = round(2.0 * w + d + 200.0, 0)
                 _add_bom_item(
@@ -1210,19 +1479,19 @@ def generate_bom(
                     name="Z-Axis Closed-Loop GT2 Z-Sync Belt",
                     specification=(
                         f"Closed-loop 2GT 6mm fiberglass belt, L={z_sync_belt_mm:.0f} mm "
-                        f"(syncs dual {ls_label} leadscrews to single Z stepper)"
+                        f"(syncs dual {ls_label} screws to single Z stepper)"
                     ),
                     quantity=1,
                     unit="pcs",
                     unit_cost_usd=7.50,
-                    unit_mass_g=round((z_sync_belt_mm * 1e-3) * 10.0, 1),
+                    unit_mass_g=round((z_sync_belt_mm * 1e-3) * _BELT_MASS_G_PER_M["gt2_6mm"], 1),
                 )
                 _add_bom_item(
                     items,
                     sku="MOT-Z-SYNC-PULLEY",
                     category="motion",
                     name="Z-Sync GT2 20T Pulley",
-                    specification="1x 5mm bore (Z stepper) + 2x 8mm bore (TR8 leadscrews), aluminum",
+                    specification=f"1x 5mm bore (Z stepper) + 2x {'10/12mm' if z_kind == 'ballscrew' else '8mm'} bore ({ls_label}), aluminum",
                     quantity=3,
                     unit="pcs",
                     unit_cost_usd=4.20,
@@ -1330,7 +1599,7 @@ def generate_bom(
         quantity=1,
         unit="pcs",
         unit_cost_usd=hotend_cost,
-        unit_mass_g=hotend.block_mass_g + 48.0,
+        unit_mass_g=float(hotend.mass_g),
     )
 
     _add_bom_item(
@@ -1426,6 +1695,42 @@ def generate_bom(
         unit="sets",
         unit_cost_usd=pei_cost,
         unit_mass_g=bed_area_m2 * 3500.0,
+    )
+
+    bed_mount_id = bed.mount_type
+    bed_mount_cfg = BED_MOUNT_CATALOG.get(bed_mount_id, BED_MOUNT_CATALOG["kinematic_3pt"])
+    mount_pts = int(bed_mount_cfg.get("mount_points", 3))
+    mount_cost = float(bed_mount_cfg.get("cost_usd", 25.0))
+    radial_mode = str(bed_mount_cfg.get("radial_dof_mode", "maxwell_vgroove"))
+    tap_label = "Tap-rated" if bool(bed_mount_cfg.get("tap_rated", False)) else "non-Tap"
+    standoff_h = float(bed_mount_cfg.get("standoff_height_mm", 15.0))
+    mount_mass_map = {
+        "rigid_4pt": 48.0,
+        "floating_4pt": 65.0,
+        "silicone_4pt": 28.0,
+        "springs_4pt": 36.0,
+        "trident_3pt_standoffs": 42.0,
+        "kinematic_3pt": 135.0,
+        "whopping_pochard_kinematic": 165.0,
+        "cnc_kelvin_magnetic": 195.0,
+        "captive_belleville_kinematic": 225.0,
+        "dual_leaf_ti_kinematic": 180.0,
+        "spherical_3pt_ratrig": 145.0,
+    }
+    mount_mass_g = mount_mass_map.get(bed_mount_id, 95.0 if mount_pts == 3 else 50.0)
+    _add_bom_item(
+        items,
+        sku="BED-MOUNT",
+        category="bed",
+        name=f"Bed Mounting Hardware ({bed_mount_cfg['name']})",
+        specification=(
+            f"{mount_pts}-pt ({radial_mode}), h={standoff_h:.0f}mm, {tap_label}, "
+            f"k_z={float(bed_mount_cfg['k_axial_n_per_mm']):.0f} N/mm/pt"
+        ),
+        quantity=1,
+        unit="sets",
+        unit_cost_usd=mount_cost,
+        unit_mass_g=mount_mass_g,
     )
 
     # ------------------------------------------------------------------

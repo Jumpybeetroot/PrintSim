@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Literal
@@ -51,17 +52,22 @@ from printsim.geometry import (
     generate_bom,
 )
 from printsim.schema import (
+    BEARING_RADIAL_PLAY_UM,
     BED_MOUNT_CATALOG,
     BELT_CATALOG,
     BELT_ROUTING_CATALOG,
+    CORNER_JOINT_BASE_2020,
+    CORNER_JOINT_IWAN_DAMPING,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
     GANTRY_WEIGHT_CLASSES,
     HOTEND_CATALOG,
+    HOTEND_MOUNT_CLAMP_BASE_N_PER_MM,
     MATERIAL_CATALOG,
     PROFILE_CATALOG,
+    RAIL_PRELOAD_FRACTIONS,
     RAIL_QUALITY_CATALOG,
     STEPPER_CATALOG,
     TOOLHEAD_CONSTRUCTION_CATALOG,
@@ -77,6 +83,10 @@ from printsim.thermal import FILAMENT_CATALOG
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
+_ALLOWED_HARDWARE_CATEGORIES = frozenset(
+    {"hotends", "toolheads", "gantry_brackets", "assemblies"}
+)
+_VALID_ASSET_ID_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 class SimulateRequest(BaseModel):
@@ -342,18 +352,37 @@ def create_app() -> FastAPI:
                 {"id": "bottom", "name": "Bottom Face (Inverted)", "short_name": "Bottom", "notes": "Bolted to bottom (-Z) face of Y extrusions: high Z stiffness & debris protection"},
             ],
             "corner_joints": [
-                {"id": "l_bracket", "name": "Internal/Stamped L-Bracket", "short_name": "L-Bracket"},
-                {"id": "blind_joint", "name": "Blind Joint (Voron Standard)", "short_name": "Blind Joint"},
-                {"id": "gusset_plate", "name": "External CNC Gusset Plate", "short_name": "Gusset Plate"},
-                {"id": "corner_cube", "name": "3-Way Cast/CNC Corner Cube", "short_name": "Corner Cube"},
-                {"id": "rigid", "name": "Idealized Rigid Welded Corner", "short_name": "Rigid"},
+                {
+                    "id": jid,
+                    "name": jname,
+                    "short_name": jshort,
+                    "k_t_n_per_mm": CORNER_JOINT_BASE_2020[jid][0] * 1e-3,
+                    "k_r_inplane_nm_rad": CORNER_JOINT_BASE_2020[jid][1],
+                    "k_r_torsion_nm_rad": CORNER_JOINT_BASE_2020[jid][2],
+                    "damping_delta": CORNER_JOINT_IWAN_DAMPING[jid],
+                }
+                for jid, jname, jshort in (
+                    ("l_bracket", "Internal/Stamped L-Bracket", "L-Bracket"),
+                    ("blind_joint", "Blind Joint (Voron Standard)", "Blind Joint"),
+                    ("gusset_plate", "External CNC Gusset Plate", "Gusset Plate"),
+                    ("corner_cube", "3-Way Cast/CNC Corner Cube", "Corner Cube"),
+                    ("rigid", "Idealized Rigid Welded Corner", "Rigid"),
+                )
             ],
             "rail_preloads": [
-                {"id": "ZF", "name": "ZF (Slight Clearance)", "short_name": "ZF"},
-                {"id": "Z0", "name": "Z0 (Zero Clearance / Light)", "short_name": "Z0"},
-                {"id": "Z1", "name": "Z1 (Light Preload — Voron Recommended)", "short_name": "Z1"},
-                {"id": "ZA", "name": "ZA (Medium Preload)", "short_name": "ZA"},
-                {"id": "ZB", "name": "ZB (Heavy Preload)", "short_name": "ZB"},
+                {
+                    "id": pid,
+                    "name": pname,
+                    "short_name": pid,
+                    "preload_fraction": RAIL_PRELOAD_FRACTIONS[pid],
+                }
+                for pid, pname in (
+                    ("ZF", "ZF (Slight Clearance)"),
+                    ("Z0", "Z0 (Zero Clearance / Light)"),
+                    ("Z1", "Z1 (Light Preload — Voron Recommended)"),
+                    ("ZA", "ZA (Medium Preload)"),
+                    ("ZB", "ZB (Heavy Preload)"),
+                )
             ],
             "rail_qualities": list(RAIL_QUALITY_CATALOG.values()),
             "rail_block_types": [
@@ -371,14 +400,36 @@ def create_app() -> FastAPI:
             "belts": list(BELT_CATALOG.values()),
             "belt_routings": list(BELT_ROUTING_CATALOG.values()),
             "hotend_presets": list(HOTEND_CATALOG.values()),
+            "hotend_mount_styles": [
+                {
+                    "id": msid,
+                    "name": msname,
+                    "short_name": msshort,
+                    "clamp_stiffness_base_n_per_mm": HOTEND_MOUNT_CLAMP_BASE_N_PER_MM[msid],
+                }
+                for msid, msname, msshort in (
+                    ("groove_mount", "J-Head Groove-Mount Collar (E3D V6)", "Groove Mount"),
+                    ("rigid_4bolt_m3", "4-Bolt M3 Rigid Flange (Revo Voron)", "4-Bolt M3"),
+                    ("dragon_4bolt_m25", "4-Bolt M2.5 Rigid Pattern (Dragon / Rapido / Goliath)", "4-Bolt M2.5"),
+                    ("chube_6bolt_m3_18pcd", "6-Bolt M3 18mm PCD Monocoque Flange (Chube)", "6-Bolt M3 18PCD"),
+                )
+            ],
             "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
-            "z_rail_profiles": Z_RAIL_PROFILES,
+            "z_rail_profiles": list(Z_RAIL_PROFILES.values()),
             "top_braces": list(TOP_BRACE_CATALOG.values()),
             "front_braces": list(FRONT_BRACE_CATALOG.values()),
             "bearing_clearances": [
-                {"id": "C2", "name": "ISO C2 Tight Clearance (3.5 um)", "short_name": "C2"},
-                {"id": "CN", "name": "ISO CN Normal Clearance (7.5 um)", "short_name": "CN"},
-                {"id": "C3", "name": "ISO C3 Loose Clearance (15.5 um)", "short_name": "C3"},
+                {
+                    "id": cid,
+                    "name": cname,
+                    "short_name": cid,
+                    "radial_play_um": BEARING_RADIAL_PLAY_UM[cid],
+                }
+                for cid, cname in (
+                    ("C2", "ISO C2 Tight Clearance (3.5 um)"),
+                    ("CN", "ISO CN Normal Clearance (7.5 um)"),
+                    ("C3", "ISO C3 Loose Clearance (15.5 um)"),
+                )
             ],
             "drive_types": [
                 {
@@ -411,6 +462,7 @@ def create_app() -> FastAPI:
                 {"id": "zvdd", "name": "ZVDD (Zero Vibration Double-Derivative)", "short_name": "ZVDD"},
                 {"id": "smooth_zv", "name": "SMOOTH_ZV (Kalico C1/C2 Smooth ZV)", "short_name": "SMOOTH_ZV"},
                 {"id": "smooth_ei", "name": "SMOOTH_EI (Kalico C1/C2 Smooth EI)", "short_name": "SMOOTH_EI"},
+                {"id": "smooth_flatness", "name": "SMOOTH_FLATNESS (Kalico Exact Flatness Bell)", "short_name": "SMOOTH_FLATNESS"},
             ],
             "part_presets": [
                 {"id": "corner_gusset", "name": "40mm L-Corner Gusset Bracket"},
@@ -440,6 +492,43 @@ def create_app() -> FastAPI:
             "spec": spec.model_dump(mode="json"),
             "yaml_text": spec.to_yaml(),
         }
+
+    @api.get("/api/assets/hardware")
+    def get_hardware_assets() -> dict[str, Any]:
+        try:
+            from printsim.cad_assets.registry import list_hardware_assets
+        except ImportError:
+            return {"hotends": {}, "toolheads": {}}
+        return list_hardware_assets()
+
+    @api.get("/api/assets/hardware/{category}/{asset_id}/visual.glb")
+    def get_hardware_asset_visual_glb(category: str, asset_id: str) -> FileResponse:
+        if category not in _ALLOWED_HARDWARE_CATEGORIES:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown hardware asset category '{category}'"
+            )
+        if not _VALID_ASSET_ID_RE.fullmatch(asset_id):
+            raise HTTPException(
+                status_code=404, detail=f"Invalid hardware asset ID '{asset_id}'"
+            )
+        try:
+            from printsim.cad_assets.registry import get_visual_glb_path
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=404, detail="Hardware asset registry unavailable"
+            ) from exc
+
+        glb_path = get_visual_glb_path(category, asset_id)
+        if glb_path is None or not Path(glb_path).is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Visual GLB asset not found for '{category}/{asset_id}'",
+            )
+        return FileResponse(
+            path=str(glb_path),
+            media_type="model/gltf-binary",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
     @api.post("/api/simulate")
     def run_simulation(req: SimulateRequest) -> dict:

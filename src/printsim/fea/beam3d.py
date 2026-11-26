@@ -1,11 +1,55 @@
-"""Exact 12-DOF 3D Euler-Bernoulli frame finite element matrices."""
+"""Exact 12-DOF 3D Euler-Bernoulli / Timoshenko frame finite element matrices."""
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
 from printsim.fea.shell_mitc4 import fastener_spring_matrices, mitc4_shell_matrices
-from printsim.geometry.builder import AssemblyModel, StructuralMember
+from printsim.geometry.builder import (
+    AssemblyModel,
+    AttachedSuperelement,
+    StructuralMember,
+    StructuralNode,
+)
+
+
+def node_rotational_inertia_xyz(
+    node: StructuralNode,
+    assembly: AssemblyModel,
+) -> tuple[float, float, float]:
+    """Return diagonal rotational inertia ``(Ixx, Iyy, Izz)`` [kg*m^2] for a lumped node (B-11).
+
+    - Bed surface: thin rectangular plate ``m*by^2/12, m*bx^2/12, m*(bx^2+by^2)/12``
+      (or circular disk ``m*R^2/4, m*R^2/4, m*R^2/2`` for Delta printers).
+    - Nozzle tip: compact ~7 mm gyration radius (heater block).
+    - Other lumped masses (toolhead CoG, motors, carriage hubs): 25 mm box estimate.
+    """
+    m = float(node.lumped_mass_kg)
+    if m <= 0.0:
+        return (0.0, 0.0, 0.0)
+
+    bed_id = getattr(assembly, "bed_node_id", "") or "bed_surface"
+    if node.id == bed_id:
+        spec = getattr(assembly, "spec", None)
+        if spec is not None and hasattr(spec, "bed"):
+            bx = max(float(spec.bed.size_mm[0]) * 1e-3, 0.05)
+            by = max(float(spec.bed.size_mm[1]) * 1e-3, 0.05)
+            kin_type = getattr(spec, "architecture", None)
+            if kin_type == "delta":
+                r_disk = 0.25 * (bx + by)
+                ixx = m * (r_disk**2) / 4.0
+                return (ixx, ixx, m * (r_disk**2) / 2.0)
+            return (
+                m * (by**2) / 12.0,
+                m * (bx**2) / 12.0,
+                m * (bx**2 + by**2) / 12.0,
+            )
+
+    r_gyr = 0.007 if node.role == "nozzle" else 0.025
+    rot_i = m * (r_gyr**2)
+    return (rot_i, rot_i, rot_i)
 
 
 def beam_rotation_matrix(p0: np.ndarray, p1: np.ndarray) -> tuple[np.ndarray, float]:
@@ -41,6 +85,32 @@ def transformation_12x12(r_mat: np.ndarray) -> np.ndarray:
     return t_mat
 
 
+def beam_shear_coefficients(member: StructuralMember) -> tuple[float, float]:
+    """Return Timoshenko shear correction factors ``(kappa_y, kappa_z)`` for anisotropic tubes.
+
+    Returns ``(0.0, 0.0)`` (pure Euler-Bernoulli) unless ``member.profile.shape == "tube"``
+    and ``E / G > 4.5``, preserving exact isotropic Euler-Bernoulli benchmarks while capturing
+    transverse shear deformation in high-E/G composite tubes. For anisotropic closed hollow
+    tubes, computes Cowper (1966) box-web shear factors using ``wall_thickness_m`` (or ``0.434``
+    fallback when unspecified).
+    """
+    if member.profile.shape != "tube":
+        return (0.0, 0.0)
+    e_pa = float(member.material.youngs_modulus_pa)
+    g_pa = max(float(member.material.effective_shear_modulus_pa), 1.0)
+    if e_pa / g_pa <= 4.5:
+        return (0.0, 0.0)
+    t_wall = member.profile.wall_thickness_m
+    if t_wall is None or t_wall <= 0.0:
+        return (0.434, 0.434)
+    area = max(float(member.profile.area_m2), 1e-12)
+    a_sy = 2.0 * float(member.profile.width_m) * float(t_wall)
+    a_sz = 2.0 * float(member.profile.height_m) * float(t_wall)
+    kappa_y = min(0.85, 0.87 * a_sy / area)
+    kappa_z = min(0.85, 0.87 * a_sz / area)
+    return (kappa_y, kappa_z)
+
+
 def local_beam_stiffness(
     e_pa: float,
     g_pa: float,
@@ -50,8 +120,10 @@ def local_beam_stiffness(
     j_torsion: float,
     length: float,
     bending_scale: float = 1.0,
+    kappa_shear_y: float = 0.0,
+    kappa_shear_z: float = 0.0,
 ) -> np.ndarray:
-    """12x12 local stiffness matrix for a 3D Euler-Bernoulli beam element.
+    """12x12 local stiffness matrix for a 3D Euler-Bernoulli / Przemieniecki Timoshenko beam element.
 
     Local DOF ordering:
       [u_x1, u_y1, u_z1, th_x1, th_y1, th_z1, u_x2, u_y2, u_z2, th_x2, th_y2, th_z2]
@@ -72,27 +144,37 @@ def local_beam_stiffness(
     k[3, 9] = k[9, 3] = -gj_l
 
     # Bending in local x-y plane: (u_y1, th_z1, u_y2, th_z2), v'(x) = +th_z
-    c_z = e_pa * iz * bending_scale / L3
+    phi_y = (
+        (12.0 * e_pa * iz * bending_scale) / (kappa_shear_y * max(g_pa, 1.0) * area * L2)
+        if kappa_shear_y > 0.0
+        else 0.0
+    )
+    c_z = e_pa * iz * bending_scale / ((1.0 + phi_y) * L3)
     idx_xy = [1, 5, 7, 11]
     k_xy = c_z * np.array(
         [
             [12.0, 6.0 * L, -12.0, 6.0 * L],
-            [6.0 * L, 4.0 * L2, -6.0 * L, 2.0 * L2],
+            [6.0 * L, (4.0 + phi_y) * L2, -6.0 * L, (2.0 - phi_y) * L2],
             [-12.0, -6.0 * L, 12.0, -6.0 * L],
-            [6.0 * L, 2.0 * L2, -6.0 * L, 4.0 * L2],
+            [6.0 * L, (2.0 - phi_y) * L2, -6.0 * L, (4.0 + phi_y) * L2],
         ]
     )
     k[np.ix_(idx_xy, idx_xy)] += k_xy
 
     # Bending in local x-z plane: (u_z1, th_y1, u_z2, th_y2), w'(x) = -th_y
-    c_y = e_pa * iy * bending_scale / L3
+    phi_z = (
+        (12.0 * e_pa * iy * bending_scale) / (kappa_shear_z * max(g_pa, 1.0) * area * L2)
+        if kappa_shear_z > 0.0
+        else 0.0
+    )
+    c_y = e_pa * iy * bending_scale / ((1.0 + phi_z) * L3)
     idx_xz = [2, 4, 8, 10]
     k_xz = c_y * np.array(
         [
             [12.0, -6.0 * L, -12.0, -6.0 * L],
-            [-6.0 * L, 4.0 * L2, 6.0 * L, 2.0 * L2],
+            [-6.0 * L, (4.0 + phi_z) * L2, 6.0 * L, (2.0 - phi_z) * L2],
             [-12.0, 6.0 * L, 12.0, 6.0 * L],
-            [-6.0 * L, 2.0 * L2, 6.0 * L, 4.0 * L2],
+            [-6.0 * L, (2.0 - phi_z) * L2, 6.0 * L, (4.0 + phi_z) * L2],
         ]
     )
     k[np.ix_(idx_xz, idx_xz)] += k_xz
@@ -150,12 +232,97 @@ def local_beam_mass(
     return m
 
 
+def _skew_3x3(vec: np.ndarray) -> np.ndarray:
+    vx, vy, vz = float(vec[0]), float(vec[1]), float(vec[2])
+    return np.array(
+        [
+            [0.0, -vz, vy],
+            [vz, 0.0, -vx],
+            [-vy, vx, 0.0],
+        ],
+        dtype=float,
+    )
+
+
+def superelement_element_matrices(
+    se: AttachedSuperelement,
+    assembly: AssemblyModel,
+    node_idx: dict[str, int],
+    internal_dof_start: int,
+) -> tuple[list[int], np.ndarray, np.ndarray | None]:
+    """Return ``(global_dofs, K_eff, M_eff)`` for a 2-port Craig-Bampton superelement.
+
+    Applies the exact rigid-arm port transform ``u1_cad = u1 + skew(dp_asm - dp_cad) @ th1``
+    whenever ``se.port_coords_cad_m`` differs from the assembly port positions, guaranteeing
+    exact zero strain energy under arbitrary 6-DOF global rigid-body motion.
+    """
+    i0 = node_idx[se.port_node_ids[0]]
+    i1 = node_idx[se.port_node_ids[1]]
+    p0_asm = assembly.nodes[i0].position_m
+    p1_asm = assembly.nodes[i1].position_m
+    dp_asm = p1_asm - p0_asm
+
+    K_cb = np.asarray(se.K_cb, dtype=float)
+    n_tot = int(K_cb.shape[0])
+    n_m = max(0, int(getattr(se, "n_internal_modes", max(0, n_tot - 12))))
+    if K_cb.shape != (12 + n_m, 12 + n_m):
+        raise ValueError(
+            f"Superelement '{se.id}' expected K_cb shape {(12 + n_m, 12 + n_m)}, got {K_cb.shape}"
+        )
+
+    M_raw = getattr(se, "M_cb", None)
+    M_mat = np.asarray(M_raw, dtype=float) if M_raw is not None else None
+    if M_mat is not None and M_mat.shape != K_cb.shape:
+        raise ValueError(
+            f"Superelement '{se.id}' M_cb shape {M_mat.shape} does not match K_cb {K_cb.shape}"
+        )
+
+    port_cad = getattr(se, "port_coords_cad_m", None)
+    if port_cad is not None:
+        p_cad = np.asarray(port_cad, dtype=float)
+        dp_cad = p_cad[1] - p_cad[0]
+        delta = dp_asm - dp_cad
+        if float(np.linalg.norm(delta)) > 1e-12:
+            J_b = np.eye(12, dtype=float)
+            J_b[6:9, 9:12] = _skew_3x3(delta)
+            if n_m > 0:
+                J_aug = np.eye(12 + n_m, dtype=float)
+                J_aug[:12, :12] = J_b
+            else:
+                J_aug = J_b
+            K_eff = J_aug.T @ K_cb @ J_aug
+            M_eff = (J_aug.T @ M_mat @ J_aug) if M_mat is not None else None
+        else:
+            K_eff = K_cb
+            M_eff = M_mat
+    else:
+        K_eff = K_cb
+        M_eff = M_mat
+
+    K_eff = 0.5 * (K_eff + K_eff.T)
+    if M_eff is not None:
+        M_eff = 0.5 * (M_eff + M_eff.T)
+
+    dofs = (
+        list(range(6 * i0, 6 * i0 + 6))
+        + list(range(6 * i1, 6 * i1 + 6))
+        + list(range(internal_dof_start, internal_dof_start + n_m))
+    )
+    return dofs, K_eff, M_eff
+
+
 def assemble_global_matrices(
     assembly: AssemblyModel,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int], list[int]]:
     """Assemble global K, M, gravity load vector F_g, node index map, and free DOF list."""
     n_nodes = len(assembly.nodes)
-    n_dof = 6 * n_nodes
+    n_nodal_dof = 6 * n_nodes
+    superelements = getattr(assembly, "superelements", ())
+    n_internal_dofs = sum(
+        max(0, int(getattr(se, "n_internal_modes", max(0, np.asarray(se.K_cb).shape[0] - 12))))
+        for se in superelements
+    )
+    n_dof = n_nodal_dof + n_internal_dofs
     node_idx = {node.id: i for i, node in enumerate(assembly.nodes)}
 
     K = np.zeros((n_dof, n_dof), dtype=float)
@@ -173,6 +340,7 @@ def assemble_global_matrices(
         t_mat = transformation_12x12(r_mat)
 
         bend_scale = 0.08 if member.is_truss else 1.0
+        kappa_y, kappa_z = beam_shear_coefficients(member)
         k_loc = local_beam_stiffness(
             e_pa=member.material.youngs_modulus_pa,
             g_pa=member.material.effective_shear_modulus_pa,
@@ -182,6 +350,8 @@ def assemble_global_matrices(
             j_torsion=member.profile.j_m4,
             length=length,
             bending_scale=bend_scale,
+            kappa_shear_y=kappa_y,
+            kappa_shear_z=kappa_z,
         )
         m_loc = local_beam_mass(
             rho=member.material.density_kg_m3,
@@ -198,10 +368,29 @@ def assemble_global_matrices(
         K[np.ix_(dofs, dofs)] += k_glob
         M[np.ix_(dofs, dofs)] += m_glob
 
-        # Equivalent nodal gravity load (-Z)
+        # Consistent Euler-Bernoulli nodal gravity load (-Z) including fixed-end moments.
+        # Local bending conventions: v'(x) = +th_z => M_z = +/- w_y L^2 / 12;
+        # w'(x) = -th_y => M_y = -/+ w_z L^2 / 12.
         elem_weight = member.profile.area_m2 * length * member.material.density_kg_m3 * g_acc
-        F_grav[6 * i0 + 2] -= 0.5 * elem_weight
-        F_grav[6 * i1 + 2] -= 0.5 * elem_weight
+        w_loc = r_mat @ np.array([0.0, 0.0, -elem_weight], dtype=float)
+        f_grav_loc = np.array(
+            [
+                0.5 * w_loc[0],
+                0.5 * w_loc[1],
+                0.5 * w_loc[2],
+                0.0,
+                -(w_loc[2] * length) / 12.0,
+                +(w_loc[1] * length) / 12.0,
+                0.5 * w_loc[0],
+                0.5 * w_loc[1],
+                0.5 * w_loc[2],
+                0.0,
+                +(w_loc[2] * length) / 12.0,
+                -(w_loc[1] * length) / 12.0,
+            ],
+            dtype=float,
+        )
+        F_grav[dofs] += t_mat.T @ f_grav_loc
 
     # Assemble 24-DOF MITC4 shell panel elements
     for shell in assembly.shell_elements:
@@ -236,20 +425,33 @@ def assemble_global_matrices(
         dofs = list(range(6 * i_s, 6 * i_s + 6)) + list(range(6 * i_f, 6 * i_f + 6))
         K[np.ix_(dofs, dofs)] += k_sp
 
-    # Add lumped nodal masses (motors, toolhead, gantry carriages) + tiny rotational inertia
+    # Assemble 2-port Craig-Bampton CAD hardware superelements (+ optional internal CB modes)
+    internal_dof_cursor = n_nodal_dof
+    for se in superelements:
+        se_dofs, k_se, m_se = superelement_element_matrices(
+            se, assembly, node_idx, internal_dof_cursor
+        )
+        n_m_se = max(0, int(getattr(se, "n_internal_modes", max(0, k_se.shape[0] - 12))))
+        internal_dof_cursor += n_m_se
+        K[np.ix_(se_dofs, se_dofs)] += k_se
+        if m_se is not None:
+            M[np.ix_(se_dofs, se_dofs)] += m_se
+            a_grav = np.zeros(12 + n_m_se, dtype=float)
+            a_grav[2] = -g_acc
+            a_grav[8] = -g_acc
+            F_grav[se_dofs] += m_se @ a_grav
+
+    # Add lumped nodal masses (motors, toolhead, gantry carriages, bed) + physical rotary inertia
     for i, node in enumerate(assembly.nodes):
         if node.lumped_mass_kg > 0.0:
             base = 6 * i
             M[base, base] += node.lumped_mass_kg
             M[base + 1, base + 1] += node.lumped_mass_kg
             M[base + 2, base + 2] += node.lumped_mass_kg
-            # Rotational inertia: compact ~7mm gyration radius for heater block/nozzle,
-            # ~25mm for toolhead/motor bodies (prevents phantom low-Hz nozzle Z-spin modes)
-            r_gyr = 0.007 if node.role == "nozzle" else 0.025
-            rot_i = node.lumped_mass_kg * (r_gyr**2)
-            M[base + 3, base + 3] += rot_i
-            M[base + 4, base + 4] += rot_i
-            M[base + 5, base + 5] += rot_i
+            ixx, iyy, izz = node_rotational_inertia_xyz(node, assembly)
+            M[base + 3, base + 3] += ixx
+            M[base + 4, base + 4] += iyy
+            M[base + 5, base + 5] += izz
             F_grav[base + 2] -= node.lumped_mass_kg * g_acc
 
     # Boundary conditions
@@ -276,6 +478,7 @@ def element_internal_forces(
     r_mat, length = beam_rotation_matrix(p0, p1)
     t_mat = transformation_12x12(r_mat)
     bend_scale = 0.08 if member.is_truss else 1.0
+    kappa_y, kappa_z = beam_shear_coefficients(member)
     k_loc = local_beam_stiffness(
         e_pa=member.material.youngs_modulus_pa,
         g_pa=member.material.effective_shear_modulus_pa,
@@ -285,6 +488,8 @@ def element_internal_forces(
         j_torsion=member.profile.j_m4,
         length=length,
         bending_scale=bend_scale,
+        kappa_shear_y=kappa_y,
+        kappa_shear_z=kappa_z,
     )
     u_loc = t_mat @ u_elem_global
     f_loc = k_loc @ u_loc
@@ -302,10 +507,20 @@ def element_internal_forces(
     sigma_bend_z = moment_z_nm * member.profile.max_c_y / member.profile.iz_m4
     sigma_normal = sigma_axial + sigma_bend_y + sigma_bend_z
 
-    # Shear + torsional shear estimate
+    # Shear + torsional shear estimate (Bredt-Batho thin-wall for closed hollow tubes)
     tau_shear = 1.5 * np.hypot(shear_y_n, shear_z_n) / member.profile.area_m2
-    r_eff = max(member.profile.max_c_y, member.profile.max_c_z)
-    tau_torsion = torque_nm * r_eff / member.profile.j_m4
+    prof = member.profile
+    if prof.shape == "tube" and prof.wall_thickness_m is not None and prof.wall_thickness_m > 0.0:
+        t_w = float(prof.wall_thickness_m)
+        r_m = max(float(prof.corner_radius_m) - 0.5 * t_w, 0.0)
+        a_m = max(
+            (prof.width_m - t_w) * (prof.height_m - t_w) - (4.0 - math.pi) * (r_m**2),
+            1e-12,
+        )
+        tau_torsion = torque_nm / (2.0 * a_m * t_w)
+    else:
+        r_eff = max(prof.max_c_y, prof.max_c_z)
+        tau_torsion = torque_nm * r_eff / prof.j_m4
     tau_total = tau_shear + tau_torsion
 
     von_mises_pa = float(np.sqrt(sigma_normal**2 + 3.0 * tau_total**2))

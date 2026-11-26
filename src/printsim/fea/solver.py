@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from scipy.linalg import cho_factor, cho_solve, solve
@@ -12,7 +13,28 @@ from scipy.sparse.linalg import splu, spsolve
 
 from printsim.fea.beam3d import assemble_global_matrices, element_internal_forces
 from printsim.fea.shell_mitc4 import mitc4_shell_von_mises_mpa
-from printsim.geometry.builder import AssemblyModel
+from printsim.geometry.builder import (
+    AssemblyModel,
+    StructuralMember,
+    resolve_toolhead_hardware_accessories,
+)
+
+
+def _is_pseudo_profile_member(member: StructuralMember) -> bool:
+    """Return True for stiffness-calibrated virtual links whose M*c/I is not physical stress."""
+    if member.material.density_kg_m3 < 1.0:
+        return True
+    if member.id in ("toolhead_mount", "nozzle_stem"):
+        return True
+    if member.id.startswith(("car_link_", "eff_link_", "panel_shear_")):
+        return True
+    if member.profile.id in (
+        "toolhead_mount_profile",
+        "nozzle_stem_profile",
+        "delta_rigid_link_profile",
+    ):
+        return True
+    return member.role == "bed" and member.profile.id.startswith("bed_")
 
 
 def classify_part_group(member_id: str, role: str = "") -> tuple[str, str]:
@@ -38,7 +60,7 @@ def classify_part_group(member_id: str, role: str = "") -> tuple[str, str]:
         return "y_axis_rail_beams", "Y-Axis Rail Beams"
     if mid.startswith(("toolhead_mount", "nozzle_stem")):
         return "toolhead_mount", "Toolhead & Nozzle Mount"
-    if mid.startswith(("bed_", "z_bed")):
+    if mid.startswith(("bed_", "z_bed", "z_rod_brg_")):
         return "bed_support", "Bed Support & Z Arms"
     if mid.startswith("panel_shear_"):
         if "left" in mid or "right" in mid:
@@ -133,7 +155,7 @@ class StaticFEAResult:
     shell_panel_stresses: list[ShellStressResult] = field(default_factory=list)
     peak_stress_part_label: str = ""
     top_flex_explanation: str = ""
-    toolhead_flex_breakdown: dict[str, float | str] = field(default_factory=dict)
+    toolhead_flex_breakdown: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -257,6 +279,96 @@ def _solve_linear_system(K: np.ndarray, F: np.ndarray, free_dofs: list[int]) -> 
     return u
 
 
+def build_inertial_load_vectors(
+    assembly: AssemblyModel,
+    node_idx: dict[str, int],
+    n_dof: int,
+    accel_m_s2: float,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Build peak X and Y inertial load vectors with physical CoG/nozzle mass splitting.
+
+    Matches ``modal.py``'s ``m_cog_lumped / (m_cog_lumped + m_noz_lumped)`` partition so the
+    cantilevered nozzle/hotend mass loads ``nozzle_stem`` in both static FEA and adjoint sensitivities.
+    """
+    th_idx = node_idx[assembly.toolhead_node_id]
+    cog_id = (
+        assembly.toolhead_cog_node_id
+        if assembly.toolhead_cog_node_id in node_idx
+        else assembly.toolhead_node_id
+    )
+    noz_id = (
+        assembly.nozzle_node_id
+        if assembly.nozzle_node_id in node_idx
+        else assembly.toolhead_node_id
+    )
+    cog_idx = node_idx[cog_id]
+    noz_idx = node_idx[noz_id]
+    has_explicit_cog = cog_idx != th_idx
+    bed_idx = node_idx.get(assembly.bed_node_id) if assembly.bed_node_id else None
+
+    m_cog_lumped = max(float(assembly.nodes[cog_idx].lumped_mass_kg), 0.0)
+    m_noz_lumped = (
+        max(float(assembly.nodes[noz_idx].lumped_mass_kg), 0.0)
+        if noz_idx != cog_idx
+        else 0.0
+    )
+    if noz_idx != cog_idx and (m_cog_lumped + m_noz_lumped) > 1e-9:
+        noz_inertia_frac = m_noz_lumped / (m_cog_lumped + m_noz_lumped)
+        cog_inertia_frac = 1.0 - noz_inertia_frac
+    else:
+        noz_inertia_frac = 0.0
+        cog_inertia_frac = 1.0
+
+    cog_z_m = assembly.spec.toolhead.cog_offset_mm[2] * 1e-3
+    f_inertial_x = assembly.x_moving_mass_kg * accel_m_s2
+    f_inertial_y = assembly.y_moving_mass_kg * accel_m_s2
+
+    F_x = np.zeros(n_dof, dtype=float)
+    F_x[6 * cog_idx + 0] = f_inertial_x * cog_inertia_frac
+    if noz_inertia_frac > 0.0:
+        F_x[6 * noz_idx + 0] += f_inertial_x * noz_inertia_frac
+    if not has_explicit_cog:
+        F_x[6 * th_idx + 4] = f_inertial_x * cog_inertia_frac * cog_z_m
+
+    F_y = np.zeros(n_dof, dtype=float)
+    if assembly.spec.architecture == "cartesian_bedslinger":
+        if bed_idx is not None:
+            F_y[6 * bed_idx + 1] = -f_inertial_y
+    elif assembly.spec.architecture == "delta":
+        F_y[6 * cog_idx + 1] = f_inertial_y * cog_inertia_frac
+        if noz_inertia_frac > 0.0:
+            F_y[6 * noz_idx + 1] += f_inertial_y * noz_inertia_frac
+        if not has_explicit_cog:
+            F_y[6 * th_idx + 3] = -f_inertial_y * cog_inertia_frac * cog_z_m
+    else:
+        th_share = min(
+            1.0,
+            max(0.0, assembly.toolhead_moving_mass_kg / max(assembly.y_moving_mass_kg, 1e-6)),
+        )
+        other_gantry = [
+            gid
+            for gid in assembly.gantry_node_ids
+            if gid != assembly.toolhead_node_id and gid in node_idx
+        ]
+        if other_gantry:
+            F_y[6 * cog_idx + 1] = f_inertial_y * th_share * cog_inertia_frac
+            if noz_inertia_frac > 0.0:
+                F_y[6 * noz_idx + 1] += f_inertial_y * th_share * noz_inertia_frac
+            if not has_explicit_cog:
+                F_y[6 * th_idx + 3] = -f_inertial_y * th_share * cog_inertia_frac * cog_z_m
+            rem = f_inertial_y * (1.0 - th_share) / len(other_gantry)
+            for gid in other_gantry:
+                F_y[6 * node_idx[gid] + 1] += rem
+        else:
+            F_y[6 * cog_idx + 1] = f_inertial_y * cog_inertia_frac
+            if noz_inertia_frac > 0.0:
+                F_y[6 * noz_idx + 1] += f_inertial_y * noz_inertia_frac
+            if not has_explicit_cog:
+                F_y[6 * th_idx + 3] = -f_inertial_y * cog_inertia_frac * cog_z_m
+
+    return F_x, F_y, f_inertial_x, f_inertial_y
+
+
 def solve_static_fea(
     assembly: AssemblyModel,
     accel_mm_s2: float | None = None,
@@ -363,57 +475,175 @@ def solve_static_fea(
         key=lambda item: item[1],
     )[0]
     stage_stiff = assembly.toolhead_stage_stiffnesses_n_per_mm
-    toolhead_flex_breakdown: dict[str, float | str] = {
-        "rail_and_xbeam_pct": round(pct_rail, 2),
-        "carriage_and_body_pct": round(pct_car, 2),
-        "hotend_and_nozzle_pct": round(100.0 - round(pct_rail, 2) - round(pct_car, 2), 2),
-        "effective_tip_stiffness_n_per_mm": round((2.0 / max(c_xy_tot, 1e-12)) * 1e-3, 2),
-        "hotend_stiffness_n_per_mm": round(
-            float(
-                stage_stiff.get(
-                    "hotend_total_n_per_mm",
-                    assembly.spec.toolhead.hotend.structural_stiffness_n_per_mm,
+    has_superelements = bool(getattr(assembly, "superelements", None))
+    hotend_k_fallback = (
+        (2.0 / max(c3_xy, 1e-12)) * 1e-3
+        if (has_superelements and c3_xy > 1e-12)
+        else assembly.spec.toolhead.hotend.structural_stiffness_n_per_mm
+    )
+    body_k_fallback = (
+        (2.0 / max(c2_xy, 1e-12)) * 1e-3
+        if (has_superelements and c2_xy > 1e-12)
+        else 0.0
+    )
+    hotend_k_val = float(stage_stiff.get("hotend_total_n_per_mm", hotend_k_fallback))
+    body_k_val = float(stage_stiff.get("body_n_per_mm", body_k_fallback))
+    car_mount_k_val = float(stage_stiff.get("carriage_mount_n_per_mm", 0.0))
+    rail_car_k_val = float(stage_stiff.get("rail_carriage_n_per_mm", car_mount_k_val))
+    backplate_k_val = float(stage_stiff.get("backplate_only_n_per_mm", 0.0))
+
+    pct_rail_r = round(pct_rail, 2)
+    pct_car_r = round(pct_car, 2)
+    pct_hot_r = round(100.0 - pct_rail_r - pct_car_r, 2)
+
+    c_rail_car = (1.0 / rail_car_k_val) if rail_car_k_val > 1e-9 else 0.0
+    c_backplate = (1.0 / backplate_k_val) if backplate_k_val > 1e-9 else 0.0
+    c_body_s = (1.0 / body_k_val) if body_k_val > 1e-9 else 0.0
+    c_stage12_sum = c_rail_car + c_backplate + c_body_s
+    rail_car_frac = (
+        min(1.0, max(0.0, c_rail_car / c_stage12_sum))
+        if (c_stage12_sum > 1e-18 and c_rail_car > 0.0)
+        else 0.0
+    )
+    rail_carriage_pct = round(pct_car_r * rail_car_frac, 2)
+    toolhead_body_pct = round(pct_car_r - rail_carriage_pct, 2)
+
+    acc = resolve_toolhead_hardware_accessories(assembly.spec)
+    eff_cog_mm = [round(float(v), 2) for v in acc["effective_cog_offset_mm"]]
+    nozzle_drop_mm = round(abs(float(assembly.spec.toolhead.nozzle_offset_mm[2])), 1)
+    assembled_mass_g = round(float(acc["effective_total_mass_g"]), 1)
+
+    spec_th = assembly.spec.toolhead
+    spec_gan = assembly.spec.gantry
+    is_delta_arch = assembly.spec.architecture == "delta"
+    has_th_se = any(se.id == "toolhead_mount" for se in getattr(assembly, "superelements", ()))
+    k_xbeam_val = round((2.0 / c1_xy) * 1e-3, 1) if c1_xy > 1e-12 else None
+    k_rail_car_disp = round(rail_car_k_val, 1) if rail_car_k_val > 1e-9 else None
+    c_body_stage = c_backplate + c_body_s
+    k_body_stage_disp = (
+        round(1.0 / c_body_stage, 1)
+        if c_body_stage > 1e-12
+        else (round(body_k_val, 1) if body_k_val > 1e-9 else None)
+    )
+    k_hotend_disp = round(hotend_k_val, 1) if hotend_k_val > 1e-9 else None
+
+    elastic_sub_causes: list[dict[str, Any]] = [
+        {
+            "id": "x_beam",
+            "label": "Delta Arms & Towers" if is_delta_arch else "X-Beam & Frame Loop",
+            "share_pct": pct_rail_r,
+            "stiffness_n_per_mm": k_xbeam_val,
+            "detail": (
+                f"{k_xbeam_val:,.0f} N/mm · {spec_gan.x_beam_profile} ({spec_gan.x_beam_material})"
+                if k_xbeam_val is not None
+                else f"{spec_gan.x_beam_profile} ({spec_gan.x_beam_material})"
+            ),
+            "action_hint": (
+                "Stiffen X-beam profile, use torsional ±45° CF / Al extrusion, or add rail backer."
+                if pct_rail_r >= 20.0
+                else "Gantry & frame loop flex is well controlled."
+            ),
+        },
+        {
+            "id": "rail_carriage",
+            "label": "Effector Joint" if is_delta_arch else "Linear Rail Carriage (Hertzian)",
+            "share_pct": rail_carriage_pct,
+            "stiffness_n_per_mm": k_rail_car_disp,
+            "detail": (
+                (
+                    f"{k_rail_car_disp:,.0f} N/mm · {spec_gan.x_rail_profile} "
+                    f"{spec_gan.rail_block_type}-block ({spec_gan.rail_preload}, {spec_gan.rail_quality})"
+                )
+                if (not is_delta_arch and k_rail_car_disp is not None)
+                else (
+                    f"{k_rail_car_disp:,.0f} N/mm · Delta effector joint"
+                    if k_rail_car_disp is not None
+                    else "Linear carriage ball-raceway contact"
                 )
             ),
-            2,
-        ),
-        "carriage_mount_stiffness_n_per_mm": round(
-            float(stage_stiff.get("carriage_mount_n_per_mm", 0.0)), 2
-        ),
+            "action_hint": (
+                "Increase rail preload (ZA/ZB), use an H-block, precision grade, or dual X rails."
+                if rail_carriage_pct >= 15.0
+                else "Linear rail carriage contact is already stiff."
+            ),
+        },
+        {
+            "id": "toolhead_body",
+            "label": "Toolhead Chassis (CAD)" if has_th_se else "Toolhead Body & Backplate",
+            "share_pct": toolhead_body_pct,
+            "stiffness_n_per_mm": k_body_stage_disp,
+            "detail": (
+                f"{k_body_stage_disp:,.0f} N/mm · {spec_th.effective_body_material}"
+                if k_body_stage_disp is not None
+                else str(spec_th.effective_body_material)
+            ),
+            "action_hint": (
+                "Upgrade body/backplate to CNC Aluminum or SLM Ti, or increase wall/plate thickness."
+                if toolhead_body_pct >= 15.0
+                else "Toolhead chassis & backplate flex is minor."
+            ),
+        },
+        {
+            "id": "hotend_nozzle",
+            "label": "Hotend & Nozzle Neck",
+            "share_pct": pct_hot_r,
+            "stiffness_n_per_mm": k_hotend_disp,
+            "detail": (
+                f"{k_hotend_disp:,.0f} N/mm · {spec_th.hotend.name}"
+                if k_hotend_disp is not None
+                else str(spec_th.hotend.name)
+            ),
+            "action_hint": (
+                "Switch to a rigid 4/6-bolt hotend (Chube / Tricorn Short) or enable a bottom brace."
+                if pct_hot_r >= 15.0
+                else "Hotend & nozzle neck is stiff."
+            ),
+        },
+    ]
+    elastic_sub_causes.sort(key=lambda item: float(item["share_pct"]), reverse=True)
+    sub_causes = elastic_sub_causes + [
+        {
+            "id": "cog_mass",
+            "label": "Toolhead Mass, CoG & Nozzle Drop",
+            "share_pct": 0.0,
+            "stiffness_n_per_mm": None,
+            "detail": (
+                f"{assembled_mass_g:.1f} g assembled · "
+                f"CoG ({eff_cog_mm[0]:+.1f}, {eff_cog_mm[1]:+.1f}, {eff_cog_mm[2]:+.1f}) mm · "
+                f"Nozzle drop {nozzle_drop_mm:.1f} mm"
+            ),
+            "action_hint": (
+                "Shorten nozzle drop, tuck CoG closer to the rail, or shed mass to cut pitch torque."
+                if (assembled_mass_g > 220.0 or abs(eff_cog_mm[1]) > 15.0 or nozzle_drop_mm > 50.0)
+                else "Compact low-overhang packaging keeps inertial pitch torque low."
+            ),
+        }
+    ]
+
+    toolhead_flex_breakdown: dict[str, Any] = {
+        "rail_and_xbeam_pct": pct_rail_r,
+        "carriage_and_body_pct": pct_car_r,
+        "hotend_and_nozzle_pct": pct_hot_r,
+        "rail_carriage_pct": rail_carriage_pct,
+        "toolhead_body_pct": toolhead_body_pct,
+        "effective_tip_stiffness_n_per_mm": round((2.0 / max(c_xy_tot, 1e-12)) * 1e-3, 2),
+        "hotend_stiffness_n_per_mm": round(hotend_k_val, 2),
+        "carriage_mount_stiffness_n_per_mm": round(car_mount_k_val, 2),
+        "rail_carriage_stiffness_n_per_mm": round(rail_car_k_val, 2),
+        "body_stiffness_n_per_mm": round(body_k_val, 2),
         "dominant_flex_source": dom_flex_source,
+        "effective_cog_offset_mm": eff_cog_mm,
+        "nozzle_drop_mm": nozzle_drop_mm,
+        "assembled_mass_g": assembled_mass_g,
+        "sub_causes": sub_causes,
     }
 
-    # 3. Peak inertial loads applied at toolhead_cog (+ gantry / moving bed) during max X and max Y accel
-    f_inertial_x = assembly.x_moving_mass_kg * accel_m_s2
-    f_inertial_y = assembly.y_moving_mass_kg * accel_m_s2
-
-    F_x = np.zeros(n_dof, dtype=float)
-    F_x[cog_dof + 0] = f_inertial_x
-    cog_z_m = assembly.spec.toolhead.cog_offset_mm[2] * 1e-3
-    if not has_explicit_cog:
-        F_x[th_dof + 4] = f_inertial_x * cog_z_m
+    # 3. Peak inertial loads applied across toolhead_cog and nozzle_tip (+ gantry / moving bed)
+    F_x, F_y, f_inertial_x, f_inertial_y = build_inertial_load_vectors(
+        assembly, node_idx, n_dof, accel_m_s2
+    )
     u_x = solve_rhs(F_x)
     defl_x_um = float(np.linalg.norm(_rel_disp_vec(u_x))) * 1e6
-
-    F_y = np.zeros(n_dof, dtype=float)
-    if assembly.spec.architecture == "cartesian_bedslinger":
-        # Bedslinger Y acceleration moves only the heated bed + Y-carriage;
-        # stationary Z-portal & toolhead see zero direct Y inertial force.
-        if has_bed:
-            F_y[bed_dof + 1] = -f_inertial_y
-    else:
-        # Toolhead + X gantry accelerate in Y -> load distributed on toolhead_cog and Y carriages
-        th_share = assembly.spec.toolhead.total_mass_g * 1e-3 / max(assembly.y_moving_mass_kg, 1e-6)
-        F_y[cog_dof + 1] = f_inertial_y * th_share
-        if not has_explicit_cog:
-            F_y[th_dof + 3] = -f_inertial_y * th_share * cog_z_m
-        other_gantry = [gid for gid in assembly.gantry_node_ids if gid != assembly.toolhead_node_id]
-        if other_gantry:
-            rem = f_inertial_y * (1.0 - th_share) / len(other_gantry)
-            for gid in other_gantry:
-                F_y[6 * node_idx[gid] + 1] += rem
-        else:
-            F_y[cog_dof + 1] = f_inertial_y
     u_y = solve_rhs(F_y)
     defl_y_um = float(np.linalg.norm(_rel_disp_vec(u_y))) * 1e6
 
@@ -522,8 +752,9 @@ def solve_static_fea(
     else:
         bed_defl_um = float(np.linalg.norm(u_comb[bed_dof : bed_dof + 3])) * 1e6 if has_bed else 0.0
 
-    # Element stress recovery
+    # Element stress recovery (exclude stiffness-calibrated pseudo-profile virtual links from envelope)
     member_stresses: list[MemberStressResult] = []
+    real_member_stresses: list[MemberStressResult] = []
     max_vm = 0.0
     min_sf = float("inf")
     for member in assembly.members:
@@ -535,20 +766,21 @@ def solve_static_fea(
         res = element_internal_forces(member, p0, p1, u_elem)
         yield_mpa = member.material.yield_strength_pa * 1e-6
         util = res["von_mises_mpa"] / max(yield_mpa, 1e-6)
-        max_vm = max(max_vm, res["von_mises_mpa"])
-        min_sf = min(min_sf, res["safety_factor"])
-        member_stresses.append(
-            MemberStressResult(
-                member_id=member.id,
-                role=member.role,
-                axial_force_n=res["axial_force_n"],
-                max_bending_moment_nm=res["max_bending_moment_nm"],
-                von_mises_mpa=res["von_mises_mpa"],
-                yield_mpa=yield_mpa,
-                safety_factor=res["safety_factor"],
-                utilization=util,
-            )
+        ms = MemberStressResult(
+            member_id=member.id,
+            role=member.role,
+            axial_force_n=res["axial_force_n"],
+            max_bending_moment_nm=res["max_bending_moment_nm"],
+            von_mises_mpa=res["von_mises_mpa"],
+            yield_mpa=yield_mpa,
+            safety_factor=res["safety_factor"],
+            utilization=util,
         )
+        member_stresses.append(ms)
+        if not _is_pseudo_profile_member(member):
+            real_member_stresses.append(ms)
+            max_vm = max(max_vm, res["von_mises_mpa"])
+            min_sf = min(min_sf, res["safety_factor"])
 
     # 2D MITC4 Shell panel stress recovery
     shell_panel_stresses: list[ShellStressResult] = []
@@ -580,10 +812,17 @@ def solve_static_fea(
             )
         )
 
+    if not real_member_stresses and not shell_panel_stresses and member_stresses:
+        # Fallback if a minimal synthetic assembly contains only virtual members
+        max_vm = max(m.von_mises_mpa for m in member_stresses)
+        min_sf = min(m.safety_factor for m in member_stresses)
+        peak_member = max(member_stresses, key=lambda m: m.von_mises_mpa, default=None)
+    else:
+        peak_member = max(real_member_stresses, key=lambda m: m.von_mises_mpa, default=None)
+
     resolved_sf = min_sf if np.isfinite(min_sf) else 999.0
     sf_disp = min(resolved_sf, 999.0)
 
-    peak_member = max(member_stresses, key=lambda m: m.von_mises_mpa, default=None)
     peak_shell = max(shell_panel_stresses, key=lambda s: s.von_mises_mpa, default=None)
     if peak_shell is not None and (
         peak_member is None or peak_shell.von_mises_mpa > peak_member.von_mises_mpa

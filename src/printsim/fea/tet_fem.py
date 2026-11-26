@@ -352,11 +352,15 @@ def solve_step_tet_fea(
     free_load_verts = np.setdiff1d(load_vertex_ids, fixed_vertex_ids)
     if len(free_load_verts) == 0:
         free_load_verts = load_vertex_ids
-    mean_loaded_disp_m = float(np.mean(np.linalg.norm(u_vertices_m[free_load_verts], axis=1)))
     f_mag = float(np.linalg.norm(f_vec))
+    if f_mag > 1e-12:
+        f_hat = f_vec / f_mag
+        mean_loaded_disp_m = float(np.mean(u_vertices_m[free_load_verts] @ f_hat))
+    else:
+        mean_loaded_disp_m = float(np.mean(np.linalg.norm(u_vertices_m[free_load_verts], axis=1)))
     stiffness_n_per_mm = f_mag / max(mean_loaded_disp_m * 1e3, 1e-9)
 
-    # Stress recovery via element quadrature points -> centroid average & volume-weighted vertex projection
+    # Stress recovery across quadrature points (and extrapolated vertices for Tet10 P2 without centroid averaging)
     grad_u = basis.interpolate(u).grad  # (3, 3, n_elem, n_qp)
     eps_qp = np.stack(
         [
@@ -370,22 +374,39 @@ def solve_step_tet_fea(
         axis=0,
     )
     sigma_qp = np.einsum("ij,jeq->ieq", D, eps_qp)  # (6, n_elem, n_qp) in Pa
-    sigma_elem = np.mean(sigma_qp, axis=2)  # (6, n_elem) exact centroid stress for linear P1 or P2
-    vm_elem = _von_mises_from_voigt(sigma_elem)  # (n_elem,) in Pa
+    vm_qp = _von_mises_from_voigt(sigma_qp)  # (n_elem, n_qp) in Pa
+    vm_elem = np.max(vm_qp, axis=1)
+    szz_elem = np.max(sigma_qp[2], axis=1)
 
     elem_vol_m3 = np.sum(basis.dx, axis=1)
     vertex_sigma = np.zeros((6, mesh.nvertices), dtype=np.float64)
     vertex_vol = np.zeros(mesh.nvertices, dtype=np.float64)
+    ref_pts = np.asarray(basis.quadrature[0], dtype=np.float64)  # (3, n_qp)
+    is_p2_extrap = order == 2 and ref_pts.shape == (3, 4)
+    if is_p2_extrap:
+        # P2 stress is exact linear in reference coords on affine tets: extrapolate from 4 QPs to 4 vertices
+        a_qp = np.column_stack([np.ones(4, dtype=np.float64), ref_pts[0], ref_pts[1], ref_pts[2]])
+        v_ref = np.array([[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [1.0, 0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 1.0]])
+        e_mat = v_ref @ np.linalg.inv(a_qp)
+        sigma_vert = np.einsum("vk,iek->iev", e_mat, sigma_qp)  # (6, n_elem, 4)
+    else:
+        sigma_mean = np.mean(sigma_qp, axis=2)
+        sigma_vert = np.broadcast_to(sigma_mean[:, :, None], (6, sigma_qp.shape[1], 4))
+
     for local_v in range(4):
         v_idx = mesh.t[local_v]
         np.add.at(vertex_vol, v_idx, elem_vol_m3)
         for comp in range(6):
-            np.add.at(vertex_sigma[comp], v_idx, sigma_elem[comp] * elem_vol_m3)
+            np.add.at(vertex_sigma[comp], v_idx, sigma_vert[comp, :, local_v] * elem_vol_m3)
     vertex_sigma /= np.maximum(vertex_vol[None, :], 1e-30)
     vertex_vm_pa = _von_mises_from_voigt(vertex_sigma)
 
-    max_vm_mpa = float(np.max(vm_elem)) * 1e-6
-    max_z_tensile_mpa = float(max(0.0, np.max(sigma_elem[2]))) * 1e-6
+    if is_p2_extrap:
+        max_vm_mpa = float(np.max(vertex_vm_pa)) * 1e-6
+        max_z_tensile_mpa = float(max(0.0, np.max(vertex_sigma[2]))) * 1e-6
+    else:
+        max_vm_mpa = float(np.max(vm_elem)) * 1e-6
+        max_z_tensile_mpa = float(max(0.0, np.max(szz_elem))) * 1e-6
 
     yield_mpa = mat.yield_strength_pa * 1e-6
     z_layer_mpa = yield_mpa * (0.55 if is_fdm else 1.0)
@@ -424,7 +445,7 @@ def solve_step_tet_fea(
             },
             cell_data={
                 "von_mises_mpa": [vm_elem * 1e-6],
-                "sigma_zz_mpa": [sigma_elem[2] * 1e-6],
+                "sigma_zz_mpa": [szz_elem * 1e-6],
             },
         )
         meshio.write(str(vtu_path), mio_mesh)

@@ -41,17 +41,19 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 
 def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
-    """All 10 HOTEND_CATALOG entries validate and produce monotonic stiffness from V6 to Chube."""
+    """All 12 HOTEND_CATALOG entries validate and produce monotonic stiffness from V6 to Chube."""
     ordered_ids = [
         "e3d_v6_groove",
         "e3d_revo_voron",
+        "tricorn_long",
         "phaetus_rapido_2_uhf",
         "phaetus_dragon_uhf",
+        "tricorn_short",
         "phaetus_rapido_2_hf",
         "phaetus_dragon_hf",
         "mellow_goliath_air",
-        "chube_compact",
         "chube_air",
+        "chube_compact",
         "chube_conduction",
     ]
     assert set(HOTEND_CATALOG.keys()) == set(ordered_ids)
@@ -63,18 +65,28 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
             float(HOTEND_CATALOG[hid]["structural_stiffness_n_per_mm"]), rel=1e-9
         )
         assert hs.mount_style == HOTEND_CATALOG[hid]["mount_style"]
-    # Verify Chube Conduction 52mm UHF melt zone passes validation cleanly
+    # Verify Chube Air (66 mm OAL 6-bolt), Chube Compact (47.2 mm OAL 4-bolt M3 Dragon pattern),
+    # and Chube Conduction (66 mm OAL + 52 mm meltzone)
+    assert specs[9].mount_style == "chube_6bolt_m3_18pcd"
+    assert specs[9].overall_length_mm == pytest.approx(66.0, rel=1e-9)
+    assert specs[10].mount_style == "rigid_4bolt_m3"
+    assert specs[10].overall_length_mm == pytest.approx(47.2, rel=1e-9)
+    assert specs[-1].overall_length_mm == pytest.approx(66.0, rel=1e-9)
     assert specs[-1].melt_zone_length_mm == pytest.approx(52.0, rel=1e-9)
 
     for idx in range(len(specs) - 1):
         assert specs[idx + 1].structural_stiffness_n_per_mm > specs[idx].structural_stiffness_n_per_mm
 
     # Physics sweep on stiff CNC CoreXY so hotend flex signal is unmistakable
+    # 1) Lumped catalog mode verifies strict monotonic catalog series stiffness ladder
+    # (chube_compact 4×M3 2200 clamp < chube_air 6×M3 6500 clamp < chube_conduction in series!)
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
     sweep_ids = [
         "e3d_v6_groove",
         "e3d_revo_voron",
+        "tricorn_long",
         "phaetus_rapido_2_uhf",
+        "tricorn_short",
         "phaetus_dragon_hf",
         "mellow_goliath_air",
         "chube_compact",
@@ -85,6 +97,7 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
     modals = []
     for hid in sweep_ids:
         s = base.model_copy(deep=True)
+        s.use_cad_superelements = False
         s.toolhead.hotend = HotendSpec(preset_id=hid)
         asm = build_assembly(s)
         statics.append(solve_static_fea(asm))
@@ -107,15 +120,58 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
             < cur_s.toolhead_flex_breakdown["hotend_and_nozzle_pct"]
         )
 
+    # 2) CAD CMS superelement mode (default True): verify Chube Conduction dominates Air, Compact, and V6
+    cad_chube_cond = solve_static_fea(build_assembly(base))
+    s_cad_air = base.model_copy(deep=True)
+    s_cad_air.toolhead.hotend = HotendSpec(preset_id="chube_air")
+    cad_chube_air = solve_static_fea(build_assembly(s_cad_air))
+    assert cad_chube_cond.toolhead_flex_breakdown["hotend_and_nozzle_pct"] < 20.0
+    assert (
+        cad_chube_cond.toolhead_flex_breakdown["hotend_stiffness_n_per_mm"]
+        > cad_chube_air.toolhead_flex_breakdown["hotend_stiffness_n_per_mm"]
+    )
+    assert cad_chube_cond.toolhead_stiffness_y_n_per_mm > statics[0].toolhead_stiffness_y_n_per_mm * 3.0
+
     # Massive real-world difference between floppy groove-mount V6 and 6-bolt Chube Conduction
     v6_st, chube_st = statics[0], statics[-1]
     v6_mo, chube_mo = modals[0], modals[-1]
     assert v6_st.toolhead_flex_breakdown["dominant_flex_source"] == "hotend_nozzle"
     assert v6_st.toolhead_flex_breakdown["hotend_and_nozzle_pct"] > 70.0
     assert chube_st.toolhead_flex_breakdown["hotend_and_nozzle_pct"] < 20.0
-    assert chube_st.nozzle_twist_amplification_pct < v6_st.nozzle_twist_amplification_pct
+    # D-02: Chube Conduction (82g) weighs ~2x V6 (42g), adding inertial CoG twist onto 0/90 roll-wrapped CF G=5 GPa;
+    # controlling equal hotend mass isolates Chube's strictly lower structural twist amplification.
+    s_chube_eq = base.model_copy(deep=True)
+    h_chube_eq = HotendSpec(preset_id="chube_conduction")
+    h_chube_eq.mass_g = 60.0
+    h_chube_eq.block_mass_g = 15.0
+    s_chube_eq.toolhead.hotend = h_chube_eq
+    s_v6_eq = base.model_copy(deep=True)
+    h_v6_eq = HotendSpec(preset_id="e3d_v6_groove")
+    h_v6_eq.mass_g = 60.0
+    h_v6_eq.block_mass_g = 15.0
+    s_v6_eq.toolhead.hotend = h_v6_eq
+    assert (
+        solve_static_fea(build_assembly(s_chube_eq)).nozzle_twist_amplification_pct
+        < solve_static_fea(build_assembly(s_v6_eq)).nozzle_twist_amplification_pct
+    )
     assert chube_st.toolhead_stiffness_y_n_per_mm > v6_st.toolhead_stiffness_y_n_per_mm * 3.0
-    assert chube_mo.nozzle_pitch_twist_freq_hz > v6_mo.nozzle_pitch_twist_freq_hz * 1.5
+    # Controlling equal hotend mass isolates Chube's strictly stiffer hotend stem on the 0/90 CF beam
+    # (82g vs 42g on Timoshenko-soft G=5.0 GPa 0/90 tube couples X-beam pitch down to ~244 Hz;
+    # upgrading to ±45°/0° torsional_45 raises even full-mass 82g Chube well above 42g V6).
+    assert (
+        solve_modal_fea(build_assembly(s_chube_eq)).nozzle_pitch_twist_freq_hz
+        > solve_modal_fea(build_assembly(s_v6_eq)).nozzle_pitch_twist_freq_hz
+    )
+    s_chube_tor = base.model_copy(deep=True)
+    s_chube_tor.gantry.x_beam_material = "carbon_fiber_torsional_45"
+    s_chube_tor.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
+    s_v6_tor = base.model_copy(deep=True)
+    s_v6_tor.gantry.x_beam_material = "carbon_fiber_torsional_45"
+    s_v6_tor.toolhead.hotend = HotendSpec(preset_id="e3d_v6_groove")
+    assert (
+        solve_modal_fea(build_assembly(s_chube_tor)).nozzle_pitch_twist_freq_hz
+        > solve_modal_fea(build_assembly(s_v6_tor)).nozzle_pitch_twist_freq_hz
+    )
 
 
 def test_custom_non_preset_hotend_scales_with_heatbreak_wall_and_material() -> None:
@@ -267,7 +323,7 @@ def test_z_rail_profiles_stiffness_and_bedslinger_geometry() -> None:
 
 def test_z_leadscrew_and_z_belt_mechanisms_monotonic_bed_stiffness() -> None:
     """Verify tr8x8_pom < tr8x4_pom < tr8x8_brass < sfu1204_bk10 and gt2_6mm < gt2_9mm Z-belt."""
-    assert len(Z_DRIVE_MECHANISM_CATALOG) == 6
+    assert len(Z_DRIVE_MECHANISM_CATALOG) == 12
     assert BedSpec(z_drive="belted_quad_z").effective_z_leadscrew_type == "gt2_6mm_z_belt"
     assert BedSpec(z_drive="leadscrew_triple").effective_z_leadscrew_type == "tr8x4_pom"
     assert BedSpec(z_drive="leadscrew_dual").effective_z_leadscrew_type == "tr8x8_pom"
@@ -323,6 +379,45 @@ def test_flex_breakdown_sums_to_100_and_geometry_dict_z_bed_metadata() -> None:
     assert brk["dominant_flex_source"] in ("rail_xbeam", "carriage_body", "hotend_nozzle")
     assert "toolhead_flex_breakdown" in st.to_dict()
 
+    # Granular "Inside the Toolhead" split: rail_carriage_pct + toolhead_body_pct == carriage_and_body_pct
+    assert float(brk["rail_carriage_pct"]) + float(brk["toolhead_body_pct"]) == pytest.approx(
+        float(brk["carriage_and_body_pct"]), abs=0.05
+    )
+    assert float(brk["rail_carriage_stiffness_n_per_mm"]) > 0.0
+    assert len(brk["effective_cog_offset_mm"]) == 3
+    assert float(brk["nozzle_drop_mm"]) == pytest.approx(abs(v24.toolhead.nozzle_offset_mm[2]), abs=0.1)
+    assert float(brk["assembled_mass_g"]) > 100.0
+
+    sub_causes = brk["sub_causes"]
+    assert isinstance(sub_causes, list) and len(sub_causes) == 5
+    assert [c["id"] for c in sub_causes[:-1]]
+    assert set(c["id"] for c in sub_causes) == {
+        "x_beam",
+        "rail_carriage",
+        "toolhead_body",
+        "hotend_nozzle",
+        "cog_mass",
+    }
+    assert sub_causes[-1]["id"] == "cog_mass"
+    assert sub_causes[-1]["stiffness_n_per_mm"] is None
+    elastic = sub_causes[:-1]
+    assert [c["share_pct"] for c in elastic] == sorted(
+        [c["share_pct"] for c in elastic], reverse=True
+    )
+    assert sum(float(c["share_pct"]) for c in sub_causes) == pytest.approx(100.0, abs=0.15)
+    for item in sub_causes:
+        assert item["label"] and item["detail"] and item["action_hint"]
+
+    # Also verify CAD toolhead (self-contained) & Delta architecture populate granular breakdown cleanly
+    for yml in ("examples/voron_monolith_awd.yaml", "examples/delta_racer.yaml"):
+        st_alt = solve_static_fea(build_assembly(PrinterSpec.from_yaml(yml)))
+        b_alt = st_alt.toolhead_flex_breakdown
+        assert float(b_alt["rail_carriage_pct"]) + float(b_alt["toolhead_body_pct"]) == pytest.approx(
+            float(b_alt["carriage_and_body_pct"]), abs=0.05
+        )
+        assert b_alt["sub_causes"][-1]["id"] == "cog_mass"
+        assert sum(float(c["share_pct"]) for c in b_alt["sub_causes"]) == pytest.approx(100.0, abs=0.15)
+
     # Geometry dict Z-rails, Z-leadscrews, bed_mount_points_mm inside bed, and toolhead_structure
     gdict = asm.to_geometry_dict()
     assert gdict["z_rail_profile"] == "mgn12_rail"
@@ -352,13 +447,13 @@ def test_api_and_mcp_expose_new_catalogs_and_hotend_overrides() -> None:
     resp = client.get("/api/catalog")
     assert resp.status_code == 200
     payload = resp.json()
-    assert len(payload["hotend_presets"]) == 10
-    assert len(payload["z_drive_mechanisms"]) == 6
+    assert len(payload["hotend_presets"]) == 12
+    assert len(payload["z_drive_mechanisms"]) == 12
     assert len(payload["z_rail_profiles"]) == 6
 
     mcp_cat = dispatch_tool("list_catalog", {})
-    assert len(mcp_cat["hotend_presets"]) == 10
-    assert len(mcp_cat["z_drive_mechanisms"]) == 6
+    assert len(mcp_cat["hotend_presets"]) == 12
+    assert len(mcp_cat["z_drive_mechanisms"]) == 12
     assert len(mcp_cat["z_rail_profiles"]) == 6
 
     trident_yaml = dispatch_tool("get_preset_yaml", {"preset_id": "voron_trident_300"})["yaml_text"]
@@ -922,8 +1017,8 @@ def test_rail_quality_and_preload_stiffness_drag_and_catalog() -> None:
 def test_gantry_weight_classes_catalog_and_validation() -> None:
     """/api/catalog exposes all 5 gantry_weight_classes and GantrySpec enforces carriage_mass_g bounds."""
     expected_classes = [
-        ("ultralight_printed", 85.0, "abs_printed"),
-        ("standard_printed", 140.0, "abs_printed"),
+        ("ultralight_printed", 141.0, "abs_printed"),
+        ("standard_printed", 196.0, "abs_printed"),
         ("stiffness_opt_printed", 185.0, "pet_cf_printed"),
         ("cnc_aluminum_light", 210.0, "aluminum_6061_t6"),
         ("monolith_cnc_awd", 214.0, "aluminum_6061_t6"),
@@ -1041,14 +1136,14 @@ def test_exact_x_beam_mass_and_y_gantry_breakdown_zero_double_counting() -> None
 
 
 def test_gantry_weight_class_carriage_mass_delta_and_monotonic_y_resonance() -> None:
-    """Sweeping Ultralight Printed (85g) -> CNC Al HD (280g) adds exact +195g and lowers Y resonance."""
+    """Sweeping Ultralight Printed (141g) -> CNC Al HD (280g) adds exact +139g and lowers Y resonance."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
     base.gantry.bracket_material = "abs_printed"
 
     ordered_ids = [
         "ultralight_printed",
-        "standard_printed",
         "stiffness_opt_printed",
+        "standard_printed",
         "cnc_aluminum_light",
         "cnc_aluminum_hd",
     ]
@@ -1064,11 +1159,11 @@ def test_gantry_weight_class_carriage_mass_delta_and_monotonic_y_resonance() -> 
     ms_ultra = asms[0].to_geometry_dict()["mass_summary"]
     ms_hd = asms[-1].to_geometry_dict()["mass_summary"]
     assert (ms_hd["y_carriage_joints_mass_g"] - ms_ultra["y_carriage_joints_mass_g"]) == pytest.approx(
-        195.0, abs=1e-6
+        139.0, abs=1e-6
     )
-    assert (ms_hd["y_moving_mass_g"] - ms_ultra["y_moving_mass_g"]) == pytest.approx(195.0, abs=0.2)
+    assert (ms_hd["y_moving_mass_g"] - ms_ultra["y_moving_mass_g"]) == pytest.approx(139.0, abs=0.2)
     assert (asms[-1].y_moving_mass_kg - asms[0].y_moving_mass_kg) * 1000.0 == pytest.approx(
-        195.0, abs=1e-6
+        139.0, abs=1e-6
     )
 
     for idx in range(len(ordered_ids) - 1):
@@ -1093,9 +1188,11 @@ def test_hotend_mass_g_presets_nozzle_cantilever_resonance_and_mass_conservation
         "phaetus_rapido_2_hf": 50.0,
         "phaetus_rapido_2_uhf": 62.0,
         "mellow_goliath_air": 96.0,
-        "chube_compact": 62.0,
-        "chube_air": 86.0,
-        "chube_conduction": 82.0,
+        "tricorn_short": 50.0,
+        "tricorn_long": 62.0,
+        "chube_compact": 63.0,
+        "chube_air": 79.0,
+        "chube_conduction": 90.0,
     }
     assert set(HOTEND_CATALOG.keys()) == set(expected_masses_g.keys())
     assert HotendSpec().mass_g == pytest.approx(45.0, abs=1e-9)
@@ -1168,6 +1265,163 @@ def test_hotend_mass_g_presets_nozzle_cantilever_resonance_and_mass_conservation
         )
         assert cantilever_hzs[idx + 1] < cantilever_hzs[idx]
         assert modals[idx + 1].nozzle_pitch_twist_freq_hz < modals[idx].nozzle_pitch_twist_freq_hz
+
+
+def test_all_12_z_drive_mechanisms_metadata_eval_fem_and_bom() -> None:
+    """Verify all 12 Z-drive mechanisms metadata, full evaluate_printer, bed FEM, stiffness ordering, and BOM."""
+    from printsim.engine import evaluate_printer
+    from printsim.fea import solve_bed_plate_fem
+    from printsim.geometry import generate_bom
+
+    expected_ids = {
+        "tr8x4_pom",
+        "tr8x4_wobblex",
+        "tr8x8_pom",
+        "tr8x8_brass",
+        "sfu1204_bk10",
+        "sfu1204_wobblex",
+        "sfu1605_fk12",
+        "gt2_6mm_z_belt",
+        "gt2_9mm_z_belt",
+        "gt2_9mm_planetary_z",
+        "gt2_9mm_worm_z",
+        "kevinakasam_belted_z",
+    }
+    assert set(Z_DRIVE_MECHANISM_CATALOG.keys()) == expected_ids
+
+    required_meta = (
+        "wobble_decoupled",
+        "self_locking",
+        "unpowered_drop_risk",
+        "gear_ratio",
+        "cost_per_axis_usd",
+    )
+    for mid, cfg in Z_DRIVE_MECHANISM_CATALOG.items():
+        for k in required_meta:
+            assert k in cfg, f"{mid} missing {k}"
+        assert isinstance(cfg["wobble_decoupled"], bool)
+        assert isinstance(cfg["self_locking"], bool)
+        assert isinstance(cfg["unpowered_drop_risk"], bool)
+        assert float(cfg["gear_ratio"]) >= 1.0
+        assert float(cfg["cost_per_axis_usd"]) > 0.0
+
+    trident = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    v24 = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+
+    # All 6 new mechanisms run cleanly through full evaluate_printer(), bed FEM, and generate_bom()
+    new_mechs = (
+        "tr8x4_wobblex",
+        "sfu1204_wobblex",
+        "sfu1605_fk12",
+        "gt2_9mm_planetary_z",
+        "gt2_9mm_worm_z",
+        "kevinakasam_belted_z",
+    )
+    for zid in new_mechs:
+        s = trident.model_copy(deep=True)
+        s.bed.z_leadscrew_type = zid  # type: ignore[assignment]
+        rep = evaluate_printer(s, include_advanced_analysis=True)
+        assert rep.bed_plate_fea is not None
+        assert math.isfinite(rep.static_fea.toolhead_stiffness_z_n_per_mm)
+        assert math.isfinite(rep.bed_plate_fea.plate_first_mode_hz)
+        bom = generate_bom(s)
+        assert bom.total_cost_usd > 0.0
+        assert sum(bom.category_costs_usd.values()) == pytest.approx(bom.total_cost_usd, abs=0.1)
+
+    # Belted-Z monotonic axial stiffness ordering on both moving-bed Trident and flying-gantry V2.4
+    belts_ordered = (
+        "gt2_6mm_z_belt",
+        "kevinakasam_belted_z",
+        "gt2_9mm_z_belt",
+        "gt2_9mm_planetary_z",
+        "gt2_9mm_worm_z",
+    )
+    trident_belt_kz = []
+    trident_belt_plate_hz = []
+    v24_belt_kz = []
+    v24_joint_kn = []
+    for zid in belts_ordered:
+        st_tri = trident.model_copy(deep=True)
+        st_tri.bed.z_leadscrew_type = zid  # type: ignore[assignment]
+        asm_tri = build_assembly(st_tri)
+        trident_belt_kz.append(solve_static_fea(asm_tri).toolhead_stiffness_z_n_per_mm)
+        trident_belt_plate_hz.append(solve_bed_plate_fem(st_tri).plate_first_mode_hz)
+
+        st_v24 = v24.model_copy(deep=True)
+        st_v24.bed.z_leadscrew_type = zid  # type: ignore[assignment]
+        asm_v24 = build_assembly(st_v24)
+        v24_belt_kz.append(solve_static_fea(asm_v24).toolhead_stiffness_z_n_per_mm)
+        v24_joint_kn.append(
+            next(sp.k_normal_n_m for sp in asm_v24.fastener_springs if sp.id == "z_joint_fl")
+        )
+
+    for idx in range(len(belts_ordered) - 1):
+        assert trident_belt_kz[idx] < trident_belt_kz[idx + 1]
+        assert trident_belt_plate_hz[idx] < trident_belt_plate_hz[idx + 1]
+        assert v24_belt_kz[idx] < v24_belt_kz[idx + 1]
+        assert v24_joint_kn[idx] < v24_joint_kn[idx + 1]
+
+    # Leadscrew & ballscrew monotonic axial stiffness ordering on moving-bed Trident
+    screws_ordered = (
+        "tr8x4_wobblex",
+        "tr8x4_pom",
+        "sfu1204_wobblex",
+        "sfu1204_bk10",
+        "sfu1605_fk12",
+    )
+    screw_droops = []
+    screw_kz = []
+    screw_plate_hz = []
+    for zid in screws_ordered:
+        s = trident.model_copy(deep=True)
+        s.bed.mount_type = "captive_belleville_kinematic"
+        s.bed.z_leadscrew_type = zid  # type: ignore[assignment]
+        st = solve_static_fea(build_assembly(s))
+        screw_droops.append(abs(float(st.nodal_displacements_mm["bed_surface"][2])))
+        screw_kz.append(st.toolhead_stiffness_z_n_per_mm)
+        screw_plate_hz.append(solve_bed_plate_fem(s).plate_first_mode_hz)
+
+    for idx in range(len(screws_ordered) - 1):
+        assert screw_droops[idx + 1] < screw_droops[idx]
+        assert screw_kz[idx] < screw_kz[idx + 1]
+        assert screw_plate_hz[idx] < screw_plate_hz[idx + 1]
+
+    # Verify realistic moving-bed Z-axis BOM items per mechanism
+    def _bom_skus(zid: str) -> dict[str, object]:
+        s = trident.model_copy(deep=True)
+        s.bed.z_leadscrew_type = zid  # type: ignore[assignment]
+        return {it.sku: it for it in generate_bom(s).items}
+
+    b_tr_wx = _bom_skus("tr8x4_wobblex")
+    assert "WobbleX" in b_tr_wx["MOT-Z-WOBBLEX"].name  # type: ignore[attr-defined]
+    assert b_tr_wx["MOT-Z-WOBBLEX"].quantity == 3  # type: ignore[attr-defined]
+    assert "TR8x4" in b_tr_wx["MOT-Z-LS"].name  # type: ignore[attr-defined]
+
+    b_1204_wx = _bom_skus("sfu1204_wobblex")
+    assert "SFU1204" in b_1204_wx["MOT-Z-LS"].name  # type: ignore[attr-defined]
+    assert "BK10" in b_1204_wx["MOT-Z-BK"].name  # type: ignore[attr-defined]
+    assert b_1204_wx["MOT-Z-WOBBLEX"].quantity == 3  # type: ignore[attr-defined]
+
+    b_1605 = _bom_skus("sfu1605_fk12")
+    assert "SFU1605" in b_1605["MOT-Z-LS"].name  # type: ignore[attr-defined]
+    assert "FK12/BK12" in b_1605["MOT-Z-BK"].name  # type: ignore[attr-defined]
+    assert "MOT-Z-WOBBLEX" not in b_1605
+
+    b_plan = _bom_skus("gt2_9mm_planetary_z")
+    assert "9mm" in b_plan["MOT-Z-BELT"].name  # type: ignore[attr-defined]
+    assert "Planetary" in b_plan["MOT-Z-GEAR"].name  # type: ignore[attr-defined]
+    assert b_plan["MOT-Z-GEAR"].quantity == 3  # type: ignore[attr-defined]
+
+    b_worm = _bom_skus("gt2_9mm_worm_z")
+    assert "9mm" in b_worm["MOT-Z-BELT"].name  # type: ignore[attr-defined]
+    assert "Worm" in b_worm["MOT-Z-GEAR"].name  # type: ignore[attr-defined]
+    assert b_worm["MOT-Z-GEAR"].quantity == 3  # type: ignore[attr-defined]
+
+    b_kas = _bom_skus("kevinakasam_belted_z")
+    assert "6mm" in b_kas["MOT-Z-BELT"].name  # type: ignore[attr-defined]
+    assert "KevinAkaSam" in b_kas["MOT-Z-GEAR"].name  # type: ignore[attr-defined]
+    assert b_kas["MOT-Z-KEYBAK"].quantity == 2  # type: ignore[attr-defined]
+
 
 
 

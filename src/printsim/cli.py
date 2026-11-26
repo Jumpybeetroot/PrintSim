@@ -749,6 +749,102 @@ def serve(
     uvicorn.run("printsim.api.server:app", host=host, port=port, reload=reload)
 
 
+@app.command("list-assets")
+def list_assets_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON asset catalog"),
+) -> None:
+    """List all baked CAD-backed hardware superelement bundles in PrintSim."""
+    from printsim.cad_assets import list_hardware_assets
+
+    catalog = list_hardware_assets()
+    if json_out:
+        print(json.dumps(catalog, indent=2))
+        return
+
+    tbl = Table(title="PrintSim Baked CAD Hardware Assets", show_header=True, header_style="bold magenta")
+    tbl.add_column("Category")
+    tbl.add_column("Asset ID")
+    tbl.add_column("Name")
+    tbl.add_column("Ref Material")
+    tbl.add_column("Mass (g)", justify="right")
+    tbl.add_column("Tip Stiff kx/ky/kz (N/mm)", justify="right")
+    tbl.add_column("Tets", justify="right")
+    tbl.add_column("GLB", justify="right")
+
+    total = 0
+    for cat, items in catalog.items():
+        for aid, m in items.items():
+            total += 1
+            ps = m.get("port_stiffness_n_per_mm", {})
+            mat_lbl = f"{m.get('reference_material_id')} ({'multi' if m.get('is_multi_material') else 'mono'})"
+            tbl.add_row(
+                cat,
+                aid,
+                str(m.get("name", aid)),
+                mat_lbl,
+                f"{float(m.get('mass_kg', 0.0)) * 1000.0:.1f}",
+                f"{float(ps.get('kx', 0.0)):.0f} / {float(ps.get('ky', 0.0)):.0f} / {float(ps.get('kz', 0.0)):.0f}",
+                f"{int(m.get('num_elements', 0)):,}",
+                f"{int(m.get('visual_bytes', 0)) / 1024:.1f} KB",
+            )
+    if total == 0:
+        console.print("[yellow]No baked CAD hardware assets found.[/yellow]")
+        return
+    console.print(tbl)
+
+
+@app.command("bake-asset")
+def bake_asset_cmd(
+    step_path: Path = typer.Argument(..., exists=True, help="Path to STEP CAD file (units: mm)"),
+    category: str = typer.Option("toolheads", "--category", "-c", help="hotends | toolheads | gantry_brackets"),
+    asset_id: Optional[str] = typer.Option(None, "--asset-id", "-id", help="Target asset ID (default: file stem)"),
+    material: str = typer.Option("titanium_grade5", "--material", "-m", help="Reference material ID"),
+    name: Optional[str] = typer.Option(None, "--name", help="Human-readable asset name"),
+    port0_axis: int = typer.Option(2, "--port0-axis", min=0, max=2, help="Mount face axis (0=X,1=Y,2=Z)"),
+    port0_end: str = typer.Option("max", "--port0-end", help="Mount face side (min|max)"),
+    port1_axis: int = typer.Option(2, "--port1-axis", min=0, max=2, help="Tip/output face axis (0=X,1=Y,2=Z)"),
+    port1_end: str = typer.Option("min", "--port1-end", help="Tip/output face side (min|max)"),
+    mesh_size: float = typer.Option(1.6, "--mesh-size", min=0.25, max=10.0, help="Target Tet4 size (mm)"),
+    modes: int = typer.Option(8, "--modes", min=0, max=24, help="Fixed-interface Craig-Bampton modes"),
+    out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Optional custom hardware assets root"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON manifest"),
+) -> None:
+    """Bake a STEP CAD file into a verified Tet4 Craig-Bampton superelement & PBR visual.glb."""
+    from printsim.cad_assets import bake_step_file
+
+    aid = asset_id or step_path.stem.lower().replace(" ", "_")
+    res = bake_step_file(
+        step_path=step_path,
+        category=category,
+        asset_id=aid,
+        material_id=material,
+        name=name,
+        port0_axis=port0_axis,
+        port0_end=port0_end,
+        port1_axis=port1_axis,
+        port1_end=port1_end,
+        mesh_size_mm=mesh_size,
+        n_internal_modes=modes,
+        assets_root=out_dir,
+    )
+    if json_out:
+        print(json.dumps(res.manifest, indent=2))
+        return
+
+    m = res.manifest
+    ps = m["port_stiffness_n_per_mm"]
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{m['name']}[/bold cyan] ({m['category']}/{m['asset_id']})\n"
+            f"Mesh: {m['num_elements']:,} {m['element_type']} ({m['num_vertices']:,} verts) | "
+            f"Mass: {m['mass_kg'] * 1000.0:.1f} g | RB max: {m['rigid_body_max_freq_hz']:.4f} Hz\n"
+            f"Tip Stiffness: kx={ps['kx']:.1f}, ky={ps['ky']:.1f}, kz={ps['kz']:.1f} N/mm\n"
+            f"GLB: {m['visual_triangles']:,} tris ({m['visual_bytes'] / 1024:.1f} KB) -> [green]{res.asset_dir}[/green]",
+            title="PrintSim CAD Superelement Baked",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Knowledge Base (`printsim kb ...`) subcommand group
 # ---------------------------------------------------------------------------
@@ -1171,6 +1267,228 @@ def kb_gaps_cmd(
         color = "green" if g["status"] == "covered" else "red"
         wtbl.add_row(g["label"], "1 / 1" if g["status"] == "covered" else "0 / 1", f"[{color}]{g['status'].upper()}[/{color}]", g["suggested_source"])
     console.print(wtbl)
+
+
+# ---------------------------------------------------------------------------
+# Zero-LLM Local CAD Pipeline (`printsim cad ...`)
+# ---------------------------------------------------------------------------
+
+cad_app = typer.Typer(
+    help="Zero-LLM local STEP inspection, recipe-driven superelement baking, QA & previews",
+    add_completion=False,
+)
+app.add_typer(cad_app, name="cad")
+
+
+@cad_app.command("inspect")
+def cad_inspect_cmd(
+    path: Path = typer.Argument(..., exists=True, help="Path to STEP/STP/STL/GLB CAD file"),
+    material: str = typer.Option("titanium_grade5", "--material", "-m", help="Default reference material ID"),
+    json_out: bool = typer.Option(False, "--json", help="Emit full JSON inspection report"),
+) -> None:
+    """Inspect a STEP/STL CAD file: solids, bbox, volume, faces, bolt holes, overlaps & port hints."""
+    from printsim.cad_assets import inspect_step_file
+
+    report = inspect_step_file(path, default_material=material)
+    if json_out:
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+    print(report.to_markdown())
+
+
+@cad_app.command("bake")
+def cad_bake_cmd(
+    recipe_path: Path = typer.Argument(..., exists=True, help="Path to declarative YAML recipe"),
+    fast: bool = typer.Option(False, "--fast", help="Coarse preview mesh + auto 2x2 contact sheet PNG"),
+    visuals_only: bool = typer.Option(False, "--visuals-only", help="Refresh visual.glb + manifest without re-meshing"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass .cache/cad_fea content cache"),
+    preview_png: Optional[Path] = typer.Option(None, "--preview-png", help="Optional path to save 2x2 preview PNG"),
+    out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Optional custom hardware assets root"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON result"),
+) -> None:
+    """Bake a declarative YAML CAD recipe into a verified superelement + PBR GLB (with caching)."""
+    from printsim.cad_assets import bake_from_recipe
+
+    res = bake_from_recipe(
+        recipe_path,
+        fast=fast,
+        visuals_only=visuals_only,
+        use_cache=not no_cache,
+        preview_png=preview_png,
+        assets_root=out_dir,
+    )
+    if json_out:
+        print(json.dumps(res, indent=2, default=str))
+        return
+    m = res["manifest"]
+    qa = res["qa"]
+    ps = m.get("port_stiffness_n_per_mm", {})
+    qa_status = "[bold green]PASS[/bold green]" if qa.get("passed") else "[bold red]FAIL[/bold red]"
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{m.get('name')}[/bold cyan] ({m.get('category')}/{m.get('asset_id')}) "
+            f"| Cache hit: {res.get('cache_hit')} | Elapsed: {res.get('elapsed_s', 0.0):.2f}s\n"
+            f"Mesh: {int(m.get('num_elements', 0)):,} {m.get('element_type')} | "
+            f"Mass: {float(m.get('mass_kg', 0.0)) * 1000.0:.1f} g | "
+            f"Tip Stiff: kx={float(ps.get('kx', 0.0)):.1f}, ky={float(ps.get('ky', 0.0)):.1f}, kz={float(ps.get('kz', 0.0)):.1f} N/mm\n"
+            f"QA: {qa_status} — {qa.get('summary', '')}"
+            + (f"\nPreview: {res['preview_png']}" if res.get("preview_png") else ""),
+            title="PrintSim CAD Recipe Bake",
+        )
+    )
+
+
+@cad_app.command("verify")
+def cad_verify_cmd(
+    category: Optional[str] = typer.Argument(None, help="Category (hotends | toolheads | assemblies | gantry_brackets)"),
+    asset_id: Optional[str] = typer.Argument(None, help="Asset ID (omit both args to verify ALL baked assets)"),
+    assets_dir: Optional[Path] = typer.Option(None, "--assets-dir", help="Optional custom assets root"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON QA report"),
+) -> None:
+    """Verify baked CAD superelement invariants (rigid-body modes, SPD K_bb, mass, GLB budget)."""
+    from printsim.cad_assets import list_hardware_assets, verify_baked_asset
+
+    targets: list[tuple[str, str]] = []
+    if category and asset_id:
+        targets.append((category, asset_id))
+    else:
+        cat_map = list_hardware_assets()
+        for cat, items in cat_map.items():
+            if category and cat != category:
+                continue
+            for aid in items:
+                targets.append((cat, aid))
+
+    reports = []
+    any_fail = False
+    for cat, aid in targets:
+        rep = verify_baked_asset(cat, aid, assets_root=assets_dir)
+        reports.append({"category": cat, "asset_id": aid, **rep.to_dict()})
+        if not rep.passed:
+            any_fail = True
+
+    if json_out:
+        print(json.dumps(reports[0] if len(reports) == 1 else reports, indent=2))
+        if any_fail:
+            raise typer.Exit(code=1)
+        return
+
+    tbl = Table(title="Baked CAD Asset QA Verification", show_header=True, header_style="bold magenta")
+    tbl.add_column("Asset")
+    tbl.add_column("Status")
+    tbl.add_column("Summary")
+    for r in reports:
+        st = "[green]PASS[/green]" if r["passed"] else "[red]FAIL[/red]"
+        tbl.add_row(f"{r['category']}/{r['asset_id']}", st, str(r["summary"]))
+    console.print(tbl)
+    if any_fail:
+        raise typer.Exit(code=1)
+
+
+@cad_app.command("preview")
+def cad_preview_cmd(
+    mesh_path: Path = typer.Argument(..., exists=True, help="Path to GLB or STL mesh"),
+    out: Path = typer.Option(..., "--out", "-o", help="Output PNG path"),
+    title: str = typer.Option("", "--title", help="Optional figure title"),
+) -> None:
+    """Render a fast headless 2x2 orthographic + isometric contact sheet PNG for a mesh/GLB."""
+    from printsim.cad_assets import render_contact_sheet
+
+    saved = render_contact_sheet(mesh_path, out, title=title or mesh_path.stem)
+    console.print(f"[green]Rendered preview contact sheet -> {saved}[/green]")
+
+
+@cad_app.command("fetch-onshape")
+def cad_fetch_onshape_cmd(
+    url_or_doc: str = typer.Argument(..., help="Onshape document URL or document ID"),
+    out: Path = typer.Option(..., "--out", "-o", help="Destination STEP file path"),
+    workspace_id: Optional[str] = typer.Option(None, "--workspace-id", "-w", help="Workspace ID (if passing bare doc ID)"),
+    element_id: Optional[str] = typer.Option(None, "--element-id", "-e", help="Element ID (if passing bare doc ID)"),
+    configuration: Optional[str] = typer.Option(None, "--configuration", "-c", help="Optional encoded Onshape configuration"),
+) -> None:
+    """Download a STEP B-Rep directly from Onshape REST API (requires ONSHAPE_ACCESS_KEY/SECRET_KEY)."""
+    from printsim.cad_assets import fetch_onshape_step
+
+    saved = fetch_onshape_step(
+        url_or_doc,
+        out,
+        workspace_id=workspace_id,
+        element_id=element_id,
+        configuration=configuration,
+    )
+    console.print(f"[green]Exported Onshape STEP -> {saved}[/green]")
+
+
+# ---------------------------------------------------------------------------
+# Zero-LLM Diagnostics, Comparisons & Offline Parallel Sweeps
+# ---------------------------------------------------------------------------
+
+
+@app.command("diagnose")
+def diagnose_cmd(
+    spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
+    override: Optional[list[str]] = typer.Option(None, "--override", "-O", help="Dot-path override key=value (repeatable)"),
+    include_gcode: bool = typer.Option(False, "--gcode", help="Include full benchmark G-code virtual print"),
+    json_out: bool = typer.Option(False, "--json", help="Emit structured JSON diagnosis"),
+) -> None:
+    """Print a compact multiphysics diagnosis (modes, shapers, 3-stage toolhead, adjoint hotspots)."""
+    from printsim.engine import diagnose_printer
+
+    diag = diagnose_printer(spec_path, overrides=override or None, include_gcode=include_gcode)
+    if json_out:
+        print(json.dumps(diag.to_dict(), indent=2))
+        return
+    print(diag.to_markdown())
+
+
+@app.command("compare")
+def compare_cmd(
+    base_spec: Path = typer.Argument(..., exists=True, help="Baseline printer YAML spec"),
+    variant_spec: Optional[Path] = typer.Argument(None, exists=True, help="Optional variant YAML spec"),
+    override: Optional[list[str]] = typer.Option(None, "--override", "-O", help="Dot-path override key=value applied to variant"),
+    label_a: Optional[str] = typer.Option(None, "--label-a", help="Custom baseline column label"),
+    label_b: Optional[str] = typer.Option(None, "--label-b", help="Custom variant column label"),
+    include_gcode: bool = typer.Option(False, "--gcode", help="Include G-code virtual print"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON comparison"),
+) -> None:
+    """Compare a baseline printer against a variant YAML or dot-path overrides with exact deltas."""
+    from printsim.engine import compare_printers
+
+    comp = compare_printers(
+        base_spec,
+        variant=variant_spec,
+        overrides=override or None,
+        label_a=label_a,
+        label_b=label_b,
+        include_gcode=include_gcode,
+    )
+    if json_out:
+        print(json.dumps(comp.to_dict(), indent=2))
+        return
+    print(comp.to_markdown())
+
+
+@app.command("sweep")
+def sweep_cmd(
+    config_path: Path = typer.Argument(..., exists=True, help="Path to sweep YAML config"),
+    workers: Optional[int] = typer.Option(None, "--workers", "-w", min=1, help="Parallel worker processes (default: auto)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable SQLite sweep result cache"),
+    out_dir: Optional[Path] = typer.Option(None, "--out-dir", "-o", help="Output directory for report.md & results.json"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON sweep report"),
+) -> None:
+    """Run a cached parallel parametric or 3D FEA calibration sweep locally at zero LLM cost."""
+    from printsim.engine import run_sweep
+
+    rep = run_sweep(
+        config_path,
+        workers=workers,
+        use_cache=not no_cache,
+        out_dir=out_dir,
+    )
+    if json_out:
+        print(json.dumps(rep.to_dict(), indent=2))
+        return
+    print(rep.to_markdown())
 
 
 if __name__ == "__main__":

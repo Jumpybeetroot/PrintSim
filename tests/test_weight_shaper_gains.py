@@ -154,15 +154,13 @@ def test_coupled_gain_matches_analytical_series_spring_formula() -> None:
 
     m_lim_g = report.assembly.y_moving_mass_kg * 1000.0
     cut_g = round(0.25 * m_lim_g, 1)
-    f_drive_new = lim.drive_freq_hz * math.sqrt(m_lim_g / (m_lim_g - cut_g))
-    # Even without structural gain, coupled f_eff increases monotonically and bounds below structural cap
-    f_eff_drive_only = 1.0 / math.sqrt(
-        1.0 / (lim.structural_freq_hz**2) + 1.0 / (f_drive_new**2)
-    )
-    f_eff_full_cap = 1.0 / math.sqrt(
-        1.0 / ((lim.structural_freq_hz * math.sqrt(m_lim_g / (m_lim_g - cut_g))) ** 2)
-        + 1.0 / (f_drive_new**2)
-    )
+    mass_boost = math.sqrt(m_lim_g / (m_lim_g - cut_g))
+    f_drive_new = lim.drive_freq_hz * mass_boost
+    # B-01 consistent moving-mass compliance split: 1/f_eff^2 = 1/f_struct_m^2 + 1/f_drive^2
+    inv_f_str_m2 = max(1.0 / (lim.effective_freq_hz**2) - 1.0 / (lim.drive_freq_hz**2), 1e-12)
+    f_struct_m = 1.0 / math.sqrt(inv_f_str_m2)
+    f_eff_drive_only = 1.0 / math.sqrt(1.0 / (f_struct_m**2) + 1.0 / (f_drive_new**2))
+    f_eff_full_cap = lim.effective_freq_hz * mass_boost
     df_min = f_eff_drive_only - lim.effective_freq_hz
     df_max = f_eff_full_cap - lim.effective_freq_hz
     assert df_min - 0.02 <= wsg["total_potential_hz_gain"] <= df_max + 0.02
@@ -199,7 +197,7 @@ def test_x_limiting_tie_break_and_no_sensitivity_fallback() -> None:
     sx = report.modal_fea.shaper_x
     sy = report.modal_fea.shaper_y
     assert sx is not None and sy is not None
-    scale = 0.7
+    scale = 0.55
     sx_tied = replace(
         sx,
         max_accel_mm_s2=sy.max_accel_mm_s2,

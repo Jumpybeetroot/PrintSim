@@ -19,7 +19,7 @@ gantry:
   drive_mode: 2wd
   belt_routing: stock_corexy
   double_shear_pulleys: true
-  bracket_material: aluminum_6061_t6
+  bracket_material: pet_cf_printed
   x_beam_profile: extrusion_2020
   x_beam_material: aluminum_6063_t5
   x_rail_profile: mgn12_rail
@@ -69,7 +69,7 @@ kinematics:
 toolhead:
   preset_id: custom
   name: RatRig EVA 3 + Orbiter 2 + SuperPINDA
-  total_mass_g: 310
+  total_mass_g: 390
   cog_offset_mm: [0, -14, -16]
   nozzle_offset_mm: [0, -16, -50]
   mount_material: pet_cf_printed

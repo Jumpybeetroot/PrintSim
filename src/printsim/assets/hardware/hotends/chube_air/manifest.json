@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "chube_air",
+  "name": "Luke's Lab Chube Air (100W Ti Shell)",
+  "source_cad": "CHUBE_INTEGRATION_REVA.step",
+  "source_url": "https://www.chubehotends.com/",
+  "baked_at": "2026-11-25T17:06:35Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 13673,
+  "num_elements": 49506,
+  "num_dofs": 41019,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.009286,
+  "mass_kg": 0.06897,
+  "com_mm": [
+    0.2351,
+    0.0655,
+    -37.2883
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -66.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 2139.708,
+    "ky": 2357.374,
+    "kz": 61788.757
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1721.79,
+    "kry": 1607.273,
+    "krz": 1807.198
+  },
+  "fixed_interface_freqs_hz": [
+    3504.05,
+    3723.09,
+    7739.1,
+    8566.41,
+    9626.7,
+    11351.44,
+    11601.58,
+    14566.0
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 22788,
+  "visual_bytes": 821960,
+  "cad_trust_pct": 86,
+  "source_hash": "0d1f028db3e946e16ec276db741ef53faebe936a2ad4c5a14adfac933841ccb4"
+}
