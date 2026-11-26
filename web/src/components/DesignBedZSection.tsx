@@ -3,10 +3,15 @@ import {
   BedMountType,
   CatalogResponse,
   PrinterSpecData,
+  SimulationResponse,
   ZLeadscrewType,
   ZRailProfileType,
 } from "../types";
 import { BED_MOUNT_STANDOFF_HEIGHT_MM } from "../viewport/bedMounts";
+import {
+  ModelOverrideControl,
+  clearModelOverrideGroup,
+} from "./ModelOverrideControl";
 
 const FALLBACK_Z_RAIL_PROFILES: Array<{ id: ZRailProfileType; name: string }> = [
   { id: "mgn12_rail", name: "MGN12H Linear Rail (12×8mm)" },
@@ -21,6 +26,9 @@ interface ZDriveOptionMeta {
   id: ZLeadscrewType;
   name: string;
   kind: "auto" | "leadscrew" | "ballscrew" | "belt";
+  k_nut_n_per_um?: number;
+  k_thrust_n_per_um?: number;
+  k_drive_n_per_um_per_corner?: number | null;
   wobble_decoupled?: boolean;
   self_locking?: boolean;
   unpowered_drop_risk?: boolean;
@@ -36,100 +44,117 @@ const FALLBACK_Z_DRIVE_MECHANISMS: ZDriveOptionMeta[] = [
     id: "tr8x4_pom",
     name: "TR8×4 Trident POM Nut",
     kind: "leadscrew",
+    k_nut_n_per_um: 11.0,
+    k_thrust_n_per_um: 18.0,
     wobble_decoupled: false,
     self_locking: true,
     unpowered_drop_risk: false,
-    backlash_um: 25,
+    backlash_um: 28,
     notes: "Standard 4mm-lead Trident leadscrew with self-locking POM nut.",
   },
   {
     id: "tr8x4_wobblex",
     name: "TR8×4 + WobbleX Decoupler",
     kind: "leadscrew",
+    k_nut_n_per_um: 10.2,
+    k_thrust_n_per_um: 18.0,
     wobble_decoupled: true,
     self_locking: true,
     unpowered_drop_risk: false,
-    backlash_um: 25,
+    backlash_um: 18,
     notes: "Floating kinematic WobbleX nut decouples XY screw runout while staying self-locking.",
   },
   {
     id: "tr8x8_pom",
     name: "TR8×8 POM Nut",
     kind: "leadscrew",
+    k_nut_n_per_um: 6.5,
+    k_thrust_n_per_um: 14.0,
     wobble_decoupled: false,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 30,
+    backlash_um: 45,
     notes: "Fast 8mm-lead 4-start screw; lower friction can back-drive heavy beds when unpowered.",
   },
   {
     id: "tr8x8_brass",
     name: "TR8×8 Brass Nut",
     kind: "leadscrew",
+    k_nut_n_per_um: 38.0,
+    k_thrust_n_per_um: 22.0,
     wobble_decoupled: false,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 45,
+    backlash_um: 35,
     notes: "Budget brass leadscrew nut with higher axial backlash and runout coupling.",
   },
   {
     id: "sfu1204_bk10",
     name: "SFU1204 C7 Ballscrew + BK10",
     kind: "ballscrew",
+    k_nut_n_per_um: 85.0,
+    k_thrust_n_per_um: 150.0,
     wobble_decoupled: false,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 10,
+    backlash_um: 8,
     notes: "High-stiffness 12mm C7 rolled ballscrew on BK10 angular-contact bearings; back-drives unpowered.",
   },
   {
     id: "sfu1204_wobblex",
     name: "SFU1204 + BK10 + WobbleX",
     kind: "ballscrew",
+    k_nut_n_per_um: 72.0,
+    k_thrust_n_per_um: 150.0,
     wobble_decoupled: true,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 10,
+    backlash_um: 6,
     notes: "SFU1204 ballscrew axial rigidity paired with a WobbleX XY runout decoupler.",
   },
   {
     id: "sfu1605_fk12",
     name: "SFU1605 Heavy Ballscrew + FK12/BK12",
     kind: "ballscrew",
+    k_nut_n_per_um: 145.0,
+    k_thrust_n_per_um: 240.0,
     wobble_decoupled: false,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 8,
+    backlash_um: 5,
     notes: "Industrial 16mm ballscrew + heavy FK12 flange support for large high-mass beds.",
   },
   {
     id: "gt2_6mm_z_belt",
     name: "GT2 6mm Z-Belt",
     kind: "belt",
+    k_drive_n_per_um_per_corner: 0.18,
     wobble_decoupled: true,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 12,
+    backlash_um: 18,
     notes: "Stock Voron 2.4 6mm GT2 Z-belt drive — zero screw wobble.",
   },
   {
     id: "gt2_9mm_z_belt",
     name: "GT2 9mm Z-Belt",
     kind: "belt",
+    k_drive_n_per_um_per_corner: 0.27,
     wobble_decoupled: true,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 8,
+    backlash_um: 12,
     notes: "Upgraded 9mm GT2 Z-belt with +50% tensile stiffness and zero Z-wobble.",
   },
   {
     id: "gt2_9mm_planetary_z",
     name: "9mm Belted-Z (5:1 Planetary)",
     kind: "belt",
+    k_drive_n_per_um_per_corner: 0.31,
     wobble_decoupled: true,
     self_locking: false,
     unpowered_drop_risk: true,
-    backlash_um: 12,
+    backlash_um: 14,
     gear_ratio: 5,
     notes: "9mm belted Z with compact 5:1 planetary gearbox for high thrust and zero screw wobble.",
   },
@@ -137,10 +162,11 @@ const FALLBACK_Z_DRIVE_MECHANISMS: ZDriveOptionMeta[] = [
     id: "gt2_9mm_worm_z",
     name: "9mm Belted-Z (Self-Locking Worm / 20:1)",
     kind: "belt",
+    k_drive_n_per_um_per_corner: 0.34,
     wobble_decoupled: true,
     self_locking: true,
     unpowered_drop_risk: false,
-    backlash_um: 18,
+    backlash_um: 16,
     gear_ratio: 20,
     notes: "Self-locking 20:1 worm-geared 9mm belted Z — zero Z-wobble and zero bed drop on power loss.",
   },
@@ -148,14 +174,38 @@ const FALLBACK_Z_DRIVE_MECHANISMS: ZDriveOptionMeta[] = [
     id: "kevinakasam_belted_z",
     name: "KevinAkaSam Belted-Z (80:16 + Keybak)",
     kind: "belt",
+    k_drive_n_per_um_per_corner: 0.21,
     wobble_decoupled: true,
     self_locking: false,
     unpowered_drop_risk: false,
-    backlash_um: 10,
+    backlash_um: 15,
     gear_ratio: 5,
     notes: "80:16 belted-Z conversion with Keybak spring counterbalance to prevent unpowered bed drop.",
   },
 ];
+
+const FALLBACK_BED_MOUNT_PARAMS: Record<
+  BedMountType,
+  {
+    k_axial_n_per_mm: number;
+    k_lateral_n_per_mm: number;
+    k_restraint_thermal_n_per_mm: number;
+    damping_delta: number;
+    standoff_height_mm: number;
+  }
+> = {
+  kinematic_3pt: { k_axial_n_per_mm: 32000, k_lateral_n_per_mm: 24000, k_restraint_thermal_n_per_mm: 0, damping_delta: 0, standoff_height_mm: 16 },
+  whopping_pochard_kinematic: { k_axial_n_per_mm: 24000, k_lateral_n_per_mm: 16000, k_restraint_thermal_n_per_mm: 0, damping_delta: 0.002, standoff_height_mm: 14 },
+  trident_3pt_standoffs: { k_axial_n_per_mm: 18000, k_lateral_n_per_mm: 9500, k_restraint_thermal_n_per_mm: 3800, damping_delta: 0.003, standoff_height_mm: 10 },
+  cnc_kelvin_magnetic: { k_axial_n_per_mm: 42000, k_lateral_n_per_mm: 30000, k_restraint_thermal_n_per_mm: 0, damping_delta: 0.001, standoff_height_mm: 15 },
+  captive_belleville_kinematic: { k_axial_n_per_mm: 52000, k_lateral_n_per_mm: 36000, k_restraint_thermal_n_per_mm: 0, damping_delta: 0.002, standoff_height_mm: 16 },
+  dual_leaf_ti_kinematic: { k_axial_n_per_mm: 38000, k_lateral_n_per_mm: 26000, k_restraint_thermal_n_per_mm: 0, damping_delta: 0.003, standoff_height_mm: 14 },
+  spherical_3pt_ratrig: { k_axial_n_per_mm: 30000, k_lateral_n_per_mm: 20000, k_restraint_thermal_n_per_mm: 1500, damping_delta: 0.002, standoff_height_mm: 15 },
+  rigid_4pt: { k_axial_n_per_mm: 65000, k_lateral_n_per_mm: 40000, k_restraint_thermal_n_per_mm: 80000, damping_delta: -0.002, standoff_height_mm: 12 },
+  floating_4pt: { k_axial_n_per_mm: 12000, k_lateral_n_per_mm: 6000, k_restraint_thermal_n_per_mm: 2800, damping_delta: 0.002, standoff_height_mm: 12 },
+  silicone_4pt: { k_axial_n_per_mm: 48, k_lateral_n_per_mm: 16, k_restraint_thermal_n_per_mm: 32, damping_delta: 0.008, standoff_height_mm: 16 },
+  springs_4pt: { k_axial_n_per_mm: 16, k_lateral_n_per_mm: 4.5, k_restraint_thermal_n_per_mm: 9, damping_delta: 0.004, standoff_height_mm: 20 },
+};
 
 const FALLBACK_Z_DRIVE_BY_ID: Record<string, ZDriveOptionMeta> = Object.fromEntries(
   FALLBACK_Z_DRIVE_MECHANISMS.map((m) => [m.id, m])
@@ -383,7 +433,9 @@ function bedZTopologyMeta(arch: PrinterSpecData["architecture"], zDrive: string)
 export interface DesignBedZSectionProps {
   spec: PrinterSpecData;
   catalog: CatalogResponse;
+  sim: SimulationResponse | null;
   showHints: boolean;
+  advancedMode: boolean;
   update: (mutator: (draft: PrinterSpecData) => void, changeLabel?: string) => void;
   updatePositiveNum: (
     raw: string,
@@ -396,7 +448,9 @@ export interface DesignBedZSectionProps {
 export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
   spec,
   catalog,
+  sim,
   showHints,
+  advancedMode,
   update,
   updatePositiveNum,
   materialLabel,
@@ -540,6 +594,10 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
               id: m.id as ZLeadscrewType,
               name: m.name,
               kind: m.kind,
+              k_nut_n_per_um: m.k_nut_n_per_um ?? fb?.k_nut_n_per_um,
+              k_thrust_n_per_um: m.k_thrust_n_per_um ?? fb?.k_thrust_n_per_um,
+              k_drive_n_per_um_per_corner:
+                m.k_drive_n_per_um_per_corner ?? fb?.k_drive_n_per_um_per_corner,
               wobble_decoupled: m.wobble_decoupled ?? fb?.wobble_decoupled,
               self_locking: m.self_locking ?? fb?.self_locking,
               unpowered_drop_risk: m.unpowered_drop_risk ?? fb?.unpowered_drop_risk,
@@ -639,11 +697,16 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
               currentBedMount;
             const nextLbl =
               BED_MOUNT_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+            const hadOv = Boolean(
+              spec.model_overrides?.bed_mount &&
+                Object.values(spec.model_overrides.bed_mount).some((v) => v != null)
+            );
             update(
               (d) => {
                 d.bed.mount_type = nextVal;
+                clearModelOverrideGroup(d, "bed_mount");
               },
-              `Bed Mount: ${prevLbl} → ${nextLbl}`
+              `Bed Mount: ${prevLbl} → ${nextLbl}${hadOv ? " (override reset)" : ""}`
             );
           }}
         >
@@ -699,6 +762,81 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             {bedMountCatalogEntry?.notes || bedMountOptionMeta.hint}
           </div>
         )}
+        {(() => {
+          const fb = FALLBACK_BED_MOUNT_PARAMS[currentBedMount];
+          const thermalNPerMm =
+            bedMountCatalogEntry?.k_restraint_thermal_n_per_m != null
+              ? bedMountCatalogEntry.k_restraint_thermal_n_per_m / 1000
+              : fb.k_restraint_thermal_n_per_mm;
+          return (
+            <ModelOverrideControl
+              visible={advancedMode}
+              idPrefix="ov-bed-mount"
+              title="Bed Mount"
+              group="bed_mount"
+              spec={spec}
+              sim={sim}
+              update={update}
+              fields={[
+                {
+                  key: "k_axial_n_per_mm",
+                  label: "Axial k_z",
+                  unit: "N/mm",
+                  min: 1,
+                  max: 500000,
+                  step: 100,
+                  decimals: 0,
+                  fallbackBaseline: bedMountCatalogEntry?.k_axial_n_per_mm ?? fb.k_axial_n_per_mm,
+                  tooltip: "Per-point vertical Z stiffness of bed mount hardware",
+                },
+                {
+                  key: "k_lateral_n_per_mm",
+                  label: "Lateral k_xy",
+                  unit: "N/mm",
+                  min: 0.5,
+                  max: 500000,
+                  step: 100,
+                  decimals: 0,
+                  fallbackBaseline: bedMountCatalogEntry?.k_lateral_n_per_mm ?? fb.k_lateral_n_per_mm,
+                  tooltip: "Per-point lateral shear stiffness against bed sway",
+                },
+                {
+                  key: "k_restraint_thermal_n_per_mm",
+                  label: "Thermal Restraint",
+                  unit: "N/mm",
+                  min: 0,
+                  max: 500000,
+                  step: 100,
+                  decimals: 0,
+                  fallbackBaseline: thermalNPerMm,
+                  tooltip: "In-plane radial thermal expansion restraint driving bed taco buckling",
+                },
+                {
+                  key: "damping_delta",
+                  label: "Mount Damping",
+                  unit: "ζ",
+                  min: -0.02,
+                  max: 0.1,
+                  step: 0.001,
+                  decimals: 3,
+                  fallbackBaseline: bedMountCatalogEntry?.damping_delta ?? fb.damping_delta,
+                  tooltip: "Modal damping increment contributed by bed mount interface",
+                },
+                {
+                  key: "standoff_height_mm",
+                  label: "Standoff Height",
+                  unit: "mm",
+                  min: 2,
+                  max: 60,
+                  step: 1,
+                  decimals: 1,
+                  fallbackBaseline: bedMountCatalogEntry?.standoff_height_mm ?? fb.standoff_height_mm,
+                  tooltip: "Nominal standoff stack height between bed plate and Z subframe",
+                },
+              ]}
+            />
+          );
+        })()}
       </div>
 
       <div className="field-grid-3">
@@ -878,11 +1016,16 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
                     ?.name ?? currentZLeadscrewType;
                 const nextLbl =
                   zDriveMechanismOptions.find((o) => o.id === nextVal)?.name ?? nextVal;
+                const hadOv = Boolean(
+                  spec.model_overrides?.z_drive_mechanism &&
+                    Object.values(spec.model_overrides.z_drive_mechanism).some((v) => v != null)
+                );
                 update(
                   (d) => {
                     d.bed.z_leadscrew_type = nextVal;
+                    clearModelOverrideGroup(d, "z_drive_mechanism");
                   },
-                  `Z Drive: ${prevLbl} → ${nextLbl}`
+                  `Z Drive: ${prevLbl} → ${nextLbl}${hadOv ? " (override reset)" : ""}`
                 );
               }}
             >
@@ -988,6 +1131,77 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             {showHints && activeZDriveMeta?.notes && (
               <div className="hint-line">{activeZDriveMeta.notes}</div>
             )}
+            <ModelOverrideControl
+              visible={advancedMode}
+              idPrefix="ov-z-drive-mechanism"
+              title="Z-Drive Mechanism"
+              group="z_drive_mechanism"
+              spec={spec}
+              sim={sim}
+              update={update}
+              fields={
+                activeZDriveMeta?.kind === "belt"
+                  ? [
+                      {
+                        key: "k_drive_n_per_um_per_corner",
+                        label: "Corner Drive k",
+                        unit: "N/µm",
+                        min: 0.01,
+                        max: 100,
+                        step: 0.05,
+                        decimals: 2,
+                        fallbackBaseline: activeZDriveMeta.k_drive_n_per_um_per_corner ?? 0.18,
+                        tooltip: "Effective axial Z-belt loop stiffness per driven corner",
+                      },
+                      {
+                        key: "backlash_um",
+                        label: "Z Backlash",
+                        unit: "µm",
+                        min: 0,
+                        max: 200,
+                        step: 1,
+                        decimals: 1,
+                        fallbackBaseline: activeZDriveMeta.backlash_um ?? 18,
+                        tooltip: "Nominal axial Z reversal backlash",
+                      },
+                    ]
+                  : [
+                      {
+                        key: "k_nut_n_per_um",
+                        label: "Nut Stiffness",
+                        unit: "N/µm",
+                        min: 0.5,
+                        max: 1000,
+                        step: 1,
+                        decimals: 1,
+                        fallbackBaseline: activeZDriveMeta?.k_nut_n_per_um ?? 11.0,
+                        tooltip: "Axial thread/ball-nut stiffness per leadscrew or ballscrew",
+                      },
+                      {
+                        key: "k_thrust_n_per_um",
+                        label: "Thrust Bearing k",
+                        unit: "N/µm",
+                        min: 1,
+                        max: 2000,
+                        step: 2,
+                        decimals: 1,
+                        fallbackBaseline: activeZDriveMeta?.k_thrust_n_per_um ?? 18.0,
+                        tooltip: "Axial stiffness of the Z motor or BK/FK thrust bearing block",
+                      },
+                      {
+                        key: "backlash_um",
+                        label: "Z Backlash",
+                        unit: "µm",
+                        min: 0,
+                        max: 200,
+                        step: 1,
+                        decimals: 1,
+                        fallbackBaseline: activeZDriveMeta?.backlash_um ?? 28,
+                        tooltip: "Nominal axial Z reversal backlash",
+                      },
+                    ]
+              }
+            />
           </div>
 
           <div className="field-row">

@@ -2,6 +2,7 @@ import {
   AdjointLens,
   FeaLoadCase,
   ModalColorMode,
+  ModalScaleMode,
   PrinterSpecData,
   ViewMode,
 } from "../types";
@@ -24,6 +25,7 @@ export interface StudioPersistedSettings {
   feaLoadCase: FeaLoadCase;
   sensitivityLens: AdjointLens;
   modalColorMode: ModalColorMode;
+  modalScaleMode: ModalScaleMode;
   showBedWarp: boolean;
   optObjective: OptObjective;
   gcodeText?: string;
@@ -45,6 +47,7 @@ export interface StorageResult<T = void> {
 const AUTOSAVE_KEY = "printsim_studio_autosave_v1";
 const SAVED_BUILDS_KEY = "printsim_studio_saved_builds_v1";
 const SHOW_HINTS_KEY = "printsim_studio_show_hints_v1";
+const ADVANCED_MODE_KEY = "printsim_studio_advanced_mode_v1";
 const MAX_SAVED_BUILDS = 30;
 const MAX_GCODE_CHARS = 100_000;
 
@@ -66,6 +69,7 @@ const VALID_LENSES = new Set<AdjointLens>([
   "mass",
 ]);
 const VALID_MODAL_COLOR_MODES = new Set<ModalColorMode>(["relative", "global"]);
+const VALID_MODAL_SCALE_MODES = new Set<ModalScaleMode>(["impact", "shape"]);
 const VALID_OPT_OBJECTIVES = new Set<OptObjective>([
   "balanced",
   "speed",
@@ -110,6 +114,10 @@ export function sanitizePersistedSettings(raw: unknown): StudioPersistedSettings
   const modalColorMode: ModalColorMode = VALID_MODAL_COLOR_MODES.has(rawModalColor)
     ? rawModalColor
     : "relative";
+  const rawModalScale = raw.modalScaleMode as ModalScaleMode;
+  const modalScaleMode: ModalScaleMode = VALID_MODAL_SCALE_MODES.has(rawModalScale)
+    ? rawModalScale
+    : "impact";
   const rawOpt = raw.optObjective as OptObjective;
   const optObjective: OptObjective = VALID_OPT_OBJECTIVES.has(rawOpt) ? rawOpt : "balanced";
 
@@ -158,6 +166,7 @@ export function sanitizePersistedSettings(raw: unknown): StudioPersistedSettings
     feaLoadCase,
     sensitivityLens,
     modalColorMode,
+    modalScaleMode,
     showBedWarp: Boolean(raw.showBedWarp),
     optObjective,
     gcodeText,
@@ -387,6 +396,7 @@ export function parseSettingsFile(
         feaLoadCase: "xy",
         sensitivityLens: "print_impact",
         modalColorMode: "relative",
+        modalScaleMode: "impact",
         showBedWarp: false,
         optObjective: "balanced",
         gcodeText: "",
@@ -414,6 +424,22 @@ export function loadShowHintsPreference(): boolean {
 export function saveShowHintsPreference(show: boolean): void {
   try {
     window.localStorage.setItem(SHOW_HINTS_KEY, show ? "1" : "0");
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function loadAdvancedModePreference(): boolean {
+  try {
+    return window.localStorage.getItem(ADVANCED_MODE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAdvancedModePreference(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(ADVANCED_MODE_KEY, enabled ? "1" : "0");
   } catch {
     // Ignore storage errors
   }

@@ -18,6 +18,11 @@ import {
   SimulationResponse,
   TopBraceType,
 } from "../types";
+import {
+  ModelOverrideControl,
+  PresetAffectsStrip,
+  clearModelOverrideGroup,
+} from "./ModelOverrideControl";
 
 interface FrameSizePreset {
   id: string;
@@ -194,6 +199,27 @@ const CORNER_JOINT_OPTIONS: Array<{ id: CornerJointType; label: string; shortLab
   { id: "rigid", label: "Ideal Rigid", shortLabel: "Ideal Rigid" },
 ];
 
+const FALLBACK_CORNER_JOINT_PARAMS: Record<
+  CornerJointType,
+  { k_t_n_per_mm: number; k_r_inplane_nm_rad: number; k_r_torsion_nm_rad: number; damping_delta: number }
+> = {
+  l_bracket: { k_t_n_per_mm: 3500, k_r_inplane_nm_rad: 4500, k_r_torsion_nm_rad: 1800, damping_delta: 0.005 },
+  blind_joint: { k_t_n_per_mm: 12000, k_r_inplane_nm_rad: 22000, k_r_torsion_nm_rad: 7500, damping_delta: 0.003 },
+  gusset_plate: { k_t_n_per_mm: 22000, k_r_inplane_nm_rad: 42000, k_r_torsion_nm_rad: 14000, damping_delta: 0.002 },
+  corner_cube: { k_t_n_per_mm: 38000, k_r_inplane_nm_rad: 85000, k_r_torsion_nm_rad: 28000, damping_delta: 0.001 },
+  rigid: { k_t_n_per_mm: 10000000, k_r_inplane_nm_rad: 1000000000, k_r_torsion_nm_rad: 1000000000, damping_delta: 0 },
+};
+
+const FALLBACK_FRAME_FEET_PARAMS: Record<
+  FrameFeetType,
+  { k_axial_n_per_mm: number; k_lateral_n_per_mm: number; damping_delta: number; base_mass_kg: number }
+> = {
+  rigid_bolted: { k_axial_n_per_mm: 0, k_lateral_n_per_mm: 0, damping_delta: 0, base_mass_kg: 0 },
+  rubber_feet: { k_axial_n_per_mm: 360, k_lateral_n_per_mm: 140, damping_delta: 0.006, base_mass_kg: 0 },
+  anti_vib_pads: { k_axial_n_per_mm: 85, k_lateral_n_per_mm: 32, damping_delta: 0.015, base_mass_kg: 0 },
+  paver_on_foam: { k_axial_n_per_mm: 240, k_lateral_n_per_mm: 95, damping_delta: 0.022, base_mass_kg: 18 },
+};
+
 const FRAME_FEET_OPTIONS: Array<{
   id: FrameFeetType;
   label: string;
@@ -242,6 +268,7 @@ export interface DesignFrameSectionProps {
   catalog: CatalogResponse;
   sim: SimulationResponse | null;
   showHints: boolean;
+  advancedMode: boolean;
   update: (mutator: (draft: PrinterSpecData) => void, changeLabel?: string) => void;
   updatePositiveNum: (
     raw: string,
@@ -257,6 +284,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
   catalog,
   sim,
   showHints,
+  advancedMode,
   update,
   profileLabel,
   materialLabel,
@@ -614,6 +642,9 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 update(
                   (d) => {
                     d.bed.z_drive = nextZ;
+                    if (!d.bed.z_leadscrew_type || d.bed.z_leadscrew_type === "auto") {
+                      clearModelOverrideGroup(d, "z_drive_mechanism");
+                    }
                   },
                   `Gantry Type: ${prevLabel} → ${nextLabel}`
                 );
@@ -679,6 +710,24 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               Custom
             </button>
           </div>
+          <PresetAffectsStrip
+            visible={advancedMode}
+            items={[
+              {
+                label: "Frame",
+                value: `${Math.round(spec.frame.width_mm)}×${Math.round(spec.frame.depth_mm)}×${Math.round(spec.frame.height_mm)} mm`,
+              },
+              {
+                label: "Build",
+                value: `${Math.round(spec.kinematics.build_volume_mm[0])}×${Math.round(spec.kinematics.build_volume_mm[1])}×${Math.round(spec.kinematics.build_volume_mm[2])} mm`,
+              },
+              {
+                label: "Bed",
+                value: `${Math.round(spec.bed.size_mm[0])}×${Math.round(spec.bed.size_mm[1])} mm`,
+              },
+            ]}
+            suffix="(editable below)"
+          />
         </div>
       )}
 
@@ -1326,11 +1375,16 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                   currentCornerJoint;
                 const nextLbl =
                   CORNER_JOINT_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                const hadOv = Boolean(
+                  spec.model_overrides?.corner_joint &&
+                    Object.values(spec.model_overrides.corner_joint).some((v) => v != null)
+                );
                 update(
                   (d) => {
                     d.frame.corner_joint_type = nextVal;
+                    clearModelOverrideGroup(d, "corner_joint");
                   },
-                  `Corner Joint: ${prevLbl} → ${nextLbl}`
+                  `Corner Joint: ${prevLbl} → ${nextLbl}${hadOv ? " (override reset)" : ""}`
                 );
               }}
             >
@@ -1340,6 +1394,67 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 </option>
               ))}
             </select>
+            {(() => {
+              const catJoint = catalog.corner_joints?.find((c) => c.id === currentCornerJoint);
+              const fb = FALLBACK_CORNER_JOINT_PARAMS[currentCornerJoint];
+              return (
+                <ModelOverrideControl
+                  visible={advancedMode}
+                  idPrefix="ov-corner-joint"
+                  title="Corner Joint"
+                  group="corner_joint"
+                  spec={spec}
+                  sim={sim}
+                  update={update}
+                  fields={[
+                    {
+                      key: "k_t_n_per_mm",
+                      label: "Translational k",
+                      unit: "N/mm",
+                      min: 10,
+                      max: 100000000,
+                      step: 500,
+                      decimals: 0,
+                      fallbackBaseline: catJoint?.k_t_n_per_mm ?? fb.k_t_n_per_mm,
+                      tooltip: "Corner joint translational shear/axial spring stiffness",
+                    },
+                    {
+                      key: "k_r_inplane_nm_rad",
+                      label: "In-Plane k_r",
+                      unit: "N·m/rad",
+                      min: 10,
+                      max: 10000000000,
+                      step: 500,
+                      decimals: 0,
+                      fallbackBaseline: catJoint?.k_r_inplane_nm_rad ?? fb.k_r_inplane_nm_rad,
+                      tooltip: "In-plane bending moment stiffness of each frame corner joint",
+                    },
+                    {
+                      key: "k_r_torsion_nm_rad",
+                      label: "Torsion k_t",
+                      unit: "N·m/rad",
+                      min: 10,
+                      max: 10000000000,
+                      step: 500,
+                      decimals: 0,
+                      fallbackBaseline: catJoint?.k_r_torsion_nm_rad ?? fb.k_r_torsion_nm_rad,
+                      tooltip: "Out-of-plane / torsional rotational stiffness of each frame corner joint",
+                    },
+                    {
+                      key: "damping_delta",
+                      label: "Joint Damping",
+                      unit: "ζ",
+                      min: 0,
+                      max: 0.15,
+                      step: 0.001,
+                      decimals: 3,
+                      fallbackBaseline: catJoint?.damping_delta ?? fb.damping_delta,
+                      tooltip: "Iwan micro-slip modal damping increment contributed by corner joints",
+                    },
+                  ]}
+                />
+              );
+            })()}
           </div>
 
           <div className="field-row">
@@ -1367,11 +1482,16 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 const nextId = e.target.value as ExtrusionFillingType;
                 const nextItem =
                   extrusionFillings.find((f) => f.id === nextId) ?? extrusionFillings[0];
+                const hadOv = Boolean(
+                  spec.model_overrides?.extrusion_filling &&
+                    Object.values(spec.model_overrides.extrusion_filling).some((v) => v != null)
+                );
                 update(
                   (d) => {
                     d.frame.extrusion_filling = nextId;
+                    clearModelOverrideGroup(d, "extrusion_filling");
                   },
-                  `Extrusion Fill: ${selectedFilling.short_name} → ${nextItem.short_name}`
+                  `Extrusion Fill: ${selectedFilling.short_name} → ${nextItem.short_name}${hadOv ? " (override reset)" : ""}`
                 );
               }}
             >
@@ -1413,6 +1533,57 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 lead shot damp resonance without raising moving mass.
               </div>
             )}
+            <ModelOverrideControl
+              visible={advancedMode}
+              idPrefix="ov-extrusion-filling"
+              title="Extrusion Cavity Fill"
+              group="extrusion_filling"
+              spec={spec}
+              sim={sim}
+              update={update}
+              fields={[
+                {
+                  key: "density_kg_m3",
+                  label: "Density",
+                  unit: "kg/m³",
+                  min: 0,
+                  max: 15000,
+                  step: 50,
+                  decimals: 0,
+                  fallbackBaseline: selectedFilling.density_kg_m3,
+                  tooltip: "Bulk density of material packed inside extrusion hollow core",
+                },
+                {
+                  key: "youngs_modulus_gpa",
+                  label: "Core E",
+                  unit: "GPa",
+                  min: 0,
+                  max: 120,
+                  step: 0.5,
+                  decimals: 2,
+                  fallbackBaseline: Number((selectedFilling.youngs_modulus_pa / 1e9).toFixed(2)),
+                  tooltip: "Elastic modulus of cured cavity core (used when bonded to walls)",
+                },
+                {
+                  key: "damping_boost",
+                  label: "Damping Boost",
+                  unit: "ζ",
+                  min: 0,
+                  max: 0.2,
+                  step: 0.002,
+                  decimals: 3,
+                  fallbackBaseline: selectedFilling.damping_boost,
+                  tooltip: "Added structural modal damping ratio from granular or resin fill",
+                },
+                {
+                  key: "bonded",
+                  label: "Bonded to Cavity Walls (+EI)",
+                  type: "boolean",
+                  fallbackBaseline: selectedFilling.bonded,
+                  tooltip: "When enabled, core modulus adds composite bending stiffness to frame beams",
+                },
+              ]}
+            />
           </div>
         </div>
       </details>
@@ -1651,7 +1822,9 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
 export interface DesignAnchoringSectionProps {
   spec: PrinterSpecData;
   catalog: CatalogResponse;
+  sim: SimulationResponse | null;
   showHints: boolean;
+  advancedMode: boolean;
   toolheadRelPos: [number, number, number];
   onToolheadRelPosChange: (pos: [number, number, number], changeLabel?: string) => void;
   panelMeshN: number;
@@ -1662,7 +1835,9 @@ export interface DesignAnchoringSectionProps {
 export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
   spec,
   catalog,
+  sim,
   showHints,
+  advancedMode,
   toolheadRelPos,
   onToolheadRelPosChange,
   panelMeshN,
@@ -1742,11 +1917,16 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
                   currentFeetType;
                 const nextLbl =
                   FRAME_FEET_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ?? nextVal;
+                const hadOv = Boolean(
+                  spec.model_overrides?.frame_feet &&
+                    Object.values(spec.model_overrides.frame_feet).some((v) => v != null)
+                );
                 update(
                   (d) => {
                     d.frame.feet_type = nextVal;
+                    clearModelOverrideGroup(d, "frame_feet");
                   },
-                  `Benchtop Feet: ${prevLbl} → ${nextLbl}`
+                  `Benchtop Feet: ${prevLbl} → ${nextLbl}${hadOv ? " (override reset)" : ""}`
                 );
               }}
             >
@@ -1764,6 +1944,71 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
                 {frameFeetCatalogEntry?.notes || frameFeetOptionMeta.hint}
               </div>
             )}
+            {(() => {
+              const fb = FALLBACK_FRAME_FEET_PARAMS[currentFeetType];
+              return (
+                <ModelOverrideControl
+                  visible={advancedMode}
+                  idPrefix="ov-frame-feet"
+                  title="Benchtop Feet"
+                  group="frame_feet"
+                  spec={spec}
+                  sim={sim}
+                  update={update}
+                  note={
+                    currentFeetType === "rigid_bolted"
+                      ? "0 N/mm = rigidly anchored to benchtop; enter positive stiffness to model compliant feet."
+                      : undefined
+                  }
+                  fields={[
+                    {
+                      key: "k_axial_n_per_mm",
+                      label: "Vertical k_z",
+                      unit: "N/mm",
+                      min: 0,
+                      max: 100000,
+                      step: 10,
+                      decimals: 0,
+                      fallbackBaseline: frameFeetCatalogEntry?.k_axial_n_per_mm ?? fb.k_axial_n_per_mm,
+                      tooltip: "Per-foot vertical compression stiffness",
+                    },
+                    {
+                      key: "k_lateral_n_per_mm",
+                      label: "Lateral k_xy",
+                      unit: "N/mm",
+                      min: 0,
+                      max: 100000,
+                      step: 5,
+                      decimals: 0,
+                      fallbackBaseline: frameFeetCatalogEntry?.k_lateral_n_per_mm ?? fb.k_lateral_n_per_mm,
+                      tooltip: "Per-foot horizontal shear stiffness",
+                    },
+                    {
+                      key: "damping_delta",
+                      label: "Foot Damping",
+                      unit: "ζ",
+                      min: 0,
+                      max: 0.15,
+                      step: 0.002,
+                      decimals: 3,
+                      fallbackBaseline: frameFeetCatalogEntry?.damping_delta ?? fb.damping_delta,
+                      tooltip: "Added modal damping ratio from elastomer feet or foam pad",
+                    },
+                    {
+                      key: "base_mass_kg",
+                      label: "Base Mass",
+                      unit: "kg",
+                      min: 0,
+                      max: 200,
+                      step: 1,
+                      decimals: 1,
+                      fallbackBaseline: frameFeetCatalogEntry?.base_mass_kg ?? fb.base_mass_kg,
+                      tooltip: "Inertial base mass rigidly coupled to bottom frame (e.g. concrete paver)",
+                    },
+                  ]}
+                />
+              );
+            })()}
           </div>
 
           <div className="sub-block">

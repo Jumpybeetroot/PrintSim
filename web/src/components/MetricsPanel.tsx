@@ -24,6 +24,7 @@ import {
   TetFEAResponse,
   ThermalStructuralReport,
   ToolheadFlexBreakdownData,
+  ToolheadStructureGeometryData,
   TopologyOptResponse,
   ViewMode,
   WeightShaperGainsSummary,
@@ -191,8 +192,22 @@ function buildImpactMetrics(
   curBom: PrinterBOMResponse | null,
   cmpBom: PrinterBOMResponse | null
 ): ImpactMetricRow[] {
-  const curCost = curBom?.total_cost_usd ?? cur.geometry.mass_summary.estimated_material_cost_usd;
-  const cmpCost = cmpBom?.total_cost_usd ?? cmp.geometry.mass_summary.estimated_material_cost_usd;
+  const curCost =
+    curBom?.total_cost_usd ??
+    cur.bom_total_cost_usd ??
+    cur.geometry.mass_summary.estimated_material_cost_usd;
+  const cmpCost =
+    cmpBom?.total_cost_usd ??
+    cmp.bom_total_cost_usd ??
+    cmp.geometry.mass_summary.estimated_material_cost_usd;
+  const curInertialFlex = Math.max(
+    cur.static_fea.accel_deflection_x_um,
+    cur.static_fea.accel_deflection_y_um
+  );
+  const cmpInertialFlex = Math.max(
+    cmp.static_fea.accel_deflection_x_um,
+    cmp.static_fea.accel_deflection_y_um
+  );
 
   const defs: Array<{
     key: string;
@@ -236,9 +251,9 @@ function buildImpactMetrics(
     },
     {
       key: "flex",
-      label: "Nozzle–Bed Flex",
-      oldVal: cmp.static_fea.combined_max_deflection_um,
-      newVal: cur.static_fea.combined_max_deflection_um,
+      label: "Inertial Flex",
+      oldVal: cmpInertialFlex,
+      newVal: curInertialFlex,
       higherIsBetter: false,
       eps: 0.05,
       fmt: (v) => `${v.toFixed(1)} µm`,
@@ -1656,6 +1671,13 @@ const BedPlateFemStrip: React.FC<{
     BED_MODE_TYPE_LABELS[bedFea.plate_first_mode_type] ?? bedFea.plate_first_mode_type;
   const isHighRisk =
     bedFea.first_layer_risk === "high" || bedFea.first_layer_risk === "critical";
+  const plateFlatnessUm = bedFea.plate_flatness_um ?? bedFea.total_flatness_error_um;
+  const cmpPlateFlatnessUm = cmpBedFea
+    ? (cmpBedFea.plate_flatness_um ?? cmpBedFea.total_flatness_error_um)
+    : undefined;
+  const rigidTiltUm = bedFea.rigid_tilt_um ?? 0;
+  const mountSettlementUm = bedFea.mount_settlement_um ?? 0;
+  const showTiltOrSettlement = rigidTiltUm >= 1.0 || mountSettlementUm >= 1.0;
 
   return (
     <div className={`bed-fem-strip risk-${bedFea.first_layer_risk}`}>
@@ -1678,9 +1700,12 @@ const BedPlateFemStrip: React.FC<{
         </span>
       </div>
 
-      <div className="metric-kv">
+      <div
+        className="metric-kv"
+        title={`Plane-removed non-planar plate flatness requiring mesh bed leveling: ${plateFlatnessUm.toFixed(1)} µm (raw peak-to-valley: ${bedFea.total_flatness_error_um.toFixed(1)} µm, rigid tilt: ${rigidTiltUm.toFixed(1)} µm, mount settlement: ${mountSettlementUm.toFixed(1)} µm)`}
+      >
         <span>
-          Flatness Error (Total)
+          Plate Flatness Error
           {ts && (
             <span className="metric-sub-inline">
               Grad {ts.bed_gradient_bow_um.toFixed(1)} µm · Buckling {ts.bed_buckling_taco_um.toFixed(1)} µm
@@ -1696,18 +1721,33 @@ const BedPlateFemStrip: React.FC<{
                 : "tag-ok"
           }`}
         >
-          {cmpBedFea && (
+          {cmpPlateFlatnessUm != null && (
             <InlineDeltaBadge
-              oldVal={cmpBedFea.total_flatness_error_um}
-              newVal={bedFea.total_flatness_error_um}
+              oldVal={cmpPlateFlatnessUm}
+              newVal={plateFlatnessUm}
               higherIsBetter={false}
               eps={0.2}
               formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
             />
           )}
-          <strong>{bedFea.total_flatness_error_um.toFixed(1)} µm</strong>
+          <strong>{plateFlatnessUm.toFixed(1)} µm</strong>
         </span>
       </div>
+
+      {showTiltOrSettlement && (
+        <div
+          className="metric-kv"
+          title="Rigid bed tilt is removed by tramming / QGL / Z-tilt; uniform mount settlement is removed by Z-homing"
+        >
+          <span>Rigid Tilt / Settlement</span>
+          <span className="metric-val">
+            <span className={rigidTiltUm >= 120 ? "tag-warn" : ""}>
+              Tilt {rigidTiltUm.toFixed(1)} µm
+            </span>
+            {mountSettlementUm >= 1.0 && ` · Settle ${mountSettlementUm.toFixed(1)} µm`}
+          </span>
+        </div>
+      )}
 
       <div className="metric-kv">
         <span>2 N Probe Deflection</span>
@@ -1753,116 +1793,277 @@ const DOMINANT_FLEX_LABELS: Record<
 > = {
   rail_xbeam: "X-beam & linear rail bending/torsion",
   carriage_body: "X-carriage backplate & toolhead body compliance",
-  hotend_nozzle: "hotend mount & nozzle stem bending",
+  rail_carriage: "MGN linear rail & carriage bearing roll",
+  toolhead_body: "toolhead body & carriage mount flexure",
+  hotend_nozzle: "hotend mount, brace & nozzle stem bending",
 };
 
-const ToolheadFlexBreakdownStrip: React.FC<{
+const ToolheadFlexBreakdownCard: React.FC<{
   breakdown: ToolheadFlexBreakdownData;
+  toolheadStructure?: ToolheadStructureGeometryData;
+  specToolhead?: PrinterSpecData["toolhead"];
   toolheadPunchIn?: boolean;
   onToggleToolheadPunchIn?: () => void;
-}> = ({ breakdown, toolheadPunchIn, onToggleToolheadPunchIn }) => {
+}> = ({
+  breakdown,
+  toolheadStructure,
+  specToolhead,
+  toolheadPunchIn,
+  onToggleToolheadPunchIn,
+}) => {
   const railPct = Math.max(0, breakdown.rail_and_xbeam_pct);
-  const bodyPct = Math.max(0, breakdown.carriage_and_body_pct);
+  const carBodyPct = Math.max(0, breakdown.carriage_and_body_pct);
   const hotendPct = Math.max(0, breakdown.hotend_and_nozzle_pct);
+  const hasFourWay =
+    breakdown.rail_carriage_pct != null && breakdown.toolhead_body_pct != null;
+  const railCarPct = hasFourWay ? Math.max(0, breakdown.rail_carriage_pct!) : 0;
+  const bodyOnlyPct = hasFourWay ? Math.max(0, breakdown.toolhead_body_pct!) : 0;
+
+  const stageK = toolheadStructure?.stage_stiffnesses_n_per_mm;
+  const railCarK =
+    breakdown.rail_carriage_stiffness_n_per_mm ??
+    stageK?.rail_carriage_n_per_mm ??
+    breakdown.carriage_mount_stiffness_n_per_mm;
+  const bodyK =
+    breakdown.body_stiffness_n_per_mm ??
+    stageK?.body_n_per_mm ??
+    breakdown.carriage_mount_stiffness_n_per_mm;
+  const hotendK =
+    breakdown.hotend_stiffness_n_per_mm ?? stageK?.hotend_total_n_per_mm;
+
   const domSource = breakdown.dominant_flex_source;
+  const dominantStageId: string = hasFourWay
+    ? (() => {
+        const candidates: Array<[string, number]> = [
+          ["rail_xbeam", railPct],
+          ["rail_carriage", railCarPct],
+          ["toolhead_body", bodyOnlyPct],
+          ["hotend_nozzle", hotendPct],
+        ];
+        candidates.sort((a, b) => b[1] - a[1]);
+        return candidates[0][0];
+      })()
+    : domSource;
+
   const domPct =
     domSource === "hotend_nozzle"
       ? hotendPct
-      : domSource === "carriage_body"
-        ? bodyPct
-        : railPct;
+      : domSource === "rail_carriage" && hasFourWay
+        ? railCarPct
+        : domSource === "toolhead_body" && hasFourWay
+          ? bodyOnlyPct
+          : domSource === "carriage_body"
+            ? carBodyPct
+            : railPct;
+
+  const fmtK = (k?: number | null): string =>
+    k != null && Number.isFinite(k) && k > 0
+      ? `${Math.round(k).toLocaleString()} N/mm`
+      : "—";
+  const fmtNum = (v?: number | null): string => {
+    if (v == null || !Number.isFinite(v)) return "—";
+    return Math.abs(v - Math.round(v)) < 0.05 ? `${Math.round(v)}` : v.toFixed(1);
+  };
+
+  const assembledMassG =
+    breakdown.assembled_mass_g ??
+    toolheadStructure?.assembled_toolhead_mass_g ??
+    (specToolhead
+      ? specToolhead.total_mass_g + (specToolhead.hotend.mass_g ?? 45)
+      : undefined);
+  const cogMm =
+    breakdown.effective_cog_offset_mm ??
+    toolheadStructure?.effective_cog_offset_mm ??
+    specToolhead?.cog_offset_mm;
+  const nozzleDropMm =
+    breakdown.nozzle_drop_mm ??
+    (specToolhead?.nozzle_offset_mm
+      ? Math.abs(specToolhead.nozzle_offset_mm[2])
+      : undefined);
+
+  const xBeamSub = breakdown.sub_causes?.find((c) => c.id === "x_beam");
+  const stageRows = hasFourWay
+    ? [
+        {
+          id: "rail_xbeam",
+          label: xBeamSub?.label || "X-Beam & Frame",
+          dotClass: "th-flex-dot-beam",
+          pct: railPct,
+          stiffText: fmtK(xBeamSub?.stiffness_n_per_mm),
+        },
+        {
+          id: "rail_carriage",
+          label: "MGN Rail / Carriage",
+          dotClass: "th-flex-dot-rail",
+          pct: railCarPct,
+          stiffText: fmtK(railCarK),
+        },
+        {
+          id: "toolhead_body",
+          label: "Toolhead Body",
+          dotClass: "th-flex-dot-body",
+          pct: bodyOnlyPct,
+          stiffText: fmtK(bodyK),
+        },
+        {
+          id: "hotend_nozzle",
+          label: "Hotend & Brace",
+          dotClass: "th-flex-dot-hotend",
+          pct: hotendPct,
+          stiffText: fmtK(hotendK),
+        },
+      ]
+    : [
+        {
+          id: "rail_xbeam",
+          label: xBeamSub?.label || "X-Beam & Frame",
+          dotClass: "th-flex-dot-beam",
+          pct: railPct,
+          stiffText: fmtK(xBeamSub?.stiffness_n_per_mm),
+        },
+        {
+          id: "carriage_body",
+          label: "MGN Carriage & Body",
+          dotClass: "th-flex-dot-body",
+          pct: carBodyPct,
+          stiffText: fmtK(breakdown.carriage_mount_stiffness_n_per_mm),
+        },
+        {
+          id: "hotend_nozzle",
+          label: "Hotend & Brace",
+          dotClass: "th-flex-dot-hotend",
+          pct: hotendPct,
+          stiffText: fmtK(hotendK),
+        },
+      ];
+
+  const barTitle = hasFourWay
+    ? `X-Beam & Rail: ${railPct.toFixed(0)}% · MGN Carriage: ${railCarPct.toFixed(
+        0
+      )}% · Toolhead Body: ${bodyOnlyPct.toFixed(0)}% · Hotend & Brace: ${hotendPct.toFixed(0)}%`
+    : `X-Beam & Rail: ${railPct.toFixed(0)}% · Carriage & Body: ${carBodyPct.toFixed(
+        0
+      )}% · Hotend & Brace: ${hotendPct.toFixed(0)}%`;
+
+  const topSubCause = breakdown.sub_causes?.[0] ?? null;
 
   return (
-    <div
-      className="sens-breakdown-card"
-      style={{
-        marginTop: 6,
-        borderColor: "rgba(56, 189, 248, 0.35)",
-      }}
-    >
+    <div className="sens-breakdown-card th-flex-card">
       <div className="sens-breakdown-head">
-        <span>Toolhead Flex Breakdown</span>
-        {onToggleToolheadPunchIn && (
-          <button
-            type="button"
-            className={`deep-verify-cta ${toolheadPunchIn ? "active" : ""}`}
- aria-pressed={toolheadPunchIn}
-            style={{ padding: "1px 7px", fontSize: 11 }}
-            onClick={onToggleToolheadPunchIn}
-            title="Zoom camera directly onto the toolhead, backplate, and hotend to inspect local flex"
-          >
-            {toolheadPunchIn ? "Exit Punch-In" : "Punch-In View"}
-          </button>
-        )}
+        <span>Inside the Toolhead</span>
+        <div className="th-flex-head-right">
+          <span className="th-flex-tip-pill" title="Effective static XY stiffness at nozzle tip">
+            Tip k {Math.round(breakdown.effective_tip_stiffness_n_per_mm).toLocaleString()} N/mm
+          </span>
+          {onToggleToolheadPunchIn && (
+            <button
+              type="button"
+              className={`deep-verify-cta th-flex-punch-btn ${toolheadPunchIn ? "active" : ""}`}
+              aria-pressed={toolheadPunchIn}
+              onClick={onToggleToolheadPunchIn}
+              title="Zoom camera directly onto the toolhead, carriage, and hotend to inspect local flex"
+            >
+              {toolheadPunchIn ? "Exit Punch-In" : "Punch-In View"}
+            </button>
+          )}
+        </div>
       </div>
 
-      <div
-        className="subsystem-bar-track"
-        title={`X-Beam & Rail: ${railPct.toFixed(0)}% • Carriage & Body: ${bodyPct.toFixed(
-          0
-        )}% • Hotend & Nozzle: ${hotendPct.toFixed(0)}%`}
-      >
+      <div className="subsystem-bar-track" title={barTitle}>
         {railPct > 0.5 && (
           <div
-            className="subsystem-bar-seg"
-            style={{ width: `${railPct}%`, background: "#38bdf8" }}
+            className="subsystem-bar-seg th-flex-seg-beam"
+            style={{ width: `${railPct}%` }}
           />
         )}
-        {bodyPct > 0.5 && (
-          <div
-            className="subsystem-bar-seg"
-            style={{ width: `${bodyPct}%`, background: "#f59e0b" }}
-          />
+        {hasFourWay ? (
+          <>
+            {railCarPct > 0.5 && (
+              <div
+                className="subsystem-bar-seg th-flex-seg-rail"
+                style={{ width: `${railCarPct}%` }}
+              />
+            )}
+            {bodyOnlyPct > 0.5 && (
+              <div
+                className="subsystem-bar-seg th-flex-seg-body"
+                style={{ width: `${bodyOnlyPct}%` }}
+              />
+            )}
+          </>
+        ) : (
+          carBodyPct > 0.5 && (
+            <div
+              className="subsystem-bar-seg th-flex-seg-body"
+              style={{ width: `${carBodyPct}%` }}
+            />
+          )
         )}
         {hotendPct > 0.5 && (
           <div
-            className="subsystem-bar-seg"
-            style={{ width: `${hotendPct}%`, background: "#f43f5e" }}
+            className="subsystem-bar-seg th-flex-seg-hotend"
+            style={{ width: `${hotendPct}%` }}
           />
         )}
       </div>
 
-      <div className="subsystem-bar-legend">
-        <span className={`subsystem-legend-item ${domSource === "rail_xbeam" ? "primary" : ""}`}>
-          <span className="swatch-dot" style={{ background: "#38bdf8" }} />
-          Rail/Beam <strong>{Math.round(railPct)}%</strong>
+      <div className="th-flex-grid" role="table" aria-label="Toolhead compliance breakdown">
+        {stageRows.map((row) => (
+          <div
+            key={row.id}
+            role="row"
+            className={`th-flex-row ${dominantStageId === row.id ? "is-dominant" : ""}`}
+          >
+            <span role="cell" className="th-flex-stage">
+              <span className={`swatch-dot ${row.dotClass}`} />
+              <span>{row.label}</span>
+            </span>
+            <span role="cell" className="th-flex-pct">
+              {Math.round(row.pct)}%
+            </span>
+            <span role="cell" className="th-flex-stiff">
+              {row.stiffText}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="th-flex-meta-strip">
+        <span className="th-flex-meta-item">
+          Mass (g) <strong>{fmtNum(assembledMassG)}</strong>
         </span>
-        <span className={`subsystem-legend-item ${domSource === "carriage_body" ? "primary" : ""}`}>
-          <span className="swatch-dot" style={{ background: "#f59e0b" }} />
-          Carriage/Body <strong>{Math.round(bodyPct)}%</strong>
+        <span className="th-flex-meta-item">
+          CoG Y / Z (mm){" "}
+          <strong>
+            {cogMm ? `${fmtNum(Math.abs(cogMm[1]))} / ${fmtNum(Math.abs(cogMm[2]))}` : "—"}
+          </strong>
         </span>
-        <span className={`subsystem-legend-item ${domSource === "hotend_nozzle" ? "primary" : ""}`}>
-          <span className="swatch-dot" style={{ background: "#f43f5e" }} />
-          Hotend/Nozzle <strong>{Math.round(hotendPct)}%</strong>
+        <span className="th-flex-meta-item">
+          Nozzle Drop (mm) <strong>{fmtNum(nozzleDropMm)}</strong>
         </span>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "4px 10px",
-          fontSize: 11,
-          color: "var(--muted)",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        <span>
-          Tip k: <strong style={{ color: "var(--text)" }}>{Math.round(breakdown.effective_tip_stiffness_n_per_mm)} N/mm</strong>
-        </span>
-        <span>
-          Mount: <strong style={{ color: "var(--text)" }}>{Math.round(breakdown.carriage_mount_stiffness_n_per_mm)} N/mm</strong>
-        </span>
-        <span>
-          Hotend: <strong style={{ color: "var(--text)" }}>{Math.round(breakdown.hotend_stiffness_n_per_mm)} N/mm</strong>
-        </span>
-      </div>
-
-      <div style={{ fontSize: 11, lineHeight: 1.35, color: "#cbd5e1" }}>
-        <span className="sens-fix-prefix">Main limit:</span>{" "}
-        {DOMINANT_FLEX_LABELS[domSource] ?? domSource} ({Math.round(domPct)}% of local toolhead tip
-        flex).
-      </div>
+      {topSubCause ? (
+        <div className="th-flex-hint">
+          <div>
+            <span className="sens-fix-prefix">Top limit:</span>{" "}
+            <strong className="th-flex-cause-title">{topSubCause.label}</strong>
+            {topSubCause.share_pct != null && (
+              <span className="th-flex-cause-share"> ({Math.round(topSubCause.share_pct)}%)</span>
+            )}
+            {topSubCause.detail && <span> — {topSubCause.detail}</span>}
+          </div>
+          {topSubCause.action_hint && (
+            <div className="th-flex-action">{topSubCause.action_hint}</div>
+          )}
+        </div>
+      ) : (
+        <div className="th-flex-hint">
+          <span className="sens-fix-prefix">Main limit:</span>{" "}
+          {DOMINANT_FLEX_LABELS[domSource] ?? domSource} ({Math.round(domPct)}% of local toolhead
+          tip flex).
+        </div>
+      )}
     </div>
   );
 };
@@ -2254,11 +2455,19 @@ export const MetricsPanel: React.FC<Props> = ({
   }
 
   const { scores, static_fea: fea, modal_fea: mod, kinematics: kin, thermal: th, virtual_print: vp } = sim;
+  const curInertialFlex = Math.max(fea.accel_deflection_x_um, fea.accel_deflection_y_um);
+  const cmpInertialFlex = compareSim
+    ? Math.max(
+        compareSim.static_fea.accel_deflection_x_um,
+        compareSim.static_fea.accel_deflection_y_um
+      )
+    : undefined;
 
   // Determine which detail cards moved vs comparison
   const structuralChanged =
     compareSim != null &&
-    (Math.abs(fea.combined_max_deflection_um - compareSim.static_fea.combined_max_deflection_um) >= 0.05 ||
+    (Math.abs(curInertialFlex - (cmpInertialFlex ?? curInertialFlex)) >= 0.05 ||
+      Math.abs(fea.combined_max_deflection_um - compareSim.static_fea.combined_max_deflection_um) >= 0.05 ||
       Math.abs(
         (fea.nozzle_absolute_deflection_um ?? 0) -
           (compareSim.static_fea.nozzle_absolute_deflection_um ?? 0)
@@ -2391,7 +2600,11 @@ export const MetricsPanel: React.FC<Props> = ({
         ) >= 0.1)) ||
       (bedFea != null &&
         (cmpBedFea == null ||
-          Math.abs(bedFea.total_flatness_error_um - cmpBedFea.total_flatness_error_um) >= 0.2 ||
+          Math.abs(
+            (bedFea.plate_flatness_um ?? bedFea.total_flatness_error_um) -
+              (cmpBedFea.plate_flatness_um ?? cmpBedFea.total_flatness_error_um)
+          ) >= 0.2 ||
+          Math.abs((bedFea.rigid_tilt_um ?? 0) - (cmpBedFea.rigid_tilt_um ?? 0)) >= 0.5 ||
           Math.abs(bedFea.plate_first_mode_hz - cmpBedFea.plate_first_mode_hz) >= 0.5)));
   const printChanged =
     compareSim != null &&
@@ -2423,8 +2636,14 @@ export const MetricsPanel: React.FC<Props> = ({
   );
 
   // Tier 1 & Tier 2 derived summary helpers
-  const curCost = bom?.total_cost_usd ?? sim.geometry.mass_summary.estimated_material_cost_usd;
-  const cmpCost = compareBom?.total_cost_usd ?? compareSim?.geometry.mass_summary.estimated_material_cost_usd;
+  const curCost =
+    bom?.total_cost_usd ??
+    sim.bom_total_cost_usd ??
+    sim.geometry.mass_summary.estimated_material_cost_usd;
+  const cmpCost =
+    compareBom?.total_cost_usd ??
+    compareSim?.bom_total_cost_usd ??
+    compareSim?.geometry.mass_summary.estimated_material_cost_usd;
 
   const limAxis: "X" | "Y" =
     mod.limiting_modal_summary?.limiting_axis ??
@@ -2464,7 +2683,11 @@ export const MetricsPanel: React.FC<Props> = ({
     ml && ml.configured_max_velocity_mm_s > ml.motor_max_velocity_mm_s + 0.5
   );
   const totalDefects =
-    vp.underextrusion_segments + vp.ringing_segments + vp.step_skip_segments;
+    vp.underextrusion_segments +
+    vp.ringing_segments +
+    vp.step_skip_segments +
+    (vp.smoothing_segments ?? 0) +
+    (vp.belt_slip_segments ?? 0);
 
   const changedImpactMetrics = impactMetrics.filter((m) => m.status !== "same");
 
@@ -2519,7 +2742,7 @@ export const MetricsPanel: React.FC<Props> = ({
   const allExpanded =
     visibleDeepKeys.length > 0 && visibleDeepKeys.every((k) => Boolean(sectionOpen[k]));
 
-  const feaAccordionBadge = `${fea.combined_max_deflection_um.toFixed(1)} µm · SF ${fea.min_safety_factor.toFixed(1)}×${
+  const feaAccordionBadge = `${curInertialFlex.toFixed(1)} µm · SF ${fea.min_safety_factor.toFixed(1)}×${
     ts ? ` · ${ts.total_thermal_z_error_um.toFixed(0)} µm Z` : ""
   }`;
   const modesAccordionBadge = `${effDrive.toUpperCase()} · ${kin.torque_safety_margin.toFixed(1)}× torque${
@@ -2913,22 +3136,25 @@ export const MetricsPanel: React.FC<Props> = ({
                   </span>
                 </div>
 
-                <div className="kpi-box">
+                <div
+                  className="kpi-box"
+                  title={`Dynamic inertial nozzle flex: ${curInertialFlex.toFixed(1)} µm (X ${fea.accel_deflection_x_um.toFixed(1)} / Y ${fea.accel_deflection_y_um.toFixed(1)} µm) · Static gravity sag: ${fea.gravity_sag_toolhead_um.toFixed(1)} µm · Combined peak: ${fea.combined_max_deflection_um.toFixed(1)} µm · Stiffness X/Y: ${fea.toolhead_stiffness_x_n_per_mm.toFixed(0)}/${fea.toolhead_stiffness_y_n_per_mm.toFixed(0)} N/mm`}
+                >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
-                    <span className="kpi-label">Nozzle–Bed Flex</span>
-                    {compareSim && (
+                    <span className="kpi-label">Inertial Flex</span>
+                    {cmpInertialFlex != null && (
                       <InlineDeltaBadge
-                        oldVal={compareSim.static_fea.combined_max_deflection_um}
-                        newVal={fea.combined_max_deflection_um}
+                        oldVal={cmpInertialFlex}
+                        newVal={curInertialFlex}
                         higherIsBetter={false}
                         eps={0.05}
                         formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
                       />
                     )}
                   </div>
-                  <span className="kpi-value">{fea.combined_max_deflection_um.toFixed(1)} µm</span>
+                  <span className="kpi-value">{curInertialFlex.toFixed(1)} µm</span>
                   <span className="kpi-sub">
-                    X/Y {fea.toolhead_stiffness_x_n_per_mm.toFixed(0)}/{fea.toolhead_stiffness_y_n_per_mm.toFixed(0)} N/mm
+                    Sag {fea.gravity_sag_toolhead_um.toFixed(1)} µm · {fea.toolhead_stiffness_x_n_per_mm.toFixed(0)}/{fea.toolhead_stiffness_y_n_per_mm.toFixed(0)} N/mm
                   </span>
                 </div>
 
@@ -3294,6 +3520,29 @@ export const MetricsPanel: React.FC<Props> = ({
                   </div>
                 );
               })()}
+              <div
+                className="metric-kv"
+                title={`Dynamic nozzle deflection under XY acceleration (excludes static gravity sag). Combined gravity+accel peak: ${fea.combined_max_deflection_um.toFixed(1)} µm.`}
+              >
+                <span>
+                  Inertial Accel Flex
+                  <span className="metric-sub-inline">
+                    X {fea.accel_deflection_x_um.toFixed(1)} µm · Y {fea.accel_deflection_y_um.toFixed(1)} µm
+                  </span>
+                </span>
+                <span className="metric-val metric-val-with-delta">
+                  {cmpInertialFlex != null && (
+                    <InlineDeltaBadge
+                      oldVal={cmpInertialFlex}
+                      newVal={curInertialFlex}
+                      higherIsBetter={false}
+                      eps={0.05}
+                      formatDelta={(d) => `${d > 0 ? "+" : ""}${d.toFixed(1)} µm`}
+                    />
+                  )}
+                  {curInertialFlex.toFixed(1)} µm
+                </span>
+              </div>
               <div className="metric-kv">
                 <span>Gravity Sag (Nozzle)</span>
                 <span className="metric-val">{fea.gravity_sag_toolhead_um.toFixed(1)} µm</span>
@@ -3403,8 +3652,10 @@ export const MetricsPanel: React.FC<Props> = ({
                 <div className="fea-explain-note">{fea.top_flex_explanation}</div>
               )}
               {fea.toolhead_flex_breakdown && (
-                <ToolheadFlexBreakdownStrip
+                <ToolheadFlexBreakdownCard
                   breakdown={fea.toolhead_flex_breakdown}
+                  toolheadStructure={sim.geometry.toolhead_structure}
+                  specToolhead={sim.spec.toolhead}
                   toolheadPunchIn={toolheadPunchIn}
                   onToggleToolheadPunchIn={onToggleToolheadPunchIn}
                 />
@@ -3429,7 +3680,18 @@ export const MetricsPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="metric-kv">
-                    <span>Bimetallic Gantry Bow</span>
+                    <span>
+                      Bimetallic Gantry Bow
+                      {(ts.gantry_bow_direction === "toward_rail" ||
+                        ts.gantry_bow_direction === "away_from_rail") &&
+                        ts.gantry_bimetallic_bow_um > 1 && (
+                          <span className="metric-sub-inline">
+                            {ts.gantry_bow_direction === "toward_rail"
+                              ? "toward rail"
+                              : "away from rail"}
+                          </span>
+                        )}
+                    </span>
                     <span
                       className={`metric-val metric-val-with-delta ${
                         ts.gantry_bimetallic_bow_um > 80
@@ -3541,6 +3803,30 @@ export const MetricsPanel: React.FC<Props> = ({
                     )}
                   </span>
                 </div>
+
+                {ts.x_beam_has_tg && (
+                  <div
+                    className="metric-kv"
+                    title="Temperature-dependent composite laminate flexural (E) and torsional shear (G) modulus retention at chamber temperature"
+                  >
+                    <span>X-Beam Matrix Retention</span>
+                    <span
+                      className={`metric-val metric-val-with-delta ${
+                        ts.x_beam_tg_warning
+                          ? "tag-bad"
+                          : (ts.x_beam_shear_retention_pct ?? 100) < 92
+                            ? "tag-warn"
+                            : "tag-ok"
+                      }`}
+                    >
+                      E {(ts.x_beam_modulus_retention_pct ?? 100).toFixed(0)}% · G{" "}
+                      {(ts.x_beam_shear_retention_pct ?? 100).toFixed(0)}%
+                      {ts.x_beam_tg_warning && (
+                        <span className="badge-pill bad">Matrix Tg!</span>
+                      )}
+                    </span>
+                  </div>
+                )}
 
                 <div className="precision-mini-grid">
                   <div
@@ -4001,7 +4287,10 @@ export const MetricsPanel: React.FC<Props> = ({
                         )}
                         {kin.belt_overtension_risk && (
                           <div className="warning-pill bad">
-                            ⚠ Belt overtensioned — exceeds working tension rating
+                            ⚠ Peak dynamic tension {kin.belt_peak_tension_n.toFixed(1)} N (static + accel load)
+                            {kin.belt_max_working_tension_n != null
+                              ? ` exceeds ${Math.round(kin.belt_max_working_tension_n)} N working rating`
+                              : " exceeds working tension rating"}
                           </div>
                         )}
                         {kin.shaft_bending_risk && (
@@ -4181,10 +4470,20 @@ export const MetricsPanel: React.FC<Props> = ({
                     {vp.peak_volumetric_flow_mm3_s.toFixed(1)} mm³/s | {(vp.max_ringing_severity * 100).toFixed(0)}%
                   </span>
                 </div>
+                {(vp.max_corner_smoothing_um ?? 0) > 0 && (
+                  <div className="metric-kv">
+                    <span>Max Corner Smoothing</span>
+                    <span className="metric-val">
+                      {(vp.max_corner_smoothing_um ?? 0).toFixed(1)} µm
+                    </span>
+                  </div>
+                )}
                 <div className="metric-kv">
                   <span>Defect Segments</span>
                   <span className="metric-val">
                     {vp.underextrusion_segments} flow • {vp.ringing_segments} ring • {vp.step_skip_segments} skip
+                    {(vp.smoothing_segments ?? 0) > 0 ? ` • ${vp.smoothing_segments} smooth` : ""}
+                    {(vp.belt_slip_segments ?? 0) > 0 ? ` • ${vp.belt_slip_segments} slip` : ""}
                   </span>
                 </div>
               </div>

@@ -41,6 +41,7 @@ import {
   FeaLoadCase,
   HistorySnapshot,
   ModalColorMode,
+  ModalScaleMode,
   ParetoOptResponse,
   ParetoPointData,
   PrinterBOMResponse,
@@ -773,6 +774,25 @@ function describeSpecDiff(
   if (prev.toolhead.hotend.part_cooling_cfm !== next.toolhead.hotend.part_cooling_cfm) {
     diffs.push(`Cooling Fan: ${prev.toolhead.hotend.part_cooling_cfm} → ${next.toolhead.hotend.part_cooling_cfm} CFM`);
   }
+  const prevBottomBrace = prev.toolhead.use_hotend_bottom_brace ?? true;
+  const nextBottomBrace = next.toolhead.use_hotend_bottom_brace ?? true;
+  if (prevBottomBrace !== nextBottomBrace) {
+    diffs.push(`Hotend Bottom Brace: ${prevBottomBrace ? "On" : "Off"} → ${nextBottomBrace ? "On" : "Off"}`);
+  }
+  const prevShieldMode = prev.toolhead.nozzle_shield_mode ?? "auto";
+  const nextShieldMode = next.toolhead.nozzle_shield_mode ?? "auto";
+  if (prevShieldMode !== nextShieldMode) {
+    const shieldLabel = (m: string) =>
+      m === "microwaved" ? "Microwaved" : m === "stock" ? "Stock" : m === "none" ? "None" : "Auto";
+    diffs.push(`Nozzle Shield: ${shieldLabel(prevShieldMode)} → ${shieldLabel(nextShieldMode)}`);
+  }
+  const prevCadCms = prev.use_cad_superelements ?? true;
+  const nextCadCms = next.use_cad_superelements ?? true;
+  if (prevCadCms !== nextCadCms) {
+    diffs.push(
+      `CAD Superelements (CMS): ${prevCadCms ? "On" : "Off"} → ${nextCadCms ? "On" : "Off"}`
+    );
+  }
 
   if (diffs.length === 0) return "Updated parameters";
   if (diffs.length <= 2) return diffs.join(" • ");
@@ -839,6 +859,7 @@ export default function App() {
   const [feaLoadCase, setFeaLoadCase] = useState<FeaLoadCase>("xy");
   const [sensitivityLens, setSensitivityLens] = useState<AdjointLens>("print_impact");
   const [modalColorMode, setModalColorMode] = useState<ModalColorMode>("relative");
+  const [modalScaleMode, setModalScaleMode] = useState<ModalScaleMode>("impact");
   const [inspectedPartId, setInspectedPartId] = useState<string | null>(null);
   const [layerLimit, setLayerLimit] = useState<number>(999);
   const [toolheadRelPos, setToolheadRelPos] = useState<[number, number, number]>([0.5, 0.5, 0.5]);
@@ -899,6 +920,7 @@ export default function App() {
         feaLoadCase,
         sensitivityLens,
         modalColorMode,
+        modalScaleMode,
         showBedWarp,
         optObjective,
         gcodeText,
@@ -1320,6 +1342,7 @@ export default function App() {
       setFeaLoadCase(settings.feaLoadCase);
       setSensitivityLens(settings.sensitivityLens);
       setModalColorMode(settings.modalColorMode);
+      setModalScaleMode(settings.modalScaleMode);
       setShowBedWarp(settings.showBedWarp);
       setOptObjective(settings.optObjective);
       setGcodeText(settings.gcodeText ?? "");
@@ -1486,6 +1509,7 @@ export default function App() {
     feaLoadCase,
     sensitivityLens,
     modalColorMode,
+    modalScaleMode,
     showBedWarp,
     optObjective,
     gcodeText,
@@ -1660,6 +1684,7 @@ export default function App() {
     viewModeRef.current = "assembly";
     setSelectedModeIdx(0);
     selectedModeIdxRef.current = 0;
+    setModalScaleMode("impact");
     setShowBedWarp(false);
     setGcodeText("");
     gcodeTextRef.current = "";
@@ -2786,6 +2811,8 @@ export default function App() {
           onSensitivityLensChange={setSensitivityLens}
           modalColorMode={modalColorMode}
           onModalColorModeChange={setModalColorMode}
+          modalScaleMode={modalScaleMode}
+          onModalScaleModeChange={setModalScaleMode}
           onInspectedPartChange={setInspectedPartId}
           onRegisterCapture={handleRegisterCapture}
         />

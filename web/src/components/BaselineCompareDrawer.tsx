@@ -325,6 +325,23 @@ function collectSpecDiffs(
   if (base.toolhead.hotend.name !== cur.toolhead.hotend.name) {
     push("Hotend", base.toolhead.hotend.name, cur.toolhead.hotend.name);
   }
+  const baseBottomBrace = base.toolhead.use_hotend_bottom_brace ?? true;
+  const curBottomBrace = cur.toolhead.use_hotend_bottom_brace ?? true;
+  if (baseBottomBrace !== curBottomBrace) {
+    push("Hotend Bottom Brace", baseBottomBrace ? "Braced" : "Unbraced", curBottomBrace ? "Braced" : "Unbraced");
+  }
+  const baseShieldMode = base.toolhead.nozzle_shield_mode ?? "auto";
+  const curShieldMode = cur.toolhead.nozzle_shield_mode ?? "auto";
+  if (baseShieldMode !== curShieldMode) {
+    const shieldLabel = (m: string) =>
+      m === "microwaved" ? "Microwaved" : m === "stock" ? "Stock" : m === "none" ? "None" : "Auto";
+    push("Nozzle Shield", shieldLabel(baseShieldMode), shieldLabel(curShieldMode));
+  }
+  const baseCadCms = base.use_cad_superelements ?? true;
+  const curCadCms = cur.use_cad_superelements ?? true;
+  if (baseCadCms !== curCadCms) {
+    push("CAD Superelements (CMS)", baseCadCms ? "Active" : "Analytical", curCadCms ? "Active" : "Analytical");
+  }
   if (base.bed.z_drive !== cur.bed.z_drive) {
     push(
       "Z Architecture",
@@ -438,9 +455,29 @@ export const BaselineCompareDrawer: React.FC<BaselineCompareDrawerProps> = ({
     const curYHz = currentSim.modal_fea.shaper_y?.effective_freq_hz ?? currentSim.modal_fea.fundamental_freq_hz;
 
     const baseCost =
-      baselineBom?.total_cost_usd ?? baselineSim.geometry.mass_summary.estimated_material_cost_usd;
+      baselineBom?.total_cost_usd ??
+      baselineSim.bom_total_cost_usd ??
+      baselineSim.geometry.mass_summary.estimated_material_cost_usd;
     const curCost =
-      currentBom?.total_cost_usd ?? currentSim.geometry.mass_summary.estimated_material_cost_usd;
+      currentBom?.total_cost_usd ??
+      currentSim.bom_total_cost_usd ??
+      currentSim.geometry.mass_summary.estimated_material_cost_usd;
+
+    const baseAccel =
+      baselineSim.motion_limits?.achievable_max_accel_mm_s2 ??
+      baselineSim.modal_fea.recommended_max_accel_mm_s2;
+    const curAccel =
+      currentSim.motion_limits?.achievable_max_accel_mm_s2 ??
+      currentSim.modal_fea.recommended_max_accel_mm_s2;
+
+    const baseInertialFlex = Math.max(
+      baselineSim.static_fea.accel_deflection_x_um,
+      baselineSim.static_fea.accel_deflection_y_um
+    );
+    const curInertialFlex = Math.max(
+      currentSim.static_fea.accel_deflection_x_um,
+      currentSim.static_fea.accel_deflection_y_um
+    );
 
     const baseLimHz = Math.max(1, Math.min(baseXHz, baseYHz));
     const curLimHz = Math.max(1, Math.min(curXHz, curYHz));
@@ -485,10 +522,10 @@ export const BaselineCompareDrawer: React.FC<BaselineCompareDrawerProps> = ({
       ),
       buildRow(
         "safe_accel",
-        "Safe Max Accel",
+        "Achievable Max Accel",
         "mm/s²",
-        baselineSim.modal_fea.recommended_max_accel_mm_s2,
-        currentSim.modal_fea.recommended_max_accel_mm_s2,
+        baseAccel,
+        curAccel,
         true,
         25,
         (v) => `${Math.round(v).toLocaleString()} mm/s²`,
@@ -496,10 +533,21 @@ export const BaselineCompareDrawer: React.FC<BaselineCompareDrawerProps> = ({
       ),
       buildRow(
         "nozzle_flex",
-        "Nozzle Flex",
+        "Inertial Nozzle Flex",
         "µm",
-        baselineSim.static_fea.combined_max_deflection_um,
-        currentSim.static_fea.combined_max_deflection_um,
+        baseInertialFlex,
+        curInertialFlex,
+        false,
+        0.1,
+        (v) => `${v.toFixed(1)} µm`,
+        (d) => `${sign(d)}${d.toFixed(1)} µm`
+      ),
+      buildRow(
+        "gravity_sag",
+        "Gravity Sag (Nozzle)",
+        "µm",
+        baselineSim.static_fea.gravity_sag_toolhead_um,
+        currentSim.static_fea.gravity_sag_toolhead_um,
         false,
         0.1,
         (v) => `${v.toFixed(1)} µm`,

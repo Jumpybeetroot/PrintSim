@@ -1,0 +1,135 @@
+:root {
+  /* Surfaces */
+  --bg: #0b0f16;
+  --panel: #121822;
+  --panel-alt: #171e2b;
+  --panel-hover: #1e2736;
+  --inset: #0d121b;
+  --border: #252f42;
+  --border-strong: #37445c;
+
+  /* Text */
+  --text: #e6ebf4;
+  --text-2: #c2cddd;
+  --muted: #8c9bb3;
+  --ink: #08101c;
+
+  /* Colour roles: accent = interactive/selected, green = good, amber = caution,
+     red = limiting/bad, purple = generative/beta. *-text is the readable tint
+     for coloured text on dark surfaces. */
+  --accent: #38bdf8;
+  --accent-strong: #0a78bd;
+  --accent-strong-hover: #0c8ad8;
+  --accent-text: #bfe3fb;
+  --teal: #14b8a6;
+  --teal-text: #5eead4;
+  --green: #22c55e;
+  --green-text: #7ee2b0;
+  --amber: #f59e0b;
+  --amber-text: #fcd34d;
+  --red: #ef4444;
+  --red-text: #fca5a5;
+  --purple: #a855f7;
+  --purple-text: #d4b8fd;
+
+  /* Channel triplets for tints: rgb(var(--accent-rgb) / 0.12) */
+  --accent-rgb: 56 189 248;
+  --teal-rgb: 20 184 166;
+  --green-rgb: 34 197 94;
+  --amber-rgb: 245 158 11;
+  --red-rgb: 239 68 68;
+  --purple-rgb: 168 85 247;
+  --muted-rgb: 140 155 179;
+  --border-rgb: 37 47 66;
+  --panel-rgb: 18 24 34;
+  --inset-rgb: 13 18 27;
+
+  /* Type scale (11px floor) */
+  --font: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+  --fs-2xl: 32px;
+
+  /* Shape & spacing (4px grid: 4 / 8 / 12 / 16, with 2 and 6 for dense rows) */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-pill: 999px;
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--accent-rgb) / 0.8);
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-md);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Minimum pointer target (WCAG 2.2, 2.5.8): every control is at least 24 x 24 px. */
+button,
+select,
+summary,
+[role="button"],
+input[type="range"] {
+  min-height: 24px;
+}
+
+button {
+  min-width: 24px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+label:has(> input[type="checkbox"]),
+label:has(> input[type="radio"]) {
+  min-height: 24px;
+  align-items: center;
+}
+
+/* One focus treatment for every interactive element (keyboard only). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

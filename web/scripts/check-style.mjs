@@ -4,7 +4,7 @@
  * (`npm run check:style`). It enforces the rules in docs/STUDIO_STYLE_GUIDE.md that
  * can be checked mechanically, so the visual system cannot drift one edit at a time.
  *
- * No dependencies: plain Node, regex over src/styles.css and src/**\/*.tsx.
+ * No dependencies: plain Node, regex over src/**\/*.css and src/**\/*.tsx.
  * If a rule blocks a change you believe is right, change the guide and this file
  * together in the same commit rather than working around the check.
  */
@@ -35,57 +35,68 @@ const ALLOWED_RADII = /^(0|1px|2px|50%|var\(--radius(-sm|-pill)?\))$/;
 const MAX_INLINE_STYLE_BLOCKS = 395;
 
 // --------------------------------------------------------------------------
-// styles.css
+// Helpers
 // --------------------------------------------------------------------------
-const cssPath = join(src, "styles.css");
-const css = readFileSync(cssPath, "utf8");
-const lineOf = (index) => css.slice(0, index).split("\n").length;
+const walkExt = (dir, ext) =>
+  readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? walkExt(path, ext) : path.endsWith(ext) ? [path] : [];
+  });
 
-for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-  const selector = rule[1].replace(/\/\*[\s\S]*?\*\//g, "").trim().replace(/\s+/g, " ");
-  const body = rule[2];
-  const bodyStart = rule.index + rule[1].length + 1;
-  if (selector === ":root") continue; // token definitions live here
-  const dataColours = DATA_COLOUR_SELECTORS.test(selector);
+// --------------------------------------------------------------------------
+// Stylesheets (*.css under src/)
+// --------------------------------------------------------------------------
+const cssFiles = walkExt(src, ".css");
+for (const cssPath of cssFiles) {
+  const css = readFileSync(cssPath, "utf8");
+  const lineOf = (index) => css.slice(0, index).split("\n").length;
 
-  for (const decl of body.matchAll(/([a-z-]+)\s*:\s*([^;]+);/g)) {
-    const [, prop, rawValue] = decl;
-    const value = rawValue.trim();
-    const line = lineOf(bodyStart + decl.index);
-    const at = `${selector} { ${prop} }`;
+  for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = rule[1].replace(/\/\*[\s\S]*?\*\//g, "").trim().replace(/\s+/g, " ");
+    const body = rule[2];
+    const bodyStart = rule.index + rule[1].length + 1;
+    if (selector === ":root") continue; // token definitions live here
+    const dataColours = DATA_COLOUR_SELECTORS.test(selector);
 
-    if (prop === "font-size" && !/^(var\(--fs-(xs|sm|md|lg|xl|2xl)\)|inherit)$/.test(value)) {
-      fail(cssPath, line, `${at}: font-size must be a --fs-* token, got "${value}"`);
-    }
-    if (prop === "font-weight" && !ALLOWED_WEIGHTS.has(value)) {
-      fail(cssPath, line, `${at}: font-weight must be 400, 500, 600 or 700, got "${value}"`);
-    }
-    if (/^border(-[a-z]+){0,2}-radius$/.test(prop)) {
-      for (const part of value.split(/\s+/)) {
-        if (!ALLOWED_RADII.test(part)) {
-          fail(cssPath, line, `${at}: radius must be --radius-sm, --radius, --radius-pill, 50% or <=2px, got "${part}"`);
+    for (const decl of body.matchAll(/([a-z-]+)\s*:\s*([^;]+);/g)) {
+      const [, prop, rawValue] = decl;
+      const value = rawValue.trim();
+      const line = lineOf(bodyStart + decl.index);
+      const at = `${selector} { ${prop} }`;
+
+      if (prop === "font-size" && !/^(var\(--fs-(xs|sm|md|lg|xl|2xl)\)|inherit)$/.test(value)) {
+        fail(cssPath, line, `${at}: font-size must be a --fs-* token, got "${value}"`);
+      }
+      if (prop === "font-weight" && !ALLOWED_WEIGHTS.has(value)) {
+        fail(cssPath, line, `${at}: font-weight must be 400, 500, 600 or 700, got "${value}"`);
+      }
+      if (/^border(-[a-z]+){0,2}-radius$/.test(prop)) {
+        for (const part of value.split(/\s+/)) {
+          if (!ALLOWED_RADII.test(part)) {
+            fail(cssPath, line, `${at}: radius must be --radius-sm, --radius, --radius-pill, 50% or <=2px, got "${part}"`);
+          }
         }
       }
-    }
-    if (prop === "font-family" && !/^(var\(--font(-mono)?\)|inherit)$/.test(value)) {
-      fail(cssPath, line, `${at}: font-family must be var(--font), var(--font-mono) or inherit`);
-    }
-    if (!dataColours) {
-      if (/#[0-9a-fA-F]{3,8}\b/.test(value)) {
-        fail(cssPath, line, `${at}: raw hex colour "${value.match(/#[0-9a-fA-F]{3,8}/)[0]}"; use a colour token`);
+      if (prop === "font-family" && !/^(var\(--font(-mono)?\)|inherit)$/.test(value)) {
+        fail(cssPath, line, `${at}: font-family must be var(--font), var(--font-mono) or inherit`);
       }
-      for (const fn of value.matchAll(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g)) {
-        const channels = fn.slice(1, 4).join(",");
-        if (channels !== "255,255,255" && channels !== "0,0,0") {
-          fail(cssPath, line, `${at}: raw rgb(${channels}); use rgb(var(--<role>-rgb) / <alpha>)`);
+      if (!dataColours) {
+        if (/#[0-9a-fA-F]{3,8}\b/.test(value)) {
+          fail(cssPath, line, `${at}: raw hex colour "${value.match(/#[0-9a-fA-F]{3,8}/)[0]}"; use a colour token`);
+        }
+        for (const fn of value.matchAll(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g)) {
+          const channels = fn.slice(1, 4).join(",");
+          if (channels !== "255,255,255" && channels !== "0,0,0") {
+            fail(cssPath, line, `${at}: raw rgb(${channels}); use rgb(var(--<role>-rgb) / <alpha>)`);
+          }
+        }
+        if (/gradient\(/.test(value)) {
+          fail(cssPath, line, `${at}: gradients are for data only (legends, hatching); use a flat token colour`);
         }
       }
-      if (/gradient\(/.test(value)) {
-        fail(cssPath, line, `${at}: gradients are for data only (legends, hatching); use a flat token colour`);
+      if (/\bdashed\b/.test(value) && !DASHED_SELECTORS.test(selector)) {
+        fail(cssPath, line, `${at}: dashed borders are reserved for drop targets and empty states`);
       }
-    }
-    if (/\bdashed\b/.test(value) && !DASHED_SELECTORS.test(selector)) {
-      fail(cssPath, line, `${at}: dashed borders are reserved for drop targets and empty states`);
     }
   }
 }
@@ -93,14 +104,8 @@ for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
 // --------------------------------------------------------------------------
 // Components (*.tsx)
 // --------------------------------------------------------------------------
-const walk = (dir) =>
-  readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    return statSync(path).isDirectory() ? walk(path) : path.endsWith(".tsx") ? [path] : [];
-  });
-
 let inlineStyleBlocks = 0;
-for (const file of walk(src)) {
+for (const file of walkExt(src, ".tsx")) {
   const text = readFileSync(file, "utf8");
   const lineAt = (index) => text.slice(0, index).split("\n").length;
   inlineStyleBlocks += (text.match(/style=\{\{/g) || []).length;
@@ -147,7 +152,7 @@ if (errors.length) {
 }
 const slack = MAX_INLINE_STYLE_BLOCKS - inlineStyleBlocks;
 console.log(
-  `Studio style check passed (${inlineStyleBlocks} inline style blocks` +
+  `Studio style check passed (${cssFiles.length} CSS files, ${inlineStyleBlocks} inline style blocks` +
     (slack > 0 ? `; limit can be lowered to ${inlineStyleBlocks}` : "") +
     ")."
 );

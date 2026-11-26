@@ -2,6 +2,44 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  ADJOINT_LENS_OPTIONS,
+  CAD_M_TO_THREE,
+  CAUSE_CATEGORY_COLORS,
+  FEA_LOAD_META,
+  MODAL_COMPLIANCE_SOURCES,
+  PUNCHIN_FLEX_SOURCE_LABELS,
+  SCALE,
+  SUBSYSTEM_META,
+  SUBSYSTEM_ORDER,
+  cadGlbBoundsCache,
+  cadGlbResolvedCache,
+  cloneCachedCadGlb,
+  loadCadGlbCached,
+} from "../viewport/cadGlbCache";
+import {
+  InspectedPartInfo,
+  applyInspectHighlight,
+  disposeGroupChildren,
+  getModalVisualSeverity,
+  getToolheadMaterialAppearance,
+  orientBeamBoxMesh,
+  orientBeamMesh,
+  toThree,
+} from "../viewport/geometryHelpers";
+import {
+  ElasticDeformMesh,
+  HOTEND_LUT_N,
+  ModalShellMesh,
+  deformBackplateMesh,
+  deformBodyMesh,
+  deformHotendMesh,
+  extractRotVecFromQuat,
+  getHotendProfileLUT,
+  sampleProfileLUT,
+} from "../viewport/modalKinematics";
+import { buildAssemblyHardwareMeshes } from "../viewport/proceduralHardware";
+import { buildSolidPartFeaScene, buildTopologyOptScene } from "../viewport/solidPartScene";
+import {
   ModalBedMountItem,
   ModalGe5cJointItem,
   buildBedMountsGroup,
@@ -28,7 +66,6 @@ import {
   formatHzGain,
   getLensScore,
   impactLevelMeta,
-  modeSeverityMeta,
 } from "../viewport/partClassifier";
 import {
   AdjointLens,
@@ -37,6 +74,8 @@ import {
   FrameFeetType,
   GeometryMember,
   ModalColorMode,
+  ModalScaleMode,
+  ModeShapeData,
   ShellPanelGeometryData,
   SimulationResponse,
   SolidFeaEngine,
@@ -49,28 +88,6 @@ import {
   XRailMountType,
   YRailMountType,
 } from "../types";
-
-interface InspectedPartInfo {
-  key: string;
-  name: string;
-  subsystem: SubsystemKey;
-  partGroupId: string;
-  role: string;
-  material?: string;
-  profile?: string;
-  complianceSharePct?: number;
-  heatScore?: number;
-  stressMpa?: number;
-  yieldMpa?: number;
-  estHzGain?: number;
-  hzPer100g?: number;
-  whyItHurts?: string;
-  actionHint?: string;
-  bedFlatnessUm?: number;
-  bedTacoUm?: number;
-  bedModeHz?: number;
-  bedRisk?: "low" | "moderate" | "high" | "critical";
-}
 
 interface Props {
   sim: SimulationResponse | null;
@@ -96,672 +113,13 @@ interface Props {
   onSensitivityLensChange?: (lens: AdjointLens) => void;
   modalColorMode?: ModalColorMode;
   onModalColorModeChange?: (mode: ModalColorMode) => void;
+  modalScaleMode?: ModalScaleMode;
+  onModalScaleModeChange?: (mode: ModalScaleMode) => void;
   onInspectedPartChange?: (partId: string | null) => void;
   onRegisterCapture?: (fn: (frames?: number, delayMs?: number) => Promise<string[]>) => void;
 }
 
-const SCALE = 0.01; // 100 mm = 1 Three.js unit
-
-const FEA_LOAD_META: Record<FeaLoadCase, { label: string; explanation: string }> = {
-  xy: {
-    label: "XY Accel",
-    explanation:
-      "Horizontal X+Y print acceleration (zero gravity droop) — shows real printing flex between nozzle & bed",
-  },
-  x: {
-    label: "X Accel",
-    explanation: "Pure horizontal X-axis acceleration from moving toolhead mass",
-  },
-  y: {
-    label: "Y Accel",
-    explanation: "Pure horizontal Y-axis acceleration from moving gantry / bed mass",
-  },
-  gravity: {
-    label: "+Gravity",
-    explanation: "Full static envelope including vertical gravity sag + belt preload + XY accel",
-  },
-};
-
-const ADJOINT_LENS_OPTIONS: Array<{ id: AdjointLens; label: string; title: string }> = [
-  {
-    id: "print_impact",
-    label: "Print Impact",
-    title: "Combined nozzle-to-bed flex, XY print-excited modal Hz & moving-mass penalty",
-  },
-  {
-    id: "compliance",
-    label: "Static Flex %",
-    title: "Pure static nozzle-to-bed compliance share (0 to +1)",
-  },
-  {
-    id: "modal",
-    label: "Modal Hz",
-    title: "XY print-excited modal frequency sensitivity (-1 to +1)",
-  },
-  {
-    id: "mass",
-    label: "Moving Mass",
-    title: "Moving-mass frequency penalty — cyan highlights parts to lighten",
-  },
-];
-
-const SUBSYSTEM_ORDER: SubsystemKey[] = ["toolhead", "gantry", "frame", "bed"];
-
-const SUBSYSTEM_META: Record<SubsystemKey, { label: string; color: string }> = {
-  toolhead: { label: "Toolhead", color: "#f43f5e" },
-  gantry: { label: "Gantry", color: "#f59e0b" },
-  frame: { label: "Frame", color: "#38bdf8" },
-  bed: { label: "Bed", color: "#a855f7" },
-};
-
-const MODAL_COMPLIANCE_SOURCES: Array<{
-  key: "frame" | "belt" | "motor" | "bracket";
-  short: string;
-  color: string;
-}> = [
-  { key: "frame", short: "Struct", color: "#38bdf8" },
-  { key: "belt", short: "Belt", color: "#f59e0b" },
-  { key: "motor", short: "Motor", color: "#a78bfa" },
-  { key: "bracket", short: "Bkt", color: "#fb7185" },
-];
-
-const CAUSE_CATEGORY_COLORS: Record<
-  "belt" | "motor" | "bracket" | "structural" | "mass",
-  string
-> = {
-  belt: "#f59e0b",
-  structural: "#38bdf8",
-  motor: "#a78bfa",
-  bracket: "#fb7185",
-  mass: "#22d3ee",
-};
-
-function disposeGroupChildren(group: THREE.Group): void {
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
-  while (group.children.length > 0) {
-    const obj = group.children[0];
-    group.remove(obj);
-    obj.traverse((child) => {
-      const geo = (child as THREE.Mesh).geometry;
-      if (geo) geometries.add(geo);
-      const mat = (child as THREE.Mesh).material;
-      if (Array.isArray(mat)) {
-        mat.forEach((m) => materials.add(m));
-      } else if (mat) {
-        materials.add(mat);
-      }
-    });
-  }
-  geometries.forEach((g) => g.dispose());
-  materials.forEach((m) => m.dispose());
-}
-
-function frameCameraToBox(
-  camera: THREE.PerspectiveCamera | undefined,
-  controls: OrbitControls | undefined,
-  box: THREE.Box3
-): void {
-  if (!camera || !controls || box.isEmpty()) return;
-  const sphere = box.getBoundingSphere(new THREE.Sphere());
-  const halfFovRad = THREE.MathUtils.degToRad(camera.fov * 0.5);
-  const dist = Math.max((sphere.radius / Math.sin(halfFovRad)) * 1.32, 3.6);
-  controls.target.copy(sphere.center);
-  camera.position.set(
-    sphere.center.x + dist * 0.64,
-    sphere.center.y + dist * 0.46,
-    sphere.center.z + dist * 0.68
-  );
-  controls.update();
-}
-
-const INSPECT_HIGHLIGHT_COLOR = new THREE.Color("#38bdf8");
-
-function applyInspectHighlight(
-  mesh: THREE.Mesh | null | undefined,
-  mode: "none" | "hover" | "pin",
-  pulse = 0
-): void {
-  if (!mesh) return;
-  const mat = mesh.material;
-  if (!(mat instanceof THREE.MeshStandardMaterial)) return;
-  if (mesh.userData._origEmissiveHex === undefined) {
-    mesh.userData._origEmissiveHex = mat.emissive.getHex();
-    mesh.userData._origEmissiveIntensity = mat.emissiveIntensity;
-  }
-  if (mode === "none") {
-    mat.emissive.setHex(mesh.userData._origEmissiveHex as number);
-    mat.emissiveIntensity = mesh.userData._origEmissiveIntensity as number;
-  } else if (mode === "hover") {
-    mat.emissive.copy(INSPECT_HIGHLIGHT_COLOR);
-    mat.emissiveIntensity = Math.max((mesh.userData._origEmissiveIntensity as number) || 0, 0.28);
-  } else {
-    mat.emissive.copy(INSPECT_HIGHLIGHT_COLOR);
-    mat.emissiveIntensity = 0.36 + 0.16 * pulse;
-  }
-}
-
-function toThree(ptMm: [number, number, number], cx: number, cy: number): THREE.Vector3 {
-  return new THREE.Vector3((ptMm[0] - cx) * SCALE, ptMm[2] * SCALE, -(ptMm[1] - cy) * SCALE);
-}
-
-const _orientDir = new THREE.Vector3();
-const _orientUp = new THREE.Vector3(0, 1, 0);
-const _orientQuat = new THREE.Quaternion();
-const _orientCadY = new THREE.Vector3(0, 0, -1);
-const _orientU = new THREE.Vector3();
-const _orientV = new THREE.Vector3();
-const _orientMat4 = new THREE.Matrix4();
-
-function orientBeamMesh(mesh: THREE.Mesh, p0: THREE.Vector3, p1: THREE.Vector3): void {
-  _orientDir.subVectors(p1, p0);
-  const len = Math.max(_orientDir.length(), 1e-4);
-  mesh.position.copy(p0).add(p1).multiplyScalar(0.5);
-  mesh.scale.set(1, len, 1);
-  _orientDir.divideScalar(len);
-  _orientQuat.setFromUnitVectors(_orientUp, _orientDir);
-  mesh.quaternion.copy(_orientQuat);
-}
-
-/**
- * Orient a unit-length box mesh (width along local X, length along local Y, height along local Z)
- * using the exact CAD beam3d.py cross-section frame so `height` stands vertically in CAD Z (Three.js +Y)
- * for horizontal beams and `width` spans horizontally.
- */
-function orientBeamBoxMesh(mesh: THREE.Mesh, p0: THREE.Vector3, p1: THREE.Vector3): void {
-  _orientDir.subVectors(p1, p0);
-  const len = Math.max(_orientDir.length(), 1e-4);
-  mesh.position.copy(p0).add(p1).multiplyScalar(0.5);
-  mesh.scale.set(1, len, 1);
-  _orientDir.divideScalar(len);
-  const refVec = Math.abs(_orientDir.y) > 0.99 ? _orientCadY : _orientUp;
-  _orientU.crossVectors(_orientDir, refVec).normalize();
-  _orientV.crossVectors(_orientU, _orientDir).normalize();
-  // Basis columns: local X = U (width), local Y = T (length), local Z = V (height)
-  // Check handedness: U x T = V => det([U, T, V]) = (U x T)·V = +1 -> Wait: in right-handed (X, Y, Z), X x Y = Z!
-  // Since U x T = V, [U, T, V] has det = +1!
-  _orientMat4.makeBasis(_orientU, _orientDir, _orientV);
-  mesh.quaternion.setFromRotationMatrix(_orientMat4);
-}
-
-interface ToolheadMatAppearance {
-  hex: number;
-  metalness: number;
-  roughness: number;
-  shortLabel: string;
-}
-
-function getToolheadMaterialAppearance(matId?: string | null): ToolheadMatAppearance {
-  switch (matId) {
-    case "aluminum_6061_t6":
-      return { hex: 0xcbd5e1, metalness: 0.86, roughness: 0.22, shortLabel: "CNC Al 6061" };
-    case "aluminum_7075_t6":
-      return { hex: 0xdbe4ef, metalness: 0.9, roughness: 0.18, shortLabel: "CNC Al 7075" };
-    case "carbon_fiber_plate":
-      return { hex: 0x181c24, metalness: 0.32, roughness: 0.34, shortLabel: "3K CF Plate" };
-    case "ppa_cf_printed":
-      return { hex: 0x1c2128, metalness: 0.22, roughness: 0.5, shortLabel: "PPA-CF" };
-    case "pps_cf_printed":
-      return { hex: 0x191d24, metalness: 0.24, roughness: 0.48, shortLabel: "PPS-CF" };
-    case "pa12_cf_printed":
-      return { hex: 0x1f242c, metalness: 0.18, roughness: 0.58, shortLabel: "PA12-CF" };
-    case "pet_cf_printed":
-      return { hex: 0x28303b, metalness: 0.18, roughness: 0.54, shortLabel: "PET-CF" };
-    case "abs_printed":
-    default:
-      // Realistic Voron dark charcoal/anthracite ABS (paired with subtle Voron-red trim accents)
-      return { hex: 0x2d333b, metalness: 0.12, roughness: 0.48, shortLabel: "ABS" };
-  }
-}
-
-const PUNCHIN_FLEX_SOURCE_LABELS: Record<
-  ToolheadFlexBreakdownData["dominant_flex_source"],
-  string
-> = {
-  rail_xbeam: "X-beam & linear rail bending/torsion",
-  carriage_body: "X-carriage backplate & toolhead body compliance",
-  hotend_nozzle: "hotend mount & nozzle stem bending",
-};
-
-interface ModalShellMesh {
-  geometry: THREE.BufferGeometry;
-  wireGeometry: THREE.BufferGeometry;
-  vertNodeIds: string[];
-}
-
 const _shellCol = new THREE.Color();
-
-interface ElasticDeformMesh {
-  mesh: THREE.Mesh;
-  geometry: THREE.BufferGeometry;
-  restPos: Float32Array;
-  restNorm: Float32Array | null;
-  /** Precomputed per-vertex normalized flex coordinate s in [0, 1] */
-  flexS: Float32Array;
-  /** Stage 2 ("body") only: precomputed Stage-1 backplate flex coordinate at rear mounting interface */
-  bpFlexS?: Float32Array;
-  /** Stage 3 ("hotend") only: precomputed curvature-integrated slope & deflection fractions */
-  hotendSlope?: Float32Array;
-  hotendDisp?: Float32Array;
-  stage: "backplate" | "body" | "hotend";
-}
-
-const HOTEND_LUT_N = 64;
-const HOTEND_PROFILE_CACHE: Record<string, { slope: Float32Array; disp: Float32Array }> = {};
-
-function getHotendProfileLUT(hotendMountStyle: string): { slope: Float32Array; disp: Float32Array } {
-  const key = hotendMountStyle === "chube_6bolt_m3_18pcd" ? "chube" : "necked";
-  const cached = HOTEND_PROFILE_CACHE[key];
-  if (cached) return cached;
-
-  const slope = new Float32Array(HOTEND_LUT_N + 1);
-  const disp = new Float32Array(HOTEND_LUT_N + 1);
-
-  if (key === "chube") {
-    // Uniform continuous 25.4 mm satin-titanium structural tube (exact Euler-Bernoulli cantilever)
-    for (let k = 0; k <= HOTEND_LUT_N; k++) {
-      const s = k / HOTEND_LUT_N;
-      slope[k] = s * (2 - s);
-      disp[k] = (s * s * (3 - s)) / 3;
-    }
-  } else {
-    // Piece-wise stiffness hotend (Dragon/Goliath 4x Ti standoffs, V6 slender heatbreak neck, Revo stem):
-    // Clamped square in collar (s=0), stiff heatsink (s < 0.16), peak curvature across
-    // standoffs / heatbreak neck (s in [0.18, 0.52]), rigid heater block + nozzle (s > 0.56).
-    const kappa = new Float32Array(HOTEND_LUT_N + 1);
-    for (let k = 0; k <= HOTEND_LUT_N; k++) {
-      const s = k / HOTEND_LUT_N;
-      const neckBump = Math.exp(-Math.pow((s - 0.35) / 0.155, 2));
-      const sinkTerm = s < 0.24 ? 0.16 * (1 - s / 0.24) : 0;
-      const blockTerm = 0.05;
-      kappa[k] = (blockTerm + sinkTerm + 1.0 * neckBump) * (1 - 0.45 * s);
-    }
-    const ds = 1 / HOTEND_LUT_N;
-    slope[0] = 0;
-    for (let k = 1; k <= HOTEND_LUT_N; k++) {
-      slope[k] = slope[k - 1] + 0.5 * (kappa[k - 1] + kappa[k]) * ds;
-    }
-    const totalSlope = Math.max(slope[HOTEND_LUT_N], 1e-6);
-    for (let k = 0; k <= HOTEND_LUT_N; k++) {
-      slope[k] /= totalSlope;
-    }
-    disp[0] = 0;
-    for (let k = 1; k <= HOTEND_LUT_N; k++) {
-      disp[k] = disp[k - 1] + 0.5 * (slope[k - 1] + slope[k]) * ds;
-    }
-  }
-
-  const out = { slope, disp };
-  HOTEND_PROFILE_CACHE[key] = out;
-  return out;
-}
-
-function sampleProfileLUT(lut: Float32Array, s: number): number {
-  const clamped = s <= 0 ? 0 : s >= 1 ? 1 : s;
-  const f = clamped * HOTEND_LUT_N;
-  const i0 = Math.floor(f);
-  const i1 = i0 < HOTEND_LUT_N ? i0 + 1 : HOTEND_LUT_N;
-  const frac = f - i0;
-  return lut[i0] + (lut[i1] - lut[i0]) * frac;
-}
-
-function extractRotVecFromQuat(
-  q: THREE.Quaternion,
-  maxRad: number,
-  out: THREE.Vector3
-): THREE.Vector3 {
-  // Ensure shortest-arc hemisphere (w >= 0)
-  const sign = q.w < 0 ? -1 : 1;
-  const w = Math.min(1, Math.max(-1, q.w * sign));
-  const halfAngle = Math.acos(w);
-  const sinHalf = Math.sqrt(Math.max(0, 1 - w * w));
-  const angle = Math.min(2 * halfAngle, maxRad);
-  if (sinHalf > 1e-6 && angle > 1e-6) {
-    const scale = (angle * sign) / sinHalf;
-    out.set(q.x * scale, q.y * scale, q.z * scale);
-  } else {
-    out.set(0, 0, 0);
-  }
-  return out;
-}
-
-function deformBackplateMesh(
-  item: ElasticDeformMesh,
-  pivotX: number,
-  pivotY: number,
-  pivotZ: number,
-  tpx: number,
-  tpy: number,
-  tpz: number,
-  spx: number,
-  spy: number,
-  spz: number
-): void {
-  const posAttr = item.geometry.getAttribute("position") as THREE.BufferAttribute;
-  const posArr = posAttr.array as Float32Array;
-  const normAttr = item.restNorm
-    ? (item.geometry.getAttribute("normal") as THREE.BufferAttribute | undefined)
-    : undefined;
-  const normArr = normAttr ? (normAttr.array as Float32Array) : null;
-  const restPos = item.restPos;
-  const restNorm = item.restNorm;
-  const flexS = item.flexS;
-  const count = flexS.length;
-
-  for (let i = 0; i < count; i++) {
-    const o = i * 3;
-    const x0 = restPos[o];
-    const y0 = restPos[o + 1];
-    const z0 = restPos[o + 2];
-    const s = flexS[i];
-    if (s <= 1e-6) {
-      posArr[o] = x0;
-      posArr[o + 1] = y0;
-      posArr[o + 2] = z0;
-      if (normArr && restNorm) {
-        normArr[o] = restNorm[o];
-        normArr[o + 1] = restNorm[o + 1];
-        normArr[o + 2] = restNorm[o + 2];
-      }
-      continue;
-    }
-
-    const w = 0.5 * s * s * (3 - s);
-    const ax = tpx * w;
-    const ay = tpy * w;
-    const az = tpz * w;
-    const vx = x0 - pivotX;
-    const vy = y0 - pivotY;
-    const vz = z0 - pivotZ;
-
-    const angSq = ax * ax + ay * ay + az * az;
-    if (angSq > 1e-12) {
-      const ang = Math.sqrt(angSq);
-      const invAng = 1 / ang;
-      const kx = ax * invAng;
-      const ky = ay * invAng;
-      const kz = az * invAng;
-      const cosA = Math.cos(ang);
-      const sinA = Math.sin(ang);
-      const omc = 1 - cosA;
-
-      const kDotV = kx * vx + ky * vy + kz * vz;
-      const cx = ky * vz - kz * vy;
-      const cy = kz * vx - kx * vz;
-      const cz = kx * vy - ky * vx;
-      posArr[o] = pivotX + vx * cosA + cx * sinA + kx * kDotV * omc + spx * w;
-      posArr[o + 1] = pivotY + vy * cosA + cy * sinA + ky * kDotV * omc + spy * w;
-      posArr[o + 2] = pivotZ + vz * cosA + cz * sinA + kz * kDotV * omc + spz * w;
-
-      if (normArr && restNorm) {
-        const nx = restNorm[o];
-        const ny = restNorm[o + 1];
-        const nz = restNorm[o + 2];
-        const kDotN = kx * nx + ky * ny + kz * nz;
-        const ncx = ky * nz - kz * ny;
-        const ncy = kz * nx - kx * nz;
-        const ncz = kx * ny - ky * nx;
-        normArr[o] = nx * cosA + ncx * sinA + kx * kDotN * omc;
-        normArr[o + 1] = ny * cosA + ncy * sinA + ky * kDotN * omc;
-        normArr[o + 2] = nz * cosA + ncz * sinA + kz * kDotN * omc;
-      }
-    } else {
-      posArr[o] = x0 + spx * w;
-      posArr[o + 1] = y0 + spy * w;
-      posArr[o + 2] = z0 + spz * w;
-      if (normArr && restNorm) {
-        normArr[o] = restNorm[o];
-        normArr[o + 1] = restNorm[o + 1];
-        normArr[o + 2] = restNorm[o + 2];
-      }
-    }
-  }
-  posAttr.needsUpdate = true;
-  if (normAttr) normAttr.needsUpdate = true;
-}
-
-function deformBodyMesh(
-  item: ElasticDeformMesh,
-  pivotX: number,
-  pivotY: number,
-  pivotZ: number,
-  bodyRootX: number,
-  bodyRootY: number,
-  bodyRootZ: number,
-  collarRelX: number,
-  collarRelY: number,
-  collarRelZ: number,
-  tpx: number,
-  tpy: number,
-  tpz: number,
-  spx: number,
-  spy: number,
-  spz: number,
-  tbx: number,
-  tby: number,
-  tbz: number,
-  sbx: number,
-  sby: number,
-  sbz: number
-): void {
-  const posAttr = item.geometry.getAttribute("position") as THREE.BufferAttribute;
-  const posArr = posAttr.array as Float32Array;
-  const normAttr = item.restNorm
-    ? (item.geometry.getAttribute("normal") as THREE.BufferAttribute | undefined)
-    : undefined;
-  const normArr = normAttr ? (normAttr.array as Float32Array) : null;
-  const restPos = item.restPos;
-  const restNorm = item.restNorm;
-  const flexS = item.flexS;
-  const bpFlexS = item.bpFlexS;
-  const count = flexS.length;
-
-  for (let i = 0; i < count; i++) {
-    const o = i * 3;
-    let qx = restPos[o];
-    let qy = restPos[o + 1];
-    let qz = restPos[o + 2];
-    let nx = restNorm ? restNorm[o] : 0;
-    let ny = restNorm ? restNorm[o + 1] : 1;
-    let nz = restNorm ? restNorm[o + 2] : 0;
-
-    // Step 1: Stage-2 elastic body flex relative to rear bolted face (s2 = 0 at rear face)
-    const s2 = flexS[i];
-    if (s2 > 1e-6) {
-      const w2 = 0.5 * s2 * s2 * (3 - s2);
-      const ax2 = tbx * w2;
-      const ay2 = tby * w2;
-      const az2 = tbz * w2;
-      const vx2 = qx - bodyRootX;
-      const vy2 = qy - bodyRootY;
-      const vz2 = qz - bodyRootZ;
-      const angSq2 = ax2 * ax2 + ay2 * ay2 + az2 * az2;
-      if (angSq2 > 1e-12) {
-        const ang2 = Math.sqrt(angSq2);
-        const inv2 = 1 / ang2;
-        const kx2 = ax2 * inv2;
-        const ky2 = ay2 * inv2;
-        const kz2 = az2 * inv2;
-        const cos2 = Math.cos(ang2);
-        const sin2 = Math.sin(ang2);
-        const omc2 = 1 - cos2;
-        const kDotV2 = kx2 * vx2 + ky2 * vy2 + kz2 * vz2;
-        const cx2 = ky2 * vz2 - kz2 * vy2;
-        const cy2 = kz2 * vx2 - kx2 * vz2;
-        const cz2 = kx2 * vy2 - ky2 * vx2;
-        qx = bodyRootX + vx2 * cos2 + cx2 * sin2 + kx2 * kDotV2 * omc2 + sbx * w2;
-        qy = bodyRootY + vy2 * cos2 + cy2 * sin2 + ky2 * kDotV2 * omc2 + sby * w2;
-        qz = bodyRootZ + vz2 * cos2 + cz2 * sin2 + kz2 * kDotV2 * omc2 + sbz * w2;
-
-        if (normArr && restNorm) {
-          const kDotN2 = kx2 * nx + ky2 * ny + kz2 * nz;
-          const ncx2 = ky2 * nz - kz2 * ny;
-          const ncy2 = kz2 * nx - kx2 * nz;
-          const ncz2 = kx2 * ny - ky2 * nx;
-          const nnx = nx * cos2 + ncx2 * sin2 + kx2 * kDotN2 * omc2;
-          const nny = ny * cos2 + ncy2 * sin2 + ky2 * kDotN2 * omc2;
-          const nnz = nz * cos2 + ncz2 * sin2 + kz2 * kDotN2 * omc2;
-          nx = nnx;
-          ny = nny;
-          nz = nnz;
-        }
-      } else {
-        qx += sbx * w2;
-        qy += sby * w2;
-        qz += sbz * w2;
-      }
-    }
-
-    // Step 2: Stage-1 backplate continuous deformation (bit-for-bit identical at rear interface!)
-    const s1 = bpFlexS ? bpFlexS[i] : 1;
-    if (s1 > 1e-6) {
-      const w1 = 0.5 * s1 * s1 * (3 - s1);
-      const ax1 = tpx * w1;
-      const ay1 = tpy * w1;
-      const az1 = tpz * w1;
-      const vx1 = qx + collarRelX - pivotX;
-      const vy1 = qy + collarRelY - pivotY;
-      const vz1 = qz + collarRelZ - pivotZ;
-      const angSq1 = ax1 * ax1 + ay1 * ay1 + az1 * az1;
-      if (angSq1 > 1e-12) {
-        const ang1 = Math.sqrt(angSq1);
-        const inv1 = 1 / ang1;
-        const kx1 = ax1 * inv1;
-        const ky1 = ay1 * inv1;
-        const kz1 = az1 * inv1;
-        const cos1 = Math.cos(ang1);
-        const sin1 = Math.sin(ang1);
-        const omc1 = 1 - cos1;
-        const kDotV1 = kx1 * vx1 + ky1 * vy1 + kz1 * vz1;
-        const cx1 = ky1 * vz1 - kz1 * vy1;
-        const cy1 = kz1 * vx1 - kx1 * vz1;
-        const cz1 = kx1 * vy1 - ky1 * vx1;
-        qx = pivotX + vx1 * cos1 + cx1 * sin1 + kx1 * kDotV1 * omc1 + spx * w1 - collarRelX;
-        qy = pivotY + vy1 * cos1 + cy1 * sin1 + ky1 * kDotV1 * omc1 + spy * w1 - collarRelY;
-        qz = pivotZ + vz1 * cos1 + cz1 * sin1 + kz1 * kDotV1 * omc1 + spz * w1 - collarRelZ;
-
-        if (normArr && restNorm) {
-          const kDotN1 = kx1 * nx + ky1 * ny + kz1 * nz;
-          const ncx1 = ky1 * nz - kz1 * ny;
-          const ncy1 = kz1 * nx - kx1 * nz;
-          const ncz1 = kx1 * ny - ky1 * nx;
-          const nnx = nx * cos1 + ncx1 * sin1 + kx1 * kDotN1 * omc1;
-          const nny = ny * cos1 + ncy1 * sin1 + ky1 * kDotN1 * omc1;
-          const nnz = nz * cos1 + ncz1 * sin1 + kz1 * kDotN1 * omc1;
-          nx = nnx;
-          ny = nny;
-          nz = nnz;
-        }
-      } else {
-        qx += spx * w1;
-        qy += spy * w1;
-        qz += spz * w1;
-      }
-    }
-
-    posArr[o] = qx;
-    posArr[o + 1] = qy;
-    posArr[o + 2] = qz;
-    if (normArr && restNorm) {
-      normArr[o] = nx;
-      normArr[o + 1] = ny;
-      normArr[o + 2] = nz;
-    }
-  }
-
-  posAttr.needsUpdate = true;
-  if (normAttr) normAttr.needsUpdate = true;
-}
-
-function deformHotendMesh(
-  item: ElasticDeformMesh,
-  hotendLen: number,
-  bx: number,
-  by: number,
-  bz: number
-): void {
-  const posAttr = item.geometry.getAttribute("position") as THREE.BufferAttribute;
-  const posArr = posAttr.array as Float32Array;
-  const normAttr = item.restNorm
-    ? (item.geometry.getAttribute("normal") as THREE.BufferAttribute | undefined)
-    : undefined;
-  const normArr = normAttr ? (normAttr.array as Float32Array) : null;
-  const restPos = item.restPos;
-  const restNorm = item.restNorm;
-  const hotendSlope = item.hotendSlope;
-  const hotendDisp = item.hotendDisp;
-  const count = item.flexS.length;
-  const safeLen = Math.max(hotendLen, 0.1);
-  const invSafeLen = 0.5 / safeLen;
-
-  if (!hotendSlope || !hotendDisp) return;
-
-  for (let i = 0; i < count; i++) {
-    const o = i * 3;
-    const x0 = restPos[o];
-    const y0 = restPos[o + 1];
-    const z0 = restPos[o + 2];
-
-    const sl = hotendSlope[i];
-    const dp = hotendDisp[i];
-    if (sl <= 1e-6 && dp <= 1e-6) {
-      posArr[o] = x0;
-      posArr[o + 1] = y0;
-      posArr[o + 2] = z0;
-      if (normArr && restNorm) {
-        normArr[o] = restNorm[o];
-        normArr[o + 1] = restNorm[o + 1];
-        normArr[o + 2] = restNorm[o + 2];
-      }
-      continue;
-    }
-
-    const ax = bx * sl;
-    const ay = by * sl;
-    const az = bz * sl;
-
-    // Exact Euler-Bernoulli cantilever centerline deflection (downward -Y beam)
-    const dxC = bz * hotendLen * dp;
-    const dzC = -bx * hotendLen * dp;
-    // Exact geometric arc-length foreshortening (pulls slightly +Y toward collar so rod never stretches)
-    const dyC = (dxC * dxC + dzC * dzC) * invSafeLen;
-
-    // Exact orthonormal cross-section rotation Ry(ay) -> Rz(az) -> Rx(ax) on radial (x0, 0, z0)
-    const cy = Math.cos(ay);
-    const sy = Math.sin(ay);
-    const cz = Math.cos(az);
-    const sz = Math.sin(az);
-    const cx = Math.cos(ax);
-    const sx = Math.sin(ax);
-
-    const x1 = x0 * cy + z0 * sy;
-    const z1 = -x0 * sy + z0 * cy;
-    const rx = x1 * cz;
-    const ry = x1 * sz * cx - z1 * sx;
-    const rz = x1 * sz * sx + z1 * cx;
-
-    posArr[o] = dxC + rx;
-    posArr[o + 1] = y0 + dyC + ry;
-    posArr[o + 2] = dzC + rz;
-
-    if (normArr && restNorm) {
-      const nx0 = restNorm[o];
-      const ny0 = restNorm[o + 1];
-      const nz0 = restNorm[o + 2];
-      // Apply exact same Ry(ay) -> Rz(az) -> Rx(ax) to rest normal
-      const nx1 = nx0 * cy + nz0 * sy;
-      const nz1 = -nx0 * sy + nz0 * cy;
-      const nx2 = nx1 * cz - ny0 * sz;
-      const ny2 = nx1 * sz + ny0 * cz;
-      normArr[o] = nx2;
-      normArr[o + 1] = ny2 * cx - nz1 * sx;
-      normArr[o + 2] = ny2 * sx + nz1 * cx;
-    }
-  }
-
-  posAttr.needsUpdate = true;
-  if (normAttr) normAttr.needsUpdate = true;
-}
 
 export const PrinterViewport: React.FC<Props> = ({
   sim,
@@ -787,6 +145,8 @@ export const PrinterViewport: React.FC<Props> = ({
   onSensitivityLensChange,
   modalColorMode: modalColorModeProp,
   onModalColorModeChange,
+  modalScaleMode: modalScaleModeProp,
+  onModalScaleModeChange,
   onInspectedPartChange,
   onRegisterCapture,
 }) => {
@@ -794,6 +154,7 @@ export const PrinterViewport: React.FC<Props> = ({
   const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(true);
   const [internalAdjointLens, setInternalAdjointLens] = useState<AdjointLens>("print_impact");
   const [internalModalColorMode, setInternalModalColorMode] = useState<ModalColorMode>("relative");
+  const [internalModalScaleMode, setInternalModalScaleMode] = useState<ModalScaleMode>("impact");
   const [internalShowBedWarp, setInternalShowBedWarp] = useState<boolean>(false);
   const [internalToolheadPunchIn, setInternalToolheadPunchIn] = useState<boolean>(false);
   const [isolateToolheadModal, setIsolateToolheadModal] = useState<boolean>(false);
@@ -805,6 +166,28 @@ export const PrinterViewport: React.FC<Props> = ({
   const toolsMenuRef = useRef<HTMLDivElement | null>(null);
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
+  const [cadGlbVersion, setCadGlbVersion] = useState<number>(0);
+
+  const hotendVisualGlbUrl = sim?.geometry?.toolhead_structure?.hotend_visual_glb_url ?? null;
+  const toolheadVisualGlbUrl = sim?.geometry?.toolhead_structure?.toolhead_visual_glb_url ?? null;
+
+  useEffect(() => {
+    const urlsToFetch = [hotendVisualGlbUrl, toolheadVisualGlbUrl].filter(
+      (url): url is string => typeof url === "string" && url.length > 0 && !cadGlbResolvedCache.has(url)
+    );
+    if (urlsToFetch.length === 0) return;
+    let cancelled = false;
+    for (const url of urlsToFetch) {
+      void loadCadGlbCached(url).then((loaded) => {
+        if (!cancelled && loaded) {
+          setCadGlbVersion((v) => v + 1);
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl]);
 
   useEffect(() => {
     if (!toolsMenuOpen) return;
@@ -841,6 +224,15 @@ export const PrinterViewport: React.FC<Props> = ({
       onModalColorModeChange(next);
     } else {
       setInternalModalColorMode(next);
+    }
+  };
+
+  const modalScaleMode = modalScaleModeProp ?? internalModalScaleMode;
+  const setModalScaleMode = (next: ModalScaleMode) => {
+    if (onModalScaleModeChange) {
+      onModalScaleModeChange(next);
+    } else {
+      setInternalModalScaleMode(next);
     }
   };
 
@@ -938,7 +330,9 @@ export const PrinterViewport: React.FC<Props> = ({
     modalBodyFlexFrac: number;
     modalCollarBpW: number;
     modalHotendStyle: string;
+    modalHotendBraced: boolean;
     modalBackplatePivotLocal: THREE.Vector3;
+    modalRailPivotLocal: THREE.Vector3;
     modalBodyRootLocal: THREE.Vector3;
     modalCollarRelToTh: THREE.Vector3;
     modalBodyDepthRef: number;
@@ -958,6 +352,7 @@ export const PrinterViewport: React.FC<Props> = ({
     isModal: boolean;
     isolateToolheadModal: boolean;
     modalAmpScale: number;
+    modalMotionScale: number;
     isToolheadPunchIn: boolean;
     ecoDpr: boolean;
     modalPaused: boolean;
@@ -979,7 +374,9 @@ export const PrinterViewport: React.FC<Props> = ({
     modalBodyFlexFrac: 0.5,
     modalCollarBpW: 1.0,
     modalHotendStyle: "dragon_4bolt_m25",
+    modalHotendBraced: false,
     modalBackplatePivotLocal: new THREE.Vector3(),
+    modalRailPivotLocal: new THREE.Vector3(),
     modalBodyRootLocal: new THREE.Vector3(),
     modalCollarRelToTh: new THREE.Vector3(),
     modalBodyDepthRef: 0.22,
@@ -995,6 +392,7 @@ export const PrinterViewport: React.FC<Props> = ({
     isModal: false,
     isolateToolheadModal: false,
     modalAmpScale: 1.0,
+    modalMotionScale: 1.0,
     isToolheadPunchIn: false,
     ecoDpr: false,
     modalPaused: false,
@@ -1144,7 +542,16 @@ export const PrinterViewport: React.FC<Props> = ({
     const tmpIsoBaseRot = new THREE.Vector3();
     const tmpIsoRelCogRot = new THREE.Vector3();
     const tmpIsoRelNozRot = new THREE.Vector3();
+    const tmpIsoLever = new THREE.Vector3();
+    const tmpIsoRigidDisp = new THREE.Vector3();
     const tmpCurTh = new THREE.Vector3();
+    const tmpBeamRotVec = new THREE.Vector3();
+    const tmpRelCogRotVec = new THREE.Vector3();
+    const tmpBeamQuat = new THREE.Quaternion();
+    const tmpRailBearQuat = new THREE.Quaternion();
+    const tmpRailOrigin = new THREE.Vector3();
+    const tmpPivotBeam = new THREE.Vector3();
+    const tmpPivotRail = new THREE.Vector3();
     const tmpUStage12 = new THREE.Vector3();
     const tmpThetaRail = new THREE.Vector3();
     const tmpThetaBp = new THREE.Vector3();
@@ -1303,7 +710,9 @@ export const PrinterViewport: React.FC<Props> = ({
           modalBodyFlexFrac,
           modalCollarBpW,
           modalHotendStyle,
+          modalHotendBraced,
           modalBackplatePivotLocal,
+          modalRailPivotLocal,
           modalBodyRootLocal,
           modalCollarRelToTh,
           modalBedMesh,
@@ -1317,13 +726,16 @@ export const PrinterViewport: React.FC<Props> = ({
           modalGe5cItems,
           isolateToolheadModal: isIsoToolhead,
           modalAmpScale: ampScale,
+          modalMotionScale: motionScale,
           isToolheadPunchIn: isPunchIn,
         } = stateRef.current;
 
-        // Auto-calibrated modal stroke: 28 mm full view / 14 mm macro punch-in at 1.0x
-        const baseStroke = (isPunchIn ? 0.14 : 0.28) * ampScale;
+        // Auto-calibrated modal stroke: 28 mm full view / 14 mm macro punch-in at 1.0x,
+        // weighted by active print-impact severity when Visual = Impact
+        const effAmpScale = ampScale * motionScale;
+        const baseStroke = (isPunchIn ? 0.14 : 0.28) * effAmpScale;
         const phase = Math.sin(t * 7.5) * baseStroke;
-        const maxStageAngle = 0.22 * Math.min(ampScale, 1.5);
+        const maxStageAngle = 0.22 * Math.min(ampScale, 1.5) * motionScale;
 
         const thId = modalToolheadNodeId || "toolhead";
         const thModalVec = isIsoToolhead ? modalVectors[thId] : undefined;
@@ -1332,19 +744,30 @@ export const PrinterViewport: React.FC<Props> = ({
         // When Toolhead Isolation is enabled, freeze the frame, gantry & MGN rail stationary
         // and subtract carriage translation/rotation so ONLY rail-roll + backplate + body + hotend flex animates.
         let isoGain = 1.0;
+        tmpIsoBaseRot.set(0, 0, 0);
         if (isIsoToolhead) {
+          if (thModalRot) tmpIsoBaseRot.copy(thModalRot);
+          const baseThPosIso = basePositions[thId];
           tmpIsoRelCogV.set(0, 0, 0);
           tmpIsoRelNozV.set(0, 0, 0);
           if (modalCogNodeId && modalVectors[modalCogNodeId]) {
             tmpIsoRelCogV.copy(modalVectors[modalCogNodeId]);
             if (thModalVec) tmpIsoRelCogV.sub(thModalVec);
+            if (thModalRot && baseThPosIso && basePositions[modalCogNodeId]) {
+              tmpIsoLever.subVectors(basePositions[modalCogNodeId], baseThPosIso);
+              tmpIsoRigidDisp.crossVectors(tmpIsoBaseRot, tmpIsoLever).multiplyScalar(0.1);
+              tmpIsoRelCogV.sub(tmpIsoRigidDisp);
+            }
           }
           if (modalNozzleNodeId && modalVectors[modalNozzleNodeId]) {
             tmpIsoRelNozV.copy(modalVectors[modalNozzleNodeId]);
             if (thModalVec) tmpIsoRelNozV.sub(thModalVec);
+            if (thModalRot && baseThPosIso && basePositions[modalNozzleNodeId]) {
+              tmpIsoLever.subVectors(basePositions[modalNozzleNodeId], baseThPosIso);
+              tmpIsoRigidDisp.crossVectors(tmpIsoBaseRot, tmpIsoLever).multiplyScalar(0.1);
+              tmpIsoRelNozV.sub(tmpIsoRigidDisp);
+            }
           }
-          tmpIsoBaseRot.set(0, 0, 0);
-          if (thModalRot) tmpIsoBaseRot.copy(thModalRot);
           tmpIsoRelCogRot.set(0, 0, 0);
           if (modalCogNodeId && modalRotations[modalCogNodeId]) {
             tmpIsoRelCogRot.copy(modalRotations[modalCogNodeId]).sub(tmpIsoBaseRot);
@@ -1374,6 +797,12 @@ export const PrinterViewport: React.FC<Props> = ({
             if (id === modalCogNodeId || id === modalNozzleNodeId) {
               if (v) out.addScaledVector(v, toolPhase);
               if (thModalVec) out.addScaledVector(thModalVec, -toolPhase);
+              const baseThPosIso = basePositions[thId];
+              if (thModalRot && baseThPosIso) {
+                tmpIsoLever.subVectors(b, baseThPosIso);
+                tmpIsoRigidDisp.crossVectors(tmpIsoBaseRot, tmpIsoLever).multiplyScalar(0.1);
+                out.addScaledVector(tmpIsoRigidDisp, -toolPhase);
+              }
             }
             return out;
           }
@@ -1445,29 +874,39 @@ export const PrinterViewport: React.FC<Props> = ({
           );
         }
         const curTh = getPosInto(thId, tmpCurTh);
+        const rawThRot = isIsoToolhead ? undefined : modalRotations[thId];
+        tmpBeamRotVec.set(0, 0, 0);
+        tmpBeamQuat.identity();
+        if (rawThRot && rawThRot.lengthSq() > 1e-8) {
+          tmpBeamRotVec.copy(rawThRot).multiplyScalar(toolPhaseMeters);
+          setQuatFromClampedRotVec(tmpBeamRotVec, maxStageAngle, tmpBeamQuat);
+        }
         if (modalRailShoe) {
           modalRailShoe.position.copy(curTh);
-          modalRailShoe.quaternion.identity();
+          modalRailShoe.quaternion.copy(tmpBeamQuat);
         }
         if (modalToolhead) {
           modalToolhead.position.copy(curTh);
-          modalToolhead.quaternion.identity();
+          modalToolhead.quaternion.copy(tmpBeamQuat);
         }
 
         // True decoupled 4-stage toolhead deformation:
-        //   Stage 0: Rigid MGN rail-carriage bearing roll (modalToolhead + backplate/body base)
+        //   Stage 0: Rigid X-beam twist (modalRailShoe) + MGN rail-carriage bearing roll around ball-track pivot
         //   Stage 1: X-carriage backplate elastic bending (only plateFrac in rail-local frame)
         //   Stage 2: Toolhead body elastic flexing (bodyFrac in front of backplate)
         //   Stage 3: Hotend Euler-Bernoulli cantilever bending
         tmpStage1Quat.identity();
         tmpRotCogVec.set(0, 0, 0);
+        tmpRelCogRotVec.set(0, 0, 0);
         tmpUStage12.set(0, 0, 0);
-        tmpRailQuat.identity();
-        tmpInvRailQuat.identity();
+        tmpRailQuat.copy(tmpBeamQuat);
+        tmpRailBearQuat.identity();
+        tmpRailOrigin.copy(curTh);
+        tmpInvRailQuat.copy(tmpBeamQuat).invert();
         tmpBpQuat.identity();
         tmpBpCollarQuat.identity();
         tmpBodyQuat.identity();
-        tmpCollarWorldQuat.identity();
+        tmpCollarWorldQuat.copy(tmpBeamQuat);
         tmpCollarWorldPos.copy(curTh).add(modalCollarRelToTh);
         tmpUBpShear.set(0, 0, 0);
         tmpUBodyShear.set(0, 0, 0);
@@ -1512,22 +951,32 @@ export const PrinterViewport: React.FC<Props> = ({
             }
           }
 
+          // Relative rotation across the MGN carriage + toolhead body (excluding X-beam's own twist)
+          tmpRelCogRotVec.copy(tmpRotCogVec).sub(tmpBeamRotVec);
+
           if (modalElasticMeshes.length > 0) {
-            // Split total carriage-to-body compliance into:
-            //   1) Rail bearing roll (rigid rotation of MGN carriage + backplate + body base)
-            //   2) Backplate elastic bending (plateFrac; drops to ~2.5% for 5mm Al so plate stays dead flat!)
-            //   3) Toolhead body elastic flexing (bodyFrac; ~68.5% for 4mm ABS body!)
+            // Split relative carriage-to-body compliance into:
+            //   1) Rail bearing roll around the actual MGN ball-raceway contact line (zero rail detachment!)
+            //   2) Backplate elastic bending (plateFrac; 0% on self-contained CAD toolheads)
+            //   3) Toolhead body elastic flexing (bodyFrac)
             const railFrac = modalRailFlexFrac;
             const plateFrac = modalPlateFlexFrac;
             const bodyFrac = modalBodyFlexFrac;
+            const maxRailBearAngle = Math.min(maxStageAngle, 0.08 * Math.min(ampScale, 1.5) * motionScale);
 
-            tmpThetaRail.copy(tmpRotCogVec).multiplyScalar(railFrac);
-            setQuatFromClampedRotVec(tmpThetaRail, maxStageAngle, tmpRailQuat);
+            tmpThetaRail.copy(tmpRelCogRotVec).multiplyScalar(railFrac);
+            setQuatFromClampedRotVec(tmpThetaRail, maxRailBearAngle, tmpRailBearQuat);
+            tmpRailQuat.copy(tmpBeamQuat).multiply(tmpRailBearQuat);
             tmpInvRailQuat.copy(tmpRailQuat).invert();
 
+            // Pivot carriage block strictly around MGN ball-raceway center so rail & block never separate
+            tmpPivotBeam.copy(modalRailPivotLocal).applyQuaternion(tmpBeamQuat);
+            tmpPivotRail.copy(modalRailPivotLocal).applyQuaternion(tmpRailQuat);
+            tmpRailOrigin.copy(curTh).add(tmpPivotBeam).sub(tmpPivotRail);
+
             // Express backplate & body bending vectors in rail-rotated local frame
-            tmpThetaBp.copy(tmpRotCogVec).multiplyScalar(plateFrac).applyQuaternion(tmpInvRailQuat);
-            tmpThetaBody.copy(tmpRotCogVec).multiplyScalar(bodyFrac).applyQuaternion(tmpInvRailQuat);
+            tmpThetaBp.copy(tmpRelCogRotVec).multiplyScalar(plateFrac).applyQuaternion(tmpInvRailQuat);
+            tmpThetaBody.copy(tmpRelCogRotVec).multiplyScalar(bodyFrac).applyQuaternion(tmpInvRailQuat);
             setQuatFromClampedRotVec(tmpThetaBp, maxStageAngle, tmpBpQuat);
             setQuatFromClampedRotVec(tmpThetaBody, maxStageAngle, tmpBodyQuat);
 
@@ -1537,7 +986,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
             tmpCollarWorldQuat.copy(tmpRailQuat).multiply(tmpBpCollarQuat).multiply(tmpBodyQuat);
 
-            // Compute collar displacement already produced by pure rotations (rail + backplate + body)
+            // Compute collar displacement already produced by pure rotations (beam + rail + backplate + body)
             tmpCollarS2
               .copy(modalBodyRootLocal)
               .negate()
@@ -1550,6 +999,8 @@ export const PrinterViewport: React.FC<Props> = ({
               .applyQuaternion(tmpBpCollarQuat)
               .add(modalBackplatePivotLocal)
               .applyQuaternion(tmpRailQuat)
+              .add(tmpRailOrigin)
+              .sub(curTh)
               .sub(modalCollarRelToTh);
 
             // Residual translational shear (clamped so it never opposes bending or bulges backwards)
@@ -1561,14 +1012,21 @@ export const PrinterViewport: React.FC<Props> = ({
                 tmpUShearTotal.addScaledVector(tmpUFromRot, -dot / rotLenSq);
               }
             }
-            const maxShear = Math.max(0.03, baseStroke * 0.42);
+            const maxShear = Math.max(0.03 * motionScale, baseStroke * 0.42);
             const shearMag = tmpUShearTotal.length();
             if (shearMag > maxShear) {
               tmpUShearTotal.multiplyScalar(maxShear / shearMag);
             }
             tmpUShearLocal.copy(tmpUShearTotal).applyQuaternion(tmpInvRailQuat);
             tmpUBpShear.copy(tmpUShearLocal).multiplyScalar(plateFrac);
-            tmpUBodyShear.copy(tmpUShearLocal).multiplyScalar(bodyFrac);
+            // Self-contained CAD toolheads (plateFrac === 0) are bolted directly to the MGN carriage
+            // with 4x M3 screws: disallow unphysical translational sliding across the bolted face;
+            // show pure clamped elastic flexure (tmpThetaBody) emerging smoothly beyond the 4-bolt pad!
+            if (plateFrac <= 1e-6) {
+              tmpUBodyShear.set(0, 0, 0);
+            } else {
+              tmpUBodyShear.copy(tmpUShearLocal).multiplyScalar(bodyFrac);
+            }
 
             // Exact deformed world collar center (bit-for-bit identical to deformBodyMesh at local (0,0,0))
             tmpCollarS2.add(tmpUBodyShear);
@@ -1580,22 +1038,22 @@ export const PrinterViewport: React.FC<Props> = ({
               .add(modalBackplatePivotLocal)
               .addScaledVector(tmpUBpShear, modalCollarBpW)
               .applyQuaternion(tmpRailQuat)
-              .add(curTh);
+              .add(tmpRailOrigin);
 
             // Rigid rail-carriage bearing roll applied identically to MGN block, backplate base, and body base
             if (modalToolhead) {
-              modalToolhead.position.copy(curTh);
+              modalToolhead.position.copy(tmpRailOrigin);
               modalToolhead.quaternion.copy(tmpRailQuat);
             }
             if (modalBackplateGroup) {
-              modalBackplateGroup.position.copy(curTh);
+              modalBackplateGroup.position.copy(tmpRailOrigin);
               modalBackplateGroup.quaternion.copy(tmpRailQuat);
             }
             if (modalCogMarker) {
               modalCogMarker.position
                 .copy(modalCollarRelToTh)
                 .applyQuaternion(tmpRailQuat)
-                .add(curTh);
+                .add(tmpRailOrigin);
               modalCogMarker.quaternion.copy(tmpRailQuat);
             }
 
@@ -1652,16 +1110,25 @@ export const PrinterViewport: React.FC<Props> = ({
               }
             }
           } else {
-            tmpThetaRail.copy(tmpRotCogVec).multiplyScalar(modalRailFlexFrac);
-            setQuatFromClampedRotVec(tmpThetaRail, maxStageAngle, tmpRailQuat);
+            const maxRailBearAngle = Math.min(
+              maxStageAngle,
+              0.08 * Math.min(ampScale, 1.5) * motionScale
+            );
+            tmpThetaRail.copy(tmpRelCogRotVec).multiplyScalar(modalRailFlexFrac);
+            setQuatFromClampedRotVec(tmpThetaRail, maxRailBearAngle, tmpRailBearQuat);
+            tmpRailQuat.copy(tmpBeamQuat).multiply(tmpRailBearQuat);
+            tmpPivotBeam.copy(modalRailPivotLocal).applyQuaternion(tmpBeamQuat);
+            tmpPivotRail.copy(modalRailPivotLocal).applyQuaternion(tmpRailQuat);
+            tmpRailOrigin.copy(curTh).add(tmpPivotBeam).sub(tmpPivotRail);
             if (modalToolhead) {
+              modalToolhead.position.copy(tmpRailOrigin);
               modalToolhead.quaternion.copy(tmpRailQuat);
             }
             if (modalBackplateGroup) {
-              modalBackplateGroup.position.copy(curTh);
-              modalBackplateGroup.quaternion
-                .copy(tmpIdentQuat)
-                .slerp(tmpStage1Quat, Math.min(1, modalRailFlexFrac + modalPlateFlexFrac));
+              modalBackplateGroup.position.copy(tmpRailOrigin);
+              tmpThetaBp.copy(tmpRelCogRotVec).multiplyScalar(modalPlateFlexFrac);
+              setQuatFromClampedRotVec(tmpThetaBp, maxStageAngle, tmpBpQuat);
+              modalBackplateGroup.quaternion.copy(tmpRailQuat).multiply(tmpBpQuat);
             }
             if (modalCogMarker) {
               modalCogMarker.position.copy(curCog).add(modalCogOffset);
@@ -1707,6 +1174,10 @@ export const PrinterViewport: React.FC<Props> = ({
                 extractRotVecFromQuat(tmpRelQuat, maxStageAngle, tmpThetaBendLocal);
               }
             }
+            if (modalHotendBraced) {
+              // Lower Ti Hotend_Brace locks Tricorn heatsink coherently to the toolhead body
+              tmpThetaBendLocal.multiplyScalar(0.22);
+            }
 
             for (let mi = 0; mi < modalElasticMeshes.length; mi++) {
               const em = modalElasticMeshes[mi];
@@ -1750,6 +1221,9 @@ export const PrinterViewport: React.FC<Props> = ({
               tmpRelRotVec.copy(effNozRot).sub(effCogRot).multiplyScalar(toolPhaseMeters);
               const relMag = tmpRelRotVec.length();
               if (relMag > maxStageAngle) tmpRelRotVec.multiplyScalar(maxStageAngle / relMag);
+              if (modalHotendBraced) {
+                tmpRelRotVec.multiplyScalar(0.15);
+              }
 
               tmpTotalRotVec.copy(tmpRotCogVec).add(tmpRelRotVec);
               setQuatFromClampedRotVec(tmpTotalRotVec, maxStageAngle * 1.25, tmpHotendQuat);
@@ -2331,294 +1805,25 @@ export const PrinterViewport: React.FC<Props> = ({
 
     // Render 3D Solid Part FEA mode (Curved Tet10 Gmsh+scikit-fem OR Voxel Hex8)
     if (viewMode === "solid_part") {
-      if (showTetPart && tetFea) {
-        const sm = tetFea.surface_mesh;
-        const verts = sm.vertices_mm;
-        const tris = sm.triangles;
-        if (verts.length === 0 || tris.length === 0) return;
-
-        let minX = Infinity,
-          maxX = -Infinity,
-          minY = Infinity,
-          maxY = -Infinity,
-          minZ = Infinity,
-          maxZ = -Infinity;
-        for (const v of verts) {
-          minX = Math.min(minX, v[0]);
-          maxX = Math.max(maxX, v[0]);
-          minY = Math.min(minY, v[1]);
-          maxY = Math.max(maxY, v[1]);
-          minZ = Math.min(minZ, v[2]);
-          maxZ = Math.max(maxZ, v[2]);
-        }
-
-        const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
-        const partScale = 4.2 / span;
-        const pcx = 0.5 * (minX + maxX);
-        const pcy = 0.5 * (minY + maxY);
-        const dispMult = feaScale * 0.08;
-        const maxVm = Math.max(tetFea.max_von_mises_mpa, 0.05);
-
-        const toPartThree = (vx: number, vy: number, vz: number): [number, number, number] => [
-          (vx - pcx) * partScale,
-          (vz - minZ) * partScale + 0.4,
-          -(vy - pcy) * partScale,
-        ];
-
-        const geo = new THREE.BufferGeometry();
-        const isPerTriangleStress =
-          sm.von_mises_mpa.length === tris.length && tris.length !== verts.length;
-
-        if (!isPerTriangleStress) {
-          // Indexed smooth surface mesh with per-vertex stress heatmap
-          const positions = new Float32Array(verts.length * 3);
-          const colors = new Float32Array(verts.length * 3);
-          for (let i = 0; i < verts.length; i++) {
-            const v = verts[i];
-            const d = sm.displacements_mm[i] || [0, 0, 0];
-            const [tx, ty, tz] = toPartThree(
-              v[0] + d[0] * dispMult,
-              v[1] + d[1] * dispMult,
-              v[2] + d[2] * dispMult
-            );
-            positions[i * 3] = tx;
-            positions[i * 3 + 1] = ty;
-            positions[i * 3 + 2] = tz;
-
-            const vm = sm.von_mises_mpa[i] ?? 0;
-            const col = stressColor(vm / maxVm);
-            colors[i * 3] = col.r;
-            colors[i * 3 + 1] = col.g;
-            colors[i * 3 + 2] = col.b;
-          }
-
-          const indices = new Uint32Array(tris.length * 3);
-          for (let t = 0; t < tris.length; t++) {
-            indices[t * 3] = tris[t][0];
-            indices[t * 3 + 1] = tris[t][1];
-            indices[t * 3 + 2] = tris[t][2];
-          }
-
-          geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-          geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-          geo.setIndex(new THREE.BufferAttribute(indices, 1));
-          geo.computeVertexNormals();
-        } else {
-          // Fallback non-indexed triangles if stress is per-triangle
-          const positions = new Float32Array(tris.length * 9);
-          const colors = new Float32Array(tris.length * 9);
-          for (let t = 0; t < tris.length; t++) {
-            const tri = tris[t];
-            const col = stressColor((sm.von_mises_mpa[t] ?? 0) / maxVm);
-            for (let k = 0; k < 3; k++) {
-              const vi = tri[k];
-              const v = verts[vi];
-              const d = sm.displacements_mm[vi] || [0, 0, 0];
-              const [tx, ty, tz] = toPartThree(
-                v[0] + d[0] * dispMult,
-                v[1] + d[1] * dispMult,
-                v[2] + d[2] * dispMult
-              );
-              const off = t * 9 + k * 3;
-              positions[off] = tx;
-              positions[off + 1] = ty;
-              positions[off + 2] = tz;
-              colors[off] = col.r;
-              colors[off + 1] = col.g;
-              colors[off + 2] = col.b;
-            }
-          }
-          geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-          geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-          geo.computeVertexNormals();
-        }
-
-        const surfaceMat = new THREE.MeshStandardMaterial({
-          vertexColors: true,
-          roughness: 0.32,
-          metalness: 0.18,
-          side: THREE.DoubleSide,
-          polygonOffset: true,
-          polygonOffsetFactor: 1,
-          polygonOffsetUnits: 1,
-        });
-        const surfaceMesh = new THREE.Mesh(geo, surfaceMat);
-        group.add(surfaceMesh);
-
-        // Subtle conformal Gmsh tetrahedral wireframe overlay
-        const wireMat = new THREE.MeshBasicMaterial({
-          color: 0x0f172a,
-          wireframe: true,
-          transparent: true,
-          opacity: 0.18,
-          depthWrite: false,
-        });
-        const wireMesh = new THREE.Mesh(geo, wireMat);
-        group.add(wireMesh);
-
-        // Auto-frame camera nicely on undeformed part bounding box (CAD Z-up -> Three Y-up)
-        const frameKey = `tet:${tetFea.part_name}:${tetFea.num_elements}:${tetFea.num_vertices}`;
-        if (stateRef.current.lastFramedKey !== frameKey) {
-          const partBox = new THREE.Box3(
-            new THREE.Vector3((minX - pcx) * partScale, 0.4, -(maxY - pcy) * partScale),
-            new THREE.Vector3(
-              (maxX - pcx) * partScale,
-              (maxZ - minZ) * partScale + 0.4,
-              -(minY - pcy) * partScale
-            )
-          );
-          frameCameraToBox(stateRef.current.camera, stateRef.current.controls, partBox);
-          stateRef.current.lastFramedKey = frameKey;
-        }
-        return;
-      }
-
-      if (!solidFea || solidFea.voxels.length === 0) return;
-      const voxels = solidFea.voxels;
-      let minX = Infinity,
-        maxX = -Infinity,
-        minY = Infinity,
-        maxY = -Infinity,
-        minZ = Infinity,
-        maxZ = -Infinity;
-      for (const v of voxels) {
-        minX = Math.min(minX, v.center_mm[0]);
-        maxX = Math.max(maxX, v.center_mm[0]);
-        minY = Math.min(minY, v.center_mm[1]);
-        maxY = Math.max(maxY, v.center_mm[1]);
-        minZ = Math.min(minZ, v.center_mm[2]);
-        maxZ = Math.max(maxZ, v.center_mm[2]);
-      }
-      const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
-      const partScale = 4.2 / span; // Fit part nicely to ~4.2 scene units
-      const pcx = 0.5 * (minX + maxX);
-      const pcy = 0.5 * (minY + maxY);
-      const dispMult = feaScale * 0.08;
-
-      const boxSize = solidFea.voxel_size_mm * partScale * 0.96;
-      const boxGeo = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
-      const boxMat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.25 });
-      const inst = new THREE.InstancedMesh(boxGeo, boxMat, voxels.length);
-
-      const maxVm = Math.max(solidFea.max_von_mises_mpa, 0.05);
-      const dummy = new THREE.Object3D();
-      for (let i = 0; i < voxels.length; i++) {
-        const v = voxels[i];
-        const x = (v.center_mm[0] + v.disp_mm[0] * dispMult - pcx) * partScale;
-        const y = (v.center_mm[2] + v.disp_mm[2] * dispMult - minZ) * partScale + boxSize * 0.5 + 0.4;
-        const z = -(v.center_mm[1] + v.disp_mm[1] * dispMult - pcy) * partScale;
-        dummy.position.set(x, y, z);
-        dummy.updateMatrix();
-        inst.setMatrixAt(i, dummy.matrix);
-        inst.setColorAt(i, stressColor(v.von_mises_mpa / maxVm));
-      }
-      inst.instanceMatrix.needsUpdate = true;
-      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-      group.add(inst);
-
-      const frameKey = `hex:${solidFea.part_name}:${solidFea.num_elements}`;
-      if (stateRef.current.lastFramedKey !== frameKey) {
-        const halfBox = boxSize * 0.5;
-        const partBox = new THREE.Box3(
-          new THREE.Vector3((minX - pcx) * partScale - halfBox, 0.4, -(maxY - pcy) * partScale - halfBox),
-          new THREE.Vector3(
-            (maxX - pcx) * partScale + halfBox,
-            (maxZ - minZ) * partScale + boxSize + 0.4,
-            -(minY - pcy) * partScale + halfBox
-          )
-        );
-        frameCameraToBox(stateRef.current.camera, stateRef.current.controls, partBox);
-        stateRef.current.lastFramedKey = frameKey;
-      }
+      buildSolidPartFeaScene({
+        group,
+        showTetPart,
+        tetFea,
+        solidFea,
+        feaScale,
+        cameraState: stateRef.current,
+      });
       return;
     }
 
     // Render 3D SIMP Topology Optimization mode
     if (viewMode === "topology") {
-      if (!topoResult || topoResult.voxels.length === 0) return;
-      const allVoxels = topoResult.voxels;
-      let minX = Infinity,
-        maxX = -Infinity,
-        minY = Infinity,
-        maxY = -Infinity,
-        minZ = Infinity,
-        maxZ = -Infinity;
-      for (const v of allVoxels) {
-        minX = Math.min(minX, v.center_mm[0]);
-        maxX = Math.max(maxX, v.center_mm[0]);
-        minY = Math.min(minY, v.center_mm[1]);
-        maxY = Math.max(maxY, v.center_mm[1]);
-        minZ = Math.min(minZ, v.center_mm[2]);
-        maxZ = Math.max(maxZ, v.center_mm[2]);
-      }
-      const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
-      const partScale = 4.2 / span;
-      const pcx = 0.5 * (minX + maxX);
-      const pcy = 0.5 * (minY + maxY);
-      const dispMult = feaScale * 0.08;
-      const boxSize = topoResult.voxel_size_mm * partScale * 0.96;
-
-      const keptVoxels = allVoxels.filter((v) => v.kept);
-      const removedVoxels = allVoxels.filter((v) => !v.kept);
-      const dummy = new THREE.Object3D();
-
-      if (keptVoxels.length > 0) {
-        const keptGeo = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
-        const keptMat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.25 });
-        const keptInst = new THREE.InstancedMesh(keptGeo, keptMat, keptVoxels.length);
-        const maxVm = Math.max(topoResult.max_von_mises_mpa, 0.05);
-
-        for (let i = 0; i < keptVoxels.length; i++) {
-          const v = keptVoxels[i];
-          const x = (v.center_mm[0] + v.disp_mm[0] * dispMult - pcx) * partScale;
-          const y = (v.center_mm[2] + v.disp_mm[2] * dispMult - minZ) * partScale + boxSize * 0.5 + 0.4;
-          const z = -(v.center_mm[1] + v.disp_mm[1] * dispMult - pcy) * partScale;
-          dummy.position.set(x, y, z);
-          dummy.updateMatrix();
-          keptInst.setMatrixAt(i, dummy.matrix);
-          keptInst.setColorAt(i, stressColor(v.von_mises_mpa / maxVm));
-        }
-        keptInst.instanceMatrix.needsUpdate = true;
-        if (keptInst.instanceColor) keptInst.instanceColor.needsUpdate = true;
-        group.add(keptInst);
-      }
-
-      if (showCarvedGhost && removedVoxels.length > 0) {
-        const ghostSize = topoResult.voxel_size_mm * partScale * 0.94;
-        const ghostFillGeo = new THREE.BoxGeometry(ghostSize, ghostSize, ghostSize);
-        const ghostFillMat = new THREE.MeshBasicMaterial({
-          color: 0x94a3b8,
-          transparent: true,
-          opacity: 0.14,
-          depthWrite: false,
-        });
-        const ghostFillInst = new THREE.InstancedMesh(ghostFillGeo, ghostFillMat, removedVoxels.length);
-
-        const ghostWireGeo = new THREE.BoxGeometry(ghostSize, ghostSize, ghostSize);
-        const ghostWireMat = new THREE.MeshBasicMaterial({
-          color: 0x64748b,
-          wireframe: true,
-          transparent: true,
-          opacity: 0.14,
-          depthWrite: false,
-        });
-        const ghostWireInst = new THREE.InstancedMesh(ghostWireGeo, ghostWireMat, removedVoxels.length);
-
-        for (let i = 0; i < removedVoxels.length; i++) {
-          const v = removedVoxels[i];
-          const x = (v.center_mm[0] - pcx) * partScale;
-          const y = (v.center_mm[2] - minZ) * partScale + boxSize * 0.5 + 0.4;
-          const z = -(v.center_mm[1] - pcy) * partScale;
-          dummy.position.set(x, y, z);
-          dummy.updateMatrix();
-          ghostFillInst.setMatrixAt(i, dummy.matrix);
-          ghostWireInst.setMatrixAt(i, dummy.matrix);
-        }
-        ghostFillInst.instanceMatrix.needsUpdate = true;
-        ghostWireInst.instanceMatrix.needsUpdate = true;
-        group.add(ghostFillInst);
-        group.add(ghostWireInst);
-      }
+      buildTopologyOptScene({
+        group,
+        topoResult,
+        feaScale,
+        showCarvedGhost,
+      });
       return;
     }
 
@@ -2670,6 +1875,10 @@ export const PrinterViewport: React.FC<Props> = ({
         ? Math.min(selectedModeIdx, sim.modal_fea.modes.length - 1)
         : 0;
     const activeMode = sim.modal_fea.modes[modeIdx];
+    const activeSeverity = getModalVisualSeverity(activeMode);
+    const activeColorScale = modalScaleMode === "impact" ? activeSeverity.colorScale : 1.0;
+    stateRef.current.modalMotionScale =
+      modalScaleMode === "impact" ? activeSeverity.motionScale : 1.0;
     const mVecs: Record<string, THREE.Vector3> = {};
     let maxModalAmp = 0;
     if (activeMode) {
@@ -2703,11 +1912,11 @@ export const PrinterViewport: React.FC<Props> = ({
     const relModalNorm = Math.max(modalAmpNorm, maxRelModalAmp, 1e-6);
     const getModalNodeScalar = (nid: string): number => {
       const mv = mVecs[nid];
-      if (modalColorMode === "relative") {
-        const relDist = mv ? mv.distanceTo(bedModalVec) : bedModalVec.length();
-        return Math.min(1, relDist / relModalNorm);
-      }
-      return Math.min(1, (mv?.length() ?? 0) / modalAmpNorm);
+      const raw =
+        modalColorMode === "relative"
+          ? Math.min(1, (mv ? mv.distanceTo(bedModalVec) : bedModalVec.length()) / relModalNorm)
+          : Math.min(1, (mv?.length() ?? 0) / modalAmpNorm);
+      return raw * activeColorScale;
     };
 
     // Stress lookup (member-level and smooth nodal averages for corner blending)
@@ -2887,6 +2096,9 @@ export const PrinterViewport: React.FC<Props> = ({
         }
       }
 
+      const isCarbonBeam =
+        m.material.startsWith("carbon_fiber_") || m.material.includes("carbon");
+
       let matColor = new THREE.Color(0xffffff);
       let sensEmissive = new THREE.Color(0x000000);
       let sensEmissiveIntensity = 0;
@@ -2906,8 +2118,8 @@ export const PrinterViewport: React.FC<Props> = ({
         } else if (m.role === "brace") {
           matColor = new THREE.Color("#38bdf8");
         } else if (m.role === "gantry") {
-          matColor = m.material.includes("carbon")
-            ? new THREE.Color("#1f2937")
+          matColor = isCarbonBeam
+            ? new THREE.Color(m.color_hex || "#1b2028")
             : new THREE.Color("#f59e0b");
         } else if (m.role === "bed") {
           matColor = isBedPost
@@ -2932,8 +2144,8 @@ export const PrinterViewport: React.FC<Props> = ({
               ? 0.25
               : isOpenBraceBar
                 ? 0.82
-                : m.material.includes("carbon")
-                  ? 0.15
+                : isCarbonBeam
+                  ? 0.28
                   : 0.55,
         roughness:
           viewMode === "sensitivity"
@@ -2942,8 +2154,8 @@ export const PrinterViewport: React.FC<Props> = ({
               ? 0.4
               : isOpenBraceBar
                 ? 0.26
-                : m.material.includes("carbon")
-                  ? 0.65
+                : isCarbonBeam
+                  ? 0.36
                   : 0.35,
         transparent: memberOpacity < 1,
         opacity: memberOpacity,
@@ -3073,6 +2285,14 @@ export const PrinterViewport: React.FC<Props> = ({
             opacity: memberOpacity * 0.7,
           });
           group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
+        } else if (viewMode === "assembly" && isCarbonBeam && m.role === "gantry") {
+          const cfEdgesGeo = new THREE.EdgesGeometry(geo, 28);
+          const cfEdgesMat = new THREE.LineBasicMaterial({
+            color: 0x475569,
+            transparent: true,
+            opacity: memberOpacity * 0.55,
+          });
+          group.add(new THREE.LineSegments(cfEdgesGeo, cfEdgesMat));
         }
 
         // Continuous T-slot core accent strip on filled stationary extrusions (Assembly mode only)
@@ -3499,2032 +2719,22 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
 
-    // Assembly-only visual feedback: NEMA17 stepper motors, gantry brackets & 3D structural panels
+    // Assembly-only visual feedback: NEMA17 stepper motors, gantry brackets, linear rails, Z drives & 3D structural panels
     if (viewMode === "assembly") {
-      const bracketInfo = geom.gantry_brackets;
-      const bracketColor = new THREE.Color(bracketInfo?.color_hex ?? "#94a3b8");
-      const bracketIsCnc = Boolean(bracketInfo?.cnc_machined);
-      const bracketMat = new THREE.MeshStandardMaterial({
-        color: bracketColor,
-        metalness: bracketIsCnc ? 0.78 : 0.22,
-        roughness: bracketIsCnc ? 0.24 : 0.48,
+      buildAssemblyHardwareMeshes({
+        group,
+        sim,
+        basePos,
+        cx,
+        cy,
+        toolheadPunchIn,
+        adjointLens,
+        stiffenById,
+        tagInspectable,
       });
 
-      // NEMA17 stepper motor blocks & tinted motor-mount brackets at every node with role === "mount"
-      const mountNodes = geom.nodes.filter((n) => n.role === "mount" && basePos[n.id]);
-      if (mountNodes.length > 0) {
-        const motorBodyGeo = new THREE.BoxGeometry(0.42, 0.38, 0.42);
-        const motorBodyMat = new THREE.MeshStandardMaterial({
-          color: 0x1e2532,
-          metalness: 0.72,
-          roughness: 0.32,
-        });
-        const mountPlateGeo = new THREE.BoxGeometry(0.56, 0.085, 0.56);
-        const motorCapGeo = new THREE.BoxGeometry(0.43, 0.045, 0.43);
-        const motorCapMat = new THREE.MeshStandardMaterial({
-          color: 0x94a3b8,
-          metalness: 0.82,
-          roughness: 0.25,
-        });
-        const pulleyGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.14, 14);
-        const pulleyMat = new THREE.MeshStandardMaterial({
-          color: 0xe2e8f0,
-          metalness: 0.85,
-          roughness: 0.2,
-        });
-        const isDoubleShear = Boolean(geom.double_shear_pulleys ?? sim.spec.gantry.double_shear_pulleys);
-        const bearingCapGeo = isDoubleShear ? new THREE.CylinderGeometry(0.115, 0.115, 0.04, 14) : null;
-        const bearingCapMat = isDoubleShear
-          ? new THREE.MeshStandardMaterial({
-              color: 0x38bdf8,
-              metalness: 0.65,
-              roughness: 0.28,
-            })
-          : null;
 
-        for (const n of mountNodes) {
-          const p = basePos[n.id];
-          const inwardX = Math.abs(p.x) > 0.2 ? -Math.sign(p.x) * 0.16 : 0;
-          const inwardZ = Math.abs(p.z) > 0.2 ? -Math.sign(p.z) * 0.16 : 0;
 
-          const motorGroup = new THREE.Group();
-          motorGroup.position.set(p.x + inwardX, p.y, p.z + inwardZ);
-
-          const bodyMesh = new THREE.Mesh(motorBodyGeo, motorBodyMat);
-          bodyMesh.position.y = -0.19;
-          motorGroup.add(bodyMesh);
-
-          // Tinted motor mount bracket plate bridging the stepper & corner extrusion
-          const plateMesh = new THREE.Mesh(mountPlateGeo, bracketMat);
-          plateMesh.position.set(-inwardX * 0.35, 0.035, -inwardZ * 0.35);
-          motorGroup.add(plateMesh);
-
-          const capMesh = new THREE.Mesh(motorCapGeo, motorCapMat);
-          capMesh.position.y = 0.02;
-          motorGroup.add(capMesh);
-
-          const pulleyMesh = new THREE.Mesh(pulleyGeo, pulleyMat);
-          pulleyMesh.position.y = 0.13;
-          motorGroup.add(pulleyMesh);
-
-          if (bearingCapGeo && bearingCapMat) {
-            const topBearing = new THREE.Mesh(bearingCapGeo, bearingCapMat);
-            topBearing.position.y = 0.22;
-            motorGroup.add(topBearing);
-          }
-
-          group.add(motorGroup);
-        }
-      }
-
-      // XY-joint carriage bracket blocks (y_car_l / y_car_r) tinted with gantry_brackets.color_hex
-      const xyJointNodes = geom.nodes.filter(
-        (n) => (n.id === "y_car_l" || n.id === "y_car_r") && basePos[n.id]
-      );
-      if (xyJointNodes.length > 0) {
-        const xyJointGeo = new THREE.BoxGeometry(0.32, 0.24, 0.34);
-        for (const n of xyJointNodes) {
-          const jointMesh = new THREE.Mesh(xyJointGeo, bracketMat);
-          jointMesh.position.copy(basePos[n.id]);
-          group.add(jointMesh);
-        }
-      }
-
-      if (mountNodes.length === 0 && xyJointNodes.length === 0) {
-        bracketMat.dispose();
-      }
-
-      // Hardened-steel 3D linear rails bolted onto the chosen faces of X-gantry & CoreXY Y-rail beams
-      {
-        const lr = geom.linear_rails;
-        const xRailMount: XRailMountType =
-          lr?.x_rail_mount ??
-          sim.spec.gantry.x_rail_mount ??
-          (sim.spec.gantry.dual_x_rails ? "dual_top_bottom" : "front");
-        const yRailMount: YRailMountType =
-          lr?.y_rail_mount ?? sim.spec.gantry.y_rail_mount ?? "top";
-        const xRailProf = lr?.x_rail_profile ?? sim.spec.gantry.x_rail_profile ?? "mgn12_rail";
-        const yRailProf = lr?.y_rail_profile ?? sim.spec.gantry.y_rail_profile ?? "mgn9_rail";
-        const xIsMgn9 = xRailProf.includes("mgn9");
-        const xIsMgn15 = xRailProf.includes("mgn15");
-        const xRailW = Math.max(
-          (lr?.x_rail_width_mm ?? (xIsMgn9 ? 9.0 : xIsMgn15 ? 15.0 : 12.0)) * SCALE,
-          0.075
-        );
-        const xRailH = Math.max(
-          (lr?.x_rail_height_mm ?? (xIsMgn9 ? 6.5 : xIsMgn15 ? 10.0 : 8.0)) * SCALE,
-          0.055
-        );
-        const yRailW = Math.max(
-          (lr?.y_rail_width_mm ?? (yRailProf.includes("mgn9") ? 9.0 : yRailProf.includes("mgn15") ? 15.0 : 12.0)) * SCALE,
-          0.075
-        );
-        const yRailH = Math.max(
-          (lr?.y_rail_height_mm ?? (yRailProf.includes("mgn9") ? 6.5 : yRailProf.includes("mgn15") ? 10.0 : 8.0)) * SCALE,
-          0.055
-        );
-
-        const railSteelMat = new THREE.MeshStandardMaterial({
-          color: 0xa6b4c4,
-          metalness: 0.86,
-          roughness: 0.22,
-        });
-        const railEdgeMat = new THREE.LineBasicMaterial({
-          color: 0xe2e8f0,
-          transparent: true,
-          opacity: 0.34,
-        });
-        let railMatUsed = false;
-
-        const addRailBar = (
-          geo: THREE.BoxGeometry,
-          edgesGeo: THREE.EdgesGeometry,
-          pos: THREE.Vector3
-        ) => {
-          railMatUsed = true;
-          const barMesh = new THREE.Mesh(geo, railSteelMat);
-          barMesh.position.copy(pos);
-          group.add(barMesh);
-          const outline = new THREE.LineSegments(edgesGeo, railEdgeMat);
-          outline.position.copy(pos);
-          group.add(outline);
-        };
-
-        // X gantry linear rail(s) on x_gantry_l + x_gantry_r (CoreXY & Cartesian)
-        const xGantryL = geom.members.find((m) => m.id === "x_gantry_l");
-        const xGantryR = geom.members.find((m) => m.id === "x_gantry_r");
-        if (xGantryL && xGantryR && basePos[xGantryL.start_id] && basePos[xGantryR.end_id]) {
-          const pL = basePos[xGantryL.start_id];
-          const pR = basePos[xGantryR.end_id];
-          const railLenX = Math.max(Math.abs(pR.x - pL.x) - 0.14, 0.15);
-          const beamCX = 0.5 * (pL.x + pR.x);
-          const beamCY = 0.5 * (pL.y + pR.y); // Three.js Y = CAD Z
-          const beamCZ = 0.5 * (pL.z + pR.z); // Three.js Z = -CAD Y
-          const beamHalfCadY = 0.5 * Math.max(xGantryL.width_mm * SCALE, 0.06);
-          const beamHalfCadZ = 0.5 * Math.max(xGantryL.height_mm * SCALE, 0.06);
-
-          // Subtle M3 counterbore bolt holes + dark longitudinal ball-raceway grooves along the rail
-          const boltPitch = (xIsMgn9 ? 20.0 : xIsMgn15 ? 40.0 : 25.0) * SCALE;
-          const boltRadius = (xIsMgn9 ? 1.8 : xIsMgn15 ? 2.8 : 2.3) * SCALE;
-          const boltCounterboreGeo = new THREE.CylinderGeometry(boltRadius, boltRadius, 0.008, 10);
-          const boltCounterboreMat = new THREE.MeshStandardMaterial({
-            color: 0x1e293b,
-            metalness: 0.45,
-            roughness: 0.58,
-          });
-          const grooveMat = new THREE.MeshStandardMaterial({
-            color: 0x475569,
-            metalness: 0.72,
-            roughness: 0.4,
-          });
-          const halfSpan = Math.max(railLenX * 0.5 - 0.1, 0);
-          const boltCount = Math.max(1, Math.floor((halfSpan * 2) / boltPitch) + 1);
-          const startBoltX = beamCX - ((boltCount - 1) * boltPitch) * 0.5;
-
-          const addXCounterboresAndGrooves = (
-            face: "front" | "top" | "bottom",
-            railCenter: THREE.Vector3
-          ) => {
-            // Two subtle longitudinal ball-race grooves along the sides of the rail
-            const grooveGeo =
-              face === "front"
-                ? new THREE.BoxGeometry(railLenX - 0.01, 0.012, 0.014)
-                : new THREE.BoxGeometry(railLenX - 0.01, 0.014, 0.012);
-            for (const side of [-1, 1]) {
-              const gMesh = new THREE.Mesh(grooveGeo, grooveMat);
-              if (face === "front") {
-                gMesh.position.set(
-                  railCenter.x,
-                  railCenter.y + side * (xRailW * 0.5 - 0.004),
-                  railCenter.z + xRailH * 0.1
-                );
-              } else {
-                gMesh.position.set(
-                  railCenter.x,
-                  railCenter.y + (face === "top" ? 1 : -1) * xRailH * 0.1,
-                  railCenter.z + side * (xRailW * 0.5 - 0.004)
-                );
-              }
-              group.add(gMesh);
-            }
-            // M3 mounting counterbore dots along the outer rail face
-            for (let bi = 0; bi < boltCount; bi++) {
-              const bx = startBoltX + bi * boltPitch;
-              const hole = new THREE.Mesh(boltCounterboreGeo, boltCounterboreMat);
-              if (face === "front") {
-                hole.rotation.x = Math.PI * 0.5;
-                hole.position.set(bx, railCenter.y, railCenter.z + xRailH * 0.5 + 0.001);
-              } else if (face === "top") {
-                hole.position.set(bx, railCenter.y + xRailH * 0.5 + 0.001, railCenter.z);
-              } else {
-                hole.position.set(bx, railCenter.y - xRailH * 0.5 - 0.001, railCenter.z);
-              }
-              group.add(hole);
-            }
-          };
-
-          if (xRailMount === "front") {
-            // CAD -Y face -> Three.js +Z face; wide face in CAD Z (Three.js Y), thickness in CAD -Y (Three.js +Z)
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailW, xRailH);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
-            const pos = new THREE.Vector3(beamCX, beamCY, beamCZ + beamHalfCadY + xRailH * 0.5);
-            addRailBar(xGeo, xEdges, pos);
-            addXCounterboresAndGrooves("front", pos);
-          } else if (xRailMount === "top") {
-            // CAD +Z face -> Three.js +Y face; wide face in CAD Y (Three.js Z), thickness in CAD +Z (Three.js +Y)
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
-            const pos = new THREE.Vector3(beamCX, beamCY + beamHalfCadZ + xRailH * 0.5, beamCZ);
-            addRailBar(xGeo, xEdges, pos);
-            addXCounterboresAndGrooves("top", pos);
-          } else if (xRailMount === "bottom") {
-            // CAD -Z face -> Three.js -Y face
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
-            const pos = new THREE.Vector3(beamCX, beamCY - beamHalfCadZ - xRailH * 0.5, beamCZ);
-            addRailBar(xGeo, xEdges, pos);
-            addXCounterboresAndGrooves("bottom", pos);
-          } else if (xRailMount === "dual_top_bottom") {
-            // Dual rails on both +Z (+Y Three.js) and -Z (-Y Three.js) faces
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
-            const posTop = new THREE.Vector3(beamCX, beamCY + beamHalfCadZ + xRailH * 0.5, beamCZ);
-            const posBot = new THREE.Vector3(beamCX, beamCY - beamHalfCadZ - xRailH * 0.5, beamCZ);
-            addRailBar(xGeo, xEdges, posTop);
-            addXCounterboresAndGrooves("top", posTop);
-            addRailBar(xGeo, xEdges, posBot);
-            addXCounterboresAndGrooves("bottom", posBot);
-          }
-        }
-
-        // CoreXY Y-axis linear rails on left (x=0) and right (x=W) Y-rail extrusions
-        if (geom.architecture === "corexy") {
-          const yRailLF = geom.members.find((m) => m.id === "y_rail_l_f");
-          const yRailRF = geom.members.find((m) => m.id === "y_rail_r_f");
-          const pLF = basePos["g_fl"];
-          const pLR = basePos["g_rl"];
-          const pRF = basePos["g_fr"];
-          const pRR = basePos["g_rr"];
-          if (yRailLF && yRailRF && pLF && pLR && pRF && pRR) {
-            const railLenY = Math.max(Math.abs(pLR.z - pLF.z) - 0.16, 0.15);
-            const beamHalfCadX = 0.5 * Math.max(yRailLF.width_mm * SCALE, 0.06);
-            const beamHalfCadZ = 0.5 * Math.max(yRailLF.height_mm * SCALE, 0.06);
-            const leftCenter = new THREE.Vector3(
-              pLF.x,
-              0.5 * (pLF.y + pLR.y),
-              0.5 * (pLF.z + pLR.z)
-            );
-            const rightCenter = new THREE.Vector3(
-              pRF.x,
-              0.5 * (pRF.y + pRR.y),
-              0.5 * (pRF.z + pRR.z)
-            );
-
-            if (yRailMount === "top") {
-              const yGeo = new THREE.BoxGeometry(yRailW, yRailH, railLenY);
-              const yEdges = new THREE.EdgesGeometry(yGeo);
-              addRailBar(
-                yGeo,
-                yEdges,
-                leftCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0))
-              );
-              addRailBar(
-                yGeo,
-                yEdges,
-                rightCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0))
-              );
-            } else if (yRailMount === "bottom") {
-              const yGeo = new THREE.BoxGeometry(yRailW, yRailH, railLenY);
-              const yEdges = new THREE.EdgesGeometry(yGeo);
-              addRailBar(
-                yGeo,
-                yEdges,
-                leftCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0))
-              );
-              addRailBar(
-                yGeo,
-                yEdges,
-                rightCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0))
-              );
-            } else if (yRailMount === "inner") {
-              // +X (inner) face of left Y extrusion and -X (inner) face of right Y extrusion
-              const yGeo = new THREE.BoxGeometry(yRailH, yRailW, railLenY);
-              const yEdges = new THREE.EdgesGeometry(yGeo);
-              addRailBar(
-                yGeo,
-                yEdges,
-                leftCenter.clone().add(new THREE.Vector3(beamHalfCadX + yRailH * 0.5, 0, 0))
-              );
-              addRailBar(
-                yGeo,
-                yEdges,
-                rightCenter.clone().add(new THREE.Vector3(-(beamHalfCadX + yRailH * 0.5), 0, 0))
-              );
-            }
-          }
-        }
-
-        if (!railMatUsed) {
-          railSteelMat.dispose();
-          railEdgeMat.dispose();
-        }
-      }
-
-      // Z Linear Rails & MGN Carriages / Smooth Chrome Rods (from geom.z_rails)
-      if (geom.z_rails && geom.z_rails.length > 0) {
-        const zRailSteelMat = new THREE.MeshStandardMaterial({
-          color: 0x9aa6b4,
-          metalness: 0.82,
-          roughness: 0.24,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.18 : 1.0,
-        });
-        const zRodChromeMat = new THREE.MeshStandardMaterial({
-          color: 0xe2e8f0,
-          metalness: 0.92,
-          roughness: 0.14,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.18 : 1.0,
-        });
-        const zCarriageBodyMat = new THREE.MeshStandardMaterial({
-          color: 0x64748b,
-          metalness: 0.72,
-          roughness: 0.3,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.18 : 1.0,
-        });
-        const zCarriageCapMat = new THREE.MeshStandardMaterial({
-          color: 0x14532d,
-          metalness: 0.15,
-          roughness: 0.55,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.18 : 1.0,
-        });
-        const zRailEdgeMat = new THREE.LineBasicMaterial({
-          color: 0xdbeafe,
-          transparent: true,
-          opacity: toolheadPunchIn ? 0.08 : 0.32,
-        });
-
-        let zRailUsed = false;
-        let zRodUsed = false;
-        let zCapUsed = false;
-
-        for (const zr of geom.z_rails) {
-          if (zr.profile_id === "none") continue;
-          const p0 = toThree(zr.start_mm, cx, cy);
-          const p1 = toThree(zr.end_mm, cx, cy);
-          const axisVec = new THREE.Vector3().subVectors(p1, p0);
-          const railLen = axisVec.length();
-          if (railLen < 1e-3) continue;
-          const axisDir = axisVec.clone().divideScalar(railLen);
-
-          const zMidX = 0.5 * (p0.x + p1.x);
-          const zMidZ = 0.5 * (p0.z + p1.z);
-          const carY = zr.carriage_z_mm * SCALE;
-          const isSmoothRod = zr.profile_id.startsWith("steel_rod");
-
-          const zRailInspect: InspectedPartInfo = {
-            key: `z_rail:${zr.id}`,
-            name: isSmoothRod
-              ? `Z Smooth Rod (${zr.profile_id.replace("steel_rod_", "")})`
-              : `Z Linear Rail (${zr.profile_id.includes("mgn9") ? "MGN9H" : "MGN12H"})`,
-            subsystem: "bed",
-            partGroupId: "bed_support",
-            role: "bed",
-            material: "hardened_steel",
-            profile: zr.profile_id,
-          };
-          const zCarInspect: InspectedPartInfo = {
-            ...zRailInspect,
-            key: `z_carriage:${zr.id}`,
-            name: isSmoothRod
-              ? `Z Linear Bearing (${zr.profile_id.replace("steel_rod_", "LM")}UU)`
-              : `Z Rail Carriage (${zr.profile_id.includes("mgn9") ? "MGN9H" : "MGN12H"})`,
-          };
-
-          if (isSmoothRod) {
-            zRodUsed = true;
-            const diaMm = zr.profile_id.includes("12")
-              ? 12
-              : zr.profile_id.includes("10")
-                ? 10
-                : 8;
-            const rodR = Math.max(diaMm * 0.5 * SCALE, 0.036);
-            const rodGeo = new THREE.CylinderGeometry(rodR, rodR, 1, 14);
-            const rodMesh = new THREE.Mesh(rodGeo, zRodChromeMat);
-            orientBeamMesh(rodMesh, p0, p1);
-            tagInspectable(rodMesh, zRailInspect);
-            group.add(rodMesh);
-
-            // Linear ball bearing sleeve (LM*UU) at carriage_z_mm
-            const sleeveGeo = new THREE.CylinderGeometry(rodR * 1.85, rodR * 1.85, 0.28, 16);
-            const sleeveMesh = new THREE.Mesh(sleeveGeo, zCarriageBodyMat);
-            sleeveMesh.position.set(zMidX, carY, zMidZ);
-            tagInspectable(sleeveMesh, zCarInspect);
-            group.add(sleeveMesh);
-          } else {
-            zRailUsed = true;
-            zCapUsed = true;
-            const isMgn9 = zr.profile_id.includes("mgn9");
-            const rW = (isMgn9 ? 9.0 : 12.0) * SCALE;
-            const rH = (isMgn9 ? 6.5 : 8.0) * SCALE;
-            // Convert CAD normal [nx, ny, nz] -> Three.js normal (nx, nz, -ny)
-            const normVec = new THREE.Vector3(
-              zr.normal[0],
-              zr.normal[2],
-              -zr.normal[1]
-            );
-            normVec.addScaledVector(axisDir, -normVec.dot(axisDir));
-            if (normVec.lengthSq() < 1e-6) normVec.set(0, 0, 1);
-            else normVec.normalize();
-            const widthVec = new THREE.Vector3().crossVectors(axisDir, normVec).normalize();
-            const basisMat = new THREE.Matrix4().makeBasis(widthVec, axisDir, normVec);
-            const railQuat = new THREE.Quaternion().setFromRotationMatrix(basisMat);
-
-            const barGeo = new THREE.BoxGeometry(rW, railLen, rH);
-            const barMesh = new THREE.Mesh(barGeo, zRailSteelMat);
-            barMesh.position
-              .copy(p0)
-              .add(p1)
-              .multiplyScalar(0.5)
-              .addScaledVector(normVec, rH * 0.5);
-            barMesh.quaternion.copy(railQuat);
-            tagInspectable(barMesh, zRailInspect);
-            group.add(barMesh);
-
-            const barOutline = new THREE.LineSegments(new THREE.EdgesGeometry(barGeo), zRailEdgeMat);
-            barOutline.position.copy(barMesh.position);
-            barOutline.quaternion.copy(railQuat);
-            group.add(barOutline);
-
-            // MGN metallic carriage block + wiper end-caps at carriage_z_mm
-            const carW = (isMgn9 ? 20 : 27) * SCALE;
-            const carL = (isMgn9 ? 36 : 44) * SCALE;
-            const carH = (isMgn9 ? 10 : 13) * SCALE;
-            const carGroup = new THREE.Group();
-            const carBody = new THREE.Mesh(
-              new THREE.BoxGeometry(carW, carL * 0.72, carH),
-              zCarriageBodyMat
-            );
-            tagInspectable(carBody, zCarInspect);
-            carGroup.add(carBody);
-
-            const capGeo = new THREE.BoxGeometry(carW * 0.96, carL * 0.14, carH * 0.94);
-            const topCap = new THREE.Mesh(capGeo, zCarriageCapMat);
-            topCap.position.y = carL * 0.43;
-            carGroup.add(topCap);
-            const botCap = new THREE.Mesh(capGeo, zCarriageCapMat);
-            botCap.position.y = -carL * 0.43;
-            carGroup.add(botCap);
-
-            carGroup.position
-              .set(zMidX, carY, zMidZ)
-              .addScaledVector(normVec, rH * 0.5 + carH * 0.42);
-            carGroup.quaternion.copy(railQuat);
-            group.add(carGroup);
-          }
-        }
-
-        if (!zRailUsed) {
-          zRailSteelMat.dispose();
-          zRailEdgeMat.dispose();
-        }
-        if (!zRodUsed) zRodChromeMat.dispose();
-        if (!zCapUsed) zCarriageCapMat.dispose();
-        if (!zRailUsed && !zRodUsed) zCarriageBodyMat.dispose();
-      }
-
-      // Z Leadscrews / Ballscrews / Z-Belts & Z-Motors (from geom.z_leadscrews)
-      if (geom.z_leadscrews && geom.z_leadscrews.length > 0) {
-        const leadSteelMat = new THREE.MeshStandardMaterial({
-          color: 0xb8c4d4,
-          metalness: 0.84,
-          roughness: 0.28,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const ballChromeMat = new THREE.MeshStandardMaterial({
-          color: 0xe6eef8,
-          metalness: 0.94,
-          roughness: 0.12,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const brassNutMat = new THREE.MeshStandardMaterial({
-          color: 0xd4a017,
-          metalness: 0.85,
-          roughness: 0.24,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const pomNutMat = new THREE.MeshStandardMaterial({
-          color: 0x1e2430,
-          metalness: 0.12,
-          roughness: 0.72,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const ballNutMat = new THREE.MeshStandardMaterial({
-          color: 0x94a3b8,
-          metalness: 0.88,
-          roughness: 0.2,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const zBeltMat = new THREE.MeshStandardMaterial({
-          color: 0x181c24,
-          metalness: 0.08,
-          roughness: 0.86,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const zPulleyMat = new THREE.MeshStandardMaterial({
-          color: 0xdce4ee,
-          metalness: 0.84,
-          roughness: 0.22,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const couplerMat = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
-          metalness: 0.75,
-          roughness: 0.25,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const zMotorBodyMat = new THREE.MeshStandardMaterial({
-          color: 0x1e2532,
-          metalness: 0.72,
-          roughness: 0.34,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const zMotorCapMat = new THREE.MeshStandardMaterial({
-          color: 0x94a3b8,
-          metalness: 0.82,
-          roughness: 0.25,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const wobbleXCopperMat = new THREE.MeshStandardMaterial({
-          color: 0xd97736,
-          metalness: 0.88,
-          roughness: 0.2,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const gearboxMetalMat = new THREE.MeshStandardMaterial({
-          color: 0xb8c4d4,
-          metalness: 0.9,
-          roughness: 0.2,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const gearboxHousingMat = new THREE.MeshStandardMaterial({
-          color: 0x334155,
-          metalness: 0.8,
-          roughness: 0.3,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-
-        let leadUsed = false;
-        let ballChromeUsed = false;
-        let ballNutUsed = false;
-        let brassUsed = false;
-        let pomUsed = false;
-        let beltUsed = false;
-        let couplerUsed = false;
-        let zMotorUsed = false;
-        let wobbleXUsed = false;
-        let gearboxUsed = false;
-
-        const zMotorBodyGeo = new THREE.BoxGeometry(0.42, 0.38, 0.42);
-        const zMotorCapGeo = new THREE.BoxGeometry(0.43, 0.045, 0.43);
-
-        for (const zl of geom.z_leadscrews) {
-          const p0 = toThree(zl.start_mm, cx, cy);
-          const p1 = toThree(zl.end_mm, cx, cy);
-          const mPos = toThree(zl.motor_pos_mm, cx, cy);
-          const midX = 0.5 * (p0.x + p1.x);
-          const midZ = 0.5 * (p0.z + p1.z);
-          const nutY = zl.nut_z_mm * SCALE;
-          const driveLen = p0.distanceTo(p1);
-          if (driveLen < 1e-3) continue;
-
-          const mechId = zl.mechanism_id || "";
-          const isWobbleX = mechId.includes("wobblex");
-          const isPlanetary = mechId.includes("planetary");
-          const isWorm = mechId.includes("worm");
-          const isHeavyBall = mechId.includes("sfu1605");
-
-          const mechNice = mechId.replace(/_/g, " ").toUpperCase();
-          const zDriveInspect: InspectedPartInfo = {
-            key: `z_drive:${zl.id}`,
-            name:
-              zl.kind === "ballscrew"
-                ? `Z Ballscrew (${mechNice})`
-                : zl.kind === "belt"
-                  ? `Z Drive Belt (${mechNice})`
-                  : `Z Leadscrew (${mechNice})`,
-            subsystem: "bed",
-            partGroupId: "bed_support",
-            role: "bed",
-            material: zl.kind === "belt" ? "gt2_belt" : "steel",
-            profile: mechId,
-          };
-          const zMotorInspect: InspectedPartInfo = {
-            key: `z_motor:${zl.id}`,
-            name: isPlanetary
-              ? `NEMA17 + 5:1 Planetary Z-Motor (${zl.id})`
-              : isWorm
-                ? `NEMA17 + 20:1 Worm Z-Motor (${zl.id})`
-                : `NEMA17 Z-Axis Motor (${zl.id})`,
-            subsystem: "bed",
-            partGroupId: "bed_support",
-            role: "bed",
-            material: "nema17_stepper",
-            profile: mechId,
-          };
-
-          // NEMA17 Z-stepper motor at motor_pos_mm
-          zMotorUsed = true;
-          const zMotGrp = new THREE.Group();
-          const zMotBody = new THREE.Mesh(zMotorBodyGeo, zMotorBodyMat);
-          zMotBody.position.y = -0.19;
-          tagInspectable(zMotBody, zMotorInspect);
-          zMotGrp.add(zMotBody);
-          const zMotCap = new THREE.Mesh(zMotorCapGeo, zMotorCapMat);
-          zMotCap.position.y = 0.02;
-          zMotGrp.add(zMotCap);
-
-          // Metallic gearbox collar on Z motor for Planetary / Worm belted-Z mods
-          if (isPlanetary) {
-            gearboxUsed = true;
-            const gCollar = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.185, 0.195, 0.22, 20),
-              gearboxMetalMat
-            );
-            gCollar.position.y = 0.15;
-            tagInspectable(gCollar, zMotorInspect);
-            zMotGrp.add(gCollar);
-
-            const gBaseFlange = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.215, 0.215, 0.04, 20),
-              gearboxHousingMat
-            );
-            gBaseFlange.position.y = 0.055;
-            zMotGrp.add(gBaseFlange);
-
-            const gTopBoss = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.145, 0.165, 0.055, 20),
-              gearboxHousingMat
-            );
-            gTopBoss.position.y = 0.285;
-            zMotGrp.add(gTopBoss);
-          } else if (isWorm) {
-            gearboxUsed = true;
-            const wormBlock = new THREE.Mesh(
-              new THREE.BoxGeometry(0.36, 0.26, 0.34),
-              gearboxHousingMat
-            );
-            wormBlock.position.y = 0.17;
-            tagInspectable(wormBlock, zMotorInspect);
-            zMotGrp.add(wormBlock);
-
-            const wormDrum = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.14, 0.14, 0.38, 18),
-              gearboxMetalMat
-            );
-            wormDrum.rotation.z = Math.PI * 0.5;
-            wormDrum.position.y = 0.18;
-            tagInspectable(wormDrum, zMotorInspect);
-            zMotGrp.add(wormDrum);
-
-            const wormCollar = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.115, 0.125, 0.06, 16),
-              gearboxMetalMat
-            );
-            wormCollar.position.y = 0.33;
-            zMotGrp.add(wormCollar);
-          }
-
-          zMotGrp.position.copy(mPos);
-          group.add(zMotGrp);
-
-          if (zl.kind === "belt") {
-            beltUsed = true;
-            const beltW = Math.max((zl.diameter_mm || 6) * SCALE, 0.055);
-            const beltT = 0.018;
-            const pulleyR = 0.09;
-            const strandGeo = new THREE.BoxGeometry(beltW, 1, beltT);
-
-            const s0A = p0.clone().add(new THREE.Vector3(0, 0, pulleyR));
-            const s1A = p1.clone().add(new THREE.Vector3(0, 0, pulleyR));
-            const strandA = new THREE.Mesh(strandGeo, zBeltMat);
-            orientBeamMesh(strandA, s0A, s1A);
-            tagInspectable(strandA, zDriveInspect);
-            group.add(strandA);
-
-            const s0B = p0.clone().add(new THREE.Vector3(0, 0, -pulleyR));
-            const s1B = p1.clone().add(new THREE.Vector3(0, 0, -pulleyR));
-            const strandB = new THREE.Mesh(strandGeo, zBeltMat);
-            orientBeamMesh(strandB, s0B, s1B);
-            tagInspectable(strandB, zDriveInspect);
-            group.add(strandB);
-
-            // Bottom 80T drive pulley + top idler pulley
-            const drive80t = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.18, 0.18, beltW * 1.15, 20),
-              zPulleyMat
-            );
-            drive80t.rotation.z = Math.PI * 0.5;
-            drive80t.position.set(p0.x, Math.max(p0.y + 0.08, mPos.y + 0.12), p0.z);
-            tagInspectable(drive80t, zDriveInspect);
-            group.add(drive80t);
-
-            const topIdler = new THREE.Mesh(
-              new THREE.CylinderGeometry(pulleyR * 1.15, pulleyR * 1.15, beltW * 1.2, 16),
-              zPulleyMat
-            );
-            topIdler.rotation.z = Math.PI * 0.5;
-            topIdler.position.copy(p1);
-            group.add(topIdler);
-
-            // Z-belt clamp block at nut_z_mm
-            pomUsed = true;
-            const clampBlock = new THREE.Mesh(
-              new THREE.BoxGeometry(0.18, 0.22, pulleyR * 2.4),
-              pomNutMat
-            );
-            clampBlock.position.set(midX, nutY, midZ);
-            tagInspectable(clampBlock, zDriveInspect);
-            group.add(clampBlock);
-          } else {
-            const isBall = zl.kind === "ballscrew" || mechId.includes("sfu");
-            const nominalDiamMm = zl.diameter_mm || (isHeavyBall ? 16 : isBall ? 12 : 8);
-            const rShaft = Math.max(
-              nominalDiamMm * 0.5 * SCALE,
-              isHeavyBall ? 0.078 : 0.036
-            );
-            const shaftGeo = new THREE.CylinderGeometry(rShaft, rShaft, 1, 16);
-            const shaftMat = isBall ? ballChromeMat : leadSteelMat;
-            if (isBall) {
-              ballChromeUsed = true;
-              ballNutUsed = true;
-            } else {
-              leadUsed = true;
-            }
-
-            const shaftMesh = new THREE.Mesh(shaftGeo, shaftMat);
-            orientBeamMesh(shaftMesh, p0, p1);
-            tagInspectable(shaftMesh, zDriveInspect);
-            group.add(shaftMesh);
-
-            // Nut block at nut_z_mm
-            const nutGrp = new THREE.Group();
-            if (isBall) {
-              // SFU1204 / SFU1605 flanged ballnut cylinder + BK10 or heavier FK12 bearing support block
-              const nutH = isHeavyBall ? 0.42 : 0.34;
-              const nutR = rShaft * (isHeavyBall ? 2.15 : 2.0);
-              const flangeR = rShaft * (isHeavyBall ? 3.25 : 3.1);
-              const flangeH = isHeavyBall ? 0.085 : 0.06;
-              const nutCyl = new THREE.Mesh(
-                new THREE.CylinderGeometry(nutR, nutR, nutH, 18),
-                ballNutMat
-              );
-              tagInspectable(nutCyl, zDriveInspect);
-              nutGrp.add(nutCyl);
-              const nutFlange = new THREE.Mesh(
-                new THREE.CylinderGeometry(flangeR, flangeR, flangeH, 18),
-                ballNutMat
-              );
-              nutFlange.position.y = nutH * 0.42;
-              nutGrp.add(nutFlange);
-
-              if (isHeavyBall) {
-                // Heavy FK12 flanged angular-contact bearing support block
-                pomUsed = true;
-                gearboxUsed = true;
-                const fk12Grp = new THREE.Group();
-                const fkFlange = new THREE.Mesh(
-                  new THREE.BoxGeometry(0.44, 0.12, 0.44),
-                  pomNutMat
-                );
-                fkFlange.position.y = 0.06;
-                tagInspectable(fkFlange, zDriveInspect);
-                fk12Grp.add(fkFlange);
-
-                const fkBoss = new THREE.Mesh(
-                  new THREE.CylinderGeometry(0.165, 0.175, 0.16, 18),
-                  gearboxHousingMat
-                );
-                fkBoss.position.y = 0.18;
-                tagInspectable(fkBoss, zDriveInspect);
-                fk12Grp.add(fkBoss);
-
-                const fkLockNut = new THREE.Mesh(
-                  new THREE.CylinderGeometry(0.125, 0.125, 0.055, 16),
-                  gearboxMetalMat
-                );
-                fkLockNut.position.y = 0.285;
-                fk12Grp.add(fkLockNut);
-
-                const boltGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.04, 10);
-                for (const bx of [-0.16, 0.16]) {
-                  for (const bz of [-0.16, 0.16]) {
-                    const bMesh = new THREE.Mesh(boltGeo, gearboxMetalMat);
-                    bMesh.position.set(bx, 0.135, bz);
-                    fk12Grp.add(bMesh);
-                  }
-                }
-                fk12Grp.position.set(p0.x, p0.y + 0.02, p0.z);
-                group.add(fk12Grp);
-              } else {
-                // BK10 bottom bearing block
-                const bk10 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.26), pomNutMat);
-                pomUsed = true;
-                bk10.position.set(p0.x, p0.y + 0.1, p0.z);
-                group.add(bk10);
-              }
-            } else {
-              const isBrass = mechId.includes("brass");
-              const nutMat = isBrass ? brassNutMat : pomNutMat;
-              if (isBrass) brassUsed = true;
-              else pomUsed = true;
-
-              const nutCyl = new THREE.Mesh(
-                new THREE.CylinderGeometry(rShaft * 1.55, rShaft * 1.55, 0.18, 14),
-                nutMat
-              );
-              tagInspectable(nutCyl, zDriveInspect);
-              nutGrp.add(nutCyl);
-              const nutFlange = new THREE.Mesh(
-                new THREE.CylinderGeometry(rShaft * 2.6, rShaft * 2.6, 0.045, 16),
-                nutMat
-              );
-              nutFlange.position.y = 0.07;
-              nutGrp.add(nutFlange);
-            }
-
-            // Visible copper/brass WobbleX kinematic decoupler ring assembly on the nut carrier
-            if (isWobbleX) {
-              wobbleXUsed = true;
-              ballChromeUsed = true;
-              const wxBaseY = isBall ? 0.23 : 0.14;
-              const wxRingR = Math.max(rShaft * 3.15, 0.145);
-
-              const wxLowerRing = new THREE.Mesh(
-                new THREE.CylinderGeometry(wxRingR, wxRingR, 0.075, 20),
-                wobbleXCopperMat
-              );
-              wxLowerRing.position.y = wxBaseY;
-              tagInspectable(wxLowerRing, zDriveInspect);
-              nutGrp.add(wxLowerRing);
-
-              const wxUpperRing = new THREE.Mesh(
-                new THREE.CylinderGeometry(wxRingR * 0.94, wxRingR * 0.94, 0.065, 20),
-                wobbleXCopperMat
-              );
-              wxUpperRing.position.y = wxBaseY + 0.105;
-              tagInspectable(wxUpperRing, zDriveInspect);
-              nutGrp.add(wxUpperRing);
-
-              // Three 120°-spaced hardened steel decoupling balls visible between the copper WobbleX plates
-              const wxBallGeo = new THREE.SphereGeometry(0.024, 10, 8);
-              for (let bi = 0; bi < 3; bi++) {
-                const ang = (bi * Math.PI * 2) / 3;
-                const wxBall = new THREE.Mesh(wxBallGeo, ballChromeMat);
-                wxBall.position.set(
-                  Math.cos(ang) * wxRingR * 0.68,
-                  wxBaseY + 0.055,
-                  Math.sin(ang) * wxRingR * 0.68
-                );
-                nutGrp.add(wxBall);
-              }
-            }
-
-            nutGrp.position.set(midX, nutY, midZ);
-            group.add(nutGrp);
-
-            // Flexible shaft coupler between Z motor and bottom of screw
-            couplerUsed = true;
-            const coupler = new THREE.Mesh(
-              new THREE.CylinderGeometry(rShaft * 2.1, rShaft * 2.1, 0.22, 14),
-              couplerMat
-            );
-            coupler.position.set(p0.x, Math.max(p0.y, mPos.y + 0.14), p0.z);
-            group.add(coupler);
-          }
-        }
-
-        if (!leadUsed) leadSteelMat.dispose();
-        if (!ballChromeUsed) ballChromeMat.dispose();
-        if (!ballNutUsed) ballNutMat.dispose();
-        if (!brassUsed) brassNutMat.dispose();
-        if (!pomUsed) pomNutMat.dispose();
-        if (!beltUsed) {
-          zBeltMat.dispose();
-          zPulleyMat.dispose();
-        }
-        if (!couplerUsed) couplerMat.dispose();
-        if (!wobbleXUsed) wobbleXCopperMat.dispose();
-        if (!gearboxUsed) {
-          gearboxMetalMat.dispose();
-          gearboxHousingMat.dispose();
-        }
-        if (!zMotorUsed) {
-          zMotorBodyGeo.dispose();
-          zMotorCapGeo.dispose();
-          zMotorBodyMat.dispose();
-          zMotorCapMat.dispose();
-        }
-      }
-
-      // Translucent / semi-opaque 3D structural panels mounted flush on outer extrusion faces (CoreXY Left, Right, Rear)
-      if (geom.architecture === "corexy" && geom.panels?.enabled) {
-        const panels = geom.panels;
-        const [fw, fd, fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
-        const extrusionHalfMm = (frameMember?.width_mm ?? 20) * 0.5;
-        const extHalf = extrusionHalfMm * SCALE;
-        const tScene = Math.max((panels.thickness_mm || 3) * SCALE, 0.024);
-
-        // Full outer-perimeter panel dimensions covering the extrusion T-slot faces
-        const spanX = (fw + 2 * extrusionHalfMm) * SCALE;
-        const spanY = (fd + 2 * extrusionHalfMm) * SCALE;
-        const spanZ = (fh + 2 * extrusionHalfMm) * SCALE;
-
-        const isTransparentSheet =
-          panels.material_id === "acrylic_pmma" || panels.material_id === "polycarbonate";
-        const isBoltedStructural = panels.mounting === "bolted_structural";
-
-        const panelColor = new THREE.Color(
-          panels.color_hex || (isTransparentSheet ? "#93c5fd" : "#475569")
-        );
-        const punchPanelScale = toolheadPunchIn ? 0.14 : 1.0;
-        const panelMat = new THREE.MeshStandardMaterial({
-          color: panelColor,
-          transparent: true,
-          opacity: (isTransparentSheet ? 0.16 : 0.32) * punchPanelScale,
-          depthWrite: false,
-          roughness: isTransparentSheet ? 0.14 : 0.38,
-          metalness: isTransparentSheet ? 0.1 : 0.42,
-          side: THREE.DoubleSide,
-        });
-
-        const edgeMat = new THREE.LineBasicMaterial({
-          color: isBoltedStructural ? 0x38bdf8 : 0x94a3b8,
-          transparent: true,
-          opacity: (isBoltedStructural ? 0.65 : 0.26) * punchPanelScale,
-        });
-
-        const topPanelInstalled =
-          panels.top_panel !== false && sim.spec.frame.top_panel !== false;
-
-        const sidePanelGeo = new THREE.BoxGeometry(tScene, spanZ, spanY);
-        const rearPanelGeo = new THREE.BoxGeometry(spanX, spanZ, tScene);
-        const sideEdgesGeo = new THREE.EdgesGeometry(sidePanelGeo);
-        const rearEdgesGeo = new THREE.EdgesGeometry(rearPanelGeo);
-
-        // Mount flush on the OUTSIDE face of Left (-X), Right (+X), Rear (+Y CAD = -Z Three.js), and Top (+Z CAD = +Y Three.js) extrusions
-        const leftCenter = toThree([0, fd * 0.5, fh * 0.5], cx, cy);
-        const rightCenter = toThree([fw, fd * 0.5, fh * 0.5], cx, cy);
-        const rearCenter = toThree([fw * 0.5, fd, fh * 0.5], cx, cy);
-        const topCenter = toThree([fw * 0.5, fd * 0.5, fh], cx, cy);
-
-        const leftPos = leftCenter.clone().add(new THREE.Vector3(-(extHalf + tScene * 0.5), 0, 0));
-        const rightPos = rightCenter.clone().add(new THREE.Vector3(extHalf + tScene * 0.5, 0, 0));
-        const rearPos = rearCenter.clone().add(new THREE.Vector3(0, 0, -(extHalf + tScene * 0.5)));
-        const topPos = topCenter.clone().add(new THREE.Vector3(0, extHalf + tScene * 0.5, 0));
-
-        const leftBoltX = leftPos.x - tScene * 0.55;
-        const rightBoltX = rightPos.x + tScene * 0.55;
-        const rearBoltZ = rearPos.z - tScene * 0.55;
-        const topBoltY = topPos.y + tScene * 0.55;
-
-        const panelSpecs: Array<{
-          bay: string;
-          label: string;
-          geo: THREE.BoxGeometry;
-          edges: THREE.EdgesGeometry;
-          pos: THREE.Vector3;
-          opacityMul?: number;
-        }> = [
-          { bay: "left", label: "Left Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: leftPos },
-          { bay: "right", label: "Right Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: rightPos },
-          { bay: "rear", label: "Rear Enclosure Panel", geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos },
-        ];
-        if (topPanelInstalled) {
-          const topPanelGeo = new THREE.BoxGeometry(spanX, tScene, spanY);
-          const topEdgesGeo = new THREE.EdgesGeometry(topPanelGeo);
-          panelSpecs.push({
-            bay: "top",
-            label: "Top Enclosure Panel",
-            geo: topPanelGeo,
-            edges: topEdgesGeo,
-            pos: topPos,
-            opacityMul: 0.78,
-          });
-        }
-
-        for (const ps of panelSpecs) {
-          const wallMat = panelMat.clone();
-          if (ps.opacityMul != null) wallMat.opacity *= ps.opacityMul;
-          const mesh = new THREE.Mesh(ps.geo, wallMat);
-          mesh.position.copy(ps.pos);
-          mesh.renderOrder = 2;
-          const bayGrp = classifyPartGroup(`bay_${ps.bay}`, "panel");
-          const baySens = sim.sensitivity?.panel_bay_sensitivities?.[ps.bay];
-          const bayStiff = stiffenById[bayGrp.id] ?? stiffenById[`bay_${ps.bay}`];
-          if (!toolheadPunchIn) {
-            tagInspectable(mesh, {
-              key: `panel:${ps.bay}`,
-              name: ps.label,
-              subsystem: "frame",
-              partGroupId: bayGrp.id,
-              role: "panel",
-              material: panels.material_name,
-              profile: `${panels.thickness_mm}mm (${panels.mounting.replace(/_/g, " ")})`,
-              complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
-              heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
-              estHzGain: bayStiff?.est_hz_gain,
-              hzPer100g: baySens?.hz_per_100g,
-              whyItHurts: bayStiff?.why_it_hurts,
-              actionHint: bayStiff?.action_hint,
-            });
-          }
-          group.add(mesh);
-
-          const outline = new THREE.LineSegments(ps.edges, edgeMat);
-          outline.position.copy(ps.pos);
-          group.add(outline);
-        }
-        panelMat.dispose();
-
-        // Metallic perimeter bolt heads aligned directly on the extrusion T-slot centerlines
-        if (isBoltedStructural && !toolheadPunchIn) {
-          const boltCoords: THREE.Vector3[] = [];
-          const pBot = toThree([0, 0, 0], cx, cy);
-          const pTop = toThree([fw, fd, fh], cx, cy);
-          const yBot = pBot.y;
-          const yTop = pTop.y;
-          const xMin = pBot.x;
-          const xMax = pTop.x;
-          const zFront = pBot.z; // CAD y = 0 (front columns)
-          const zRear = pTop.z;  // CAD y = fd (rear columns)
-          const steps = 5;
-
-          const addSideBolts = (xFace: number) => {
-            for (let i = 0; i <= steps; i++) {
-              const t = i / steps;
-              const zAlong = zFront + t * (zRear - zFront);
-              const yAlong = yBot + t * (yTop - yBot);
-              // Bottom & top horizontal extrusion T-slot centerlines
-              boltCoords.push(new THREE.Vector3(xFace, yBot, zAlong));
-              boltCoords.push(new THREE.Vector3(xFace, yTop, zAlong));
-              // Front & rear vertical column T-slot centerlines (skip corners)
-              if (i > 0 && i < steps) {
-                boltCoords.push(new THREE.Vector3(xFace, yAlong, zFront));
-                boltCoords.push(new THREE.Vector3(xFace, yAlong, zRear));
-              }
-            }
-          };
-
-          const addRearBolts = (zFace: number) => {
-            for (let i = 0; i <= steps; i++) {
-              const t = i / steps;
-              const xAlong = xMin + t * (xMax - xMin);
-              const yAlong = yBot + t * (yTop - yBot);
-              // Base rear & top rear horizontal extrusion centerlines
-              boltCoords.push(new THREE.Vector3(xAlong, yBot, zFace));
-              boltCoords.push(new THREE.Vector3(xAlong, yTop, zFace));
-              // Left & right rear vertical column centerlines (skip corners)
-              if (i > 0 && i < steps) {
-                boltCoords.push(new THREE.Vector3(xMin, yAlong, zFace));
-                boltCoords.push(new THREE.Vector3(xMax, yAlong, zFace));
-              }
-            }
-          };
-
-          const addTopBolts = (yFace: number) => {
-            for (let i = 0; i <= steps; i++) {
-              const t = i / steps;
-              const xAlong = xMin + t * (xMax - xMin);
-              const zAlong = zFront + t * (zRear - zFront);
-              // Top front & top rear extrusions
-              boltCoords.push(new THREE.Vector3(xAlong, yFace, zFront));
-              boltCoords.push(new THREE.Vector3(xAlong, yFace, zRear));
-              // Top left & top right extrusions (skip corners)
-              if (i > 0 && i < steps) {
-                boltCoords.push(new THREE.Vector3(xMin, yFace, zAlong));
-                boltCoords.push(new THREE.Vector3(xMax, yFace, zAlong));
-              }
-            }
-          };
-
-          addSideBolts(leftBoltX);
-          addSideBolts(rightBoltX);
-          addRearBolts(rearBoltZ);
-          if (topPanelInstalled) {
-            addTopBolts(topBoltY);
-          }
-
-          const boltGeo = new THREE.SphereGeometry(0.036, 8, 8);
-          const boltMat = new THREE.MeshStandardMaterial({
-            color: 0xe2e8f0,
-            metalness: 0.85,
-            roughness: 0.25,
-          });
-          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
-          const dummy = new THREE.Object3D();
-          for (let i = 0; i < boltCoords.length; i++) {
-            dummy.position.copy(boltCoords[i]);
-            dummy.updateMatrix();
-            boltInst.setMatrixAt(i, dummy.matrix);
-          }
-          boltInst.instanceMatrix.needsUpdate = true;
-          group.add(boltInst);
-        }
-
-        // Bright cyan gantry-line bolt heads aligned directly on the fixed Y-rail & rear gantry extrusion T-slots
-        if (panels.bolted_to_gantry) {
-          const gantryNode =
-            geom.nodes.find((n) => n.id === "g_rl") ??
-            geom.nodes.find((n) => n.id === "g_rr") ??
-            geom.nodes.find((n) => n.role === "gantry");
-          if (gantryNode) {
-            const gantryY = toThree(gantryNode.position_mm, cx, cy).y;
-            const pBot = toThree([0, 0, 0], cx, cy);
-            const pTop = toThree([fw, fd, fh], cx, cy);
-            const xMin = pBot.x;
-            const xMax = pTop.x;
-            const zFront = pBot.z;
-            const zRear = pTop.z;
-            const gantrySteps = 5;
-            const gantryBoltCoords: THREE.Vector3[] = [];
-
-            for (let i = 0; i <= gantrySteps; i++) {
-              const t = i / gantrySteps;
-              const zAlong = zFront + t * (zRear - zFront);
-              const xAlong = xMin + t * (xMax - xMin);
-              // Left & Right side panels bolted along the fixed Y-rail extrusions
-              gantryBoltCoords.push(new THREE.Vector3(leftBoltX, gantryY, zAlong));
-              gantryBoltCoords.push(new THREE.Vector3(rightBoltX, gantryY, zAlong));
-              // Rear panel bolted along the fixed rear gantry motor extrusion
-              gantryBoltCoords.push(new THREE.Vector3(xAlong, gantryY, rearBoltZ));
-            }
-
-            const gantryBoltRadius = Math.max(0.044, tScene * 0.65);
-            const gantryBoltGeo = new THREE.SphereGeometry(gantryBoltRadius, 10, 10);
-            const gantryBoltMat = new THREE.MeshStandardMaterial({
-              color: 0x38bdf8,
-              emissive: 0x0284c7,
-              emissiveIntensity: 0.45,
-              metalness: 0.78,
-              roughness: 0.2,
-            });
-            const gantryBoltInst = new THREE.InstancedMesh(
-              gantryBoltGeo,
-              gantryBoltMat,
-              gantryBoltCoords.length
-            );
-            const dummy = new THREE.Object3D();
-            for (let i = 0; i < gantryBoltCoords.length; i++) {
-              dummy.position.copy(gantryBoltCoords[i]);
-              dummy.updateMatrix();
-              gantryBoltInst.setMatrixAt(i, dummy.matrix);
-            }
-            gantryBoltInst.instanceMatrix.needsUpdate = true;
-            group.add(gantryBoltInst);
-          }
-        }
-      }
-
-      // Trident Backbone by Clee (github.com/clee/TridentBackbone):
-      // Authentic 3.18mm (1/8") laser-cut mild steel open-center perimeter plate with
-      // front 20x20 corner post reliefs, recessed rear wings + rear corner ears,
-      // 86x20mm split rear Z-motor tab with 20.4x20.1mm U-notch, 25x8mm rear wiring notch,
-      // R10mm central cutout, 3x Ø26mm Z-motor bores, and 8x 3.6mm DIN/accessory slots.
-      const showTridentBackbone =
-        geom.architecture === "corexy" &&
-        (Boolean(geom.trident_backbone?.active) ||
-          (Boolean(sim.spec.frame.trident_backbone) &&
-            !geom.panels?.is_flying_gantry &&
-            sim.spec.bed.z_drive !== "belted_quad_z"));
-      if (showTridentBackbone) {
-        const [fw, fd] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
-        const extWidthMm = frameMember?.width_mm ?? 20;
-        const extHalfMm = extWidthMm * 0.5;
-        const bbExtra = geom.trident_backbone as
-          | (NonNullable<typeof geom.trident_backbone> & {
-              cutout_w_mm?: number;
-              cutout_d_mm?: number;
-            })
-          | undefined;
-        const plateThickMm = bbExtra?.thickness_mm ?? 3.18;
-        const plateThickScene = Math.max(plateThickMm * SCALE, 0.026);
-
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
-        const yF = -extHalfMm;
-        const yB = fd + extHalfMm;
-        const midX = fw * 0.5;
-
-        // Outer contour features matching clee/TridentBackbone backbone-300.dxf
-        const cornerRelief = extWidthMm; // 20x20mm front corner post reliefs for 2020 extrusions
-        const rearRecess = extWidthMm; // 20mm recessed rear wings for rear extrusion/wiring clearance
-        const yRearWing = yB - rearRecess;
-
-        // Small rear corner ears inboard of rear vertical posts
-        const rearEarWidth = Math.min(14.0, Math.max(6.0, fw * 0.035));
-        const rearEarDepth = Math.min(7.0, Math.max(3.5, rearRecess * 0.35));
-
-        // Integral protruding rear-center Z-motor tab (86mm wide x 20mm deep)
-        const rearTabHalfW = Math.min(
-          43.0,
-          Math.max(24.0, (fw - 2 * cornerRelief - 2 * rearEarWidth - 36) * 0.35)
-        );
-        const rearTabL = midX - rearTabHalfW;
-        const rearTabR = midX + rearTabHalfW;
-
-        // 20.4 x 20.1mm U-shaped rear Z-rail clearance notch splitting the rear tab
-        const zRailNotchHalfW = Math.min(rearTabHalfW - 8.0, Math.max(10.2, extHalfMm + 0.2));
-        const zRailNotchDepth = Math.max(20.1, extWidthMm + 0.1);
-
-        // 25 x 8mm rear wiring relief notch on the left side of the rear Z-motor tab
-        const wireNotchAvailW = rearTabL - (xL + cornerRelief + rearEarWidth) - 8.0;
-        const wireNotchW = Math.min(25.0, Math.max(0.0, wireNotchAvailW));
-        const wireNotchDepth = wireNotchW > 4.0 ? 8.0 : 0.0;
-
-        // 2D shape in (sx, sy) mapped via rotateX(-PI/2) -> (sx, sz, -sy) matching toThree
-        const sx = (cadX: number) => (cadX - cx) * SCALE;
-        const sy = (cadY: number) => (cadY - cy) * SCALE;
-
-        // Outer perimeter polygon traced strictly CCW in (sx, sy)
-        const bbShape = new THREE.Shape();
-        bbShape.moveTo(sx(xL + cornerRelief), sy(yF));
-        bbShape.lineTo(sx(xR - cornerRelief), sy(yF));
-        // Front-Right 20x20 corner post relief
-        bbShape.lineTo(sx(xR - cornerRelief), sy(yF + cornerRelief));
-        bbShape.lineTo(sx(xR), sy(yF + cornerRelief));
-        // Right edge up to recessed rear-right corner
-        bbShape.lineTo(sx(xR), sy(yRearWing));
-        bbShape.lineTo(sx(xR - cornerRelief), sy(yRearWing));
-        // Rear-Right small corner ear near RR vertical post
-        bbShape.lineTo(sx(xR - cornerRelief), sy(yRearWing + rearEarDepth));
-        bbShape.lineTo(sx(xR - cornerRelief - rearEarWidth), sy(yRearWing + rearEarDepth));
-        bbShape.lineTo(sx(xR - cornerRelief - rearEarWidth), sy(yRearWing));
-        // Recessed rear-right wing -> protruding rear-center Z-motor tab
-        bbShape.lineTo(sx(rearTabR), sy(yRearWing));
-        bbShape.lineTo(sx(rearTabR), sy(yB));
-        // 20.4 x 20.1mm U-shaped rear Z-rail clearance notch
-        bbShape.lineTo(sx(midX + zRailNotchHalfW), sy(yB));
-        bbShape.lineTo(sx(midX + zRailNotchHalfW), sy(yB - zRailNotchDepth));
-        bbShape.lineTo(sx(midX - zRailNotchHalfW), sy(yB - zRailNotchDepth));
-        bbShape.lineTo(sx(midX - zRailNotchHalfW), sy(yB));
-        // Left half of rear-center Z-motor tab
-        bbShape.lineTo(sx(rearTabL), sy(yB));
-        // 25 x 8mm rear wiring relief notch on the left side of the rear Z-motor tab
-        if (wireNotchW > 4.0) {
-          bbShape.lineTo(sx(rearTabL), sy(yRearWing - wireNotchDepth));
-          bbShape.lineTo(sx(rearTabL - wireNotchW), sy(yRearWing - wireNotchDepth));
-          bbShape.lineTo(sx(rearTabL - wireNotchW), sy(yRearWing));
-        } else {
-          bbShape.lineTo(sx(rearTabL), sy(yRearWing));
-        }
-        // Recessed rear-left wing -> small rear-left corner ear near RL vertical post
-        bbShape.lineTo(sx(xL + cornerRelief + rearEarWidth), sy(yRearWing));
-        bbShape.lineTo(sx(xL + cornerRelief + rearEarWidth), sy(yRearWing + rearEarDepth));
-        bbShape.lineTo(sx(xL + cornerRelief), sy(yRearWing + rearEarDepth));
-        bbShape.lineTo(sx(xL + cornerRelief), sy(yRearWing));
-        bbShape.lineTo(sx(xL), sy(yRearWing));
-        // Left edge down to Front-Left 20x20 corner post relief
-        bbShape.lineTo(sx(xL), sy(yF + cornerRelief));
-        bbShape.lineTo(sx(xL + cornerRelief), sy(yF + cornerRelief));
-        bbShape.closePath();
-
-        // Helper for strictly CW rounded-rectangle / stadium-slot holes in (sx, sy)
-        const addCwRoundedRectHole = (
-          x0Mm: number,
-          y0Mm: number,
-          x1Mm: number,
-          y1Mm: number,
-          radiusMm: number
-        ) => {
-          const x0 = sx(x0Mm);
-          const x1 = sx(x1Mm);
-          const y0 = sy(y0Mm);
-          const y1 = sy(y1Mm);
-          const w = x1 - x0;
-          const h = y1 - y0;
-          if (w <= 1e-4 || h <= 1e-4) return;
-          const r = Math.min(radiusMm * SCALE, w * 0.48, h * 0.48);
-          const hole = new THREE.Path();
-          hole.moveTo(x0, y0 + r);
-          hole.lineTo(x0, y1 - r);
-          hole.absarc(x0 + r, y1 - r, r, Math.PI, Math.PI * 0.5, true);
-          hole.lineTo(x1 - r, y1);
-          hole.absarc(x1 - r, y1 - r, r, Math.PI * 0.5, 0, true);
-          hole.lineTo(x1, y0 + r);
-          hole.absarc(x1 - r, y0 + r, r, 0, -Math.PI * 0.5, true);
-          hole.lineTo(x0 + r, y0);
-          hole.absarc(x0 + r, y0 + r, r, -Math.PI * 0.5, -Math.PI, true);
-          hole.closePath();
-          bbShape.holes.push(hole);
-        };
-
-        // 3x Ø26.0mm Z-motor pilot/leadscrew bore positions (exact DXF offsets for 2020; clears thicker posts too)
-        const boreFrontOffsetMm = Math.max(41.8, cornerRelief + 21.8);
-        const boreRearOffsetMm = Math.max(49.9, zRailNotchDepth + 29.8);
-        const boreRadiusMm = 13.0; // Ø26.0mm
-        const zMotorBoresMm: Array<[number, number]> = [
-          [xL + boreFrontOffsetMm, yF + boreFrontOffsetMm],
-          [xR - boreFrontOffsetMm, yF + boreFrontOffsetMm],
-          [midX, yB - boreRearOffsetMm],
-        ];
-
-        // TRUE OPEN CENTRAL CUTOUT with R10mm corner fillets leaving ~80mm wide perimeter steel flanges
-        const minSideFlangeMm = boreFrontOffsetMm + 24.0;
-        const minFrontFlangeMm = boreFrontOffsetMm + 24.0;
-        const minRearFlangeMm = boreRearOffsetMm + 24.0;
-        const rawCutW = bbExtra?.cutout_w_mm ?? fw - 160.0;
-        const rawCutD = bbExtra?.cutout_d_mm ?? fd - 180.0;
-        const maxCutW = Math.max(0, xR - xL - 2 * minSideFlangeMm);
-        const maxCutD = Math.max(0, yB - minRearFlangeMm - (yF + minFrontFlangeMm));
-        const cutW = Math.min(Math.max(rawCutW, 0), maxCutW);
-        const cutD = Math.min(Math.max(rawCutD, 0), maxCutD);
-
-        const cutXMin = midX - cutW * 0.5;
-        const cutXMax = midX + cutW * 0.5;
-        const yCutCenter = 0.5 * (yF + yRearWing);
-        const cutYMin = Math.max(yF + minFrontFlangeMm, yCutCenter - cutD * 0.5);
-        const cutYMax = Math.min(yB - minRearFlangeMm, cutYMin + cutD);
-
-        if (cutW >= 24.0 && cutYMax - cutYMin >= 24.0) {
-          const cutFilletR = Math.min(10.0, cutW * 0.25, (cutYMax - cutYMin) * 0.25);
-          addCwRoundedRectHole(cutXMin, cutYMin, cutXMax, cutYMax, cutFilletR);
-        }
-
-        // TRUE PUNCHED 3x Ø26.0mm circular Z-motor pilot/leadscrew bores (strictly CW)
-        for (const [bxMm, byMm] of zMotorBoresMm) {
-          const boreHole = new THREE.Path();
-          boreHole.absarc(sx(bxMm), sy(byMm), boreRadiusMm * SCALE, 0, Math.PI * 2, true);
-          bbShape.holes.push(boreHole);
-        }
-
-        // TRUE PUNCHED 8x narrow 3.6mm DIN/accessory mounting slots through the perimeter steel flanges:
-        // 4x 50x3.6mm vertical slots (2 left flange, 2 right flange) + 4x 40x3.6mm horizontal slots (2 front, 2 rear)
-        const slotWidthMm = 3.6;
-        const slotHalfW = slotWidthMm * 0.5;
-        const slotRadiusMm = slotHalfW;
-        const flangeClearMinMm = 12.0;
-
-        // Left & right flange vertical 50 x 3.6mm slots
-        const leftOpenSpanX = cutXMin - (xL + extWidthMm);
-        const rightOpenSpanX = xR - extWidthMm - cutXMax;
-        const leftSlotX = 0.5 * (xL + extWidthMm + cutXMin);
-        const rightSlotX = 0.5 * (cutXMax + (xR - extWidthMm));
-        const vSpanMin = yF + boreFrontOffsetMm + 30.0;
-        const vSpanMax = yRearWing - 22.0;
-        const vSpan = vSpanMax - vSpanMin;
-        if (leftOpenSpanX >= flangeClearMinMm && rightOpenSpanX >= flangeClearMinMm && vSpan >= 52.0) {
-          const vSlotLen = Math.min(50.0, Math.max(16.0, (vSpan - 20.0) * 0.5));
-          const vHalf = vSlotLen * 0.5;
-          const vCentersY = [vSpanMin + vSpan * 0.27, vSpanMin + vSpan * 0.73];
-          for (const cyMm of vCentersY) {
-            addCwRoundedRectHole(
-              leftSlotX - slotHalfW,
-              cyMm - vHalf,
-              leftSlotX + slotHalfW,
-              cyMm + vHalf,
-              slotRadiusMm
-            );
-            addCwRoundedRectHole(
-              rightSlotX - slotHalfW,
-              cyMm - vHalf,
-              rightSlotX + slotHalfW,
-              cyMm + vHalf,
-              slotRadiusMm
-            );
-          }
-        }
-
-        // Front flange horizontal 40 x 3.6mm slots (2x)
-        const frontOpenSpanY = cutYMin - (yF + extWidthMm);
-        const frontSlotY = 0.5 * (yF + extWidthMm + cutYMin);
-        const hFrontMin = xL + boreFrontOffsetMm + 30.0;
-        const hFrontMax = xR - boreFrontOffsetMm - 30.0;
-        const hFrontSpan = hFrontMax - hFrontMin;
-        if (frontOpenSpanY >= flangeClearMinMm && hFrontSpan >= 44.0) {
-          const hFrontLen = Math.min(40.0, Math.max(14.0, (hFrontSpan - 20.0) * 0.5));
-          const hFrontHalf = hFrontLen * 0.5;
-          const fCentersX = [hFrontMin + hFrontSpan * 0.27, hFrontMin + hFrontSpan * 0.73];
-          for (const cxMm of fCentersX) {
-            addCwRoundedRectHole(
-              cxMm - hFrontHalf,
-              frontSlotY - slotHalfW,
-              cxMm + hFrontHalf,
-              frontSlotY + slotHalfW,
-              slotRadiusMm
-            );
-          }
-        }
-
-        // Rear flange horizontal 40 x 3.6mm slots (2x: rear-left wing & rear-right wing)
-        const rearSlotTopLimit = yRearWing - wireNotchDepth;
-        const rearOpenSpanY = rearSlotTopLimit - cutYMax;
-        const rearSlotY = 0.5 * (cutYMax + rearSlotTopLimit);
-        const rearLeftMin = Math.max(leftSlotX + 12.0, xL + 46.0);
-        const rearLeftMax = midX - 28.0;
-        const rearWingSpan = rearLeftMax - rearLeftMin;
-        if (rearOpenSpanY >= flangeClearMinMm && rearWingSpan >= 24.0) {
-          const hRearLen = Math.min(40.0, Math.max(12.0, rearWingSpan - 10.0));
-          const hRearHalf = hRearLen * 0.5;
-          const rearLeftCenterX = 0.5 * (rearLeftMin + rearLeftMax);
-          const rearRightCenterX = fw - rearLeftCenterX;
-          for (const cxMm of [rearLeftCenterX, rearRightCenterX]) {
-            addCwRoundedRectHole(
-              cxMm - hRearHalf,
-              rearSlotY - slotHalfW,
-              cxMm + hRearHalf,
-              rearSlotY + slotHalfW,
-              slotRadiusMm
-            );
-          }
-        }
-
-        const backboneGeo = new THREE.ExtrudeGeometry(bbShape, {
-          depth: plateThickScene,
-          bevelEnabled: false,
-          curveSegments: 16,
-        });
-        backboneGeo.rotateX(-Math.PI / 2);
-        backboneGeo.computeVertexNormals();
-
-        const plateBaseY = toThree([0, 0, extHalfMm], cx, cy).y;
-        const plateTopY = plateBaseY + plateThickScene;
-
-        const backboneMat = new THREE.MeshStandardMaterial({
-          color: 0x1e2530,
-          metalness: 0.62,
-          roughness: 0.36,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.22 : 1.0,
-        });
-        const backboneMesh = new THREE.Mesh(backboneGeo, backboneMat);
-        backboneMesh.position.y = plateBaseY;
-
-        const bbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["backbone"];
-        const bbStiff = stiffenById["trident_backbone"] ?? stiffenById["bay_backbone"];
-        if (!toolheadPunchIn) {
-          tagInspectable(backboneMesh, {
-            key: "frame:trident_backbone",
-            name: "Trident Backbone (Clee, 3.18mm Mild Steel Perimeter Plate)",
-            subsystem: "frame",
-            partGroupId: "trident_backbone",
-            role: "panel",
-            material: geom.trident_backbone?.material_name ?? "Powder-Coated Mild Steel",
-            profile: `${plateThickMm.toFixed(2)}mm laser-cut open-center perimeter plate`,
-            complianceSharePct: bbBaySens?.compliance_share_pct ?? bbStiff?.compliance_share_pct,
-            heatScore: bbBaySens ? getLensScore(bbBaySens, adjointLens) : undefined,
-            estHzGain: bbStiff?.est_hz_gain,
-            hzPer100g: bbBaySens?.hz_per_100g,
-            whyItHurts: bbStiff?.why_it_hurts,
-            actionHint: bbStiff?.action_hint,
-          });
-        }
-        group.add(backboneMesh);
-
-        // Crisp metallic edge highlight outlining outer perimeter, R10 central cutout, Ø26 bores & 3.6mm slots
-        const backboneEdgesGeo = new THREE.EdgesGeometry(backboneGeo, 28);
-        const backboneEdgesMat = new THREE.LineBasicMaterial({
-          color: 0x475569,
-          transparent: true,
-          opacity: toolheadPunchIn ? 0.2 : 0.85,
-        });
-        const backboneEdges = new THREE.LineSegments(backboneEdgesGeo, backboneEdgesMat);
-        backboneEdges.position.y = plateBaseY;
-        group.add(backboneEdges);
-
-        // Hardware details on top of the plate:
-        // 12x M3 stainless socket-head bolts (4 on a 31x31mm square around each of the 3x Ø26mm Z-motor bores)
-        // + 10x M5 frame-mounting socket-head bolts (4 FL, 4 FR, 2 on the split rear-center tab)
-        if (!toolheadPunchIn) {
-          const m3BoltCoords: THREE.Vector3[] = [];
-          const m3OffsetMm = 15.5; // NEMA-17 standard 31 x 31mm M3 bolt pattern
-          const m3BoltY = plateTopY + 0.01;
-
-          for (const [bxMm, byMm] of zMotorBoresMm) {
-            for (const dxMm of [-m3OffsetMm, m3OffsetMm]) {
-              for (const dyMm of [-m3OffsetMm, m3OffsetMm]) {
-                const bPos = toThree([bxMm + dxMm, byMm + dyMm, extHalfMm + plateThickMm], cx, cy);
-                m3BoltCoords.push(new THREE.Vector3(bPos.x, m3BoltY, bPos.z));
-              }
-            }
-          }
-
-          if (m3BoltCoords.length > 0) {
-            const m3BoltGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.02, 10);
-            const m3BoltMat = new THREE.MeshStandardMaterial({
-              color: 0xe2e8f0,
-              metalness: 0.88,
-              roughness: 0.22,
-            });
-            const m3BoltInst = new THREE.InstancedMesh(m3BoltGeo, m3BoltMat, m3BoltCoords.length);
-            const m3Dummy = new THREE.Object3D();
-            for (let i = 0; i < m3BoltCoords.length; i++) {
-              m3Dummy.position.copy(m3BoltCoords[i]);
-              m3Dummy.updateMatrix();
-              m3BoltInst.setMatrixAt(i, m3Dummy.matrix);
-            }
-            m3BoltInst.instanceMatrix.needsUpdate = true;
-            group.add(m3BoltInst);
-          }
-
-          // 10x M5 frame-mounting socket-head bolts on 2020 deck extrusion centerlines:
-          // 4 FL (2 front + 2 left), 4 FR (2 front + 2 right), 2 on the rear-center Z-motor tab
-          const m5OffNear = 16.0;
-          const m5OffFar = 52.0;
-          const rearTabBoltOffsetX = 0.5 * (zRailNotchHalfW + rearTabHalfW);
-          const m5PointsMm: Array<[number, number]> = [
-            // 4x Front-Left
-            [xL + cornerRelief + m5OffNear, 0],
-            [xL + cornerRelief + m5OffFar, 0],
-            [0, yF + cornerRelief + m5OffNear],
-            [0, yF + cornerRelief + m5OffFar],
-            // 4x Front-Right
-            [xR - cornerRelief - m5OffNear, 0],
-            [xR - cornerRelief - m5OffFar, 0],
-            [fw, yF + cornerRelief + m5OffNear],
-            [fw, yF + cornerRelief + m5OffFar],
-            // 2x Rear-center Z-motor tab
-            [midX - rearTabBoltOffsetX, fd],
-            [midX + rearTabBoltOffsetX, fd],
-          ];
-
-          const m5BoltY = plateTopY + 0.015;
-          const bbBoltGeo = new THREE.CylinderGeometry(0.036, 0.036, 0.028, 10);
-          const bbBoltMat = new THREE.MeshStandardMaterial({
-            color: 0xdbe4ee,
-            metalness: 0.86,
-            roughness: 0.24,
-          });
-          const bbBoltInst = new THREE.InstancedMesh(bbBoltGeo, bbBoltMat, m5PointsMm.length);
-          const bbDummy = new THREE.Object3D();
-          for (let i = 0; i < m5PointsMm.length; i++) {
-            const [mxMm, myMm] = m5PointsMm[i];
-            const bPos = toThree([mxMm, myMm, extHalfMm + plateThickMm], cx, cy);
-            bbDummy.position.set(bPos.x, m5BoltY, bPos.z);
-            bbDummy.updateMatrix();
-            bbBoltInst.setMatrixAt(i, bbDummy.matrix);
-          }
-          bbBoltInst.instanceMatrix.needsUpdate = true;
-          group.add(bbBoltInst);
-        }
-      }
-
-      // Helper for strictly CW rounded-rectangle cutout holes in any 2D THREE.Shape
-      const addCwRoundedRectHole2D = (
-        targetShape: THREE.Shape,
-        x0: number,
-        y0: number,
-        x1: number,
-        y1: number,
-        rRaw: number
-      ) => {
-        const w = x1 - x0;
-        const h = y1 - y0;
-        if (w <= 1e-4 || h <= 1e-4) return;
-        const r = Math.min(Math.max(rRaw, 0), w * 0.48, h * 0.48);
-        const hole = new THREE.Path();
-        hole.moveTo(x0, y0 + r);
-        hole.lineTo(x0, y1 - r);
-        hole.absarc(x0 + r, y1 - r, r, Math.PI, Math.PI * 0.5, true);
-        hole.lineTo(x1 - r, y1);
-        hole.absarc(x1 - r, y1 - r, r, Math.PI * 0.5, 0, true);
-        hole.lineTo(x1, y0 + r);
-        hole.absarc(x1 - r, y0 + r, r, 0, -Math.PI * 0.5, true);
-        hole.lineTo(x0 + r, y0);
-        hole.absarc(x0 + r, y0 + r, r, -Math.PI * 0.5, -Math.PI, true);
-        hole.closePath();
-        targetShape.holes.push(hole);
-      };
-
-      // Open-Center Top CNC Halo Ring (5mm brushed 6061 aluminum plate resting flush on top rails)
-      const topBrace = geom.top_brace;
-      if (
-        geom.architecture === "corexy" &&
-        Boolean(topBrace?.active) &&
-        topBrace?.id === "cnc_halo_ring"
-      ) {
-        const [fw, fd, fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
-        const extWidthMm = frameMember?.width_mm ?? 20;
-        const extHalfMm = extWidthMm * 0.5;
-        const plateThickMm = topBrace.thickness_mm > 0 ? topBrace.thickness_mm : 5.0;
-        const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
-
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
-        const yF = -extHalfMm;
-        const yB = fd + extHalfMm;
-        const sx = (cadX: number) => (cadX - cx) * SCALE;
-        const sy = (cadY: number) => (cadY - cy) * SCALE;
-
-        const haloShape = new THREE.Shape();
-        haloShape.moveTo(sx(xL), sy(yF));
-        haloShape.lineTo(sx(xR), sy(yF));
-        haloShape.lineTo(sx(xR), sy(yB));
-        haloShape.lineTo(sx(xL), sy(yB));
-        haloShape.closePath();
-
-        const flangeMm = topBrace.flange_width_mm > 0 ? topBrace.flange_width_mm : 50.0;
-        const rawCutW =
-          topBrace.cutout_w_mm > 0 ? topBrace.cutout_w_mm : Math.max(80, fw - 2 * flangeMm);
-        const rawCutD =
-          topBrace.cutout_d_mm > 0 ? topBrace.cutout_d_mm : Math.max(80, fd - 2 * flangeMm);
-        const maxCutW = Math.max(0, xR - xL - 2 * extWidthMm - 16);
-        const maxCutD = Math.max(0, yB - yF - 2 * extWidthMm - 16);
-        const cutW = Math.min(rawCutW, maxCutW);
-        const cutD = Math.min(rawCutD, maxCutD);
-
-        if (cutW >= 24 && cutD >= 24) {
-          const midX = fw * 0.5;
-          const midY = fd * 0.5;
-          const rMm = Math.min(20.0, cutW * 0.25, cutD * 0.25);
-          addCwRoundedRectHole2D(
-            haloShape,
-            sx(midX - cutW * 0.5),
-            sy(midY - cutD * 0.5),
-            sx(midX + cutW * 0.5),
-            sy(midY + cutD * 0.5),
-            rMm * SCALE
-          );
-        }
-
-        const haloGeo = new THREE.ExtrudeGeometry(haloShape, {
-          depth: plateThickScene,
-          bevelEnabled: false,
-          curveSegments: 16,
-        });
-        haloGeo.rotateX(-Math.PI / 2);
-        haloGeo.computeVertexNormals();
-
-        const plateBaseY = toThree([0, 0, fh + extHalfMm], cx, cy).y + 0.002;
-        const plateTopY = plateBaseY + plateThickScene;
-
-        const haloMat = new THREE.MeshStandardMaterial({
-          color: 0xcbd5e1,
-          metalness: 0.84,
-          roughness: 0.25,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const haloMesh = new THREE.Mesh(haloGeo, haloMat);
-        haloMesh.position.y = plateBaseY;
-
-        const tbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["top_brace"];
-        const tbStiff = stiffenById["top_brace"] ?? stiffenById["bay_top_brace"];
-        if (!toolheadPunchIn) {
-          tagInspectable(haloMesh, {
-            key: "frame:top_brace",
-            name: `Top CNC Halo Ring (${Math.round(plateThickMm)}mm Al)`,
-            subsystem: "frame",
-            partGroupId: "top_brace",
-            role: "panel",
-            material: topBrace.material_name || "6061-T6 Aluminum",
-            profile: `${plateThickMm.toFixed(1)}mm CNC halo ring (${Math.round(cutW)}×${Math.round(cutD)}mm open center)`,
-            complianceSharePct: tbBaySens?.compliance_share_pct ?? tbStiff?.compliance_share_pct,
-            heatScore: tbBaySens ? getLensScore(tbBaySens, adjointLens) : undefined,
-            estHzGain: tbStiff?.est_hz_gain,
-            hzPer100g: tbBaySens?.hz_per_100g,
-            whyItHurts: tbStiff?.why_it_hurts,
-            actionHint: tbStiff?.action_hint,
-          });
-        }
-        group.add(haloMesh);
-
-        const haloEdgesGeo = new THREE.EdgesGeometry(haloGeo, 28);
-        const haloEdgesMat = new THREE.LineBasicMaterial({
-          color: 0x64748b,
-          transparent: true,
-          opacity: toolheadPunchIn ? 0.16 : 0.85,
-        });
-        const haloEdges = new THREE.LineSegments(haloEdgesGeo, haloEdgesMat);
-        haloEdges.position.y = plateBaseY;
-        group.add(haloEdges);
-
-        // Perimeter M5 socket-head bolts seated along top frame extrusion centerlines
-        if (!toolheadPunchIn) {
-          const steps = 5;
-          const boltCoords: THREE.Vector3[] = [];
-          const boltY = plateTopY + 0.013;
-          for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            const bx = t * fw;
-            const by = t * fd;
-            const pf = toThree([bx, 0, fh + extHalfMm + plateThickMm], cx, cy);
-            const pr = toThree([bx, fd, fh + extHalfMm + plateThickMm], cx, cy);
-            boltCoords.push(new THREE.Vector3(pf.x, boltY, pf.z));
-            boltCoords.push(new THREE.Vector3(pr.x, boltY, pr.z));
-            if (i > 0 && i < steps) {
-              const pl = toThree([0, by, fh + extHalfMm + plateThickMm], cx, cy);
-              const pri = toThree([fw, by, fh + extHalfMm + plateThickMm], cx, cy);
-              boltCoords.push(new THREE.Vector3(pl.x, boltY, pl.z));
-              boltCoords.push(new THREE.Vector3(pri.x, boltY, pri.z));
-            }
-          }
-          const boltGeo = new THREE.CylinderGeometry(0.034, 0.034, 0.026, 10);
-          const boltMat = new THREE.MeshStandardMaterial({
-            color: 0xe2e8f0,
-            metalness: 0.88,
-            roughness: 0.22,
-          });
-          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
-          const dummy = new THREE.Object3D();
-          for (let i = 0; i < boltCoords.length; i++) {
-            dummy.position.copy(boltCoords[i]);
-            dummy.updateMatrix();
-            boltInst.setMatrixAt(i, dummy.matrix);
-          }
-          boltInst.instanceMatrix.needsUpdate = true;
-          group.add(boltInst);
-        }
-      }
-
-      // Open-Door Front CNC Portal Frame (5mm brushed 6061 aluminum picture-frame plate at y = -extHalf)
-      const frontBrace = geom.front_brace;
-      if (
-        geom.architecture === "corexy" &&
-        Boolean(frontBrace?.active) &&
-        frontBrace?.id === "cnc_portal_frame"
-      ) {
-        const [fw, , fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
-        const extWidthMm = frameMember?.width_mm ?? 20;
-        const extHalfMm = extWidthMm * 0.5;
-        const plateThickMm = frontBrace.thickness_mm > 0 ? frontBrace.thickness_mm : 5.0;
-        const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
-
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
-        const zB = -extHalfMm;
-        const zT = fh + extHalfMm;
-        const sx = (cadX: number) => (cadX - cx) * SCALE;
-        const sz = (cadZ: number) => cadZ * SCALE;
-
-        const portalShape = new THREE.Shape();
-        portalShape.moveTo(sx(xL), sz(zB));
-        portalShape.lineTo(sx(xR), sz(zB));
-        portalShape.lineTo(sx(xR), sz(zT));
-        portalShape.lineTo(sx(xL), sz(zT));
-        portalShape.closePath();
-
-        const flangeMm = frontBrace.flange_width_mm > 0 ? frontBrace.flange_width_mm : 55.0;
-        const rawCutW =
-          frontBrace.cutout_w_mm > 0 ? frontBrace.cutout_w_mm : Math.max(80, fw - 2 * flangeMm);
-        const rawCutH =
-          frontBrace.cutout_h_mm > 0 ? frontBrace.cutout_h_mm : Math.max(80, fh - 2 * flangeMm);
-        const maxCutW = Math.max(0, xR - xL - 2 * extWidthMm - 16);
-        const maxCutH = Math.max(0, zT - zB - 2 * extWidthMm - 16);
-        const cutW = Math.min(rawCutW, maxCutW);
-        const cutH = Math.min(rawCutH, maxCutH);
-
-        if (cutW >= 24 && cutH >= 24) {
-          const midX = fw * 0.5;
-          const midZ = fh * 0.5;
-          const rMm = Math.min(20.0, cutW * 0.25, cutH * 0.25);
-          addCwRoundedRectHole2D(
-            portalShape,
-            sx(midX - cutW * 0.5),
-            sz(midZ - cutH * 0.5),
-            sx(midX + cutW * 0.5),
-            sz(midZ + cutH * 0.5),
-            rMm * SCALE
-          );
-        }
-
-        const portalGeo = new THREE.ExtrudeGeometry(portalShape, {
-          depth: plateThickScene,
-          bevelEnabled: false,
-          curveSegments: 16,
-        });
-        portalGeo.computeVertexNormals();
-
-        // Mount flush on front outer face CAD y = -extHalfMm (Three.js +Z outward)
-        const frontOuterZ = toThree([0, -extHalfMm, 0], cx, cy).z + 0.002;
-        const frontFaceZ = frontOuterZ + plateThickScene;
-
-        const portalMat = new THREE.MeshStandardMaterial({
-          color: 0xcbd5e1,
-          metalness: 0.84,
-          roughness: 0.25,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const portalMesh = new THREE.Mesh(portalGeo, portalMat);
-        portalMesh.position.z = frontOuterZ;
-
-        const fbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["front_brace"];
-        const fbStiff = stiffenById["front_brace"] ?? stiffenById["bay_front_brace"];
-        if (!toolheadPunchIn) {
-          tagInspectable(portalMesh, {
-            key: "frame:front_brace",
-            name: `Front CNC Portal Frame (${Math.round(plateThickMm)}mm Al)`,
-            subsystem: "frame",
-            partGroupId: "front_brace",
-            role: "panel",
-            material: frontBrace.material_name || "6061-T6 Aluminum",
-            profile: `${plateThickMm.toFixed(1)}mm CNC front portal (${Math.round(cutW)}×${Math.round(cutH)}mm clear door)`,
-            complianceSharePct: fbBaySens?.compliance_share_pct ?? fbStiff?.compliance_share_pct,
-            heatScore: fbBaySens ? getLensScore(fbBaySens, adjointLens) : undefined,
-            estHzGain: fbStiff?.est_hz_gain,
-            hzPer100g: fbBaySens?.hz_per_100g,
-            whyItHurts: fbStiff?.why_it_hurts,
-            actionHint: fbStiff?.action_hint,
-          });
-        }
-        group.add(portalMesh);
-
-        const portalEdgesGeo = new THREE.EdgesGeometry(portalGeo, 28);
-        const portalEdgesMat = new THREE.LineBasicMaterial({
-          color: 0x64748b,
-          transparent: true,
-          opacity: toolheadPunchIn ? 0.16 : 0.85,
-        });
-        const portalEdges = new THREE.LineSegments(portalEdgesGeo, portalEdgesMat);
-        portalEdges.position.z = frontOuterZ;
-        group.add(portalEdges);
-
-        // Perimeter M5 socket-head bolts seated along front perimeter extrusion centerlines
-        if (!toolheadPunchIn) {
-          const steps = 5;
-          const boltCoords: THREE.Vector3[] = [];
-          const boltZ = frontFaceZ + 0.013;
-          for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            const bx = t * fw;
-            const bz = t * fh;
-            boltCoords.push(new THREE.Vector3(sx(bx), sz(0), boltZ));
-            boltCoords.push(new THREE.Vector3(sx(bx), sz(fh), boltZ));
-            if (i > 0 && i < steps) {
-              boltCoords.push(new THREE.Vector3(sx(0), sz(bz), boltZ));
-              boltCoords.push(new THREE.Vector3(sx(fw), sz(bz), boltZ));
-            }
-          }
-          const boltGeo = new THREE.CylinderGeometry(0.034, 0.034, 0.026, 10);
-          boltGeo.rotateX(Math.PI / 2);
-          const boltMat = new THREE.MeshStandardMaterial({
-            color: 0xe2e8f0,
-            metalness: 0.88,
-            roughness: 0.22,
-          });
-          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
-          const dummy = new THREE.Object3D();
-          for (let i = 0; i < boltCoords.length; i++) {
-            dummy.position.copy(boltCoords[i]);
-            dummy.updateMatrix();
-            boltInst.setMatrixAt(i, dummy.matrix);
-          }
-          boltInst.instanceMatrix.needsUpdate = true;
-          group.add(boltInst);
-        }
-      }
-
-      // Open-Door Front Upper Header + Lower Skirt (two 5mm brushed 6061 aluminum plates at y = -extHalf)
-      if (
-        geom.architecture === "corexy" &&
-        Boolean(frontBrace?.active) &&
-        frontBrace?.id === "header_and_skirt"
-      ) {
-        const [fw, , fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
-        const extWidthMm = frameMember?.width_mm ?? 20;
-        const extHalfMm = extWidthMm * 0.5;
-        const plateThickMm = frontBrace.thickness_mm > 0 ? frontBrace.thickness_mm : 5.0;
-        const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
-
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
-        const sx = (cadX: number) => (cadX - cx) * SCALE;
-        const sz = (cadZ: number) => cadZ * SCALE;
-
-        const gantryTopClr = geom.gantry_top_clearance_mm ?? sim.spec.frame.gantry_top_clearance_mm ?? 55;
-        const headerHeightMm =
-          frontBrace.header_height_mm > 0 ? frontBrace.header_height_mm : gantryTopClr;
-        const skirtHeightMm =
-          frontBrace.skirt_height_mm > 0 ? frontBrace.skirt_height_mm : 65.0;
-
-        const zHeaderTop = fh + extHalfMm;
-        const zHeaderBot = Math.max(extHalfMm + 20, fh - headerHeightMm);
-        const zSkirtBot = -extHalfMm;
-        const zSkirtTop = Math.min(zHeaderBot - 20, Math.max(extWidthMm, skirtHeightMm));
-        const clearDoorH = Math.max(0, zHeaderBot - zSkirtTop);
-
-        const frontOuterZ = toThree([0, -extHalfMm, 0], cx, cy).z + 0.002;
-        const frontFaceZ = frontOuterZ + plateThickScene;
-
-        const hsMat = new THREE.MeshStandardMaterial({
-          color: 0xcbd5e1,
-          metalness: 0.84,
-          roughness: 0.25,
-          transparent: toolheadPunchIn,
-          opacity: toolheadPunchIn ? 0.16 : 1.0,
-        });
-        const hsEdgesMat = new THREE.LineBasicMaterial({
-          color: 0x64748b,
-          transparent: true,
-          opacity: toolheadPunchIn ? 0.16 : 0.85,
-        });
-
-        const fbBaySens = sim.sensitivity?.panel_bay_sensitivities?.["front_brace"];
-        const fbStiff = stiffenById["front_brace"] ?? stiffenById["bay_front_brace"];
-        const hsInspectInfo: InspectedPartInfo = {
-          key: "frame:front_brace",
-          name: `Front Upper Header + Lower Skirt (${Math.round(plateThickMm)}mm Al)`,
-          subsystem: "frame",
-          partGroupId: "front_brace",
-          role: "panel",
-          material: frontBrace.material_name || "6061-T6 Aluminum",
-          profile: `${plateThickMm.toFixed(1)}mm CNC header (${Math.round(headerHeightMm)}mm) + skirt (${Math.round(skirtHeightMm)}mm) · ${Math.round(clearDoorH)}mm clear door`,
-          complianceSharePct: fbBaySens?.compliance_share_pct ?? fbStiff?.compliance_share_pct,
-          heatScore: fbBaySens ? getLensScore(fbBaySens, adjointLens) : undefined,
-          estHzGain: fbStiff?.est_hz_gain,
-          hzPer100g: fbBaySens?.hz_per_100g,
-          whyItHurts: fbStiff?.why_it_hurts,
-          actionHint: fbStiff?.action_hint,
-        };
-
-        const addFrontRectPlate = (z0Mm: number, z1Mm: number) => {
-          const rectShape = new THREE.Shape();
-          rectShape.moveTo(sx(xL), sz(z0Mm));
-          rectShape.lineTo(sx(xR), sz(z0Mm));
-          rectShape.lineTo(sx(xR), sz(z1Mm));
-          rectShape.lineTo(sx(xL), sz(z1Mm));
-          rectShape.closePath();
-
-          const geo = new THREE.ExtrudeGeometry(rectShape, {
-            depth: plateThickScene,
-            bevelEnabled: false,
-            curveSegments: 8,
-          });
-          geo.computeVertexNormals();
-          const mesh = new THREE.Mesh(geo, hsMat);
-          mesh.position.z = frontOuterZ;
-          if (!toolheadPunchIn) {
-            tagInspectable(mesh, hsInspectInfo);
-          }
-          group.add(mesh);
-
-          const edgesGeo = new THREE.EdgesGeometry(geo, 28);
-          const edges = new THREE.LineSegments(edgesGeo, hsEdgesMat);
-          edges.position.z = frontOuterZ;
-          group.add(edges);
-        };
-
-        addFrontRectPlate(zHeaderBot, zHeaderTop);
-        addFrontRectPlate(zSkirtBot, zSkirtTop);
-
-        // Perimeter M5 socket-head bolts along header top/sides and skirt bottom/sides
-        if (!toolheadPunchIn) {
-          const steps = 5;
-          const boltCoords: THREE.Vector3[] = [];
-          const boltZ = frontFaceZ + 0.013;
-          for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            const bx = t * fw;
-            boltCoords.push(new THREE.Vector3(sx(bx), sz(fh), boltZ));
-            boltCoords.push(new THREE.Vector3(sx(bx), sz(0), boltZ));
-          }
-          // Side column bolts near lower edge of upper header and upper edge of lower skirt
-          const headerMidZ = Math.max(zHeaderBot + 10, fh - Math.min(headerHeightMm * 0.75, headerHeightMm - 10));
-          const skirtUpperZ = Math.min(zSkirtTop - 10, Math.max(20, skirtHeightMm * 0.75));
-          boltCoords.push(new THREE.Vector3(sx(0), sz(headerMidZ), boltZ));
-          boltCoords.push(new THREE.Vector3(sx(fw), sz(headerMidZ), boltZ));
-          boltCoords.push(new THREE.Vector3(sx(0), sz(skirtUpperZ), boltZ));
-          boltCoords.push(new THREE.Vector3(sx(fw), sz(skirtUpperZ), boltZ));
-
-          const boltGeo = new THREE.CylinderGeometry(0.034, 0.034, 0.026, 10);
-          boltGeo.rotateX(Math.PI / 2);
-          const boltMat = new THREE.MeshStandardMaterial({
-            color: 0xe2e8f0,
-            metalness: 0.88,
-            roughness: 0.22,
-          });
-          const boltInst = new THREE.InstancedMesh(boltGeo, boltMat, boltCoords.length);
-          const dummy = new THREE.Object3D();
-          for (let i = 0; i < boltCoords.length; i++) {
-            dummy.position.copy(boltCoords[i]);
-            dummy.updateMatrix();
-            boltInst.setMatrixAt(i, dummy.matrix);
-          }
-          boltInst.instanceMatrix.needsUpdate = true;
-          group.add(boltInst);
-        }
-      }
     }
 
     // Heated bed plate (deforms with bed_surface in Frame FEA, animates in Modal mode, & tints in Sensitivity)
@@ -5553,6 +2763,13 @@ export const PrinterViewport: React.FC<Props> = ({
       if (absBed > 0.15) {
         bedEmissive.copy(bedColor);
         bedEmissiveIntensity = absBed * 0.32;
+      }
+    } else if (viewMode === "modal") {
+      const bedModalScalar = getModalNodeScalar(bedNodeIdEarly);
+      stressColorInto(bedModalScalar, bedColor);
+      if (bedModalScalar > 0.35) {
+        bedEmissive.copy(bedColor);
+        bedEmissiveIntensity = (bedModalScalar - 0.25) * 0.32;
       }
     }
 
@@ -5599,7 +2816,7 @@ export const PrinterViewport: React.FC<Props> = ({
         (bedPlateFea.first_layer_risk === "high" || bedPlateFea.first_layer_risk === "critical")
           ? "Bed mount & Z-axis support stiffness / thermal constraint"
           : undefined),
-      bedFlatnessUm: bedPlateFea?.total_flatness_error_um,
+      bedFlatnessUm: bedPlateFea?.plate_flatness_um ?? bedPlateFea?.total_flatness_error_um,
       bedTacoUm: bedPlateFea?.taco_buckling_um,
       bedModeHz: bedPlateFea?.plate_first_mode_hz,
       bedRisk: bedPlateFea?.first_layer_risk,
@@ -6025,6 +3242,10 @@ export const PrinterViewport: React.FC<Props> = ({
         thStruct?.hotend_mount_style ?? sim.spec.toolhead.hotend.mount_style ?? "rigid_4bolt_m3";
       const hotendPresetId =
         thStruct?.hotend_preset_id ?? sim.spec.toolhead.hotend.preset_id ?? null;
+      const presetLow = (hotendPresetId || "").toLowerCase();
+      const isChubeCompact = presetLow.includes("chube_compact");
+      const isChubeHotend =
+        hotendMountStyle === "chube_6bolt_m3_18pcd" || presetLow.startsWith("chube_");
       const hotendStiffness =
         thStruct?.hotend_stiffness_n_per_mm ??
         sim.spec.toolhead.hotend.structural_stiffness_n_per_mm ??
@@ -6079,7 +3300,7 @@ export const PrinterViewport: React.FC<Props> = ({
       let clampEmissiveInt = 0;
 
       const hotendShellColorObj = new THREE.Color(
-        hotendMountStyle === "chube_6bolt_m3_18pcd"
+        isChubeHotend
           ? 0xb4bfcc
           : hotendMountStyle === "rigid_4bolt_m3"
             ? 0xb91c1c
@@ -6121,6 +3342,20 @@ export const PrinterViewport: React.FC<Props> = ({
         const cTot = cRail + cPlate + cBody;
         stageRailFrac = cRail / cTot;
         stagePlateFrac = cPlate / cTot; // No artificial floor: stiff 5mm Al drops to ~2% and stays visibly flat!
+        stageBodyFrac = cBody / cTot;
+      } else if (
+        kRailStage != null &&
+        Number.isFinite(kRailStage) &&
+        kRailStage > 0 &&
+        (kPlateStage == null || kPlateStage <= 0)
+      ) {
+        // Self-contained CAD toolheads bolt directly to the MGN carriage (no separate backplate):
+        // split compliance strictly between MGN rail carriage bearing pitch and SLM/CAD body flex!
+        const cRail = 1 / Math.max(kRailStage, 1);
+        const cBody = 1 / Math.max(kBodyStage, 1);
+        const cTot = cRail + cBody;
+        stageRailFrac = cRail / cTot;
+        stagePlateFrac = 0;
         stageBodyFrac = cBody / cTot;
       } else {
         const cCar = 1 / Math.max(kCarStage, 1);
@@ -6221,7 +3456,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
         stressColorInto(nozScalar, nozzleColorObj);
         nozzleEmissive.copy(nozzleColorObj);
-        nozzleEmissiveInt = 0.22 + nozScalar * 0.52;
+        nozzleEmissiveInt = 0.22 * activeColorScale + nozScalar * 0.52;
       } else if (viewMode === "fea_stress") {
         const mountStress =
           stressMap["toolhead_mount"] ?? stressMap["toolhead_cog_spring"] ?? 0.35;
@@ -6254,14 +3489,39 @@ export const PrinterViewport: React.FC<Props> = ({
         lightenById["toolhead_assembly"] ?? lightenById["toolhead_cog"] ?? lightenById["toolhead"];
       const thSubShare = sim.sensitivity?.subsystem_breakdown?.toolhead?.compliance_share_pct;
 
+      const liveBodyMassG = thStruct?.toolhead_body_mass_g ?? sim.spec.toolhead.total_mass_g;
+      const liveAssembledMassG =
+        thStruct?.assembled_toolhead_mass_g ??
+        liveBodyMassG + (thStruct?.hotend_mass_g ?? sim.spec.toolhead.hotend.mass_g ?? 45);
+      const liveCogOffsetMm = thStruct?.effective_cog_offset_mm ?? sim.spec.toolhead.cog_offset_mm;
+      const liveRailCarriageK =
+        stageStiffnesses?.rail_carriage_n_per_mm ??
+        stageStiffnesses?.carriage_mount_n_per_mm ??
+        sim.spec.toolhead.internal_stiffness_n_per_mm ??
+        450;
+      const liveCarriageK =
+        stageStiffnesses?.carriage_mount_n_per_mm ??
+        stageStiffnesses?.rail_carriage_n_per_mm ??
+        sim.spec.toolhead.internal_stiffness_n_per_mm ??
+        450;
+      const liveBodyK = stageStiffnesses?.body_n_per_mm;
+      const liveHotendK = stageStiffnesses?.hotend_total_n_per_mm ?? hotendStiffness;
+      const isSelfContainedCadInspect = Boolean(thStruct?.cad_toolhead_self_contained);
+
       const carriageInspectInfo: InspectedPartInfo = {
         key: "toolhead_carriage",
-        name: "X-Carriage MGN Block & Backplate",
+        name: isSelfContainedCadInspect
+          ? "X-Carriage MGN Block (Direct CAD Mount)"
+          : "X-Carriage MGN Block & Backplate",
         subsystem: "toolhead",
         partGroupId: "toolhead_mount",
         role: "toolhead",
-        material: `${carriageMountMatId} (${carPlateMm.toFixed(1)}mm)`,
-        profile: `${backplateApp.shortLabel} · ${carPlateMm.toFixed(1)}mm plate · ${Math.round(sim.spec.toolhead.internal_stiffness_n_per_mm ?? 450)} N/mm`,
+        material: isSelfContainedCadInspect
+          ? "MGN Linear Carriage"
+          : `${carriageMountMatId} (${carPlateMm.toFixed(1)}mm)`,
+        profile: isSelfContainedCadInspect
+          ? `MGN Carriage · ${Math.round(liveRailCarriageK).toLocaleString()} N/mm · Direct CAD Bolt-On`
+          : `${backplateApp.shortLabel} · ${carPlateMm.toFixed(1)}mm plate · ${Math.round(liveCarriageK).toLocaleString()} N/mm`,
         complianceSharePct:
           thMountStiff?.compliance_share_pct ?? thMountEntry?.compliance_share_pct ?? thSubShare,
         heatScore: thMountEntry ? getLensScore(thMountEntry, adjointLens) : undefined,
@@ -6278,21 +3538,33 @@ export const PrinterViewport: React.FC<Props> = ({
         name: `X-Carriage Backplate (${backplateApp.shortLabel} · ${carPlateMm.toFixed(1)}mm)`,
       };
       const hotendStyleShort =
-        hotendMountStyle === "chube_6bolt_m3_18pcd"
-          ? "Chube 6× M3 Ti Shell"
-          : hotendMountStyle === "dragon_4bolt_m25"
-            ? "Dragon 4× M2.5 Standoffs"
-            : hotendMountStyle === "groove_mount"
-              ? "V6 Groove Mount"
-              : "4× M3 Rigid Flange";
+        isChubeCompact
+          ? "Chube 4× M3 Ti Shell (16PCD)"
+          : isChubeHotend
+            ? "Chube 6× M3 Ti Shell (18PCD)"
+            : hotendMountStyle === "dragon_4bolt_m25"
+              ? "Dragon 4× M2.5 Standoffs"
+              : hotendMountStyle === "groove_mount"
+                ? "V6 Groove Mount"
+                : "4× M3 Rigid Flange";
       const nozStemInspectInfo: InspectedPartInfo = {
         key: "nozzle_stem",
-        name: `${sim.spec.toolhead.hotend.name || "Hotend Assembly"} (${hotendStyleShort})`,
+        name: `${sim.spec.toolhead.hotend.name || "Hotend Assembly"} (${
+          thStruct?.cad_hotend_braced ? "Braced CAD" : hotendStyleShort
+        })`,
         subsystem: "toolhead",
         partGroupId: "toolhead_mount",
         role: "toolhead",
-        material: `${clampApp.shortLabel} ${hotendClampMm.toFixed(1)}mm clamp · ${sim.spec.toolhead.hotend.heatbreak_material}`,
-        profile: `${Math.round(hotendStiffness)} N/mm · Clamp ${hotendClampMm.toFixed(1)}mm · Drop Z ${Math.round(Math.abs(sim.spec.toolhead.nozzle_offset_mm?.[2] ?? 62))} mm`,
+        material: isSelfContainedCadInspect
+          ? `${thStruct?.cad_hotend_braced ? "Braced Ti CAD · " : "CAD Mount · "}${sim.spec.toolhead.hotend.heatbreak_material}`
+          : `${clampApp.shortLabel} ${hotendClampMm.toFixed(1)}mm clamp · ${sim.spec.toolhead.hotend.heatbreak_material}`,
+        profile: `${Math.round(liveHotendK).toLocaleString()} N/mm · ${
+          isSelfContainedCadInspect
+            ? thStruct?.cad_hotend_braced
+              ? "Bottom Ti Brace"
+              : "Direct CAD Mount"
+            : `Clamp ${hotendClampMm.toFixed(1)}mm`
+        } · Drop Z ${Math.round(Math.abs(sim.spec.toolhead.nozzle_offset_mm?.[2] ?? 62))} mm`,
         complianceSharePct: nozStemEntry?.compliance_share_pct ?? thMountStiff?.compliance_share_pct,
         heatScore: nozStemEntry ? getLensScore(nozStemEntry, adjointLens) : undefined,
         stressMpa: nozStemStress?.von_mises_mpa ?? thMountStress?.von_mises_mpa,
@@ -6303,26 +3575,38 @@ export const PrinterViewport: React.FC<Props> = ({
       };
       const cogInspectInfo: InspectedPartInfo = {
         key: "toolhead_cog",
-        name: thMassLight?.label ?? `Toolhead Body / Extruder (${bodyApp.shortLabel} · ${bodyWallMm.toFixed(1)}mm)`,
+        name:
+          thMassLight?.label ??
+          (isSelfContainedCadInspect
+            ? `${sim.spec.toolhead.name || "Toolhead Body"} (CAD Monoblock)`
+            : `Toolhead Body / Extruder (${bodyApp.shortLabel} · ${bodyWallMm.toFixed(1)}mm)`),
         subsystem: "toolhead",
         partGroupId: "toolhead_assembly",
         role: "toolhead",
-        material: `${bodyApp.shortLabel} · ${bodyWallMm.toFixed(1)}mm wall · ${Math.round(sim.spec.toolhead.total_mass_g)} g`,
-        profile: `Wall ${bodyWallMm.toFixed(1)}mm · CoG Y/Z: ${Math.round(Math.abs(sim.spec.toolhead.cog_offset_mm?.[1] ?? 18))}/${Math.round(Math.abs(sim.spec.toolhead.cog_offset_mm?.[2] ?? 25))} mm`,
+        material: isSelfContainedCadInspect
+          ? `${bodyApp.shortLabel} CAD Monoblock · ${Math.round(liveBodyMassG)} g body (${Math.round(liveAssembledMassG)} g total)`
+          : `${bodyApp.shortLabel} · ${bodyWallMm.toFixed(1)}mm wall · ${Math.round(liveBodyMassG)} g`,
+        profile: `${
+          liveBodyK && liveBodyK > 0
+            ? `${Math.round(liveBodyK).toLocaleString()} N/mm · `
+            : !isSelfContainedCadInspect
+              ? `Wall ${bodyWallMm.toFixed(1)}mm · `
+              : ""
+        }CoG Y/Z: ${Math.round(Math.abs(liveCogOffsetMm?.[1] ?? 18))}/${Math.round(Math.abs(liveCogOffsetMm?.[2] ?? 25))} mm`,
         complianceSharePct: thSubShare,
         heatScore: thMassEntryInspect ? getLensScore(thMassEntryInspect, adjointLens) : undefined,
         hzPer100g: thMassLight?.hz_per_100g ?? thMassEntryInspect?.hz_per_100g,
         whyItHurts: thMassLight?.why_it_hurts,
         actionHint:
           thMassLight?.action_hint ??
-          (sim.spec.toolhead.total_mass_g > 235
+          (liveAssembledMassG > 235
             ? "Moving toolhead inertia limits XY acceleration and input-shaper frequency"
             : undefined),
       };
       const nozzleInspectInfo: InspectedPartInfo = {
         ...nozStemInspectInfo,
         key: "nozzle_tip",
-        name: `Hotend Nozzle (${sim.spec.toolhead.hotend.nozzle_diameter_mm}mm · ${Math.round(hotendStiffness)} N/mm)`,
+        name: `Hotend Nozzle (${sim.spec.toolhead.hotend.nozzle_diameter_mm}mm · ${Math.round(liveHotendK).toLocaleString()} N/mm)`,
       };
 
       // =====================================================================
@@ -6364,8 +3648,70 @@ export const PrinterViewport: React.FC<Props> = ({
       const baseCog = basePos[cogNodeId] ?? cogAnchor;
       const baseNoz = basePos[nozNodeId] ?? nozAnchor;
       const nozRelY = baseNoz.y - baseTh.y; // negative (mm below X-beam)
-      const hotendLen = Math.max(Math.min(Math.abs(nozRelY) * 0.72, 0.56), 0.34);
+
+      const cachedHotendGlb = hotendVisualGlbUrl
+        ? (cadGlbResolvedCache.get(hotendVisualGlbUrl) ?? null)
+        : null;
+      const hotendGlbBounds = hotendVisualGlbUrl
+        ? cadGlbBoundsCache.get(hotendVisualGlbUrl)
+        : undefined;
+      const cachedToolheadGlb = toolheadVisualGlbUrl
+        ? (cadGlbResolvedCache.get(toolheadVisualGlbUrl) ?? null)
+        : null;
+      const toolheadGlbBounds = toolheadVisualGlbUrl
+        ? cadGlbBoundsCache.get(toolheadVisualGlbUrl)
+        : undefined;
+
+      const toolheadGlbLoaded = Boolean(cachedToolheadGlb);
+      const activeToolheadSeSummary =
+        thStruct?.cad_superelements_active?.find((se) => se.category === "toolheads") ?? null;
+      const cadToolheadPort1Mm =
+        toolheadGlbLoaded && activeToolheadSeSummary?.port1_mm && activeToolheadSeSummary.port1_mm.length === 3
+          ? activeToolheadSeSummary.port1_mm
+          : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "microwaved_bowden"
+            ? ([0, -9.76, 30.5] as [number, number, number])
+            : null;
+      const cadPort1Three = cadToolheadPort1Mm
+        ? new THREE.Vector3(
+            cadToolheadPort1Mm[0] * SCALE,
+            cadToolheadPort1Mm[2] * SCALE,
+            -cadToolheadPort1Mm[1] * SCALE
+          )
+        : null;
+      const isCadSelfContainedToolhead = toolheadGlbLoaded && !isDeltaArch && xRailMountTool === "front";
+
+      let hotendLen = Math.max(Math.min(Math.abs(nozRelY) * 0.72, 0.56), 0.34);
+      if (cachedHotendGlb && hotendGlbBounds && !hotendGlbBounds.isEmpty()) {
+        const glbTipDrop =
+          hotendGlbBounds.min.y < -0.05
+            ? -hotendGlbBounds.min.y
+            : hotendGlbBounds.max.y - hotendGlbBounds.min.y;
+        if (Number.isFinite(glbTipDrop) && glbTipDrop > 0.1) {
+          hotendLen = Math.max(0.28, Math.min(1.1, glbTipDrop));
+        }
+      } else if (cadPort1Three) {
+        const nominalHotendMm =
+          thStruct?.hotend_overall_length_mm ?? sim.spec.toolhead.hotend.overall_length_mm ?? 62;
+        hotendLen = Math.max(0.28, Math.min(1.1, nominalHotendMm * SCALE));
+      }
       const collarYRelToTh = nozRelY + hotendLen;
+
+      const hotendGlbLoaded = Boolean(cachedHotendGlb);
+      const hotendGlbTopAbovePort =
+        hotendGlbLoaded && hotendGlbBounds && !hotendGlbBounds.isEmpty() && hotendGlbBounds.min.y < -0.05
+          ? Math.max(0, hotendGlbBounds.max.y)
+          : 0;
+      const hotendGlbHalfX =
+        hotendGlbLoaded && hotendGlbBounds && !hotendGlbBounds.isEmpty()
+          ? Math.max(Math.abs(hotendGlbBounds.min.x), Math.abs(hotendGlbBounds.max.x))
+          : 0;
+      const hotendGlbRearZ =
+        hotendGlbLoaded && hotendGlbBounds && !hotendGlbBounds.isEmpty()
+          ? Math.max(0, -hotendGlbBounds.min.z)
+          : 0;
+      // Keep the procedural clamp collar seated cleanly AT or ABOVE topY (y = 0 in cogGroup)
+      // when a real CAD hotend GLB is loaded so it never swallows the hotend's top cooling windows/screws.
+      const clampBotY = hotendGlbLoaded ? Math.max(0, hotendGlbTopAbovePort) : 0;
 
       // Backplate front face Z coordinate (relative to X-beam centerline) for each x_rail_mount
       const plateThick = carPlateMm * SCALE; // User-tunable 2..15 mm X-carriage backplate
@@ -6374,7 +3720,10 @@ export const PrinterViewport: React.FC<Props> = ({
       const plateH = 0.38; // 38 mm tall (extended if needed to support hotend mount)
       let backplateFrontZ = 0;
       if (!isDeltaArch) {
-        if (xRailMountTool === "front") {
+        if (isCadSelfContainedToolhead) {
+          // Self-contained CAD toolheads (e.g., Microwaved Bowden SLM) bolt directly onto the MGN carriage face
+          backplateFrontZ = beamHalfZ + carTotalH;
+        } else if (xRailMountTool === "front") {
           backplateFrontZ = beamHalfZ + carTotalH + plateThick; // clears MGN carriage even at 15 mm!
         } else {
           const plateInnerZ = Math.max(beamHalfZ + 0.03, carWidth * 0.5 + 0.006);
@@ -6382,20 +3731,43 @@ export const PrinterViewport: React.FC<Props> = ({
         }
       }
 
-      // Compute exact rest positions for Stage 2 (Hotend Mount Collar & Extruder) and Stage 3 (Nozzle Tip)
-      // so the toolhead ALWAYS clears the backplate with ZERO clipping while tracking exact FEA/Modal motion!
+      // On top/bottom/dual_top_bottom mounts with a CAD toolhead, clear any rear flange protrusion behind Port 0
+      const cadToolheadBackClearZ =
+        !isDeltaArch &&
+        !isCadSelfContainedToolhead &&
+        cadPort1Three &&
+        toolheadGlbBounds &&
+        !toolheadGlbBounds.isEmpty() &&
+        toolheadGlbBounds.min.z < -0.002
+          ? -toolheadGlbBounds.min.z + 0.004
+          : 0;
+
+      // Compute exact rest positions for Stage 2 (Hotend Mount Collar / Port 1) and Stage 3 (Nozzle Tip).
+      // When a self-contained CAD toolhead GLB is loaded with an exact CAD Port 1 datum (e.g., Microwaved
+      // Port 0 = MGN12H carriage bolt face, Port 1 = hotend crown mount at [0, -9.76, +30.50] mm),
+      // lock Port 0 flush onto the MGN carriage and place Stage 2 / Stage 3 directly at Port 1!
       const baseNozRelZ = baseNoz.z - baseTh.z;
-      const targetHotendRelZ = isDeltaArch
-        ? baseNozRelZ
-        : Math.max(baseNozRelZ, backplateFrontZ + 0.16);
+      const targetHotendRelZ = cadPort1Three && !isDeltaArch
+        ? backplateFrontZ + cadToolheadBackClearZ + cadPort1Three.z
+        : isDeltaArch
+          ? baseNozRelZ
+          : Math.max(baseNozRelZ, backplateFrontZ + Math.max(0.16, hotendGlbRearZ + 0.025));
       const rearBridgeZ = isDeltaArch ? 0 : -(targetHotendRelZ - backplateFrontZ);
 
-      const stage3RestPos = new THREE.Vector3(baseNoz.x, baseNoz.y, baseTh.z + targetHotendRelZ);
-      const stage2RestPos = new THREE.Vector3(
-        baseNoz.x,
-        baseNoz.y + hotendLen,
-        baseTh.z + targetHotendRelZ
-      );
+      const stage2RestPos = cadPort1Three && !isDeltaArch
+        ? new THREE.Vector3(
+            baseTh.x + cadPort1Three.x,
+            baseTh.y + cadPort1Three.y,
+            baseTh.z + backplateFrontZ + cadToolheadBackClearZ + cadPort1Three.z
+          )
+        : new THREE.Vector3(
+            baseNoz.x,
+            baseNoz.y + hotendLen,
+            baseTh.z + targetHotendRelZ
+          );
+      const stage3RestPos = cadPort1Three && !isDeltaArch
+        ? new THREE.Vector3(stage2RestPos.x, stage2RestPos.y - hotendLen, stage2RestPos.z)
+        : new THREE.Vector3(baseNoz.x, baseNoz.y, baseTh.z + targetHotendRelZ);
       const stage2Offset = stage2RestPos.clone().sub(baseCog);
       const stage3Offset = stage3RestPos.clone().sub(baseNoz);
 
@@ -6423,32 +3795,6 @@ export const PrinterViewport: React.FC<Props> = ({
         emissiveIntensity: backplateEmissiveInt,
         metalness: isHeatMode ? 0.3 : backplateApp.metalness,
         roughness: isHeatMode ? 0.36 : backplateApp.roughness,
-      });
-      const bodyMat = new THREE.MeshStandardMaterial({
-        color: bodyColorObj,
-        emissive: bodyEmissive,
-        emissiveIntensity: bodyEmissiveInt,
-        metalness: isHeatMode ? 0.28 : bodyApp.metalness,
-        roughness: isHeatMode ? 0.38 : bodyApp.roughness,
-      });
-      const clampMat = new THREE.MeshStandardMaterial({
-        color: clampColorObj,
-        emissive: clampEmissive,
-        emissiveIntensity: clampEmissiveInt,
-        metalness: isHeatMode ? 0.3 : clampApp.metalness,
-        roughness: isHeatMode ? 0.36 : clampApp.roughness,
-      });
-      const accentTrimColor = isHeatMode
-        ? bodyColorObj
-        : bodyMatId === "abs_printed"
-          ? new THREE.Color(0xdc2626) // Authentic Voron-red accent strip on charcoal ABS
-          : new THREE.Color(0x475569);
-      const accentTrimMat = new THREE.MeshStandardMaterial({
-        color: accentTrimColor,
-        emissive: bodyEmissive,
-        emissiveIntensity: bodyEmissiveInt * 0.7,
-        metalness: isHeatMode ? 0.25 : 0.2,
-        roughness: 0.42,
       });
 
       // =====================================================================
@@ -6627,10 +3973,17 @@ export const PrinterViewport: React.FC<Props> = ({
           }
         };
 
-        const backplateBotMinY = Math.min(-beamHalfY - 0.09, collarYRelToTh - 0.015);
-        const backplateTopMinY = Math.max(beamHalfY + 0.09, plateH * 0.5, collarYRelToTh + clampH + 0.02);
+        const effCollarRelY = stage2RestPos.y - baseTh.y;
+        const backplateBotMinY = Math.min(-beamHalfY - 0.09, effCollarRelY - 0.015);
+        const backplateTopMinY = Math.max(
+          beamHalfY + 0.09,
+          plateH * 0.5,
+          effCollarRelY + (cadPort1Three ? 0.06 : clampBotY + clampH + 0.02)
+        );
 
-        if (xRailMountTool === "front") {
+        if (isCadSelfContainedToolhead) {
+          // Self-contained CAD toolhead GLB mounts directly to the MGN carriage; omit generic procedural backplate
+        } else if (xRailMountTool === "front") {
           const zRear = beamHalfZ + carTotalH;
           const zCenter = zRear + plateThick * 0.5;
           const yBot = Math.min(-plateH * 0.5, backplateBotMinY);
@@ -6770,13 +4123,100 @@ export const PrinterViewport: React.FC<Props> = ({
       const isCpapToolhead =
         (sim.spec.toolhead.preset_id || "").toLowerCase().includes("cpap") ||
         (sim.spec.toolhead.hotend.part_cooling_cfm ?? 0) >= 16;
+      const extWidth = 0.32 + (bodyWallMm - 4.0) * 0.012; // Scales visibly with body_wall_thickness_mm
 
-      // 2A. Hotend Mount Collar / Clamping Block (y in [0, +clampH], colored by hotend_mount_material)
+      if (cachedToolheadGlb) {
+        // Real 3D CAD Toolhead GLB (PrintSim SI meters Z-up -> Three.js Y-up via Rx(-90 deg) * 10.0)
+        // Port 0 = MGN carriage bolt face at local (0, 0, 0); Port 1 = hotend top crown at cadPort1Three.
+        const cadToolhead = cloneCachedCadGlb(cachedToolheadGlb, {
+          isHeatMode,
+          heatColor: bodyColorObj,
+          heatEmissive: bodyEmissive,
+          heatEmissiveIntensity: bodyEmissiveInt,
+          inspectInfo: cogInspectInfo,
+          tagInspectable,
+        });
+        cadToolhead.scale.setScalar(CAD_M_TO_THREE);
+        cadToolhead.rotation.x = -Math.PI * 0.5;
+        const hideBottomBrace =
+          thStruct?.use_hotend_bottom_brace === false ||
+          sim.spec.toolhead.use_hotend_bottom_brace === false ||
+          !thStruct?.cad_hotend_brace_available;
+        const activeShieldMode = thStruct?.nozzle_shield_mode ?? "microwaved";
+        const hideMbtShield =
+          !thStruct?.nozzle_shield_options?.includes("microwaved") ||
+          activeShieldMode !== "microwaved";
+        if (hideBottomBrace || hideMbtShield) {
+          cadToolhead.traverse((obj) => {
+            const nm = (obj.name || "").toLowerCase();
+            if (
+              hideBottomBrace &&
+              (nm === "hotend_brace" ||
+                nm === "fastener_11" ||
+                nm === "fastener_12" ||
+                nm === "fastener_13")
+            ) {
+              obj.visible = false;
+            }
+            if (hideMbtShield && (nm === "mbt_shield" || nm === "fastener_19")) {
+              obj.visible = false;
+            }
+          });
+        }
+        if (cadPort1Three) {
+          // cogGroup origin IS Port 1 (hotend top mount), so shifting by -cadPort1Three keeps Port 1
+          // concentric with the hotend (on CoreXY/Cartesian AND Delta) and locks Port 0 flush to MGN12H!
+          cadToolhead.position.set(-cadPort1Three.x, -cadPort1Three.y, -cadPort1Three.z);
+        } else {
+          let thPosY = -collarYRelToTh;
+          let thPosZ = isDeltaArch ? 0 : rearBridgeZ;
+          if (toolheadGlbBounds && !toolheadGlbBounds.isEmpty()) {
+            if (toolheadGlbBounds.min.y < -0.05) {
+              thPosY = Math.max(-collarYRelToTh, -hotendLen + 0.04 - toolheadGlbBounds.min.y);
+            } else {
+              thPosY = -toolheadGlbBounds.min.y;
+            }
+            thPosZ = isDeltaArch
+              ? -0.5 * (toolheadGlbBounds.min.z + toolheadGlbBounds.max.z)
+              : rearBridgeZ + Math.max(0, -toolheadGlbBounds.min.z);
+          }
+          cadToolhead.position.set(0, thPosY, thPosZ);
+        }
+        cogGroup.add(cadToolhead);
+      } else {
+        const bodyMat = new THREE.MeshStandardMaterial({
+          color: bodyColorObj,
+          emissive: bodyEmissive,
+          emissiveIntensity: bodyEmissiveInt,
+          metalness: isHeatMode ? 0.28 : bodyApp.metalness,
+          roughness: isHeatMode ? 0.38 : bodyApp.roughness,
+        });
+        const clampMat = new THREE.MeshStandardMaterial({
+          color: clampColorObj,
+          emissive: clampEmissive,
+          emissiveIntensity: clampEmissiveInt,
+          metalness: isHeatMode ? 0.3 : clampApp.metalness,
+          roughness: isHeatMode ? 0.36 : clampApp.roughness,
+        });
+        const accentTrimColor = isHeatMode
+          ? bodyColorObj
+          : bodyMatId === "abs_printed"
+            ? new THREE.Color(0xdc2626) // Authentic Voron-red accent strip on charcoal ABS
+            : new THREE.Color(0x475569);
+        const accentTrimMat = new THREE.MeshStandardMaterial({
+          color: accentTrimColor,
+          emissive: bodyEmissive,
+          emissiveIntensity: bodyEmissiveInt * 0.7,
+          metalness: isHeatMode ? 0.25 : 0.2,
+          roughness: 0.42,
+        });
+
+      // 2A. Hotend Mount Collar / Clamping Block (y in [clampBotY, clampBotY + clampH], colored by hotend_mount_material)
       const clampCollar = new THREE.Mesh(
         new THREE.CylinderGeometry(0.148, 0.148, clampH, 22, isModalSubdiv ? 4 : 1),
         clampMat
       );
-      clampCollar.position.set(0, clampH * 0.5, 0);
+      clampCollar.position.set(0, clampBotY + clampH * 0.5, 0);
       tagInspectable(clampCollar, nozStemInspectInfo);
       cogGroup.add(clampCollar);
 
@@ -6789,7 +4229,7 @@ export const PrinterViewport: React.FC<Props> = ({
             : new THREE.BoxGeometry(0.32, clampH, bridgeDepth),
           clampMat
         );
-        clampWeb.position.set(0, clampH * 0.5, rearBridgeZ * 0.5);
+        clampWeb.position.set(0, clampBotY + clampH * 0.5, rearBridgeZ * 0.5);
         tagInspectable(clampWeb, nozStemInspectInfo);
         cogGroup.add(clampWeb);
       }
@@ -6798,13 +4238,12 @@ export const PrinterViewport: React.FC<Props> = ({
       for (const sx of [-1, 1]) {
         const cb = new THREE.Mesh(m3SocketGeo, boltHeadMat);
         cb.rotation.x = Math.PI * 0.5;
-        cb.position.set(sx * 0.11, clampH * 0.5, 0.148);
+        cb.position.set(sx * 0.11, clampBotY + clampH * 0.5, 0.148);
         cogGroup.add(cb);
       }
 
       // 2B. Upper Direct-Drive Extruder Assembly (or sleek Bowden coupler turret)
-      const extBotY = clampH;
-      const extWidth = 0.32 + (bodyWallMm - 4.0) * 0.012; // Scales visibly with body_wall_thickness_mm
+      const extBotY = clampBotY + clampH;
       if (isDirectDrive) {
         const extH = 0.22;
         const extDepth = isDeltaArch ? 0.22 : Math.max(Math.abs(rearBridgeZ) + 0.12, 0.24);
@@ -6995,7 +4434,10 @@ export const PrinterViewport: React.FC<Props> = ({
       const cageCenterZ = isDeltaArch ? -0.01 : rearBridgeZ + cageDepth * 0.5;
 
       // Cheek thickness driven directly by body_wall_thickness_mm (grows outward, never clips hotend!)
-      const cheekInnerX = hotendMountStyle === "chube_6bolt_m3_18pcd" ? 0.212 : 0.189;
+      const cheekInnerX = Math.max(
+        isChubeHotend ? (isChubeCompact ? 0.198 : 0.212) : 0.189,
+        hotendGlbHalfX > 0 ? hotendGlbHalfX + 0.055 : 0
+      );
       const cheekThickX = 0.022 + (bodyWallMm - 2.0) * 0.0055;
       const sideCheekX = cheekInnerX + cheekThickX * 0.5;
       const sideCheekOuterX = cheekInnerX + cheekThickX;
@@ -7003,7 +4445,7 @@ export const PrinterViewport: React.FC<Props> = ({
       // Continuous duct geometry anchor Y coordinates (ZERO floating gaps at any hotendLen!)
       const ductElbowY = -(hotendLen - 0.145);
       const ductTipY = -(hotendLen - 0.068);
-      const cheekTopY = Math.min(0.035, clampH * 0.55);
+      const cheekTopY = clampBotY + Math.min(0.035, clampH * 0.55);
       const cheekBotY = ductElbowY - 0.012;
       const cheekH = Math.max(cheekTopY - cheekBotY, 0.14);
       const cheekCenterY = 0.5 * (cheekTopY + cheekBotY);
@@ -7152,10 +4594,21 @@ export const PrinterViewport: React.FC<Props> = ({
         cpapInlet.rotation.x = -0.22;
         cogGroup.add(cpapInlet);
       }
+      }
 
       cogGroup.position.copy(cogAnchor).add(stage2Offset);
       if (viewMode === "fea_stress") {
         cogGroup.quaternion.copy(stage1FeaQuat);
+        if (cadPort1Three && !isDeltaArch) {
+          // Pivot CAD toolhead cleanly around Port 0 / carriage bolt face (not Port 1!)
+          // so microwaved_bowden stays seated flush on the MGN12 carriage instead of swinging off.
+          const port0LocalInTh = new THREE.Vector3(0, 0, backplateFrontZ + cadToolheadBackClearZ);
+          const port0World = isCadSelfContainedToolhead
+            ? thAnchor.clone().add(port0LocalInTh)
+            : port0LocalInTh.applyQuaternion(backplateGroup.quaternion).add(thAnchor);
+          const port1FromPort0 = cadPort1Three.clone().applyQuaternion(stage1FeaQuat);
+          cogGroup.position.copy(port0World).add(port1FromPort0);
+        }
       }
       group.add(cogGroup);
 
@@ -7165,7 +4618,46 @@ export const PrinterViewport: React.FC<Props> = ({
       // (bottom of Hotend Mount Collar), articulating cleanly with toolhead_cog -> nozzle_tip!
       // =====================================================================
       const nozzleGroup = new THREE.Group();
+      const topY = hotendLen;
 
+      if (cachedHotendGlb) {
+        // Real 3D CAD Hotend GLB: Port 0 (top mounting flange) at [0, 0, 0], Port 1 (nozzle tip) at [0, 0, -L_m].
+        // Rx(-90 deg) maps PrintSim (+X, +Y, +Z) -> Three.js (+X, +Z, -Y); scale 10.0 maps m -> Three.js units.
+        const cadHotend = cloneCachedCadGlb(cachedHotendGlb, {
+          isHeatMode,
+          heatColor: hotendShellColorObj,
+          heatEmissive: hotendShellEmissive,
+          heatEmissiveIntensity: hotendShellEmissiveInt,
+          inspectInfo: nozStemInspectInfo,
+          tagInspectable,
+        });
+        cadHotend.scale.setScalar(CAD_M_TO_THREE);
+        const hideStockTricornBucket =
+          Boolean(thStruct?.nozzle_shield_options?.length) &&
+          thStruct?.nozzle_shield_mode !== "stock";
+        if (hideStockTricornBucket) {
+          cadHotend.traverse((obj) => {
+            if ((obj.name || "").toLowerCase() === "ti_shield_bucket") {
+              obj.visible = false;
+            }
+          });
+        }
+        // Coupled assembly GLBs (e.g. assemblies/microwaved_bowden__tricorn_long) are already baked in the
+        // exact Microwaved assembly orientation (brace in +Y toward the MGN12H rail); only standalone
+        // hotends/tricorn_* GLBs need a 180 deg vertical spin to face Microwaved's Ti Hotend_Brace.
+        const isCoupledAssemblyGlb = Boolean(hotendVisualGlbUrl?.includes("/assemblies/"));
+        const spinHotend180 =
+          !isCoupledAssemblyGlb &&
+          (sim.spec.toolhead.preset_id || "").toLowerCase() === "microwaved_bowden" &&
+          presetLow.startsWith("tricorn_");
+        cadHotend.rotation.set(-Math.PI * 0.5, 0, spinHotend180 ? Math.PI : 0);
+        const hotendYOffset =
+          hotendGlbBounds && !hotendGlbBounds.isEmpty() && hotendGlbBounds.min.y >= -0.05
+            ? -hotendGlbBounds.min.y
+            : topY;
+        cadHotend.position.set(0, hotendYOffset, 0);
+        nozzleGroup.add(cadHotend);
+      } else {
       const nozzleMat = new THREE.MeshStandardMaterial({
         color: nozzleColorObj,
         emissive: nozzleEmissive,
@@ -7177,8 +4669,8 @@ export const PrinterViewport: React.FC<Props> = ({
         color: hotendShellColorObj,
         emissive: hotendShellEmissive,
         emissiveIntensity: hotendShellEmissiveInt,
-        metalness: isHeatMode ? 0.32 : hotendMountStyle === "chube_6bolt_m3_18pcd" ? 0.86 : 0.84,
-        roughness: isHeatMode ? 0.36 : hotendMountStyle === "chube_6bolt_m3_18pcd" ? 0.26 : 0.24,
+        metalness: isHeatMode ? 0.32 : isChubeHotend ? 0.86 : 0.84,
+        roughness: isHeatMode ? 0.36 : isChubeHotend ? 0.26 : 0.24,
       });
       const heaterBlockMat = new THREE.MeshStandardMaterial({
         color: heaterBlockColorObj,
@@ -7207,30 +4699,27 @@ export const PrinterViewport: React.FC<Props> = ({
       nozzleNeck.position.y = 0.14;
       nozzleGroup.add(nozzleNeck);
 
-      const topY = hotendLen;
-      const presetLow = (hotendPresetId || "").toLowerCase();
-
-      if (hotendMountStyle === "chube_6bolt_m3_18pcd") {
-        // Luke's Lab Chube (Compact / Air / Conduction):
-        // Unmistakable 25.4 mm OD brushed satin-titanium outer structural tube + 6x M3 Torx flange on 18 mm PCD
-        // + exposed gleaming copper melt core tip (+ CNC Al conduction block OR side 2510 fan module!)
-        const shellBotY = 0.178;
+      if (isChubeHotend) {
+        // Luke's Lab Chube (Compact: Ø22.23 mm + 4× M3 16 mm PCD + sock;
+        // Air / Conduction: Ø25.4 mm + 6× M3 Torx 18 mm PCD + shield + side fan OR CNC Al conduction block)
+        const shellBotY = isChubeCompact ? 0.162 : 0.178;
         const flangeH = 0.036;
         const shellTopY = Math.max(topY - flangeH, shellBotY + 0.14);
         const shellLen = shellTopY - shellBotY;
+        const chubeR = isChubeCompact ? 0.111 : 0.127;
 
         // Exposed gleaming copper melt core peeking from bottom of satin-titanium shell
         const copperCore = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.094, 0.082, 0.052, 20, isModalSubdiv ? 2 : 1),
+          new THREE.CylinderGeometry(chubeR * 0.74, chubeR * 0.65, 0.052, 20, isModalSubdiv ? 2 : 1),
           heaterBlockMat
         );
-        copperCore.position.y = 0.16;
+        copperCore.position.y = isChubeCompact ? 0.15 : 0.16;
         tagInspectable(copperCore, nozStemInspectInfo);
         nozzleGroup.add(copperCore);
 
-        // 25.4 mm OD (r = 0.127) satin-titanium cylindrical outer structural tube
+        // Satin-titanium cylindrical outer structural tube (Ø22.23 mm Compact / Ø25.4 mm Air & Conduction)
         const tiShell = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.127, 0.127, shellLen, 28, isModalSubdiv ? 12 : 1),
+          new THREE.CylinderGeometry(chubeR, chubeR, shellLen, 28, isModalSubdiv ? 12 : 1),
           hotendShellMat
         );
         tiShell.position.y = 0.5 * (shellBotY + shellTopY);
@@ -7238,7 +4727,7 @@ export const PrinterViewport: React.FC<Props> = ({
         nozzleGroup.add(tiShell);
 
         // Machined circumferential CNC accent rings on the titanium shell
-        const tiRingGeo = new THREE.TorusGeometry(0.128, 0.004, 8, 28);
+        const tiRingGeo = new THREE.TorusGeometry(chubeR + 0.001, 0.004, 8, 28);
         for (const frac of [0.16, 0.84]) {
           const ring = new THREE.Mesh(tiRingGeo, darkScrewMat);
           ring.rotation.x = Math.PI * 0.5;
@@ -7246,9 +4735,9 @@ export const PrinterViewport: React.FC<Props> = ({
           nozzleGroup.add(ring);
         }
 
-        // Top 6-bolt circular mounting flange + 6 visible M3 Torx bolts on 18 mm PCD (r = 0.090)
+        // Top circular mounting flange + visible M3 bolts (4× on 16 mm PCD for Compact; 6× on 18 mm PCD for Air/Conduction)
         const flange = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.152, 0.152, flangeH, 24),
+          new THREE.CylinderGeometry(chubeR + 0.025, chubeR + 0.025, flangeH, 24),
           hotendShellMat
         );
         flange.position.y = shellTopY + flangeH * 0.5;
@@ -7256,14 +4745,33 @@ export const PrinterViewport: React.FC<Props> = ({
         nozzleGroup.add(flange);
 
         const m3TorxGeo = new THREE.CylinderGeometry(0.017, 0.017, 0.022, 8);
-        for (let bi = 0; bi < 6; bi++) {
-          const ang = (bi / 6) * Math.PI * 2;
+        const boltCount = isChubeCompact ? 4 : 6;
+        const boltPcdR = isChubeCompact ? 0.08 : 0.09;
+        const boltPhase = isChubeCompact ? Math.PI * 0.25 : 0;
+        for (let bi = 0; bi < boltCount; bi++) {
+          const ang = boltPhase + (bi / boltCount) * Math.PI * 2;
           const bolt = new THREE.Mesh(m3TorxGeo, boltHeadMat);
-          bolt.position.set(Math.cos(ang) * 0.09, shellTopY + flangeH + 0.008, Math.sin(ang) * 0.09);
+          bolt.position.set(
+            Math.cos(ang) * boltPcdR,
+            shellTopY + flangeH + 0.008,
+            Math.sin(ang) * boltPcdR
+          );
           nozzleGroup.add(bolt);
         }
 
-        if (presetLow.includes("conduction")) {
+        if (isChubeCompact) {
+          // Chube Compact: Ø26.22 mm × 12 mm lower silicone sock wrapping the bottom melt section
+          const compactSock = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.131, 0.126, Math.min(0.12, shellLen * 0.44), 24),
+            new THREE.MeshStandardMaterial({
+              color: isHeatMode ? heaterBlockColorObj : 0x1e293b,
+              metalness: 0.08,
+              roughness: 0.72,
+            })
+          );
+          compactSock.position.y = shellBotY + Math.min(0.06, shellLen * 0.22);
+          nozzleGroup.add(compactSock);
+        } else if (presetLow.includes("conduction")) {
           // Chube Conduction: iconic bright machined CNC Aluminum conduction heatsink block
           const condH = Math.min(0.145, shellLen * 0.48);
           const condBlock = new THREE.Mesh(
@@ -7578,6 +5086,7 @@ export const PrinterViewport: React.FC<Props> = ({
           nozzleGroup.add(b);
         }
       }
+      }
 
       // Align articulated hotendGroup: dead-vertical at rest, articulating cleanly with cog -> nozzle flex!
       const baseHotendRefDir = new THREE.Vector3().subVectors(baseCog, baseNoz);
@@ -7594,6 +5103,20 @@ export const PrinterViewport: React.FC<Props> = ({
           const qAng = 2 * Math.acos(Math.min(1, Math.abs(nozzleGroup.quaternion.w)));
           if (qAng > 0.42) {
             nozzleGroup.quaternion.slerp(new THREE.Quaternion(), 1 - 0.42 / qAng);
+          }
+        }
+        if (thStruct?.cad_hotend_braced) {
+          // Lower Ti Hotend_Brace locks Tricorn coherently to the toolhead body:
+          // tightly damp/clamp relative rotation so Tricorn never shears through Hotend_Brace.
+          const relQ = cogGroup.quaternion.clone().invert().multiply(nozzleGroup.quaternion);
+          const relAng = 2 * Math.acos(Math.min(1, Math.abs(relQ.w)));
+          const maxBracedRel = 0.015;
+          if (relAng > maxBracedRel) {
+            nozzleGroup.quaternion
+              .copy(cogGroup.quaternion)
+              .slerp(nozzleGroup.quaternion, maxBracedRel / relAng);
+          } else {
+            nozzleGroup.quaternion.slerp(cogGroup.quaternion, 0.85);
           }
         }
         // Pin hotend top face (local 0, hotendLen, 0) flush inside bottom of green collar!
@@ -7638,7 +5161,11 @@ export const PrinterViewport: React.FC<Props> = ({
             new THREE.BoxGeometry(extWidth, 0.24, 0.24),
             ghostSilMat
           );
-          ghostBody.position.set(stage2RestPos.x, stage2RestPos.y + clampH + 0.11, stage2RestPos.z);
+          ghostBody.position.set(
+            stage2RestPos.x,
+            stage2RestPos.y + clampBotY + clampH + 0.11,
+            stage2RestPos.z
+          );
           group.add(ghostBody);
 
           const ghostHotendGrp = new THREE.Group();
@@ -7646,7 +5173,7 @@ export const PrinterViewport: React.FC<Props> = ({
           ghostNoz.rotation.x = Math.PI;
           ghostNoz.position.y = 0.046;
           ghostHotendGrp.add(ghostNoz);
-          const ghostShellR = hotendMountStyle === "chube_6bolt_m3_18pcd" ? 0.127 : 0.096;
+          const ghostShellR = isChubeHotend ? (isChubeCompact ? 0.111 : 0.127) : 0.096;
           const ghostShellLen = Math.max(topY - 0.14, 0.16);
           const ghostShell = new THREE.Mesh(
             new THREE.CylinderGeometry(ghostShellR, ghostShellR, ghostShellLen, 12),
@@ -7729,7 +5256,9 @@ export const PrinterViewport: React.FC<Props> = ({
 
         const bodyRootLocal = isDeltaArch
           ? new THREE.Vector3(0, -collarYRelToTh, 0)
-          : new THREE.Vector3(0, 0, rearBridgeZ);
+          : cadPort1Three
+            ? new THREE.Vector3(-cadPort1Three.x, -cadPort1Three.y, -cadPort1Three.z)
+            : new THREE.Vector3(0, 0, rearBridgeZ);
 
         const plateInnerZRef = backplateFrontZ - plateThick;
         const topFlangeY0Ref = beamHalfY + carTotalH;
@@ -7798,16 +5327,47 @@ export const PrinterViewport: React.FC<Props> = ({
           : computeBackplateS(collarRelToTh.x, collarRelToTh.y, backplateFrontZ);
         const collarBpW = 0.5 * collarBpS * collarBpS * (3 - collarBpS);
 
-        const computeBodyS = (_x: number, y: number, z: number): number => {
+        const computeBodyS = (x: number, y: number, z: number): number => {
           if (isDeltaArch) {
             const yMountInCog = Math.max(-collarYRelToTh, 0.12);
             return THREE.MathUtils.clamp((yMountInCog - y) / yMountInCog, 0, 1);
+          }
+          if (cadPort1Three) {
+            // Self-contained CAD monoblock bolted directly to the MGN carriage at Port 0 = bodyRootLocal:
+            // keep the entire 4x M3 bolted mounting pad 100% solid (s2 = 0, zero sliding or separation)
+            // and transition C1-smoothly into elastic flexure outward toward Port 1 (s2 = 1 at Port 1)!
+            const dx = Math.abs(x - bodyRootLocal.x);
+            const dy = Math.abs(y - bodyRootLocal.y);
+            const dz = z - bodyRootLocal.z; // +Z projects forward away from MGN carriage face
+            const padHalfX = Math.max(boltSpanX * 0.68, 0.135);
+            const padHalfY = Math.max(boltSpanW * 0.68, 0.135);
+            const padDepthZ = 0.038; // 3.8 mm clamped mounting flange under the 4x M3 screws
+            if (dx <= padHalfX && dy <= padHalfY && dz <= padDepthZ) {
+              return 0;
+            }
+            const ex = Math.max(0, dx - padHalfX);
+            const ey = Math.max(0, dy - padHalfY);
+            const ez = Math.max(0, dz - padDepthZ);
+            const refEx = Math.max(0, Math.abs(cadPort1Three.x) - padHalfX);
+            const refEy = Math.max(0, Math.abs(cadPort1Three.y) - padHalfY);
+            const refEz = Math.max(0, cadPort1Three.z - padDepthZ);
+            const refSpan = Math.max(Math.hypot(refEx, refEy, refEz), 0.08);
+            const sRadial = Math.hypot(ex, ey, ez) / refSpan;
+            // Forward Z projection locks the entire front hotend centerline plane (Port 1 + Hotend_Brace)
+            // to flex coherently (s = 1) while keeping the 4-bolt MGN pad strictly rigid (s = 0).
+            const sForward = refEz > 0.02 ? ez / refEz : 0;
+            return THREE.MathUtils.clamp(Math.max(sRadial, sForward), 0, 1);
           }
           const bodySpanZ = Math.max(Math.abs(rearBridgeZ) * 0.65, 0.09);
           return THREE.MathUtils.clamp((z - rearBridgeZ) / bodySpanZ, 0, 1);
         };
 
-        const hotendLut = getHotendProfileLUT(hotendMountStyle);
+        const resolvedModalHotendStyle = thStruct?.cad_hotend_braced
+          ? "braced"
+          : isChubeHotend
+            ? "chube_6bolt_m3_18pcd"
+            : hotendMountStyle;
+        const hotendLut = getHotendProfileLUT(resolvedModalHotendStyle);
         const elasticMeshes: ElasticDeformMesh[] = [];
         const replacedGeos = new Set<THREE.BufferGeometry>();
 
@@ -7815,25 +5375,75 @@ export const PrinterViewport: React.FC<Props> = ({
           targetGroup: THREE.Group,
           stage: "backplate" | "body" | "hotend"
         ) => {
-          for (const child of targetGroup.children) {
-            if (!(child instanceof THREE.Mesh) || !child.geometry) continue;
-            child.updateMatrix();
+          targetGroup.updateMatrixWorld(true);
+          const invTargetWorld = targetGroup.matrixWorld.clone().invert();
+          const meshesToBake: THREE.Mesh[] = [];
+          targetGroup.traverseVisible((obj) => {
+            if (obj instanceof THREE.Mesh && obj.geometry) {
+              meshesToBake.push(obj);
+            }
+          });
+          const relMatrix = new THREE.Matrix4();
+          for (const child of meshesToBake) {
+            relMatrix.multiplyMatrices(invTargetWorld, child.matrixWorld);
             const origGeo = child.geometry;
             const bakedGeo = origGeo.clone();
-            bakedGeo.applyMatrix4(child.matrix);
+            bakedGeo.applyMatrix4(relMatrix);
+
+            const rawPosAttr = bakedGeo.getAttribute("position");
+            if (!rawPosAttr || rawPosAttr.count === 0) {
+              bakedGeo.dispose();
+              continue;
+            }
+            const count = rawPosAttr.count;
+            let posAttr: THREE.BufferAttribute;
+            if (
+              rawPosAttr instanceof THREE.BufferAttribute &&
+              rawPosAttr.array instanceof Float32Array
+            ) {
+              posAttr = rawPosAttr;
+            } else {
+              const flatPos = new Float32Array(count * 3);
+              for (let i = 0; i < count; i++) {
+                flatPos[i * 3] = rawPosAttr.getX(i);
+                flatPos[i * 3 + 1] = rawPosAttr.getY(i);
+                flatPos[i * 3 + 2] = rawPosAttr.getZ(i);
+              }
+              posAttr = new THREE.BufferAttribute(flatPos, 3);
+              bakedGeo.setAttribute("position", posAttr);
+            }
+
+            const rawNormAttr = bakedGeo.getAttribute("normal");
+            let restNorm: Float32Array | null = null;
+            if (rawNormAttr && rawNormAttr.count === count) {
+              if (
+                rawNormAttr instanceof THREE.BufferAttribute &&
+                rawNormAttr.array instanceof Float32Array
+              ) {
+                restNorm = new Float32Array(rawNormAttr.array);
+              } else {
+                const flatNorm = new Float32Array(count * 3);
+                for (let i = 0; i < count; i++) {
+                  flatNorm[i * 3] = rawNormAttr.getX(i);
+                  flatNorm[i * 3 + 1] = rawNormAttr.getY(i);
+                  flatNorm[i * 3 + 2] = rawNormAttr.getZ(i);
+                }
+                bakedGeo.setAttribute("normal", new THREE.BufferAttribute(flatNorm, 3));
+                restNorm = new Float32Array(flatNorm);
+              }
+            }
+
             child.geometry = bakedGeo;
+            if (child.parent !== targetGroup) {
+              targetGroup.add(child);
+            }
             child.position.set(0, 0, 0);
             child.rotation.set(0, 0, 0);
             child.scale.set(1, 1, 1);
             child.updateMatrix();
             replacedGeos.add(origGeo);
 
-            const posAttr = bakedGeo.getAttribute("position") as THREE.BufferAttribute | undefined;
-            if (!posAttr || posAttr.count === 0) continue;
             const restPos = new Float32Array(posAttr.array as Float32Array);
-            const normAttr = bakedGeo.getAttribute("normal") as THREE.BufferAttribute | undefined;
-            const restNorm = normAttr ? new Float32Array(normAttr.array as Float32Array) : null;
-            const count = posAttr.count;
             const flexS = new Float32Array(count);
 
             let bpFlexS: Float32Array | undefined;
@@ -7932,8 +5542,20 @@ export const PrinterViewport: React.FC<Props> = ({
         stateRef.current.modalPlateFlexFrac = stagePlateFrac;
         stateRef.current.modalBodyFlexFrac = stageBodyFrac;
         stateRef.current.modalCollarBpW = collarBpW;
-        stateRef.current.modalHotendStyle = hotendMountStyle;
+        stateRef.current.modalHotendStyle = resolvedModalHotendStyle;
+        stateRef.current.modalHotendBraced = Boolean(thStruct?.cad_hotend_braced);
         stateRef.current.modalBackplatePivotLocal.copy(bpPivotLocal);
+        if (isDeltaArch) {
+          stateRef.current.modalRailPivotLocal.set(0, 0, 0);
+        } else if (xRailMountTool === "front") {
+          stateRef.current.modalRailPivotLocal.set(0, 0, beamHalfZ + railThickTool * 0.5);
+        } else if (xRailMountTool === "top") {
+          stateRef.current.modalRailPivotLocal.set(0, beamHalfY + railThickTool * 0.5, 0);
+        } else if (xRailMountTool === "bottom") {
+          stateRef.current.modalRailPivotLocal.set(0, -(beamHalfY + railThickTool * 0.5), 0);
+        } else {
+          stateRef.current.modalRailPivotLocal.set(0, 0, 0);
+        }
         stateRef.current.modalBodyRootLocal.copy(bodyRootLocal);
         stateRef.current.modalCollarRelToTh.copy(collarRelToTh);
         stateRef.current.modalBodyDepthRef = isDeltaArch ? 0.22 : Math.max(Math.abs(rearBridgeZ) + 0.12, 0.24);
@@ -8044,8 +5666,10 @@ export const PrinterViewport: React.FC<Props> = ({
       const defectHex: Record<string, string> = {
         ok: "#22c55e",
         ringing: "#f59e0b",
+        smoothing: "#fb923c",
         underextrusion: "#ef4444",
         step_skip: "#d946ef",
+        belt_slip: "#f43f5e",
         cooling: "#38bdf8",
         travel: "#475569",
       };
@@ -8109,8 +5733,10 @@ export const PrinterViewport: React.FC<Props> = ({
     layerLimit,
     adjointLens,
     modalColorMode,
+    modalScaleMode,
     showBedWarp,
     toolheadPunchIn,
+    cadGlbVersion,
   ]);
 
   // Smooth camera transition into / out of Toolhead Punch-In macro view
@@ -8244,6 +5870,10 @@ export const PrinterViewport: React.FC<Props> = ({
       : null;
 
   const bedPlateFeaHud = sim?.bed_plate_fea ?? null;
+  const bedPlateFlatnessHudUm =
+    bedPlateFeaHud != null
+      ? (bedPlateFeaHud.plate_flatness_um ?? bedPlateFeaHud.total_flatness_error_um)
+      : null;
   const canShowBedWarpHud =
     Boolean(bedPlateFeaHud) &&
     (viewMode === "assembly" ||
@@ -8253,7 +5883,7 @@ export const PrinterViewport: React.FC<Props> = ({
   const bedWarpHintHot =
     canShowBedWarpHud &&
     !showBedWarp &&
-    (bedPlateFeaHud?.total_flatness_error_um ?? 0) >= 50;
+    (bedPlateFlatnessHudUm ?? 0) >= 50;
   const bedWarpActive = canShowBedWarpHud && showBedWarp && Boolean(bedPlateFeaHud);
   const activeToolsCount =
     (toolheadPunchIn ? 1 : 0) + (bedWarpActive ? 1 : 0) + (showHudDetails ? 1 : 0);
@@ -8351,23 +5981,27 @@ export const PrinterViewport: React.FC<Props> = ({
                   </button>
                 )}
 
-                {canShowBedWarpHud && bedPlateFeaHud && (
+                {canShowBedWarpHud && bedPlateFeaHud && bedPlateFlatnessHudUm != null && (
                   <button
                     type="button"
                     role="menuitemcheckbox"
                     aria-checked={showBedWarp}
                     className={`hud-tools-item ${showBedWarp ? "active-amber" : ""}`}
                     onClick={() => setShowBedWarp(!showBedWarp)}
-                    title={`Toggle 3D MITC4 Heated Bed Thermal/Gravity Warp Mesh (Flatness error: ${bedPlateFeaHud.total_flatness_error_um.toFixed(
+                    title={`Toggle 3D MITC4 Heated Bed Thermal/Gravity Warp Mesh (Plate flatness: ${bedPlateFlatnessHudUm.toFixed(
                       1
-                    )} µm, Taco: ${bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm)`}
+                    )} µm${
+                      (bedPlateFeaHud.rigid_tilt_um ?? 0) >= 1
+                        ? `, Rigid tilt: ${(bedPlateFeaHud.rigid_tilt_um ?? 0).toFixed(1)} µm`
+                        : ""
+                    }, Taco: ${bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm)`}
                   >
                     <span className="hud-tools-item-label">Bed Thermal / Warp Mesh</span>
                     <span className="hud-tools-item-meta">
                       <span
                         className={`hud-tools-badge ${bedWarpHintHot ? "hot" : ""}`}
                       >
-                        {Math.round(bedPlateFeaHud.total_flatness_error_um)} µm
+                        {Math.round(bedPlateFlatnessHudUm)} µm
                       </span>
                       <span className={`hud-tools-toggle ${showBedWarp ? "on-amber" : ""}`}>
                         {showBedWarp ? "ON" : "OFF"}
@@ -8789,13 +6423,48 @@ export const PrinterViewport: React.FC<Props> = ({
           const railPct = Math.max(0, Math.min(100, bd?.rail_and_xbeam_pct ?? 0));
           const bodyPct = Math.max(0, Math.min(100, bd?.carriage_and_body_pct ?? 0));
           const hotendPct = Math.max(0, Math.min(100, bd?.hotend_and_nozzle_pct ?? 0));
+          const hasFourWayHud =
+            bd?.rail_carriage_pct != null && bd?.toolhead_body_pct != null;
+          const railCarPct = hasFourWayHud
+            ? Math.max(0, Math.min(100, bd!.rail_carriage_pct!))
+            : 0;
+          const bodyOnlyPct = hasFourWayHud
+            ? Math.max(0, Math.min(100, bd!.toolhead_body_pct!))
+            : 0;
           const domSource = bd?.dominant_flex_source;
           const domPct =
             domSource === "hotend_nozzle"
               ? hotendPct
-              : domSource === "carriage_body"
-                ? bodyPct
-                : railPct;
+              : domSource === "rail_carriage" && hasFourWayHud
+                ? railCarPct
+                : domSource === "toolhead_body" && hasFourWayHud
+                  ? bodyOnlyPct
+                  : domSource === "carriage_body"
+                    ? bodyPct
+                    : railPct;
+          const isCadSelfContainedHud = Boolean(thStruct?.cad_toolhead_self_contained);
+          const hudBars: Array<[string, number, string, boolean]> = hasFourWayHud
+            ? [
+                ["X-Beam & Frame", railPct, "#38bdf8", domSource === "rail_xbeam"],
+                ["MGN Rail / Carriage", railCarPct, "#14b8a6", domSource === "rail_carriage"],
+                ["Toolhead Body", bodyOnlyPct, "#f59e0b", domSource === "toolhead_body"],
+                ["Hotend & Brace", hotendPct, "#f43f5e", domSource === "hotend_nozzle"],
+              ]
+            : [
+                ["X-Beam & Rail Flex", railPct, "#38bdf8", domSource === "rail_xbeam"],
+                [
+                  "Carriage Backplate & Body",
+                  bodyPct,
+                  "#f59e0b",
+                  domSource === "carriage_body",
+                ],
+                [
+                  "Hotend & Nozzle Stem",
+                  hotendPct,
+                  "#f43f5e",
+                  domSource === "hotend_nozzle",
+                ],
+              ];
 
           return (
             <div
@@ -8846,23 +6515,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
               {bd ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  {(
-                    [
-                      ["X-Beam & Rail Flex", railPct, "#38bdf8", domSource === "rail_xbeam"],
-                      [
-                        "Carriage Backplate & Body",
-                        bodyPct,
-                        "#f59e0b",
-                        domSource === "carriage_body",
-                      ],
-                      [
-                        "Hotend & Nozzle Stem",
-                        hotendPct,
-                        "#f43f5e",
-                        domSource === "hotend_nozzle",
-                      ],
-                    ] as Array<[string, number, string, boolean]>
-                  ).map(([label, pct, color, isDom]) => (
+                  {hudBars.map(([label, pct, color, isDom]) => (
                     <div key={label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       <div
                         style={{
@@ -8913,39 +6566,55 @@ export const PrinterViewport: React.FC<Props> = ({
               )}
 
               {showHudDetails && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "3px 8px",
-                    fontSize: 11,
-                    color: "var(--muted)",
-                    paddingTop: 4,
-                    borderTop: "1px dashed rgba(255, 255, 255, 0.08)",
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                >
-                  <span>
-                    Backplate:{" "}
-                    <strong style={{ color: "var(--text)" }}>
-                      {bpMat.shortLabel} ({bpThickMm.toFixed(1)}mm)
-                    </strong>
-                  </span>
-                  <span>
-                    Body:{" "}
-                    <strong style={{ color: "var(--text)" }}>
-                      {bodyMatInfo.shortLabel} ({bodyThickMm.toFixed(1)}mm)
-                    </strong>
-                  </span>
-                  <span>
-                    Clamp:{" "}
-                    <strong style={{ color: "var(--text)" }}>
-                      {clampMatInfo.shortLabel} ({clampThickMm.toFixed(1)}mm)
-                    </strong>
-                  </span>
-                  <span>
-                    Hotend: <strong style={{ color: "var(--text)" }}>{Math.round(heStiff)} N/mm</strong>
-                  </span>
+                <div className="th-flex-meta-strip">
+                  {isCadSelfContainedHud ? (
+                    <>
+                      <span className="th-flex-meta-item">
+                        CAD Body:{" "}
+                        <strong>
+                          {thStruct?.stage_stiffnesses_n_per_mm?.body_n_per_mm
+                            ? `${Math.round(thStruct.stage_stiffnesses_n_per_mm.body_n_per_mm).toLocaleString()} N/mm`
+                            : bodyMatInfo.shortLabel}
+                        </strong>
+                      </span>
+                      {thStruct?.assembled_toolhead_mass_g != null && (
+                        <span className="th-flex-meta-item">
+                          Mass: <strong>{Math.round(thStruct.assembled_toolhead_mass_g)} g</strong>
+                        </span>
+                      )}
+                      <span className="th-flex-meta-item">
+                        Hotend:{" "}
+                        <strong>
+                          {Math.round(heStiff).toLocaleString()} N/mm
+                          {thStruct?.cad_hotend_braced ? " (Braced)" : ""}
+                        </strong>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="th-flex-meta-item">
+                        Backplate:{" "}
+                        <strong>
+                          {bpMat.shortLabel} ({bpThickMm.toFixed(1)}mm)
+                        </strong>
+                      </span>
+                      <span className="th-flex-meta-item">
+                        Body:{" "}
+                        <strong>
+                          {bodyMatInfo.shortLabel} ({bodyThickMm.toFixed(1)}mm)
+                        </strong>
+                      </span>
+                      <span className="th-flex-meta-item">
+                        Clamp:{" "}
+                        <strong>
+                          {clampMatInfo.shortLabel} ({clampThickMm.toFixed(1)}mm)
+                        </strong>
+                      </span>
+                      <span className="th-flex-meta-item">
+                        Hotend: <strong>{Math.round(heStiff).toLocaleString()} N/mm</strong>
+                      </span>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -9002,11 +6671,19 @@ export const PrinterViewport: React.FC<Props> = ({
                       : "tag-ok"
                 }
               >
-                {bedPlateFeaHud.total_flatness_error_um.toFixed(1)} µm
+                {(bedPlateFlatnessHudUm ?? bedPlateFeaHud.total_flatness_error_um).toFixed(1)} µm
               </strong>
             </span>
             {showHudDetails && (
               <>
+                {(bedPlateFeaHud.rigid_tilt_um ?? 0) >= 1 && (
+                  <>
+                    <span>|</span>
+                    <span>
+                      Tilt: <strong>{(bedPlateFeaHud.rigid_tilt_um ?? 0).toFixed(1)} µm</strong>
+                    </span>
+                  </>
+                )}
                 <span style={{ color: "var(--muted)" }}>|</span>
                 <span>
                   Taco: <strong>{bedPlateFeaHud.taco_buckling_um.toFixed(1)} µm</strong>
@@ -9099,7 +6776,7 @@ export const PrinterViewport: React.FC<Props> = ({
         {viewMode === "modal" && sim && (
           <>
             <div className="hud-card">
-              <span style={{ color: "var(--muted)", fontWeight: 500 }}>Mode:</span>
+              <span className="hud-inline-label">Mode:</span>
               {(() => {
                 const visibleModes = sim.modal_fea.modes.slice(0, 6).map((m, idx) => ({ m, idx }));
                 if (primaryLimitingModeIdx >= 6 && sim.modal_fea.modes[primaryLimitingModeIdx]) {
@@ -9125,8 +6802,7 @@ export const PrinterViewport: React.FC<Props> = ({
                       className={`hud-pill modal-mode-pill ${clampedModeIdx === idx ? "active" : ""} ${
                         isPrimaryLimiting ? "limiting-mode" : isWorst ? "worst-mode" : ""
                       }`}
- aria-pressed={clampedModeIdx === idx}
-                      style={{ padding: "4px 8px" }}
+                      aria-pressed={clampedModeIdx === idx}
                       onClick={() => onSelectModeIdx(idx)}
                       title={
                         [
@@ -9173,8 +6849,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 primaryLimitingModeNum != null && (
                   <button
                     type="button"
-                    className="hud-focus-limiting-btn"
-                    style={{ padding: "3px 8px", fontSize: 11 }}
+                    className="hud-focus-limiting-btn hud-pill-compact"
                     onClick={() => onSelectModeIdx(primaryLimitingModeIdx)}
                     title={`Snap 3D modal animation to Limiting Mode M${primaryLimitingModeNum}${
                       limitingSummary?.primary_structural_mode_label
@@ -9185,44 +6860,72 @@ export const PrinterViewport: React.FC<Props> = ({
                     ★ Focus Limiting M{primaryLimitingModeNum}
                   </button>
                 )}
-              <span style={{ color: "var(--muted)" }}>|</span>
-              <span style={{ color: "var(--muted)", fontWeight: 500 }}>Color:</span>
-              <button
-                type="button"
-                className={`hud-pill ${modalColorMode === "relative" ? "active" : ""}`}
- aria-pressed={modalColorMode === "relative"}
-                style={{ padding: "3px 7px", fontSize: 11 }}
-                onClick={() => setModalColorMode("relative")}
-                title="Color nodes by |u_node - u_bed| — whole-frame rocking stays cool blue while flopping toolheads blaze red"
+              <span className="hud-divider" aria-hidden="true">|</span>
+              <span id="vp-modal-scale-label" className="hud-inline-label">
+                Visual:
+              </span>
+              <div
+                className="hud-pill-inline-group"
+                role="group"
+                aria-labelledby="vp-modal-scale-label"
               >
-                Relative to Bed (Print Error)
-              </button>
-              <button
-                type="button"
-                className={`hud-pill ${modalColorMode === "global" ? "active" : ""}`}
- aria-pressed={modalColorMode === "global"}
-                style={{ padding: "3px 7px", fontSize: 11 }}
-                onClick={() => setModalColorMode("global")}
-                title="Color nodes by absolute global modal displacement amplitude |u_node|"
+                <button
+                  type="button"
+                  className={`hud-pill hud-pill-compact ${modalScaleMode === "impact" ? "active" : ""}`}
+                  aria-pressed={modalScaleMode === "impact"}
+                  aria-label="Impact — scales motion and heatmap by real print severity"
+                  onClick={() => setModalScaleMode("impact")}
+                  title="Print Impact — scales motion & heatmap by how much this mode hurts real prints"
+                >
+                  Impact
+                </button>
+                <button
+                  type="button"
+                  className={`hud-pill hud-pill-compact ${modalScaleMode === "shape" ? "active" : ""}`}
+                  aria-pressed={modalScaleMode === "shape"}
+                  aria-label="Shape — normalizes every mode to full amplitude for geometry inspection"
+                  onClick={() => setModalScaleMode("shape")}
+                  title="Mode Shape — normalizes every mode to full amplitude for geometry inspection"
+                >
+                  Shape
+                </button>
+              </div>
+              <span className="hud-divider" aria-hidden="true">|</span>
+              <span id="vp-modal-color-label" className="hud-inline-label">
+                Color:
+              </span>
+              <div
+                className="hud-pill-inline-group"
+                role="group"
+                aria-labelledby="vp-modal-color-label"
               >
-                Global Motion
-              </button>
-              <span style={{ color: "var(--muted)" }}>|</span>
+                <button
+                  type="button"
+                  className={`hud-pill hud-pill-compact ${modalColorMode === "relative" ? "active" : ""}`}
+                  aria-pressed={modalColorMode === "relative"}
+                  onClick={() => setModalColorMode("relative")}
+                  title="Color nodes by |u_node - u_bed| — whole-frame rocking stays cool blue while flopping toolheads blaze red"
+                >
+                  Relative to Bed
+                </button>
+                <button
+                  type="button"
+                  className={`hud-pill hud-pill-compact ${modalColorMode === "global" ? "active" : ""}`}
+                  aria-pressed={modalColorMode === "global"}
+                  onClick={() => setModalColorMode("global")}
+                  title="Color nodes by absolute global modal displacement amplitude |u_node|"
+                >
+                  Global Motion
+                </button>
+              </div>
+              <span className="hud-divider" aria-hidden="true">|</span>
               <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  fontSize: 11,
-                  color: "var(--muted)",
-                  whiteSpace: "nowrap",
-                  fontVariantNumeric: "tabular-nums",
-                }}
+                className="hud-scale-label"
                 title="Dial modal animation visual scale (0.1× subtle to 2.0× exaggerated)"
               >
-                <span style={{ fontWeight: 500 }}>
+                <span>
                   Scale{" "}
-                  <strong style={{ color: "var(--text)" }}>{modalAmpScale.toFixed(1)}×</strong>
+                  <strong className="hud-scale-value">{modalAmpScale.toFixed(1)}×</strong>
                 </span>
                 <input
                   type="range"
@@ -9231,16 +6934,15 @@ export const PrinterViewport: React.FC<Props> = ({
                   step={0.1}
                   value={modalAmpScale}
                   onChange={(e) => setModalAmpScale(Number(e.target.value))}
-                  style={{ width: 72, accentColor: "var(--accent)", cursor: "pointer" }}
+                  className="hud-scale-slider"
                   aria-label="Modal display scale"
                 />
               </label>
-              <span style={{ color: "var(--muted)" }}>|</span>
+              <span className="hud-divider" aria-hidden="true">|</span>
               <button
                 type="button"
-                className={`hud-pill ${modalPaused ? "active" : ""}`}
- aria-pressed={modalPaused}
-                style={{ padding: "3px 8px", fontSize: 11 }}
+                className={`hud-pill hud-pill-compact ${modalPaused ? "active" : ""}`}
+                aria-pressed={modalPaused}
                 onClick={() => setModalPaused((p) => !p)}
                 title={
                   modalPaused
@@ -9256,20 +6958,9 @@ export const PrinterViewport: React.FC<Props> = ({
               const axisTag = activeMode.excited_axis
                 ? `${activeMode.excited_axis}-Accel`
                 : activeMode.dominant_axis;
-              const sevMeta = modeSeverityMeta(activeMode.severity);
-              const impMeta =
-                activeMode.print_impact_level || activeMode.print_impact_score != null
-                  ? impactLevelMeta(
-                      activeMode.print_impact_level ??
-                        ((activeMode.print_impact_score ?? 0) >= 75
-                          ? "critical"
-                          : (activeMode.print_impact_score ?? 0) >= 50
-                            ? "high"
-                            : (activeMode.print_impact_score ?? 0) >= 25
-                              ? "moderate"
-                              : "low")
-                    )
-                  : null;
+              const activeSeverity = getModalVisualSeverity(activeMode);
+              const activeLegendScale = modalScaleMode === "impact" ? activeSeverity.colorScale : 1.0;
+              const legendCapPct = Math.round(activeLegendScale * 100);
               const isWorstActive =
                 sim.modal_fea.worst_print_mode_number === activeMode.mode_number;
               const isPrimaryLimitingActive =
@@ -9294,6 +6985,26 @@ export const PrinterViewport: React.FC<Props> = ({
                         {activeMode.frequency_hz.toFixed(1)} Hz
                       </span>
                       <span className="badge-pill hud-axis-pill">{axisTag}</span>
+                      <span
+                        className={`modal-severity-pill ${activeSeverity.pillClass}`}
+                        title={
+                          modalScaleMode === "impact"
+                            ? `Print impact: ${activeSeverity.label} (${Math.round(activeSeverity.score)}/100) — motion scaled to ${Math.round(activeSeverity.motionScale * 100)}% and heatmap capped at ${legendCapPct}%`
+                            : `Print impact: ${activeSeverity.label} (${Math.round(activeSeverity.score)}/100) — Mode Shape view active (100% normalized geometry)`
+                        }
+                      >
+                        <span className="modal-severity-bars" aria-hidden="true">
+                          {[1, 2, 3, 4].map((seg) => (
+                            <span
+                              key={seg}
+                              className={`modal-severity-seg seg-${seg} ${
+                                seg <= activeSeverity.segments ? "lit" : ""
+                              }`}
+                            />
+                          ))}
+                        </span>
+                        <span>{activeSeverity.label}</span>
+                      </span>
                       {showHudDetails && isPrimaryLimitingActive && (
                         <span className="badge-pill hud-limit-mode-badge">
                           LIMITING {limAxis ?? activeMode.excited_axis ?? "XY"}-AXIS MODE
@@ -9304,17 +7015,6 @@ export const PrinterViewport: React.FC<Props> = ({
                             : ""}
                         </span>
                       )}
-                      {showHudDetails &&
-                        (impMeta ? (
-                          <span className={`badge-pill ${impMeta.cls}`}>
-                            {impMeta.label}
-                            {activeMode.print_impact_score != null
-                              ? ` ${Math.round(activeMode.print_impact_score)}/100`
-                              : ""}
-                          </span>
-                        ) : (
-                          sevMeta && <span className={`badge-pill ${sevMeta.cls}`}>{sevMeta.label}</span>
-                        ))}
                       {showHudDetails && (activeMode.nozzle_whip_ratio ?? 0) >= 1.25 && (
                         <span
                           className={`badge-pill ${
@@ -9356,6 +7056,27 @@ export const PrinterViewport: React.FC<Props> = ({
                       )}
                     </div>
                     <div className="hud-guide-meta">
+                      <span
+                        className="modal-legend-wrap"
+                        title={
+                          modalScaleMode === "impact"
+                            ? `Heatmap weighted by print impact (${activeSeverity.label}): peak nodes reach ${legendCapPct}% of the blue-to-red scale`
+                            : "Mode Shape heatmap: peak nodes normalized to 100% of the blue-to-red scale"
+                        }
+                      >
+                        <span>Calm</span>
+                        <span className="modal-legend-track" aria-hidden="true">
+                          <span className="legend-gradient" />
+                          {legendCapPct < 100 && (
+                            <span
+                              className="modal-legend-dim"
+                              style={{ left: `${legendCapPct}%` }}
+                            />
+                          )}
+                        </span>
+                        <span>{modalScaleMode === "shape" ? "Peak" : "Severe"}</span>
+                      </span>
+                      <span>·</span>
                       {showHudDetails && (
                         <>
                           <span>

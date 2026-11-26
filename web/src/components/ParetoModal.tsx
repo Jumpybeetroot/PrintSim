@@ -227,7 +227,7 @@ export const ParetoModal: React.FC<Props> = ({
               {loading && <span className="badge-pill">Solving NSGA-II...</span>}
             </div>
             <div className="pareto-subtitle">
-              Simultaneously balancing Build Cost ($), Safe Max Accel (mm/s²), and Nozzle Stiffness (µm)
+              Simultaneously balancing Build Cost ($), Safe Max Accel (mm/s²), and Inertial Flex @ 10k (µm)
             </div>
           </div>
 
@@ -412,7 +412,7 @@ export const ParetoModal: React.FC<Props> = ({
                     <title>
                       Current Build (Baseline): ${Math.round(base.total_cost_usd)} •{" "}
                       {Math.round(base.safe_max_accel_mm_s2).toLocaleString()} mm/s² •{" "}
-                      {base.nozzle_deflection_um.toFixed(1)} µm flex
+                      {base.nozzle_deflection_um.toFixed(1)} µm inertial flex @ 10k
                     </title>
                   </g>
 
@@ -456,7 +456,8 @@ export const ParetoModal: React.FC<Props> = ({
                         <title>
                           {pt.label}: ${Math.round(pt.total_cost_usd)} •{" "}
                           {Math.round(pt.safe_max_accel_mm_s2).toLocaleString()} mm/s² •{" "}
-                          {pt.nozzle_deflection_um.toFixed(1)} µm flex • Score {pt.composite_score.toFixed(1)}
+                          {pt.nozzle_deflection_um.toFixed(1)} µm inertial flex @ 10k • Score{" "}
+                          {pt.composite_score.toFixed(1)}
                         </title>
                       </g>
                     );
@@ -603,9 +604,12 @@ export const ParetoModal: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      <div className="pareto-kpi-tile">
+                      <div
+                        className="pareto-kpi-tile"
+                        title="Inertial dynamic nozzle deflection normalized to 10,000 mm/s² reference acceleration (excludes static gravity sag)"
+                      >
                         <div className="pareto-kpi-top">
-                          <span>Nozzle Flex</span>
+                          <span>Nozzle Flex @ 10k</span>
                           <span className={`impact-badge ${flexD.cls}`}>
                             {flexD.cls === "same" ? "—" : flexD.text}
                           </span>
@@ -682,7 +686,7 @@ export const ParetoModal: React.FC<Props> = ({
               <div className="pareto-list-section">
                 <div className="pareto-list-head">
                   <span>All Frontier Builds ({sortedFront.length})</span>
-                  <span>Cost • Accel • Flex</span>
+                  <span>Cost • Accel • Flex @ 10k</span>
                 </div>
                 <div className="pareto-list-scroll">
                   {sortedFront.map((pt) => {
