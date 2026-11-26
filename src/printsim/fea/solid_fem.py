@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-import trimesh
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
@@ -343,6 +342,8 @@ def voxelize_stl_bytes(
     target_max_dim_voxels: int = 18,
 ) -> tuple[np.ndarray, float]:
     """Load an STL/OBJ byte buffer and voxelize it into a solid 3D boolean grid for Hex8 FEA."""
+    import trimesh
+
     loaded = trimesh.load(trimesh.util.wrap_as_stream(stl_bytes), file_type=file_type, force="mesh")
     if isinstance(loaded, trimesh.Scene):
         loaded = loaded.to_geometry()

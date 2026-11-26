@@ -63,7 +63,7 @@
 - **Next**: 2D/3D CFD / surrogate airflow models for part-cooling ducts (`5015` / `4010` / CPAP blowers) predicting overhang curling and bridging sag, and Cross-WLF melt viscosity with pressure-advance transient oozing/stringing simulation.
 
 ### Phase 5 — Implemented (v0.9) & Remaining Extensions
-- **Implemented**: 21-tool stdio JSON-RPC 2.0 MCP server (`printsim mcp`) with live 3D Studio inspection/update/capture bridge, upstream Klipper multi-damping input shaper calibration (`ZV`, `ZVD`, `MZV`, `EI`, `2HUMP_EI`, `3HUMP_EI`) + ADXL345 CSV overlay/auto-fit, `G2`/`G3` arc + retract G-code lookahead simulator with physical ringing/smoothing/belt-slip defects, and `pymoo` NSGA-II 3-objective Pareto optimization (`Cost` vs `Achievable Safe Accel` vs `Inertial Nozzle Flex @ 10k`).
+- **Implemented**: 21-tool stdio JSON-RPC 2.0 MCP server (`printsim mcp`) with live 3D Studio inspection/update/capture bridge, upstream Klipper multi-damping input shaper calibration (`ZV`, `ZVD`, `MZV`, `EI`, `2HUMP_EI`, `3HUMP_EI`) + ADXL345 CSV overlay/auto-fit, `G2`/`G3` arc + retract G-code lookahead simulator with physical ringing/smoothing/belt-slip defects, `pymoo` NSGA-II (plus pure-NumPy fallback) 3-objective Pareto optimization (`Cost` vs `Achievable Safe Accel` vs `Inertial Nozzle Flex @ 10k`), and zero-server **Hybrid GitHub Pages Web Studio** (`src/printsim/wasm_dispatch.py`, `scripts/build_gh_pages_data.py`, `web/src/workers/pyodideWorker.ts`, `web/src/utils/pagesApiBridge.ts`, `.github/workflows/pages.yml`) pairing instant pre-baked presets & static PBR GLBs with a background Pyodide WebAssembly solver.
 - **Next**: Direct Klipper `klippy` batch-mode step-pulse replay integration.
 
 ## Engineering Reference Docs

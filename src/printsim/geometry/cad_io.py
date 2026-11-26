@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import trimesh
 
 from printsim.geometry.builder import AssemblyModel
 from printsim.schema import CustomMeshSpec, get_material
+
+if TYPE_CHECKING:
+    import trimesh
 
 
 def _hex_to_rgba(hex_color: str, alpha: int = 255) -> list[int]:
@@ -24,6 +27,8 @@ def _beam_mesh(
     shape: str,
     color_hex: str,
 ) -> trimesh.Trimesh:
+    import trimesh
+
     vec = p1_mm - p0_mm
     length = float(np.linalg.norm(vec))
     if length < 1e-3:
@@ -54,6 +59,8 @@ def _beam_mesh(
 
 def build_trimesh_scene(assembly: AssemblyModel) -> trimesh.Scene:
     """Create a 3D trimesh Scene (units: mm) of the full printer assembly."""
+    import trimesh
+
     scene = trimesh.Scene()
     nmap = assembly.node_map
 
@@ -135,6 +142,8 @@ def inspect_custom_mesh(mesh_spec: CustomMeshSpec) -> dict:
             ],
             "watertight": True,
         }
+
+    import trimesh
 
     loaded = trimesh.load(str(path), force="mesh")
     if isinstance(loaded, trimesh.Scene):

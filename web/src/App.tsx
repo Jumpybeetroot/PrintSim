@@ -21,6 +21,12 @@ import {
   encodeSpecToHash,
 } from "./utils/shareSpec";
 import {
+  getPagesEngineStatus,
+  IS_STATIC_PAGES,
+  PagesEngineStatus,
+  subscribePagesEngineStatus,
+} from "./utils/pagesApiBridge";
+import {
   clearAutoSavedSession,
   deleteSavedBuild,
   loadAutoSavedSession,
@@ -867,6 +873,14 @@ export default function App() {
   const [showBedWarp, setShowBedWarp] = useState<boolean>(false);
   const [toolheadPunchIn, setToolheadPunchIn] = useState<boolean>(false);
   const [studioSyncStatus, setStudioSyncStatus] = useState<"connected" | "syncing" | "offline">("syncing");
+  const [pagesEngineStatus, setPagesEngineStatus] = useState<PagesEngineStatus>(() =>
+    getPagesEngineStatus()
+  );
+
+  useEffect(() => {
+    if (!IS_STATIC_PAGES) return;
+    return subscribePagesEngineStatus(setPagesEngineStatus);
+  }, []);
   const [openMenu, setOpenMenu] = useState<"optimize" | "export" | null>(null);
   const optimizeMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1702,6 +1716,7 @@ export default function App() {
 
   // Live Studio Session Bridge: debounced state sync -> POST /api/studio/state
   useEffect(() => {
+    if (IS_STATIC_PAGES) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
@@ -1757,6 +1772,7 @@ export default function App() {
 
   // Live Studio Session Bridge: visibility-aware poll GET /api/studio/commands every 2000ms
   useEffect(() => {
+    if (IS_STATIC_PAGES) return;
     let active = true;
     let inFlight = false;
     let pollTimerId: number | null = null;
@@ -2424,64 +2440,83 @@ export default function App() {
         <div className="brand">
           <span className="brand-badge">PrintSim 1.1</span>
           <span className="brand-subtitle">Multiphysics 3D Printer Studio</span>
-          <span
-            className="agent-sync-pill"
-            title="Live Studio Bridge active — AI agents can inspect & sync this session via PrintSim MCP/API"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "3px 8px",
-              borderRadius: 999,
-              fontSize: 11,
-              fontWeight: 500,
-              letterSpacing: "0.02em",
-              background:
-                studioSyncStatus === "offline"
-                  ? "rgba(100, 116, 139, 0.16)"
-                  : studioSyncStatus === "syncing"
-                  ? "rgba(56, 189, 248, 0.14)"
-                  : "rgba(34, 197, 94, 0.12)",
-              border:
-                studioSyncStatus === "offline"
-                  ? "1px solid rgba(100, 116, 139, 0.35)"
-                  : studioSyncStatus === "syncing"
-                  ? "1px solid rgba(56, 189, 248, 0.42)"
-                  : "1px solid rgba(34, 197, 94, 0.34)",
-              color:
-                studioSyncStatus === "offline"
-                  ? "var(--muted)"
-                  : studioSyncStatus === "syncing"
-                  ? "var(--accent)"
-                  : "#86efac",
-              userSelect: "none",
-            }}
-          >
+          {IS_STATIC_PAGES ? (
             <span
+              className={`wasm-engine-pill ${pagesEngineStatus.state}`}
+              title={
+                pagesEngineStatus.detail ||
+                "In-browser Python WebAssembly (Pyodide) multiphysics engine"
+              }
+            >
+              <span className="wasm-engine-dot" aria-hidden="true" />
+              <span>
+                {pagesEngineStatus.state === "ready"
+                  ? "Browser Engine"
+                  : pagesEngineStatus.state === "error"
+                  ? "WASM Error"
+                  : "WASM Loading…"}
+              </span>
+            </span>
+          ) : (
+            <span
+              className="agent-sync-pill"
+              title="Live Studio Bridge active — AI agents can inspect & sync this session via PrintSim MCP/API"
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "3px 8px",
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 500,
+                letterSpacing: "0.02em",
                 background:
                   studioSyncStatus === "offline"
-                    ? "#64748b"
+                    ? "rgba(100, 116, 139, 0.16)"
                     : studioSyncStatus === "syncing"
-                    ? "#38bdf8"
-                    : "#22c55e",
-                boxShadow:
+                    ? "rgba(56, 189, 248, 0.14)"
+                    : "rgba(34, 197, 94, 0.12)",
+                border:
                   studioSyncStatus === "offline"
-                    ? "none"
+                    ? "1px solid rgba(100, 116, 139, 0.35)"
                     : studioSyncStatus === "syncing"
-                    ? "0 0 8px rgba(56, 189, 248, 0.9)"
-                    : "0 0 6px rgba(34, 197, 94, 0.75)",
-                animation:
-                  studioSyncStatus === "syncing"
-                    ? "studioSyncPulse 0.85s ease-in-out infinite"
-                    : "none",
+                    ? "1px solid rgba(56, 189, 248, 0.42)"
+                    : "1px solid rgba(34, 197, 94, 0.34)",
+                color:
+                  studioSyncStatus === "offline"
+                    ? "var(--muted)"
+                    : studioSyncStatus === "syncing"
+                    ? "var(--accent)"
+                    : "#86efac",
+                userSelect: "none",
               }}
-            />
-            <span>Agent Sync</span>
-          </span>
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background:
+                    studioSyncStatus === "offline"
+                      ? "#64748b"
+                      : studioSyncStatus === "syncing"
+                      ? "#38bdf8"
+                      : "#22c55e",
+                  boxShadow:
+                    studioSyncStatus === "offline"
+                      ? "none"
+                      : studioSyncStatus === "syncing"
+                      ? "0 0 8px rgba(56, 189, 248, 0.9)"
+                      : "0 0 6px rgba(34, 197, 94, 0.75)",
+                  animation:
+                    studioSyncStatus === "syncing"
+                      ? "studioSyncPulse 0.85s ease-in-out infinite"
+                      : "none",
+                }}
+              />
+              <span>Agent Sync</span>
+            </span>
+          )}
           {optMessage && (
             <span className="topbar-opt-msg" title={optMessage}>
               ✓ {optMessage}

@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import ezdxf
-
 from printsim.geometry.builder import (
     front_brace_dimensions_mm,
     top_brace_dimensions_mm,
@@ -787,6 +785,8 @@ def _emit_lwpolyline(
 
 def export_panels_dxf_bytes(spec: PrinterSpec, part: str = "all_plates") -> bytes:
     """Generate a 2D CNC/Laser DXF R2010 (mm) drawing for a plate or nested kit."""
+    import ezdxf
+
     plates = _build_plates_for_part(spec, part)
 
     doc = ezdxf.new("R2010")

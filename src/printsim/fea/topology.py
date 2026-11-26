@@ -7,11 +7,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 import numpy as np
-import trimesh
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 from scipy.spatial import cKDTree
+
+if TYPE_CHECKING:
+    import trimesh
 
 from printsim.schema import get_material
 
@@ -781,6 +785,8 @@ def voxel_grid_to_trimesh(
 
     quads = inverse.reshape(-1, 4)
     faces = np.vstack([quads[:, [0, 1, 2]], quads[:, [0, 2, 3]]])
+
+    import trimesh
 
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
     if smooth_iterations > 0:

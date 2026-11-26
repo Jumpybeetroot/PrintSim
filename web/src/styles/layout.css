@@ -85,6 +85,57 @@
   flex-shrink: 0;
 }
 
+.wasm-engine-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.wasm-engine-pill.booting {
+  background: rgb(var(--accent-rgb) / 0.14);
+  border: 1px solid rgb(var(--accent-rgb) / 0.42);
+  color: var(--accent-text);
+}
+
+.wasm-engine-pill.ready {
+  background: rgb(var(--green-rgb) / 0.12);
+  border: 1px solid rgb(var(--green-rgb) / 0.34);
+  color: var(--green-text);
+}
+
+.wasm-engine-pill.error {
+  background: rgb(var(--red-rgb) / 0.14);
+  border: 1px solid rgb(var(--red-rgb) / 0.42);
+  color: var(--red-text);
+}
+
+.wasm-engine-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wasm-engine-pill.booting .wasm-engine-dot {
+  background: var(--accent);
+  animation: studioSyncPulse 0.85s ease-in-out infinite;
+}
+
+.wasm-engine-pill.ready .wasm-engine-dot {
+  background: var(--green);
+}
+
+.wasm-engine-pill.error .wasm-engine-dot {
+  background: var(--red);
+}
+
 .workspace {
   flex: 1;
   display: grid;

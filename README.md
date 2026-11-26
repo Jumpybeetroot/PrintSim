@@ -1,8 +1,9 @@
 # PrintSim — Full-Featured Multiphysics 3D Printer Simulator
 
+[![Live Web Studio](https://img.shields.io/badge/Launch%203D%20Web%20Studio-0a78bd?style=for-the-badge&logo=githubpages&logoColor=white)](https://jumpybeetroot.github.io/PrintSim/)
 [![Support on Ko-fi](https://img.shields.io/badge/Support%20on%20Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/jumpybeetroot)
 
-**PrintSim** is an engineering-grade 3D printer design, simulation, and AI optimization studio built for both **human mechanical engineers** and **AI design agents**. Design and test complete 3D printers — frames, trusses, bolted structural panels, extrusion fillings, composite linear rails, gantry brackets, belts, steppers, hotends, and custom CAD parts — before cutting a single aluminum extrusion or printing a bracket.
+**PrintSim** is an engineering-grade 3D printer design, simulation, and AI optimization studio built for both **human mechanical engineers** and **AI design agents**. Try the interactive 3D Studio directly in your browser at **[jumpybeetroot.github.io/PrintSim](https://jumpybeetroot.github.io/PrintSim/)** (hybrid instant pre-baked presets + in-browser Pyodide WebAssembly FEA engine — zero install required), or run locally with full native Gmsh Tet10, OpenCASCADE STEP, and MCP agent support. Design and test complete 3D printers — frames, trusses, bolted structural panels, extrusion fillings, composite linear rails, gantry brackets, belts, steppers, hotends, and custom CAD parts — before cutting a single aluminum extrusion or printing a bracket.
 
 ## What's New in v0.9.0
 
@@ -97,6 +98,9 @@ uv run printsim sweep sweeps/example_parametric_sweep.yaml --workers 4
 Connect PrintSim directly to **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, **Gemini CLI**, or **LangGraph / OpenAI Agents** — see **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** for copy-paste config JSONs, all 21 MCP tool schemas, REST endpoints, zero-LLM local CLI workflows, and example engineering prompts.
 
 ### 3. Launch the Interactive 3D Web Studio
+
+- **Zero-install Browser Studio (GitHub Pages)**: Open **[https://jumpybeetroot.github.io/PrintSim/](https://jumpybeetroot.github.io/PrintSim/)**. Built-in presets, 3D hardware GLB meshes, and BOMs load instantly from static pre-baked bundles while PrintSim's Python multiphysics engine (`numpy`, `scipy`, `pydantic`, `pyyaml`) boots in a background Pyodide WebAssembly worker so every slider edit, ADXL calibration, Solid Hex8 FEA, SIMP topology optimization, and STL/DXF/CSV export runs live in your browser.
+- **Local Studio (full native Gmsh Tet10, OpenCASCADE STEP & MCP Live Bridge)**:
 
 ```bash
 # Build frontend once (if not already built)

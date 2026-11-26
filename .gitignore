@@ -13,6 +13,8 @@ build/
 # Node / Web 3D Studio
 web/node_modules/
 web/dist/
+web/public/pages-data/
+web/public/api/
 *.tsbuildinfo
 
 # Generated CAD / simulation artifacts
