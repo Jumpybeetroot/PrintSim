@@ -1,0 +1,91 @@
+name: Cartesian Bedslinger Braced 300
+description: Stiffened 300 mm open-portal Cartesian bedslinger with 3030 frame, cross bracing, 9 mm belts, dual leadscrew Z, and high-flow direct-drive toolhead
+architecture: cartesian_bedslinger
+frame:
+  width_mm: 460
+  depth_mm: 480
+  height_mm: 500
+  profile: extrusion_3030
+  material: aluminum_6063_t5
+  bracing: side_cross
+  brace_profile: brace_rod_10mm
+  brace_material: steel_4140
+  enclosed_panels: false
+gantry:
+  x_beam_profile: extrusion_2020
+  x_beam_material: aluminum_6063_t5
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 210
+  belt:
+    type: gt2_9mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 36.0
+kinematics:
+  build_volume_mm: [300, 300, 300]
+  max_velocity_mm_s: 400
+  max_accel_mm_s2: 6500
+  max_z_velocity_mm_s: 20
+  max_z_accel_mm_s2: 200
+  square_corner_velocity_mm_s: 5.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ac
+    name: NEMA17-48mm High-Torque
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.4
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+toolhead:
+  preset_id: custom
+  name: Compact Direct-Drive Toolhead
+  total_mass_g: 310
+  cog_offset_mm: [0, -18, -24]
+  nozzle_offset_mm: [0, -22, -60]
+  mount_material: pa12_cf_printed
+  body_construction: compact_cage
+  internal_stiffness_n_per_mm: 600.0
+  envelope_mm: [64, 70, 90]
+  hotend:
+    preset_id: phaetus_dragon_hf
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 550.0
+    overall_length_mm: 62.2
+    name: Phaetus Dragon HF
+    heater_power_w: 50
+    block_material: copper_c110
+    block_mass_g: 13
+    nozzle_material: brass_c360
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 17.5
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 12
+    heatbreak_wall_mm: 0.20
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 3.4
+    part_cooling_cfm: 9.0
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 5.0
+    max_push_force_n: 55
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [310, 310]
+  plate_material: aluminum_6061_t6
+  plate_thickness_mm: 5.0
+  heater_power_w: 450
+  mass_g: 1650
+  z_drive: leadscrew_dual
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x8_pom

@@ -234,7 +234,11 @@ def solve_step_tet_fea(
     skfem, meshio = _require_tet_fea_deps()
     path = Path(step_path)
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
+    is_fdm = (
+        fdm_anisotropic
+        if fdm_anisotropic is not None
+        else bool(mat.is_printed_polymer or mat.is_slm_metal)
+    )
     resolved_name = part_name if part_name is not None else path.name
 
     points_mm, tets, used_h_mm = _mesh_step_with_gmsh(path, mesh_size_mm)
@@ -409,7 +413,12 @@ def solve_step_tet_fea(
         max_z_tensile_mpa = float(max(0.0, np.max(szz_elem))) * 1e-6
 
     yield_mpa = mat.yield_strength_pa * 1e-6
-    z_layer_mpa = yield_mpa * (0.55 if is_fdm else 1.0)
+    if is_fdm and mat.is_slm_metal:
+        z_layer_mpa = yield_mpa * float(mat.z_strength_ratio)
+    elif is_fdm:
+        z_layer_mpa = yield_mpa * 0.55
+    else:
+        z_layer_mpa = yield_mpa
     sf_iso = yield_mpa / max(max_vm_mpa, 1e-6)
     sf_z = z_layer_mpa / max(max_z_tensile_mpa, 1e-6)
     safety_factor = min(sf_iso, sf_z)
@@ -417,7 +426,7 @@ def solve_step_tet_fea(
     if safety_factor >= 1.0:
         failure_mode = "safe"
     elif is_fdm and sf_z < sf_iso:
-        failure_mode = "fdm_layer_delamination"
+        failure_mode = "slm_build_z_yield" if mat.is_slm_metal else "fdm_layer_delamination"
     else:
         failure_mode = "isotropic_yield"
 

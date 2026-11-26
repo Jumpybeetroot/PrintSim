@@ -104,7 +104,7 @@ workspace             left sidebar 330px | 3D viewport | right sidebar 360px
 
 - **Top bar:** neutral `.btn` buttons and exactly one `.btn.primary` (Re-Simulate). Menus are
   plain lists (`.topbar-menu-item`); do not tint individual items.
-- **Left sidebar:** the pinned `.design-header` (Printer, Filament, auto-save) sits **above** the
+- **Left sidebar:** the pinned `.design-header` (expandable printer-type picker `.printer-picker`, Filament, auto-save) sits **above** the
   tabs because it applies to every tab. Do not put it back inside a tab.
 - **Printer tab:** `.section-jump` is a sticky jump bar. Each top-level section card carries
   `data-design-section="<id>"`, and the list of sections is `DESIGN_SECTIONS` in

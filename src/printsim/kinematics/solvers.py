@@ -439,6 +439,8 @@ def compute_drive_stiffness_details_n_per_m(
     """Compute detailed series drive-train stiffness components using exact pulley-to-pulley free spans."""
     from printsim.fea.components import (
         belt_effective_ea_n,
+        compute_bearing_cte_clearance_um,
+        compute_stepper_mount_temp_c,
         gerbert_tooth_mesh_stiffness_n_m,
         idler_shaft_and_bearing_stiffness,
     )
@@ -456,8 +458,10 @@ def compute_drive_stiffness_details_n_per_m(
     dp = max(d - 2.0 * (b_ext + 0.025), by + 0.04)
     u = float(min(max(u_rel, 0.05), 0.95))
     v = float(min(max(v_rel, 0.05), 0.95))
+    t_ch = float(spec.frame.chamber_temp_c)
+    motor_mount_temp_c, _ = compute_stepper_mount_temp_c(spec)
     bkt_mat = get_material(spec.gantry.bracket_material)
-    e_bkt_eff = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
+    e_bkt_eff = bkt_mat.effective_modulus_pa(motor_mount_temp_c)
 
     belt_cfg = resolve_belt(spec)
     belt_ea_n = float(belt_cfg["stiffness_ea_n"])
@@ -468,13 +472,14 @@ def compute_drive_stiffness_details_n_per_m(
     span_factor = float(routing_cfg["span_factor"])
     idler_factor = float(routing_cfg["idler_stiffness_factor"])
     idler_stiffness_mult = idler_factor if spec.architecture == "corexy" else 1.0
-    t_ch = float(spec.frame.chamber_temp_c)
     bc_cfg = resolve_bearing_clearance(spec)
+    cte_clearance_um, _ = compute_bearing_cte_clearance_um(spec, t_ch)
     idler_info = idler_shaft_and_bearing_stiffness(
         belt,
         double_shear=spec.gantry.double_shear_pulleys,
         bracket_e_pa=e_bkt_eff,
         radial_play_um_override=float(bc_cfg["radial_play_um"]),
+        thermal_clearance_um=cte_clearance_um,
     )
     k_idler_single = float(idler_info["k_idler_n_m"]) * idler_stiffness_mult
     if idler_stiffness_mult != 1.0:
@@ -670,7 +675,7 @@ def compute_drive_stiffness_details_n_per_m(
     if override is not None or spec.model_overrides.gantry_bracket.stiffness_n_per_mm is not None:
         bracket_retention_pct = 100.0
     else:
-        bracket_retention_pct = bkt_mat.modulus_retention_at_temp(t_ch) * 100.0
+        bracket_retention_pct = bkt_mat.modulus_retention_at_temp(motor_mount_temp_c) * 100.0
     k_drive = 1.0 / (
         1.0 / max(k_belt_subsystem, 1e-9)
         + 1.0 / max(k_motor_axis, 1e-9)
@@ -728,8 +733,12 @@ def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     drive_mode = "awd" if is_awd else "2wd"
     xy_motor_count = 4 if is_awd else (3 if spec.architecture == "delta" else 2)
 
-    # Linear friction estimate (extra AWD idlers/motors add modest drag: 3.6 N vs 2.5 N)
-    f_fric = 3.6 if is_awd else 2.5
+    # Linear friction estimate (extra AWD idlers/motors add modest drag: 3.6 N vs 2.5 N).
+    # Belt/idler rolling hysteresis (~60% of gantry drag) scales by belt.rolling_drag_mult
+    # (1.0 for standard 2GT EPDM, 1.18 for softer-elastomer GT3 2MGT).
+    f_fric_base = 3.6 if is_awd else 2.5
+    drag_mult = max(float(belt.rolling_drag_mult), 0.5)
+    f_fric = f_fric_base * (0.40 + 0.60 * drag_mult)
     j_rot = kin.xy_stepper.rotor_inertia_kg_m2
     m_x = assembly.x_moving_mass_kg
     m_y = assembly.y_moving_mass_kg

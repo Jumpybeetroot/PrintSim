@@ -75,3 +75,57 @@ Source: `#user-projects` thread **`[Read pins] Carbonara questions and help`** (
 - **Controlled Before/After Klipper ADXL345 Benchmark (`HVFDesigns`, Siboor printer, `9/6/26 → 9/8/26`, 2020 + milled joints → Carbonara):**
   - **Y-Axis:** $\omega_0 = 61.2 \to \mathbf{65.8\text{ Hz}}$ (`+7.5%`), $\zeta = 0.044 \to \mathbf{0.063}$ (`+43%` damping), MZV `62.2 → 65.0 Hz` (`11,300 → 12,360 mm/s²`), ZV `63.4 → 68.6 Hz` (`15,480 → 18,180 mm/s²`).
   - **X-Axis:** $\omega_0 = 84.2 \to \mathbf{88.8\text{ Hz}}$ (`+5.5%`), $\zeta = 0.034 \to \mathbf{0.041}$ (`+21%` damping), MZV `85.8 → 89.4 Hz` (`21,480 → 23,330 mm/s²`), ZV `87.6 → 91.4 Hz` (`29,520 → 32,160 mm/s²`).
+
+## 7. Official Website & Monolith Builder Benchmarks (`monolith3d.xyz` & `build.monolith3d.xyz`)
+Source: 195 public development updates (`Mar 2025 – Nov 2026`, `CloakedWayne`, `Adeo`, `Zruncho`, `dderg`, `Brazuka`, `FrankRamm`) and live Monolith Builder BOMs:
+
+- **Scale-Measured 10 mm Belt Pairs (`2 × 1658 mm = 3.316 m` at `~20 lbf` / `89 N`):**
+  - `Gates GT2 EPDM 10 mm`: `41.0 g` (`12.36 g/m`), `283 Hz` pluck → **`113.8 Hz` ZV**
+  - `Gates GT3 2MGT 10 mm`: `49.7 g` (`14.99 g/m`), `257 Hz` pluck → **`110.6 Hz` ZV** (softer base elastomer increases elongation needed & rolling drag)
+  - `2GT 10 mm TPU + Kevlar`: `42.7 g` (`12.88 g/m`), `277 Hz` pluck → **`120.4 Hz` ZV** (loses tension at `60–70 °C`)
+  - `2GT 10 mm Rubber + Aramid`: `46.4 g` (`13.99 g/m`), `266 Hz` pluck → **`119.4 Hz` ZV**
+- **Thermal Press-Fit & Stepper Gasket Tests:**
+  - `F695` steel bearing (`Ø13 mm` OD) in 6061 Al housing (`P6` fit, `26 µm` max interference) drops to zero interference above **`~66 °C`** (bearing reaches `~100 °C` in `80 °C` chamber); `M5` Belleville disc springs (`10×5.2×0.25 mm`) restore axial preload across thermal cycles.
+  - `2 mm` PTFE stepper thermal isolation gasket (`25 W` / `115 °C` stepper in `80 °C` chamber) reduces mount surface temp from **`109.1 °C max / 104.1 °C avg` → `95.7 °C max / 90.0 °C avg`** (`-13.4 °C` peak / `-14.1 °C` avg).
+- **CPAP Blowers, Monolith Toolhead & Chamber Heaters:**
+  - Ducted CPAP flow: `WS7040-24-V200` (`5.8 dm³/s`, `+5.5 °C` exhaust heating @ 100% PWM), `WM9290-24V` (`9.2 dm³/s`, throttles to `1.0 dm³/s` @ 25%, quietest), `WM7575-220VAC` (`11.6 dm³/s`, loud HF); `15 mm` HT hose vs `18 mm` ID (`~20%` worst-case drop, lower mass/stiffness).
+  - Monolith Toolhead (`37:1` double-start worm extruder, `rotation_distance: 55`, belt-coplanar CoG centered on `MGN12H` raceways) + `50 mm`+V6 HF hotend (`80 W` + `PT1000`): **`83 mm³/s`** LDO ABS (`300 °C` nozzle, `85 °C` chamber, `0.5 A`, `~90%` PWM).
+  - Active SLM PTC Chamber Heater kits: `100 W 24V` (`98×32 mm` PTC + `2× 3628` fans) and `500 W AC` (`140×50 mm` PTC + `2× 5032` fans) paired with `10/20 mm` PIR insulation.
+- **Monolith Zero (`M0`) & Fixed vs. Flying Parity:**
+  - `M0` (`1515` `1.1 mm` wall frame, `6 mm` belts @ `10 lbf`, `500–600 g` moving mass): unsupported bare `MGN12` X-rail hits **`54k–63k` MZV** (`59k–62k` w/ `5 mm` backer; 2WD `30–40k` MZV Y).
+  - Matched `750 g` 300 mm comparison: **Fixed gantry (`2040` Y)** vs. **Flying gantry (`2020` Y + `2 mm` SS backers + double SLM Z-joints)** achieved identical IS frequencies within run-to-run variance (`~37–41k` MZV baseline).
+  - `Cra-Z` (`2+2+2` double-wishbone `GE5C` gravity-preloaded) kinematic Z suspension drop-in for 3-screw Trident & 4-belt fixed V2.
+
+## 7. BFE (Big Fucking Extruder) — Dual-NEMA17 Dual-LGX/HGX Bowden Extruder
+Source: `#user-projects` thread **`BFE (Big Fucking Extruder)`** (`1567989441379700766`, 139 messages, `2026-11-05` to `2026-11-25`, OP `Microwave` / `micreathonn`; pinned GitHub repo [`github.com/micreathonn/BFE`](https://github.com/micreathonn/BFE), PrintDB ID `components/extruders/microwaved-bfe`):
+
+- **Architecture & CAD Geometry (`CAD/BFEV1.STEP`, 66 solids):**
+  - **Envelope:** `114.9 × 102.5 × 80.9 mm`; two 48 mm NEMA17 motors mounted side-by-side at `43.0 mm` center-to-center (`X = ±21.5 mm`).
+  - **Geartrain:** 2× **17T stainless steel motor hobs** (Mod 0.5, `Ø9.9 mm` OD; stainless required when pairing with metal LGX gears; AliExpress `1005006755339441`) directly driving 2× synchronized pairs of **37T LGX (preferred) or HGX large drive gears** (`Ø19.5 mm` OD, `13.50 mm` pinion-to-gear C-C, `18.60 mm` meshed pair C-C) → exact gear ratio **`37:17` (`2.1765:1`)** (`~25.3 mm/motor-rev` at `~17.5 mm` effective LGX wheel diameter, keeping high-acceleration Bowden PA velocity spikes well inside the flat torque band of NEMA17 steppers).
+  - **Equal-Tension Double-Shear Mechanics:** Two main printed housing pieces (**Motor Plate** `30.1 cm³` + **Main Body** `26.3 cm³`) plus 2× **Idler Arms** (`2.28 / 2.30 cm³`) and printed thumbscrew knob (`2.26 cm³`, `63.2 cm³` total printed volume). Static LGX gears and idler arms assemble onto the Motor Plate first to set backlash, then the Main Body caps and double-shears all pins (`2× M3×24 mm`, `4× M3×16 mm`). One shared **`M3×50 mm` SHCS + `3 mm` ID `8–12 mm` spring** tensions both idlers equally for synchronous dual-stage drive. Note: thinner budget AliExpress HGX/LGX gears (`3256808239002515`) require axial shims; do not mix LGX and HGX gear pairs.
+  - **Bowden Interface & Cooling:** `2× PC4-M10` couplers + `1× 23 mm` internal `1.9 mm` ID Capricorn PTFE guide; optional extruder-side screw-tensioned Bowden sheath (toolhead side uses rigid mount, retaining string loops for Colphaer sheath). Mounted outside the heated chamber with motor heatsinks + `6015` fan (gears stay cool).
+  - **CAD-Derived Mass Estimate:** `~175 g` excl. motors (`~50–66 g` ABS/ASA printed parts + `~74 g` 4× steel LGX gears + `~8.4 g` 2× stainless hobs + `~37.5 g` hardware/couplers) → **`~895 g`** with 2× Moons `MS17HD6P420I-04` (`360 g` each) and **`~950–1000 g`** with heatsinks + 6015 fan (consistent with `Microwave`'s *"weigh 1 kg"* note; **0 g** added to moving gantry/toolhead mass since frame-mounted).
+  - **BOM Cost:** `~$50` (budget HGX gears + generic NEMA17s) to `~$140` (steel LGX gears + Moons NEMA17s); reputable motors recommended (`Moons / Wantai / OMC / LDO`).
+- **Empirical Volumetric Flow, Grip & High-Accel Bowden Benchmarks (`Microwave`, 350 mm Voron Trident + MBT Tricorn):**
+  - **Max Flow / Grip Limit (`ABS @ 300 °C`, `2.0 A` per NEMA17):** Starts skipping/grinding only at **`100 mm³/s`** (vs `~65 mm³/s` on DiodeKing's extruder and `50–60 mm³/s` on Boombox). Failure mode is **filament grinding** (dual-LGX grip `~130 N` est.), not motor stall (dual NEMA17 torque headroom `~150–200 N`).
+  - **High-Speed Bowden Print Tests (`350 mm` Trident, ABS & PET-GF):**
+    - Test cube 1 (ABS): `500 mm/s`, `25,000 mm/s²`, `PA = 0.08 s`, `smooth_time = 0.02 s` — crisp corners.
+    - Test cube 2 (ABS): `500 mm/s`, `40,000 mm/s²` — extruder keeps up cleanly.
+    - Dial-in runs (ABS): `500 mm/s`, **`50,000 mm/s²`**, **`20 SCV`** (`25k` top layers), `PA = 0.09 s` / `0.02 s` smooth time → refined to `PA = 0.085 s`, `smooth_time = 0.01 s` (also tested `PA ≈ 0.12 s @ 25k` and half bridging PA in OrcaSlicer; rebuild with tighter backlash eliminated sawtooth PA artifact).
+    - Functional parts (PET-GF PSU enclosures): `500 mm/s`, `30,000 mm/s²` everything.
+  - **Mounting & Routing Guidance:** Mount **top center** on panel/frame (5 mm steel panel alone easily supports BFE without extra extrusions), angled backwards or forwards to ease PTFE bend radius. Stock Trident `~80 mm` headroom above gantry works, though **`+50 mm` extra top clearance (`~130 mm` total)** is ideal for Bowden bend radius. Keep Bowden tube as short as possible (critical for PA); CPAP hose length is less sensitive and can be routed cleanly alongside.
+
+## 8. CW's Fixed Gantry Conversion (`MONOLITH 300`) & Simpla Isolation Feet
+Source: `#members-projects` thread **`CW's Fixed Gantry Conversion`** (`1564391176369606726`, 184 messages, `2026-10-26` to `2026-11-24`, OP `CloakedWayne`, plus `zruncho` M0 foot tests; preset [`examples/cw_fixed_gantry_300.yaml`](../examples/cw_fixed_gantry_300.yaml), PrintDB `assemblies/printers/monolith-cw-fixed-gantry-300`):
+
+- **Machine Architecture (`MONOLITH 300` — *Road to 50k* Testbed):**
+  - Converted from a **Voron V2.4 300 LDO kit** (`300×300 mm` bed / `305 mm` PEI sheet retained; Mainsail `X=150`, `Y=298`) to a **fixed-gantry AWD CoreXY** at *"standard Trident height −20 mm insulation"* with the entire electronics bay (**BTT Octopus Pro** + **Raspberry Pi**) relocated **above the gantry** behind a perforated top front cover and filament spools stored inside the heated chamber.
+  - **Thermal Performance (Mainsail log, `2026-11-10`):** **`19.5 °C → 80.0 °C` chamber in 9 minutes** with **20 mm foil-faced PIR insulation** and active PTC chamber heating (`Heater Fins` thermistor; snapshot at 9 min: Bed `99.4/100.0 °C @ 36%`, Chamber `80.0/80.0 °C @ 78%`, Extruder `150.0 °C @ 10%`, Beacon Coil `70.9 °C`).
+  - **Gantry, Toolhead & Motion:** **Carbonara 20×20 CF X-beam** + front-mounted rail, **inner-mounted Y-rails**, metallic **CNC/SLM XY-joints**, metallic **SLM/CNC CPAP toolhead** + **Beacon** eddy probe + **WS9290 CPAP** blower (`40–50%` PWM + Mellow pot intake filter, front-extrusion umbilical chain), printing functional parts at **`50,000 mm/s²` accel / `50 mm/s` SCV**.
+  - **Experimental `Cra-Z` Suspension:** Vertical Z-rails + vertical leadscrews with top-mounted Z steppers driving curved **GE5C double-wishbone arms** to the bed; CW notes the current linkage still exhibits an **~5× stiffness ratio** between stiffest and weakest directions and high sensitivity to rod length.
+- **Simpla Isolation Feet (`Isolation foot.step`, 481 KB, pinned):**
+  - Replaces Voron BOM rubber feet with **2 printed parts/corner** + **`F8-22M` (`8×22×7 mm`) thrust bearing** flipped for lateral seismic isolation + **`3070` natural latex tubing (`3 mm ID × 7 mm OD`, `~119 mm`/foot)** + **`45×38×3.5 mm` O-ring** base (`~25%` perceived noise reduction by CW ear test).
+  - **`zruncho` Monolith Zero (`M0`) ADXL Benchmarks (high-CG narrow printer comparison):**
+    - `2026-05-25` M0 2WD (`OMC 2504 @ 3.3 A`, baseline before feet): **X `MZV 142.2 Hz` (`≤59.6k`)** / `ZV 144.6 Hz` (`81.5k`); **Y `ZV 101.0 Hz` (`≤39.8k`)** / `MZV 104.0 Hz` (`31.9k`).
+    - `2025-10-04` M0 AWD (`4× 2504 @ 2.5 A`, old gantry): **X `MZV 185.2 Hz` (`≤101.0k`)**; **Y `MZV 132.0 Hz` (`≤51.3k`)**.
+    - `2026-11-23` M0 2WD (`FOC + Simpla feet`): tall/top-heavy M0 exhibited coupled frame-rocking split mode on Y (`~86 Hz` + `~235 Hz`, `MZV 62.6 Hz ≤11.5k` / `3HUMP_EI 174.6 Hz ≤22.3k`) while X shifted up (`ZV 243.4 Hz` / `MZV 253.0 Hz ≤188.6k`), confirming that low-lateral-stiffness isolation feet can couple with tall, top-heavy printers (`Sayomi` saw zero IS shift on a wider Trident).

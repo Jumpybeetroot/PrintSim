@@ -105,6 +105,8 @@ def hydrate_stepper_catalog(catalog: dict[str, dict[str, Any]]) -> None:
         "isik_ouroboros": "components/motors/isik-tech-ouroboros-encstp",
         "ldo_2504ac": "components/motors/ldo-42sth48-2504ac",
         "ldo_2504ah": "components/motors/ldo-42sth48-2504ah",
+        "ldo_2504ah_s45r": "components/motors/ldo-42sth48-2504ah-s45r",
+        "ldo_2504ah_s80": "components/motors/ldo-42sth48-2504ah-s80",
         "ldo_2804ah": "components/motors/ldo-42sth48-2804ah",
         "kraken_motor_v2": "components/motors/kraken-motor-v2-60mm",
         "ldo_60_3004": "components/motors/ldo-42sth60-3004ac",
@@ -153,6 +155,8 @@ def hydrate_belt_catalog(catalog: dict[str, dict[str, Any]]) -> None:
     mapping: dict[str, str] = {
         "gt2_6mm": "components/belts/gates-2gt-6mm-ll",
         "gt2_9mm": "components/belts/gates-2gt-9mm-ll",
+        "gt2_10mm": "components/belts/gates-2gt-10mm-ll",
+        "gt3_10mm": "components/belts/gates-gt3-2mgt-10mm",
         "gt2_12mm": "components/belts/gates-2gt-12mm-ll",
         "gt2_15mm": "components/belts/gates-2gt-15mm-ll",
         "gt2_dual_9mm": "components/belts/gates-2gt-dual-9mm",
@@ -196,6 +200,7 @@ def hydrate_hotend_catalog(catalog: dict[str, dict[str, Any]]) -> None:
         "chube_conduction": "components/hotends/lukes-lab-chube-conduction",
         "tricorn_short": "components/hotends/tricorn-short",
         "tricorn_long": "components/hotends/tricorn-long",
+        "monolith_50mm_hf": "components/hotends/monolith-50mm-hf-hotend",
     }
     for key, rid in mapping.items():
         if key not in catalog:
@@ -280,6 +285,13 @@ def hydrate_material_catalog(catalog: dict[str, Any]) -> None:
         "pet_cf_printed": "materials/generic-pet-cf15-annealed",
         "ppa_cf_printed": "materials/generic-ppa-cf-annealed",
         "pps_cf_printed": "materials/generic-pps-cf-annealed",
+        "pc_pbt_gf_printed": "materials/treed-pc-pbt-gf",
+        "slm_aluminum": "materials/slm-alsi10mg-aluminum",
+        "slm_ti6al4v": "materials/slm-ti6al4v-titanium",
+        "slm_316l_steel": "materials/slm-316l-stainless",
+        "slm_17_4ph_steel": "materials/slm-17-4ph-stainless",
+        "slm_maraging_steel": "materials/slm-maraging-steel-ms1",
+        "slm_cucrzr": "materials/slm-cucrzr-copper",
         "acrylic_pmma": "materials/acrylic-pmma-sheet",
         "polycarbonate": "materials/polycarbonate-sheet",
         "acm_dibond": "materials/acm-dibond-panel",
@@ -305,6 +317,11 @@ def hydrate_material_catalog(catalog: dict[str, Any]) -> None:
             mat.specific_heat_j_kgk = float(si["specific_heat_j_per_kgk"])
         if si.get("cte_per_k") is not None and key != "abs_printed":
             mat.thermal_expansion_1_k = float(si["cte_per_k"])
+        if getattr(mat, "is_slm_metal", False):
+            if si.get("shear_modulus_pa") is not None:
+                mat.shear_modulus_pa = float(si["shear_modulus_pa"])
+            if si.get("damping_ratio") is not None:
+                mat.damping_ratio = float(si["damping_ratio"])
 
 
 def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
@@ -333,6 +350,7 @@ def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
 def hydrate_profile_catalog(catalog: dict[str, Any]) -> None:
     """Overlay PrintDB cross-section SI geometry onto all matching ``PROFILE_CATALOG`` entries."""
     mapping: dict[str, str] = {
+        "extrusion_1515": "components/profiles/makerbeam-1515-extrusion",
         "extrusion_2020": "components/profiles/misumi-hfs5-2020",
         "extrusion_2040": "components/profiles/misumi-hfs5-2040",
         "extrusion_3030": "components/profiles/misumi-hfs6-3030",
@@ -346,11 +364,13 @@ def hydrate_profile_catalog(catalog: dict[str, Any]) -> None:
         "cf_tube_30x20x2": "components/profiles/cf-tube-30x20x2",
         "cf_tube_25x25x2": "components/profiles/cf-tube-25x25x2",
         "ti_tube_20x20x1_2": "components/profiles/ti-tube-20x20x1-2",
+        "al_tube_12x12x1": "components/profiles/al-tube-12x12x1",
         "al_tube_20x20x2": "components/profiles/al-tube-20x20x2",
         "al_tube_30x30x3": "components/profiles/al-tube-30x30x3",
         "steel_tube_25x25x2": "components/profiles/steel-tube-25x25x2",
         "mgn9_rail": "components/profiles/profile-mgn9-rail",
         "mgn12_rail": "components/profiles/profile-mgn12-rail",
+        "mgn12_hollow_rail": "components/profiles/profile-hollow-mgn12-rail",
         "mgn15_rail": "components/profiles/profile-mgn15-rail",
         "steel_rod_8mm": "components/profiles/profile-steel-rod-8mm",
         "steel_rod_10mm": "components/profiles/profile-steel-rod-10mm",
@@ -415,6 +435,7 @@ def hydrate_bed_mount_catalog(catalog: dict[str, dict[str, Any]]) -> None:
         "captive_belleville_kinematic": "components/bed_mounts/generic-captive-belleville-kinematic",
         "dual_leaf_ti_kinematic": "components/bed_mounts/annex-dual-leaf-ti-kinematic",
         "spherical_3pt_ratrig": "components/bed_mounts/ratrig-spherical-3pt-kinematic",
+        "craz_kinematic_ge5c": "components/bed_mounts/monolith-craz-kinematic-ge5c",
         "rigid_4pt": "components/bed_mounts/generic-rigid-4pt-standoffs",
         "floating_4pt": "components/bed_mounts/generic-floating-4pt-tabs",
         "silicone_4pt": "components/bed_mounts/generic-silicone-4pt-70a",

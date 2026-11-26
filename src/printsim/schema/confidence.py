@@ -110,6 +110,25 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "are not explicitly modeled; live CAD CMS raises trust to 86%."
             ),
         },
+        "el_fuego": {
+            "trust_pct": 83,
+            "basis": (
+                "KhaymKhaym Monolith Discord release STLs (Main Body 31.37 cm³ / 83.75 g SLM AlSi10Mg, "
+                "Belt Plate Rev1 6.87 g Al / 19.97 g Steel, Titanium Sherpa Micro extruder plate 3.62 g) "
+                "+ GOM Scan 1 MV200 pre-machine metrology report (Aire Fuego GS1, <=20 µm contact-face "
+                "deviation, 50.67 mm mount-to-duct height) + 241.9k-elem Tet4 Craig-Bampton CMS "
+                "(42,319 X / 127,968 Y / 21,366 Z N/mm at Port 1 [-0.32, -19.93, +2.28] mm; "
+                "1,540 X / 748 Y N/mm, 1,007 N/mm harmonic projected at 66 mm Chube/Tricorn nozzle tip; "
+                "scales across AlSi10Mg / Ti-6Al-4V / 316L / 17-4PH by E ratio). Dressed baseline 262 g "
+                "excl. hotend (94.2 g 3-part CAD + 48.3 g MGN12H + 105 g Sherpa Micro w/ pancake + "
+                "Beacon RevH & fasteners; CoM on carriage front face +2 mm Z)."
+            ),
+            "caveat": (
+                "Release Rev1 STLs had a minor geometry revision pending KhaymKhaym's upcoming GitHub "
+                "release; Aire Fuego 2.5 mm internal CPAP bleed cooling and 19 mm CPAP hose drag are "
+                "lumped; live 241.9k-elem CAD CMS raises trust to 85%."
+            ),
+        },
         "heavy_uhf_long": {
             "trust_pct": 56,
             "basis": (
@@ -117,6 +136,17 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "caveat": (
                 "Real mass, fan-duct bulk, and center-of-gravity overhang vary widely across custom multi-blower UHF shrouds."
+            ),
+        },
+        "monolith_toolhead_cpap": {
+            "trust_pct": 78,
+            "basis": (
+                "Monolith Toolhead CAD & scale-weighed CPAP + 37:1 worm-gear assembly (~143 g excl. hotend, "
+                "belt-coplanar CoG dz=-1.5 mm matching belt_plane_z_offset_mm=-1.5 mm, -14 mm Y nozzle lever)."
+            ),
+            "caveat": (
+                "15 mm HT CPAP hose dynamic whip and SLM AlSi10Mg chassis vs printed PA/PPA variant stiffness "
+                "await full Tet10 STEP superelement condensation."
             ),
         },
     },
@@ -360,6 +390,17 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "Long 50 mm copper melt core and wide Ti support posts have not been statically deflection-tested in-repo."
             ),
         },
+        "monolith_50mm_hf": {
+            "trust_pct": 66,
+            "basis": (
+                "Monolith 50 mm+V6 HF hotend specification (52 g dressed, 68 mm OAL, 50 mm melt zone, "
+                "80 W PT1000, 4-bolt M3 rigid flange, ~920 N/mm estimated tip stiffness)."
+            ),
+            "caveat": (
+                "50 mm extended melt-zone Graetz flow ceiling and Ti heatbreak lateral tip stiffness await "
+                "direct STEP Tet10 condensation and bench extrusion flow sweep."
+            ),
+        },
     },
     "hotend_mount_styles": {
         "chube_6bolt_m3_18pcd": {
@@ -423,6 +464,28 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "caveat": (
                 "Real resonance depends on accurate tension balancing and stiffer double-shear idlers at >80 N preload."
+            ),
+        },
+        "gt2_10mm": {
+            "trust_pct": 82,
+            "basis": (
+                "Gates PowerGrip 2GT 10 mm EPDM fiberglass (31.5 kN × 2.0 dynamic EA, scale-weighed "
+                "12.36 g/m across Monolith 2×1658 mm belts) calibrated against Monolith Road-to-50k "
+                "matched-tension AWD ADXL logs (113.8 Hz ZV @ 89 N)."
+            ),
+            "caveat": (
+                "Assumes 10 mm double-shear live-shaft idlers and balanced tension across A/B loops."
+            ),
+        },
+        "gt3_10mm": {
+            "trust_pct": 80,
+            "basis": (
+                "Gates PowerGrip GT3 (2MGT) 10 mm fiberglass (scale-weighed 14.99 g/m, 0.90× elastomer "
+                "seating factor, 1.18× rolling drag) calibrated to Monolith matched-tension shootout "
+                "(110.6 Hz ZV vs 113.8 Hz for GT2 EPDM @ 89 N)."
+            ),
+            "caveat": (
+                "Softer base elastomer seating and rolling hysteresis vary with pulley tooth profile and chamber soak."
             ),
         },
         "gt2_12mm": {
@@ -617,6 +680,82 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "caveat": (
                 "Nylon moisture absorption lowers real modulus by up to 30–40% and accelerates preload creep under AWD belt tension."
+            ),
+        },
+        "pc_pbt_gf_printed": {
+            "trust_pct": 56,
+            "basis": (
+                "TreeD PC-PBT-GF high-HDT structural filament TDS & Monolith HDT tests (4.6 GPa, "
+                "132 °C HDT, 85 N creep limit) with lumped XY-joint scaling."
+            ),
+            "caveat": (
+                "Inter-layer Z adhesion and local M5 bearing-seat creep at >85 °C motor-face soak vary by print profile."
+            ),
+        },
+        "slm_aluminum": {
+            "trust_pct": 68,
+            "basis": (
+                "EOS / JLCPCB / IN3DTEC stress-relieved SLM AlSi10Mg datasheet (68.0 GPa, E_z/E_xy=0.93, "
+                "2670 kg/m³, 240 MPa yield, k=140 W/m·K, CTE=20.5 ppm/K, 0.92× bolted rough-face contact factor) "
+                "benchmarked against Monolith SLM XY-joint & El Fuego hardware."
+            ),
+            "caveat": (
+                "As-sintered surface roughness (Ra 6–15 µm), ~0.5% micro-porosity, and exact post-machining of "
+                "bearing bores vary across SLM bureaus until STEP Tet10 condensation."
+            ),
+        },
+        "slm_ti6al4v": {
+            "trust_pct": 67,
+            "basis": (
+                "EOS Ti64 / JLCPCB TC4 stress-relieved SLM Titanium datasheet (110 GPa, E_z/E_xy=0.96, "
+                "4410 kg/m³, 960 MPa yield, k=6.8 W/m·K, sub-steel CTE 8.8 ppm/K, 0.93× bolted contact factor)."
+            ),
+            "caveat": (
+                "Lumped bracket mass (+28 g delta) and stiffness assume hollow thin-wall SLM topology; exact "
+                "rib geometry and post-reamed bearing seats require STEP Tet10 verification."
+            ),
+        },
+        "slm_maraging_steel": {
+            "trust_pct": 66,
+            "basis": (
+                "EOS MaragingSteel MS1 (1.2709) datasheet (180 GPa, E_z/E_xy=0.96, 8050 kg/m³, 1000 MPa as-built "
+                "yield, bearing-matched CTE 10.3 ppm/K, 0.94× bolted contact factor)."
+            ),
+            "caveat": (
+                "High density increases moving carriage mass (+64 g delta) unless aggressively topology-optimized; "
+                "requires rust-inhibiting coating in humid environments."
+            ),
+        },
+        "slm_316l_steel": {
+            "trust_pct": 67,
+            "basis": (
+                "EOS / JLCPCB SLM 316L stainless datasheet (185 GPa XY / 180 GPa Z columnar texture, "
+                "7970 kg/m³, 470 MPa yield, CTE 15.8 ppm/K, 0.93× bolted contact factor)."
+            ),
+            "caveat": (
+                "Lumped stiffness assumes thin-wall SLM belt clamps / XY-joints; high density (+62 g delta) "
+                "penalizes Y-axis moving mass vs SLM AlSi10Mg or Ti-6Al-4V."
+            ),
+        },
+        "slm_17_4ph_steel": {
+            "trust_pct": 67,
+            "basis": (
+                "EOS GP1 / SLM Solutions / JLCPCB 17-4PH H900 datasheet (190 GPa, E_z/E_xy=0.95, 7780 kg/m³, "
+                "1050 MPa aged yield, steel-matched CTE 10.8 ppm/K, 0.93× bolted contact factor)."
+            ),
+            "caveat": (
+                "Yield strength varies strongly between as-built (~600–860 MPa) and H900 aged (~1050–1250 MPa) "
+                "service-bureau heat treatments; lumped geometry omits specific pocket topology."
+            ),
+        },
+        "sheet_metal_steel": {
+            "trust_pct": 68,
+            "basis": (
+                "Monolith Builder v1.5 laser-cut structural steel gantry plates (200 GPa, 3–3.2 mm XY-joints, "
+                "4.7–5 mm motor mounts & tensioners, zero thermal creep or Al CTE bearing-seat mismatch)."
+            ),
+            "caveat": (
+                "Lumped plate-stack stiffness does not explicitly mesh spacer standoff shear or bend-radius tabs."
             ),
         },
     },
@@ -913,6 +1052,16 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "Preload compression height, spring-end squareness, and screw-hole lateral slop cause ±30–40% stiffness variance."
             ),
         },
+        "craz_kinematic_ge5c": {
+            "trust_pct": 70,
+            "basis": (
+                "Monolith Cra-Z 3-point GE5C spherical-bearing + linear-glide kinematic bed suspension "
+                "(zero radial thermal taco restraint, high vertical axial stiffness, zero magnetic pull-off)."
+            ),
+            "caveat": (
+                "Spherical bearing radial clearance and slide-pin friction vary slightly with build alignment and chamber temperature."
+            ),
+        },
     },
     "z_drive_mechanisms": {
         "tr8x4_pom": {
@@ -1035,6 +1184,50 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
 }
 
 
+PROFILE_CONFIDENCE_REGISTRY: dict[str, dict[str, Any]] = {
+    "extrusion_1515": {
+        "trust_pct": 88,
+        "basis": (
+            "MakerBeam / LDO Voron V0 & Monolith Zero 15×15 mm T-slot extrusion cross-section "
+            "(A=85 mm², 0.230 kg/m, Iy=Iz=0.198 cm⁴, open-slot J=0.032 cm⁴)."
+        ),
+        "caveat": (
+            "Vendor 1515 wall thickness (1.0–1.3 mm) and center-bore tolerances shift Iy/Iz by ±8%."
+        ),
+    },
+    "al_tube_12x12x1": {
+        "trust_pct": 92,
+        "basis": (
+            "Exact closed thin-wall 12×12×1.0 mm aluminum square tube section inertia and "
+            "Bredt-Batho torsional constant J for Monolith Zero lightweight gantry builds."
+        ),
+        "caveat": (
+            "Corner fillet radius and local M3 rail-mounting wall dimpling are idealized."
+        ),
+    },
+    "mgn12_hollow_rail": {
+        "trust_pct": 76,
+        "basis": (
+            "Monolith revised Hollow MGN12H / ULS lightweight X-rail (0.44 kg/m vs 0.65 kg/m solid, "
+            "~18% lower beam Iy/Iz, 0.92× thin-wall raceway Hertzian stiffness, identical 54 g H-block)."
+        ),
+        "caveat": (
+            "Thin-wall hollow raceway backing compliance (0.92×) is estimated pending direct 3D Tet10 carriage FEA."
+        ),
+    },
+    "unsupported_rail": {
+        "trust_pct": 84,
+        "basis": (
+            "Bare unsupported linear rail X-gantry (e.g. Monolith Zero bare MGN12H X-rail) using exact "
+            "oriented rail section inertia, zero phantom beam double-counting, and optional opposite-face steel backer."
+        ),
+        "caveat": (
+            "End-clamping stiffness of the bare steel rail into XY-joint pockets depends on M3 bolt engagement length."
+        ),
+    },
+}
+
+
 def get_item_confidence(
     category: str,
     item_id: str,
@@ -1044,7 +1237,11 @@ def get_item_confidence(
     fallback_caveat: str = "Unverified catalog option; validate critical builds empirically.",
 ) -> dict[str, Any]:
     """Return a copy of the confidence metadata dict for ``category`` / ``item_id``."""
-    cat_map = ITEM_CONFIDENCE_REGISTRY.get(category, {})
+    cat_map = (
+        PROFILE_CONFIDENCE_REGISTRY
+        if category == "profiles"
+        else ITEM_CONFIDENCE_REGISTRY.get(category, {})
+    )
     entry = cat_map.get(item_id)
     if entry is None:
         return {

@@ -177,6 +177,7 @@ class WorkspaceFRFMap:
     reflected_rotor_mass_g: float
     drive_type: str
     midband_instability_risk: bool
+    is_spatial_spread_pct: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -195,6 +196,7 @@ class WorkspaceFRFMap:
             "min_freq_hz": round(float(self.min_freq_hz), 2),
             "max_freq_hz": round(float(self.max_freq_hz), 2),
             "worst_corner_drop_pct": round(float(self.worst_corner_drop_pct), 2),
+            "is_spatial_spread_pct": round(float(self.is_spatial_spread_pct), 2),
             "max_cross_coupling_pct": round(float(self.max_cross_coupling_pct), 2),
             "reflected_rotor_mass_g": round(float(self.reflected_rotor_mass_g), 2),
             "drive_type": self.drive_type,
@@ -866,6 +868,15 @@ def compute_workspace_frf_map(
             span_v = 4.0 * float(v_val) * (1.0 - float(v_val))
             comp_y_scale = 1.0 + 0.22 * (span_u - 1.0)
             comp_x_scale = 1.0 + 0.14 * (span_v - 1.0) + 0.08 * (0.5 - float(v_val))
+            if (
+                assembly.spec.architecture == "corexy"
+                and not assembly.spec.frame.rear_bottom_extrusion
+            ):
+                # Omitting lower rear tie extrusion leaves the rear portal open to torsional splay
+                # and racking, softening rear-quadrant structural modes and widening spatial IS spread.
+                rear_weight = (float(v_val) ** 1.5) * (0.65 + 1.35 * abs(float(u_val) - 0.5))
+                comp_x_scale += 1.05 * rear_weight
+                comp_y_scale += 0.90 * rear_weight
             f_sx_uv = base_fx / math.sqrt(max(comp_x_scale, 0.6))
             f_sy_uv = base_fy / math.sqrt(max(comp_y_scale, 0.6))
 
@@ -900,6 +911,9 @@ def compute_workspace_frf_map(
     min_freq = min(all_min)
     max_freq = max(all_max)
     worst_drop_pct = max(0.0, 100.0 * (center_freq - min_freq) / max(center_freq, 1e-6))
+    is_spatial_spread_pct = max(
+        0.0, 100.0 * (max(all_min) - min(all_min)) / max(center_freq, 1e-6)
+    )
 
     return WorkspaceFRFMap(
         grid_n=n,
@@ -917,4 +931,5 @@ def compute_workspace_frf_map(
         reflected_rotor_mass_g=reflected_g,
         drive_type=cfg.drive_type,
         midband_instability_risk=midband_any,
+        is_spatial_spread_pct=is_spatial_spread_pct,
     )

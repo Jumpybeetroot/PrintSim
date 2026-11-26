@@ -36,6 +36,7 @@ These touchstones complement `docs/monolith_discord_benchmarks.md` by filling ba
 | toolhead | A4T + Wristwatch G2 + Dragon | 250 | Armchair Heavy Industries A4T repo / community scale-weighed assembly |
 | toolhead | Dragon Burner + Orbiter 2 + Dragon | 245 | Chirpy2605 Dragon Burner community scale-weighed build |
 | toolhead | Archetype CPAP + Goliath Air | 235 | Armchair Heavy Industries Archetype CPAP lightweight remote-cooling toolhead |
+| toolhead | El Fuego SLM (Aire Fuego / Agua Fuego) + Sherpa Micro + Chube Conduction | 352 | KhaymKhaym Monolith Discord release STLs (`83.75 g` SLM AlSi10Mg main body + `6.87 g` Al belt plate [`19.97 g` steel] + `3.62 g` Ti extruder plate = `94.24 g` bare CAD; `262 g` excl. hotend w/ MGN12H + Sherpa Micro + Beacon; GOM Scan 1 `<=20 µm` contact faces; Aire Fuego `2.5 mm` CPAP bleed cooling) |
 | carriage | Stock Voron ABS XY-Joints (pair) | 125 | Voron Trident / 2.4 printed ABS XY-joints with F695 bearings and M5 hardware |
 | carriage | CNC 6061 AWD XY-Joints (pair) | 195 | CNC 6061-T6 billet AWD XY-joint pair with double-shear idler hardware |
 | carriage | MGN12H Carriage Block + Printed Shuttle | 115 | MGN12H stainless carriage block (~65 g) + printed ABS/CF X-carriage shuttle (~50 g) |

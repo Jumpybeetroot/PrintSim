@@ -19,11 +19,20 @@ import { ModelConfidenceModal } from "./ModelConfidenceModal";
 import {
   CatalogResponse,
   GantryBracketInfo,
+  PresetItem,
   PrinterSpecData,
   SimulationResponse,
   SolidFeaEngine,
   TopoOptRequestParams,
 } from "../types";
+
+const PRINTER_TYPE_ORDER = ["corexy", "cartesian_bedslinger", "delta"] as const;
+
+const PRINTER_TYPE_FALLBACK_LABELS: Record<string, string> = {
+  corexy: "CoreXY",
+  cartesian_bedslinger: "Cartesian Bedslinger",
+  delta: "Delta",
+};
 
 /** Top-level sections of the Printer tab, in order, for the jump bar. */
 const DESIGN_SECTIONS = [
@@ -91,8 +100,15 @@ const PART_FEA_PRINTED_IDS = new Set([
 ]);
 
 const PART_FEA_METAL_IDS = new Set([
+  "slm_aluminum",
+  "slm_ti6al4v",
+  "slm_316l_steel",
+  "slm_17_4ph_steel",
+  "slm_maraging_steel",
+  "slm_cucrzr",
   "aluminum_6061_t6",
   "aluminum_7075_t6",
+  "sheet_metal_steel",
   "carbon_fiber_plate",
   "steel_4140",
   "stainless_304",
@@ -193,6 +209,39 @@ export const DesignPanel: React.FC<Props> = ({
   const [showHints, setShowHints] = useState<boolean>(() => loadShowHintsPreference());
   const [advancedMode, setAdvancedMode] = useState<boolean>(() => loadAdvancedModePreference());
   const [confidenceModalOpen, setConfidenceModalOpen] = useState<boolean>(false);
+  const [printerPickerOpen, setPrinterPickerOpen] = useState<boolean>(false);
+  const [expandedPrinterTypes, setExpandedPrinterTypes] = useState<Record<string, boolean>>({});
+  const printerPickerRef = useRef<HTMLDivElement | null>(null);
+  const printerTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const closePrinterPicker = () => {
+    setPrinterPickerOpen(false);
+    setExpandedPrinterTypes({});
+  };
+
+  useEffect(() => {
+    if (!printerPickerOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (
+        printerPickerRef.current &&
+        !printerPickerRef.current.contains(e.target as Node)
+      ) {
+        closePrinterPicker();
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closePrinterPicker();
+        printerTriggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [printerPickerOpen]);
   const [feaEngine, setFeaEngine] = useState<SolidFeaEngine>("tet10");
   const [partPreset, setPartPreset] = useState<string>("corner_gusset");
   const [partMat, setPartMat] = useState<string>("pa12_cf_printed");
@@ -274,24 +323,148 @@ export const DesignPanel: React.FC<Props> = ({
     sim?.geometry?.toolhead_structure?.cad_superelements_active ?? [];
   const activeOverrideCount = countActiveModelOverrides(spec.model_overrides);
 
+  const activePreset = catalog.presets.find((p) => p.id === selectedPreset) || null;
+  const presetGroups = (() => {
+    const byCat = new Map<string, { category: string; label: string; items: PresetItem[] }>();
+    for (const p of catalog.presets) {
+      const cat = p.category || p.architecture || "other";
+      const label = p.category_label || PRINTER_TYPE_FALLBACK_LABELS[cat] || cat;
+      let grp = byCat.get(cat);
+      if (!grp) {
+        grp = { category: cat, label, items: [] };
+        byCat.set(cat, grp);
+      }
+      grp.items.push(p);
+    }
+    const ordered: Array<{ category: string; label: string; items: PresetItem[] }> = [];
+    for (const cat of PRINTER_TYPE_ORDER) {
+      const grp = byCat.get(cat);
+      if (grp) {
+        ordered.push(grp);
+        byCat.delete(cat);
+      }
+    }
+    for (const grp of byCat.values()) {
+      ordered.push(grp);
+    }
+    return ordered;
+  })();
+
+  const togglePrinterType = (category: string) => {
+    setExpandedPrinterTypes((prev) => ({
+      ...prev,
+      [category]: !prev[category],
+    }));
+  };
+
   return (
     <aside className="sidebar">
       {/* Preset & filament apply to every tab, so they sit above the tabs, once. */}
       <div className="design-header">
-        <div className="design-header-row">
-          <label htmlFor="design-preset-select">Printer</label>
-          <select
-            id="design-preset-select"
-            value={selectedPreset}
-            onChange={(e) => onSelectPreset(e.target.value)}
-          >
-            {!selectedPreset && <option value="">Custom / Saved Configuration</option>}
-            {catalog.presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.architecture})
-              </option>
-            ))}
-          </select>
+        <div className="printer-picker" ref={printerPickerRef}>
+          <div className="design-header-row">
+            <label htmlFor="design-preset-trigger">Printer</label>
+            <button
+              ref={printerTriggerRef}
+              type="button"
+              id="design-preset-trigger"
+              className={`printer-picker-trigger${printerPickerOpen ? " open" : ""}`}
+              aria-expanded={printerPickerOpen}
+              aria-controls="design-preset-panel"
+              title={
+                activePreset
+                  ? `${activePreset.name} — click to browse default printers by type`
+                  : "Custom or saved configuration — click to browse default printers by type"
+              }
+              onClick={() => {
+                if (printerPickerOpen) {
+                  closePrinterPicker();
+                } else {
+                  setPrinterPickerOpen(true);
+                }
+              }}
+            >
+              <span className="printer-picker-current">
+                {activePreset
+                  ? activePreset.short_name || activePreset.name
+                  : "Custom / Saved Configuration"}
+              </span>
+              <span className="printer-picker-chevron" aria-hidden="true">
+                ▸
+              </span>
+            </button>
+          </div>
+          {printerPickerOpen && (
+            <div
+              id="design-preset-panel"
+              className="printer-picker-panel"
+              role="region"
+              aria-label="Default printers by type"
+            >
+              {presetGroups.map((group) => {
+                const isExpanded = Boolean(expandedPrinterTypes[group.category]);
+                const hasActive = group.items.some((p) => p.id === selectedPreset);
+                const listId = `dp-printer-type-${group.category}`;
+                return (
+                  <div key={group.category} className="printer-type-group">
+                    <button
+                      type="button"
+                      className={`printer-type-toggle${isExpanded ? " expanded" : ""}${hasActive ? " has-active" : ""}`}
+                      aria-expanded={isExpanded}
+                      aria-controls={listId}
+                      onClick={() => togglePrinterType(group.category)}
+                    >
+                      <span className="printer-type-toggle-left">
+                        <span className="printer-type-chevron" aria-hidden="true">
+                          ▸
+                        </span>
+                        <span className="printer-type-name">{group.label}</span>
+                        {hasActive && (
+                          <span
+                            className="printer-type-active-dot"
+                            aria-label="Contains active printer"
+                          />
+                        )}
+                      </span>
+                      <span className="badge-pill">{group.items.length}</span>
+                    </button>
+                    {isExpanded && (
+                      <div
+                        id={listId}
+                        className="printer-type-list"
+                        role="group"
+                        aria-label={`${group.label} default printers`}
+                      >
+                        {group.items.map((p) => {
+                          const isActive = p.id === selectedPreset;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              className={`printer-preset-option${isActive ? " active" : ""}`}
+                              aria-pressed={isActive}
+                              title={p.description}
+                              onClick={() => {
+                                onSelectPreset(p.id);
+                                closePrinterPicker();
+                              }}
+                            >
+                              <span className="printer-preset-name">
+                                {p.short_name || p.name}
+                              </span>
+                              {p.summary && (
+                                <span className="printer-preset-summary">{p.summary}</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
         <div className="design-header-row">
           <label htmlFor="design-filament-select" title="Filament material (sets rheology and glass transition)">

@@ -5,6 +5,12 @@ export interface MaterialItem {
   density_kg_m3: number;
   yield_strength_pa: number;
   color_hex: string;
+  is_slm_metal?: boolean;
+  e3_ratio?: number;
+  z_strength_ratio?: number;
+  bolted_joint_stiffness_factor?: number;
+  surface_roughness_ra_um?: number | null;
+  porosity_pct?: number;
 }
 
 export interface ProfileItem {
@@ -18,7 +24,11 @@ export interface ProfileItem {
 export interface PresetItem {
   id: string;
   name: string;
+  short_name?: string;
   architecture: string;
+  category?: string;
+  category_label?: string;
+  summary?: string;
   description: string;
 }
 
@@ -65,10 +75,29 @@ export type BracketMaterialType =
   | "abs_printed"
   | "pet_cf_printed"
   | "pa12_cf_printed"
+  | "pc_pbt_gf_printed"
   | "ppa_cf_printed"
   | "pps_cf_printed"
+  | "slm_aluminum"
+  | "slm_ti6al4v"
+  | "slm_maraging_steel"
+  | "slm_316l_steel"
+  | "slm_17_4ph_steel"
+  | "sheet_metal_steel"
   | "aluminum_6061_t6"
   | "aluminum_7075_t6";
+
+export type ChamberHeaterType = "none" | "monolith_100w_ptc" | "monolith_500w_ptc";
+
+export type CpapBlowerType = "none" | "ws7040_24v" | "wm9290_24v" | "wm7575_220vac";
+
+export type StepperThermalGasketType = "none" | "ptfe_2mm";
+
+export type IdlerAxialPreloadType = "auto" | "none" | "disc_spring_m5";
+
+export type ZJointType = "single" | "double";
+
+export type ZJointMaterialType = "printed" | "hybrid" | "slm" | "milled";
 
 export type ToolheadMountMaterial = BracketMaterialType;
 
@@ -113,6 +142,7 @@ export type BedMountType =
   | "captive_belleville_kinematic"
   | "dual_leaf_ti_kinematic"
   | "spherical_3pt_ratrig"
+  | "craz_kinematic_ge5c"
   | "trident_3pt_standoffs"
   | "whopping_pochard_kinematic"
   | "rigid_4pt"
@@ -155,6 +185,8 @@ export type BeltRoutingType = "stock_corexy" | "monolith_short";
 export type BeltType =
   | "gt2_6mm"
   | "gt2_9mm"
+  | "gt2_10mm"
+  | "gt3_10mm"
   | "gt2_12mm"
   | "gt2_15mm"
   | "gt2_dual_9mm"
@@ -294,6 +326,7 @@ export interface GantryBracketInfo {
   hdt_c: number;
   creep_tension_limit_n: number;
   cnc_machined: boolean;
+  manufacturing_process?: "fdm" | "slm" | "sheet_metal" | "cnc";
   kit_cost_usd: number;
   carriage_mass_delta_g: number;
   color_hex: string;
@@ -349,6 +382,11 @@ export interface ToolheadPresetItem {
   internal_stiffness_n_per_mm?: number;
   z_probe_type?: ZProbeType;
   extruder_type?: "direct_drive" | "bowden";
+  cpap_blower_id?: CpapBlowerType;
+  cpap_hose_id_mm?: number;
+  shared_heatsink_cpap_duct?: boolean;
+  belt_plane_z_offset_mm?: number;
+  default_hardware_summary?: string;
 }
 
 export type ToolheadPresetData = ToolheadPresetItem;
@@ -834,6 +872,9 @@ export interface PrinterSpecData {
     corner_joint_type?: CornerJointType;
     feet_type?: FrameFeetType;
     chamber_temp_c?: number;
+    chamber_heater_id?: ChamberHeaterType;
+    chamber_insulation_mm?: number;
+    rear_bottom_extrusion?: boolean;
   };
   gantry: {
     x_beam_profile: string;
@@ -857,6 +898,10 @@ export interface PrinterSpecData {
     bracket_material?: BracketMaterialType;
     custom_bracket_override?: CustomBracketOverrideData | null;
     carriage_mass_g: number;
+    stepper_thermal_gasket?: StepperThermalGasketType;
+    idler_axial_preload?: IdlerAxialPreloadType;
+    z_joint_type?: ZJointType;
+    z_joint_material?: ZJointMaterialType;
     belt: {
       type: BeltType;
       core: "fiberglass" | "steel" | "aramid";
@@ -927,6 +972,11 @@ export interface PrinterSpecData {
     z_probe_type?: ZProbeType;
     use_hotend_bottom_brace?: boolean;
     nozzle_shield_mode?: "auto" | "stock" | "microwaved" | "none";
+    cpap_blower_id?: CpapBlowerType;
+    cpap_hose_id_mm?: number;
+    cpap_pwm_pct?: number;
+    shared_heatsink_cpap_duct?: boolean;
+    belt_plane_z_offset_mm?: number;
     envelope_mm: [number, number, number];
     hotend: {
       preset_id?: string | null;
@@ -1690,6 +1740,34 @@ export interface ThermalStructuralReport {
   rail_newmark_gamma: number;
   rail_carriage_roll_nm_per_rad: number;
   rail_carriage_radial_n_per_um: number;
+  motor_mount_temp_c?: number;
+  bearing_temp_c?: number;
+  bearing_cte_clearance_um?: number;
+  bearing_cte_pressfit_warning?: boolean;
+  toolhead_belt_cog_z_offset_mm?: number;
+  toolhead_nozzle_y_lever_mm?: number;
+  toolhead_x_roll_warning?: boolean;
+}
+
+export interface ChamberCpapReport {
+  chamber_heater_id: string;
+  chamber_heater_power_w: number;
+  chamber_insulation_mm: number;
+  enclosure_ua_w_per_k: number;
+  chamber_steady_temp_c: number;
+  chamber_heatup_time_60c_s: number | null;
+  cpap_blower_id: string;
+  cpap_hose_id_mm: number;
+  cpap_pwm_pct: number;
+  cpap_effective_pwm_pct: number;
+  cpap_hose_flow_factor: number;
+  cpap_delivered_dm3_s: number;
+  cpap_delivered_cfm: number;
+  cpap_exhaust_temp_rise_c: number;
+  cpap_outlet_air_temp_c: number;
+  cpap_hose_moving_mass_g: number;
+  kalico_shared_duct_active: boolean;
+  cpap_cooling_notes: string[];
 }
 
 export interface WorkspaceFRFData {
@@ -1704,6 +1782,7 @@ export interface WorkspaceFRFData {
   min_freq_hz: number;
   max_freq_hz: number;
   worst_corner_drop_pct: number;
+  is_spatial_spread_pct?: number;
   max_cross_coupling_pct: number;
   reflected_rotor_mass_g: number;
   drive_type: string;
@@ -1957,6 +2036,7 @@ export interface SimulationResponse {
     bridge_sag_40mm_mm: number;
     heatup_curve: Array<{ time_s: number; temp_c: number }>;
     axial_profile: Array<{ z_mm: number; temp_c: number; zone: string }>;
+    chamber_cpap?: ChamberCpapReport;
   };
   virtual_print: VirtualPrintReport;
   effective_model_params?: EffectiveModelParamsData;

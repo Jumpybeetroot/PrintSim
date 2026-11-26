@@ -498,6 +498,13 @@ def test_api_phase1_catalog_and_thermal_structural_simulate() -> None:
         "x_beam_tg_warning",
         "x_beam_has_tg",
         "gantry_bow_direction",
+        "motor_mount_temp_c",
+        "bearing_temp_c",
+        "bearing_cte_clearance_um",
+        "bearing_cte_pressfit_warning",
+        "toolhead_belt_cog_z_offset_mm",
+        "toolhead_nozzle_y_lever_mm",
+        "toolhead_x_roll_warning",
     }
     assert set(ts.keys()) == expected_keys
     assert ts["bracket_tg_warning"] is True

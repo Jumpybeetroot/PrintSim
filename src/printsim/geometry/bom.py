@@ -20,6 +20,8 @@ from printsim.geometry.builder import (
 )
 from printsim.schema import (
     BED_MOUNT_CATALOG,
+    CHAMBER_HEATER_CATALOG,
+    CPAP_BLOWER_CATALOG,
     EXTRUSION_FILLINGS,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
@@ -332,6 +334,12 @@ _RAIL_HARDWARE: dict[str, tuple[str, float, float, float, float]] = {
     # profile_id -> (series_label, rail_usd_per_m, carriage_usd, mass_c_g, mass_h_g)
     "mgn9_rail": ("MGN9", 32.0, 12.0, *_RAIL_BLOCK_MASS_G["mgn9_rail"]),
     "mgn12_rail": ("MGN12", 42.0, 16.0, *_RAIL_BLOCK_MASS_G["mgn12_rail"]),
+    "mgn12_hollow_rail": (
+        "Hollow MGN12",
+        64.0,
+        16.0,
+        *_RAIL_BLOCK_MASS_G.get("mgn12_hollow_rail", _RAIL_BLOCK_MASS_G["mgn12_rail"]),
+    ),
     "mgn15_rail": ("MGN15", 58.0, 22.0, *_RAIL_BLOCK_MASS_G["mgn15_rail"]),
     "hgh15_rail": ("HGH15CA", 72.0, 32.0, *_RAIL_BLOCK_MASS_G["hgh15_rail"]),
     "steel_rod_8mm": ("LM8UU", 14.0, 4.5, *_RAIL_BLOCK_MASS_G["steel_rod_8mm"]),
@@ -346,6 +354,12 @@ _BELT_COST_USD_PER_M: dict[tuple[str, str], float] = {
     ("gt2_9mm", "fiberglass"): 6.50,
     ("gt2_9mm", "aramid"): 9.00,
     ("gt2_9mm", "steel"): 8.50,
+    ("gt2_10mm", "fiberglass"): 7.20,
+    ("gt2_10mm", "aramid"): 9.80,
+    ("gt2_10mm", "steel"): 9.20,
+    ("gt3_10mm", "fiberglass"): 8.00,
+    ("gt3_10mm", "aramid"): 10.50,
+    ("gt3_10mm", "steel"): 10.00,
     ("gt2_12mm", "fiberglass"): 8.50,
     ("gt2_12mm", "aramid"): 11.50,
     ("gt2_12mm", "steel"): 11.00,
@@ -354,6 +368,8 @@ _BELT_COST_USD_PER_M: dict[tuple[str, str], float] = {
 _BELT_MASS_G_PER_M: dict[str, float] = {
     "gt2_6mm": 12.0,
     "gt2_9mm": 18.0,
+    "gt2_10mm": 12.36,
+    "gt3_10mm": 14.99,
     "gt2_12mm": 24.0,
 }
 
@@ -977,6 +993,72 @@ def generate_bom(
             unit="kit",
             unit_cost_usd=18.00,
             unit_mass_g=insert_mass_g,
+        )
+
+    # Monolith hardware parity items (belt clamp, M5 Belleville disc springs, 2mm PTFE motor gaskets, sheet-metal DXF plates, V2 Z-joints)
+    if arch == "corexy" and spec.gantry.belt_routing == "monolith_short":
+        _add_bom_item(
+            items,
+            sku="GNT-MONOLITH-CLAMP",
+            category="gantry",
+            name="Monolith Belt Clamp (SLM / LDO Milled Aluminum)",
+            specification="Single-piece metal flipped-belt clamp (>=6 teeth engaged, up to 12mm belt, MGN12H clip-on)",
+            quantity=1,
+            unit="pcs",
+            unit_cost_usd=20.00,
+            unit_mass_g=16.0,
+        )
+    if spec.gantry.effective_idler_axial_preload == "disc_spring_m5":
+        disc_qty = 16 if (arch == "corexy" and spec.gantry.drive_mode == "awd") else 10
+        _add_bom_item(
+            items,
+            sku="GNT-DISC-SPRING-M5",
+            category="gantry",
+            name="M5 Belleville Disc Spring (10x5.2x0.25mm)",
+            specification="Axial preload springs for F695/695 live-shaft idlers (prevents Al housing CTE press-fit loss >66 C)",
+            quantity=disc_qty,
+            unit="pcs",
+            unit_cost_usd=0.35,
+            unit_mass_g=0.25,
+        )
+    if spec.gantry.stepper_thermal_gasket == "ptfe_2mm":
+        gasket_qty = 4 if (arch == "corexy" and spec.gantry.drive_mode == "awd") else 2
+        _add_bom_item(
+            items,
+            sku="GNT-PTFE-GASKET-2MM",
+            category="gantry",
+            name="2mm PTFE NEMA17 Stepper Thermal Isolation Gasket",
+            specification="Virgin PTFE spacer (k=0.25 W/m·K; drops 25W stepper mount temp ~14 C in 80 C chamber)",
+            quantity=gasket_qty,
+            unit="pcs",
+            unit_cost_usd=1.80,
+            unit_mass_g=4.5,
+        )
+    if bkt_id == "sheet_metal_steel":
+        _add_bom_item(
+            items,
+            sku="GNT-SHEET-METAL-DXF",
+            category="gantry",
+            name="Monolith v1.5 Laser-Cut Sheet Metal Plate Set (DXF)",
+            specification="3–3.2mm steel XY-joint plates + 4.7–5mm front/rear motor mount & tensioner plates + 40x9mm Z belt clamps",
+            quantity=1,
+            unit="kit",
+            unit_cost_usd=62.00,
+            unit_mass_g=485.0,
+        )
+    if spec.is_flying_gantry and (spec.gantry.z_joint_material in ("milled", "slm") or spec.gantry.z_joint_type == "double"):
+        z_kit_qty = 2 if spec.gantry.z_joint_type == "double" else 1
+        z_mat_lbl = spec.gantry.z_joint_material.upper() if spec.gantry.z_joint_material == "slm" else spec.gantry.z_joint_material.title()
+        _add_bom_item(
+            items,
+            sku="GNT-V2-ZJOINTS",
+            category="gantry",
+            name=f"Monolith V2 {z_mat_lbl} Z-Joint Kit ({spec.gantry.z_joint_type.title()}-Z)",
+            specification="4x anodized/SLM Z-joints + reduced-area XY-compliant clamping spacers + M3 hardware",
+            quantity=z_kit_qty,
+            unit="sets",
+            unit_cost_usd=40.00 if spec.gantry.z_joint_material in ("milled", "slm") else 18.00,
+            unit_mass_g=110.0,
         )
 
     # ------------------------------------------------------------------
@@ -1670,19 +1752,37 @@ def generate_bom(
         unit_mass_g=130.0 if is_direct else 110.0,
     )
 
-    part_fan_qty = 2 if hotend.part_cooling_cfm >= 10.0 else (1 if hotend.part_cooling_cfm > 0 else 0)
-    if part_fan_qty > 0:
+    cpap_id = spec.toolhead.cpap_blower_id
+    if cpap_id != "none" and cpap_id in CPAP_BLOWER_CATALOG:
+        cpap_info = CPAP_BLOWER_CATALOG[cpap_id]
         _add_bom_item(
             items,
-            sku="HOT-FAN-PART",
+            sku=f"HOT-CPAP-{cpap_id.upper().replace('_', '-')}",
             category="hotend",
-            name="5015 Dual-Ball-Bearing Part Cooling Blower",
-            specification=f"24V radial blower, {hotend.part_cooling_cfm:.1f} CFM total system flow",
-            quantity=part_fan_qty,
-            unit="pcs",
-            unit_cost_usd=8.50,
-            unit_mass_g=28.0,
+            name=f"CPAP Part-Cooling Blower — {cpap_info['name']}",
+            specification=(
+                f"{cpap_info['ducted_max_dm3_s']:.1f} dm³/s ({cpap_info['ducted_max_cfm']:.1f} CFM) ducted max, "
+                f"Ø{spec.toolhead.cpap_hose_id_mm:.0f}mm HT CPAP hose + anti-vibration mount"
+            ),
+            quantity=1,
+            unit="kit",
+            unit_cost_usd=float(cpap_info["cost_usd"]) + 14.0,
+            unit_mass_g=320.0,
         )
+    else:
+        part_fan_qty = 2 if hotend.part_cooling_cfm >= 10.0 else (1 if hotend.part_cooling_cfm > 0 else 0)
+        if part_fan_qty > 0:
+            _add_bom_item(
+                items,
+                sku="HOT-FAN-PART",
+                category="hotend",
+                name="5015 Dual-Ball-Bearing Part Cooling Blower",
+                specification=f"24V radial blower, {hotend.part_cooling_cfm:.1f} CFM total system flow",
+                quantity=part_fan_qty,
+                unit="pcs",
+                unit_cost_usd=8.50,
+                unit_mass_g=28.0,
+            )
     _add_bom_item(
         items,
         sku="HOT-FAN-HS",
@@ -1764,6 +1864,7 @@ def generate_bom(
         "captive_belleville_kinematic": 225.0,
         "dual_leaf_ti_kinematic": 180.0,
         "spherical_3pt_ratrig": 145.0,
+        "craz_kinematic_ge5c": 190.0,
     }
     mount_mass_g = mount_mass_map.get(bed_mount_id, 95.0 if mount_pts == 3 else 50.0)
     _add_bom_item(
@@ -1784,6 +1885,37 @@ def generate_bom(
     # ------------------------------------------------------------------
     # 6. ENCLOSURE / STRUCTURAL PANELS (material, thickness & mounting)
     # ------------------------------------------------------------------
+    if spec.frame.chamber_heater_id != "none" and spec.frame.chamber_heater_id in CHAMBER_HEATER_CATALOG:
+        ch_info = CHAMBER_HEATER_CATALOG[spec.frame.chamber_heater_id]
+        _add_bom_item(
+            items,
+            sku=f"ENC-CH-HEATER-{spec.frame.chamber_heater_id.upper().replace('_', '-')}",
+            category="enclosure",
+            name=f"Active Chamber Heater Kit — {ch_info['name']}",
+            specification=(
+                f"{ch_info['power_w']:.0f}W PTC ({ch_info['ptc_dims_mm'][0]:.0f}x{ch_info['ptc_dims_mm'][1]:.0f} mm) "
+                f"+ SLM duct + {ch_info['fan_count']}x {ch_info['fan_size']} fans + 4x M3x15 standoffs"
+            ),
+            quantity=1,
+            unit="kit",
+            unit_cost_usd=float(ch_info["cost_usd"]),
+            unit_mass_g=280.0 if ch_info["power_w"] <= 150.0 else 540.0,
+        )
+    if spec.frame.chamber_insulation_mm > 0.0:
+        ins_t = float(spec.frame.chamber_insulation_mm)
+        enc_area_m2 = 2.0 * ((w * 1e-3) * (h * 1e-3) + (d * 1e-3) * (h * 1e-3)) + (w * 1e-3) * (d * 1e-3)
+        pir_mass_g = enc_area_m2 * (ins_t * 1e-3) * 32.0 * 1000.0  # 32 kg/m^3 PIR foam
+        _add_bom_item(
+            items,
+            sku="ENC-PIR-INSUL",
+            category="enclosure",
+            name=f"Rigid PIR Chamber Insulation Liner ({ins_t:.0f} mm)",
+            specification=f"Foil-faced PIR foam panels (k=0.023 W/m·K, {enc_area_m2:.2f} m² coverage)",
+            quantity=1,
+            unit="sets",
+            unit_cost_usd=round(14.0 + enc_area_m2 * 18.0, 2),
+            unit_mass_g=round(pir_mass_g, 1),
+        )
     has_panels = spec.frame.enclosed_panels and spec.frame.panel_mounting != "none"
     if has_panels:
         pt = spec.frame.panel_thickness_mm

@@ -117,8 +117,15 @@ const MOUNT_MATERIAL_OPTIONS: Array<{
   { id: "abs_printed", label: "Printed ABS (2.1 GPa)", shortLabel: "Printed ABS" },
   { id: "pet_cf_printed", label: "Printed PET-CF15 (5.2 GPa)", shortLabel: "Printed PET-CF15" },
   { id: "pa12_cf_printed", label: "Printed PA12-CF (6.2 GPa)", shortLabel: "Printed PA12-CF" },
-  { id: "ppa_cf_printed", label: "Printed PPA-CF (11.8 GPa)", shortLabel: "Printed PPA-CF" },
-  { id: "pps_cf_printed", label: "Printed PPS-CF (8.5 GPa)", shortLabel: "Printed PPS-CF" },
+  { id: "pc_pbt_gf_printed", label: "Printed PC-PBT-GF (4.6 GPa)", shortLabel: "Printed PC-PBT-GF" },
+  { id: "ppa_cf_printed", label: "Printed PPA-CF (10.8 GPa)", shortLabel: "Printed PPA-CF" },
+  { id: "pps_cf_printed", label: "Printed PPS-CF (9.2 GPa)", shortLabel: "Printed PPS-CF" },
+  { id: "slm_aluminum", label: "SLM AlSi10Mg (68 GPa)", shortLabel: "SLM AlSi10Mg" },
+  { id: "slm_ti6al4v", label: "SLM Ti-6Al-4V Gr.5/23 (110 GPa)", shortLabel: "SLM Ti-6Al-4V" },
+  { id: "slm_maraging_steel", label: "SLM MS1 Steel (180 GPa)", shortLabel: "SLM MS1" },
+  { id: "slm_316l_steel", label: "SLM 316L Steel (185 GPa)", shortLabel: "SLM 316L" },
+  { id: "slm_17_4ph_steel", label: "SLM 17-4PH H900 (190 GPa)", shortLabel: "SLM 17-4PH" },
+  { id: "sheet_metal_steel", label: "Sheet Metal Steel (200 GPa)", shortLabel: "Sheet Metal Steel" },
   { id: "aluminum_6061_t6", label: "CNC Al 6061-T6 (68.9 GPa)", shortLabel: "CNC Al 6061" },
   { id: "aluminum_7075_t6", label: "CNC Al 7075-T6 (71.7 GPa)", shortLabel: "CNC Al 7075" },
 ];
@@ -131,12 +138,19 @@ const TOOLHEAD_PART_MATERIAL_OPTIONS: Array<{
   { id: "abs_printed", label: "Printed ABS (2.1 GPa)", shortLabel: "ABS" },
   { id: "pet_cf_printed", label: "Printed PET-CF15 (5.2 GPa)", shortLabel: "PET-CF" },
   { id: "pa12_cf_printed", label: "Printed PA12-CF (6.2 GPa)", shortLabel: "PA12-CF" },
-  { id: "ppa_cf_printed", label: "Printed PPA-CF (11.8 GPa)", shortLabel: "PPA-CF" },
-  { id: "pps_cf_printed", label: "Printed PPS-CF (8.5 GPa)", shortLabel: "PPS-CF" },
-  { id: "carbon_fiber_plate", label: "3K Carbon Fiber Plate (55 GPa)", shortLabel: "3K CF Plate" },
+  { id: "pc_pbt_gf_printed", label: "Printed PC-PBT-GF (4.6 GPa)", shortLabel: "PC-PBT-GF" },
+  { id: "ppa_cf_printed", label: "Printed PPA-CF (10.8 GPa)", shortLabel: "PPA-CF" },
+  { id: "pps_cf_printed", label: "Printed PPS-CF (9.2 GPa)", shortLabel: "PPS-CF" },
+  { id: "carbon_fiber_plate", label: "3K Carbon Fiber Plate (58 GPa)", shortLabel: "3K CF Plate" },
+  { id: "slm_aluminum", label: "SLM AlSi10Mg (68 GPa)", shortLabel: "SLM Al" },
+  { id: "slm_ti6al4v", label: "SLM Ti-6Al-4V Gr.5/23 (110 GPa)", shortLabel: "SLM Ti64" },
+  { id: "slm_maraging_steel", label: "SLM MS1 Steel (180 GPa)", shortLabel: "SLM MS1" },
+  { id: "slm_316l_steel", label: "SLM 316L Steel (185 GPa)", shortLabel: "SLM 316L" },
+  { id: "slm_17_4ph_steel", label: "SLM 17-4PH H900 (190 GPa)", shortLabel: "SLM 17-4PH" },
+  { id: "sheet_metal_steel", label: "Sheet Metal Steel (200 GPa)", shortLabel: "Steel Sheet" },
   { id: "aluminum_6061_t6", label: "CNC Al 6061-T6 (68.9 GPa)", shortLabel: "CNC Al 6061" },
   { id: "aluminum_7075_t6", label: "CNC Al 7075-T6 (71.7 GPa)", shortLabel: "CNC Al 7075" },
-  { id: "titanium_grade5", label: "SLM / CNC Ti-6Al-4V Gr.5 (113.8 GPa)", shortLabel: "Ti-6Al-4V" },
+  { id: "titanium_grade5", label: "CNC Ti-6Al-4V Gr.5 (113.8 GPa)", shortLabel: "CNC Ti64" },
 ];
 
 const TOOLHEAD_CONSTRUCTION_OPTIONS: ToolheadConstructionCatalogItem[] = [
@@ -240,6 +254,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "multi_piece_clamshell",
     internal_stiffness_n_per_mm: 350,
     z_probe_type: "static_eddy",
+    default_hardware_summary:
+      "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, 5015 + 4010 fans, MGN12H carriage & static eddy probe (hotend added separately).",
   },
   {
     preset_id: "stealthburner_tap",
@@ -251,6 +267,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "multi_piece_clamshell",
     internal_stiffness_n_per_mm: 350,
     z_probe_type: "printed_tap",
+    default_hardware_summary:
+      "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, 5015 + 4010 fans & Printed Voron Tap carriage (hotend added separately).",
   },
   {
     preset_id: "xol_compact",
@@ -262,6 +280,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "compact_cage",
     internal_stiffness_n_per_mm: 650,
     z_probe_type: "static_eddy",
+    default_hardware_summary:
+      "Sherpa Mini direct-drive extruder + NEMA14 pancake, PA12-CF cage, dual cooling blowers, MGN12H carriage & static eddy probe (hotend added separately).",
   },
   {
     preset_id: "a4t_beacon",
@@ -273,6 +293,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "compact_cage",
     internal_stiffness_n_per_mm: 1150,
     z_probe_type: "static_eddy",
+    default_hardware_summary:
+      "Wristwatch G2 / compact direct-drive extruder + NEMA14 pancake, PPA-CF cage, dual blowers, MGN12H carriage & static Beacon probe (hotend added separately).",
   },
   {
     preset_id: "dragon_burner",
@@ -284,6 +306,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "compact_cage",
     internal_stiffness_n_per_mm: 720,
     z_probe_type: "static_eddy",
+    default_hardware_summary:
+      "Orbiter 2 / Sherpa compact direct-drive extruder, PA12-CF shroud, dual 4010 blowers, MGN12H carriage & static eddy probe (hotend added separately).",
   },
   {
     preset_id: "archetype_cpap",
@@ -295,6 +319,24 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "plate_sandwich_cf",
     internal_stiffness_n_per_mm: 1800,
     z_probe_type: "static_eddy",
+    default_hardware_summary:
+      "Lightweight direct-drive extruder (Sherpa/Orbiter-class), CF/Al plate sandwich, remote CPAP duct (no onboard blowers), MGN12H carriage & static eddy probe (hotend added separately).",
+  },
+  {
+    preset_id: "monolith_toolhead_cpap",
+    name: "Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)",
+    total_mass_g: 143,
+    cog_offset_mm: [0, -9.5, -1.5],
+    nozzle_offset_mm: [0, -14, -44],
+    mount_material: "slm_aluminum",
+    body_construction: "extruder_as_chassis",
+    internal_stiffness_n_per_mm: 2400,
+    z_probe_type: "static_eddy",
+    cpap_blower_id: "ws7040_24v",
+    cpap_hose_id_mm: 15,
+    belt_plane_z_offset_mm: -1.5,
+    default_hardware_summary:
+      "Integrated 37:1 worm-gear direct-drive extruder, SLM Al belt-coplanar CPAP chassis (WS7040 24V, 15 mm hose), MGN12H carriage & static eddy probe (hotend added separately).",
   },
   {
     preset_id: "microwaved_bowden",
@@ -308,6 +350,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     internal_stiffness_n_per_mm: 5340,
     z_probe_type: "static_eddy",
     extruder_type: "bowden",
+    default_hardware_summary:
+      "Remote Bowden extruder (no onboard motor) — 130 g includes SLM Ti/Al body (43.4 g), Ti bottom brace & shield (2.9 g), MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), Beacon RevH & ECAS coupler (hotend added separately).",
   },
   {
     preset_id: "microwaved_bowden_chube",
@@ -321,6 +365,26 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     internal_stiffness_n_per_mm: 2990,
     z_probe_type: "static_eddy",
     extruder_type: "bowden",
+    default_hardware_summary:
+      "Remote Bowden extruder (no onboard motor) — 135 g includes SLM Al Chube V1 body (~56.5 g), MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), Beacon RevH & ECAS coupler (hotend added separately).",
+  },
+  {
+    preset_id: "el_fuego",
+    name: "El Fuego SLM (CPAP + Sherpa Micro + Beacon)",
+    total_mass_g: 262,
+    cog_offset_mm: [0, -10.5, 2],
+    nozzle_offset_mm: [-0.3, -27.7, -63.7],
+    mount_material: "slm_aluminum",
+    body_material: "slm_aluminum",
+    body_construction: "cnc_monoblock",
+    internal_stiffness_n_per_mm: 1007,
+    z_probe_type: "static_eddy",
+    cpap_blower_id: "wm7575_220vac",
+    cpap_hose_id_mm: 19,
+    shared_heatsink_cpap_duct: true,
+    extruder_type: "direct_drive",
+    default_hardware_summary:
+      "Sherpa Micro direct-drive extruder + NEMA14 pancake (~105 g, pulls CoG to Z +2.0 mm), 3-part SLM CAD chassis (94.2 g: AlSi10Mg main body + Al belt plate + Ti extruder plate), MGN12H carriage (48.3 g), Beacon RevH & fasteners, plus WM7575 CPAP (19 mm hose) w/ shared heatsink bleed. Hotend added separately; 3D mesh renders chassis only.",
   },
   {
     preset_id: "heavy_uhf_long",
@@ -332,6 +396,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     body_construction: "multi_piece_clamshell",
     internal_stiffness_n_per_mm: 250,
     z_probe_type: "static_eddy",
+    default_hardware_summary:
+      "Heavy direct-drive extruder, multi-blower UHF ABS shroud, long-nozzle drop spacer, MGN12H carriage & static eddy probe (hotend added separately).",
   },
 ];
 
@@ -811,6 +877,18 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                         if (d.toolhead.extruder) {
                           d.toolhead.extruder.type = chosen.extruder_type ?? "direct_drive";
                         }
+                        if (chosen.cpap_blower_id != null) {
+                          d.toolhead.cpap_blower_id = chosen.cpap_blower_id;
+                        }
+                        if (chosen.cpap_hose_id_mm != null) {
+                          d.toolhead.cpap_hose_id_mm = chosen.cpap_hose_id_mm;
+                        }
+                        d.toolhead.shared_heatsink_cpap_duct = Boolean(
+                          chosen.shared_heatsink_cpap_duct
+                        );
+                        if (chosen.belt_plane_z_offset_mm != null) {
+                          d.toolhead.belt_plane_z_offset_mm = chosen.belt_plane_z_offset_mm;
+                        }
                         d.toolhead.nozzle_shield_mode = "auto";
                       },
                       `Toolhead Preset: ${prevName} → ${chosen.name}`
@@ -851,6 +929,17 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                     </optgroup>
                   )}
                 </select>
+                {(() => {
+                  const presetMeta =
+                    matchedToolheadPreset ??
+                    toolheadPresets.find((tp) => tp.preset_id === spec.toolhead.preset_id);
+                  if (!presetMeta?.default_hardware_summary) return null;
+                  return (
+                    <div className="hint-line">
+                      <strong>Included by default:</strong> {presetMeta.default_hardware_summary}
+                    </div>
+                  );
+                })()}
                 <PresetAffectsStrip
                   visible={advancedMode}
                   items={[
@@ -1084,8 +1173,10 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                         {Math.abs(effectiveCogMm[0]) >= 0.05
                           ? `X ${effectiveCogMm[0] >= 0 ? "+" : ""}${effectiveCogMm[0].toFixed(1)} · `
                           : ""}
-                        Y {Math.abs(effectiveCogMm[1]).toFixed(1)} · Z{" "}
-                        {Math.abs(effectiveCogMm[2]).toFixed(1)} mm
+                        Y {effectiveCogMm[1] >= 0 ? "+" : ""}
+                        {effectiveCogMm[1].toFixed(1)} · Z{" "}
+                        {effectiveCogMm[2] >= 0 ? "+" : ""}
+                        {effectiveCogMm[2].toFixed(1)} mm
                       </span>
                     </div>
                     <div className="cad-driven-stat">
@@ -1132,9 +1223,11 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                   </div>
 
                   <p className="cad-driven-note">
-                    Geometry, backplate, ribs &amp; CoG come directly from the baked 3D CAD
-                    superelement. Switch preset to Custom (or toggle CAD Superelements off in
-                    Advanced Mode) to use generic structure sliders.
+                    Chassis stiffness &amp; load path come directly from the baked 3D CAD
+                    superelement; simulated mass &amp; CoG include the preset&apos;s dressed hardware
+                    (extruder, carriage &amp; probe, excl. hotend) even when the 3D mesh renders only
+                    the structural chassis. Switch preset to Custom (or toggle CAD Superelements off
+                    in Advanced Mode) to use generic structure sliders.
                   </p>
                 </div>
               ) : (
@@ -1481,6 +1574,45 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                         }}
                       />
                     </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label htmlFor="dp-belt-plane-z-offset-mm">
+                      <span>Belt-Plane Z Offset (mm)</span>
+                      <span className="sub-block-tag">
+                        {(spec.toolhead.belt_plane_z_offset_mm ?? 0) === 0
+                          ? "Coplanar (0 mm)"
+                          : `${(spec.toolhead.belt_plane_z_offset_mm ?? 0) > 0 ? "+" : ""}${spec.toolhead.belt_plane_z_offset_mm} mm`}
+                      </span>
+                    </label>
+                    <input
+                      id="dp-belt-plane-z-offset-mm"
+                      type="number"
+                      min={-40}
+                      max={40}
+                      step={0.5}
+                      value={spec.toolhead.belt_plane_z_offset_mm ?? 0}
+                      title="Vertical Z offset between belt drive plane and X-rail / toolhead CoG (0 mm = belt-coplanar like Monolith Toolhead, minimizing X-accel roll coupling)"
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        const clamped = Math.max(-40, Math.min(40, v));
+                        const prev = spec.toolhead.belt_plane_z_offset_mm ?? 0;
+                        if (clamped === prev) return;
+                        update(
+                          (d) => {
+                            d.toolhead.belt_plane_z_offset_mm = clamped;
+                          },
+                          `Belt-Plane Z Offset: ${prev} → ${clamped} mm`
+                        );
+                      }}
+                    />
+                    {showHints && (
+                      <div className="hint-line">
+                        Aligning the belt plane with toolhead CoG (≈ 0 mm) minimizes X-axis roll torque
+                        and resonance splitting.
+                      </div>
+                    )}
                   </div>
                 </div>
                 </details>

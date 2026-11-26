@@ -56,17 +56,26 @@ def _base_corexy_spec(
 
 
 def test_all_seven_bracket_materials_stiffness_order_and_series_formula() -> None:
-    """Verify exact series bracket compliance across all 7 bracket materials."""
+    """Verify exact series bracket compliance across all gantry bracket materials (FDM, SLM, CNC, sheet steel)."""
     ordered_materials = [
         "abs_printed",
+        "pc_pbt_gf_printed",
         "pet_cf_printed",
         "pa12_cf_printed",
         "pps_cf_printed",
         "ppa_cf_printed",
+        "slm_aluminum",
         "aluminum_6061_t6",
         "aluminum_7075_t6",
+        "slm_ti6al4v",
+        "slm_maraging_steel",
+        "slm_316l_steel",
+        "slm_17_4ph_steel",
+        "sheet_metal_steel",
     ]
     assert set(ordered_materials) == set(GANTRY_BRACKET_CATALOG.keys())
+
+    from printsim.fea.components import compute_stepper_mount_temp_c
 
     k_bkts: list[float] = []
     k_drvs: list[float] = []
@@ -81,7 +90,9 @@ def test_all_seven_bracket_materials_stiffness_order_and_series_formula() -> Non
         kin = analyze_kinematics(asm)
 
         # Analytical series formula check (calibrated 500 N/mm base 2WD ABS chain -> Hex8 ABS FEA)
-        e_bkt = get_material(mat_id).youngs_modulus_pa
+        mount_t, _ = compute_stepper_mount_temp_c(spec)
+        mat_obj = get_material(mat_id)
+        e_bkt = mat_obj.effective_modulus_pa(mount_t) * float(mat_obj.bolted_joint_stiffness_factor)
         k_mat = 5.0e5 * 1.45 * 1.65 * (e_bkt / 2.1e9)
         expected_k_bkt = (k_mat * 8.0e6) / (k_mat + 8.0e6)
         k_bkt = compute_bracket_stiffness_n_per_m(asm)
@@ -467,7 +478,7 @@ def test_api_catalog_and_simulate_expose_fillings_and_brackets() -> None:
     assert r_cat.status_code == 200
     cat = r_cat.json()
     assert len(cat["extrusion_fillings"]) == 6
-    assert len(cat["gantry_brackets"]) == 7
+    assert len(cat["gantry_brackets"]) == 14
 
     spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
     spec.frame.extrusion_filling = "uhpc_grout"

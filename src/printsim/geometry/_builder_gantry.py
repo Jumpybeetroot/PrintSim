@@ -401,6 +401,29 @@ def _apply_cf_two_wall_clamped_inserts(
     return insert_mass_kg
 
 
+def _oriented_bare_rail_profile(x_rail_prof: ProfileSpec, x_mount: str) -> ProfileSpec:
+    """Orient a bare linear rail cross-section to match its mounting face on an unsupported X-gantry.
+
+    In local beam coordinates along +X, local y is global Y (front-to-back) and local z is global Z.
+    - ``top``/``bottom``/``dual_top_bottom``: rail lies flat (wide dimension along Y, height along Z).
+    - ``front``: rail stands vertically (8 mm thickness along Y -> iz resists Y-bending, 12 mm width along Z -> iy resists Z-bending).
+    """
+    if x_mount in ("top", "bottom", "dual_top_bottom"):
+        return x_rail_prof.model_copy(
+            update={"id": x_rail_prof.id, "shape": "rail"}
+        )
+    return x_rail_prof.model_copy(
+        update={
+            "id": x_rail_prof.id,
+            "shape": "rail",
+            "width_m": x_rail_prof.height_m,
+            "height_m": x_rail_prof.width_m,
+            "iy_m4": x_rail_prof.iz_m4,
+            "iz_m4": x_rail_prof.iy_m4,
+        }
+    )
+
+
 def _make_x_backer_profile(
     x_beam_prof: ProfileSpec, x_rail_prof: ProfileSpec, backer_thickness_mm: float
 ) -> ProfileSpec:
@@ -569,7 +592,14 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
     model.x_carriage_k_ry_nm_rad = float(props["k_ry_car"])
 
     if spec.architecture in ("corexy", "cartesian_bedslinger"):
-        base_x_prof = get_profile(spec.gantry.x_beam_profile)
+        is_unsupported_rail = spec.gantry.x_beam_profile == "unsupported_rail"
+        x_rail_prof = get_profile(spec.gantry.x_rail_profile)
+        rail_mat = get_material(spec.gantry.rail_material)
+        base_x_prof = (
+            _oriented_bare_rail_profile(x_rail_prof, spec.gantry.effective_x_rail_mount)
+            if is_unsupported_rail
+            else get_profile(spec.gantry.x_beam_profile)
+        )
         x_gantry_members = [m for m in model.members if m.id in ("x_gantry_l", "x_gantry_r")]
         if x_gantry_members:
             mean_iz = sum(m.profile.iz_m4 for m in x_gantry_members) / len(x_gantry_members)
@@ -585,13 +615,13 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
                 100.0 * (mean_j - base_x_prof.j_m4) / max(base_x_prof.j_m4, 1e-18)
             )
 
-        x_beam_mat = get_material(spec.gantry.x_beam_material)
+        x_beam_mat = rail_mat if is_unsupported_rail else get_material(spec.gantry.x_beam_material)
         chamber_c = float(spec.frame.chamber_temp_c)
         eb_eff = x_beam_mat.effective_modulus_pa(chamber_c)
         shear_ret = x_beam_mat.shear_modulus_retention_at_temp(chamber_c)
-        x_rail_prof = get_profile(spec.gantry.x_rail_profile)
-        rail_mat = get_material(spec.gantry.rail_material)
-        if base_x_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):
+        if is_unsupported_rail:
+            sub_kind = "solid_bar"
+        elif base_x_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):
             sub_kind = "carbon_tube"
         elif base_x_prof.shape == "solid_bar":
             sub_kind = "solid_bar"
@@ -607,18 +637,36 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
             if x_gantry_members
             else spec.frame.width_mm * 1e-3
         )
-        model.x_rail_newmark_gamma = newmark_rail_composite_gamma(
-            e_rail_pa=rail_mat.youngs_modulus_pa,
-            a_rail_m2=x_rail_prof.area_m2,
-            e_beam_pa=eb_eff,
-            a_beam_m2=base_x_prof.area_m2,
-            bolt_pitch_m=spec.gantry.rail_bolt_pitch_mm * 1e-3,
-            l_eff_m=max(x_span_m, 0.15),
-            substrate_kind=sub_kind,
-            wall_thickness_m=base_x_prof.wall_thickness_m,
-            matrix_shear_retention=shear_ret,
-            cf_rail_mounting=spec.gantry.effective_cf_rail_mounting,
-        )
+        if is_unsupported_rail:
+            if spec.gantry.rail_backer_material == "none":
+                model.x_rail_newmark_gamma = 1.0
+            else:
+                backer_mat_tel = get_material(spec.gantry.rail_backer_material)
+                backer_prof_tel = _make_x_backer_profile(
+                    x_rail_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
+                )
+                model.x_rail_newmark_gamma = newmark_rail_composite_gamma(
+                    e_rail_pa=backer_mat_tel.youngs_modulus_pa,
+                    a_rail_m2=backer_prof_tel.area_m2,
+                    e_beam_pa=rail_mat.youngs_modulus_pa,
+                    a_beam_m2=x_rail_prof.area_m2,
+                    bolt_pitch_m=spec.gantry.rail_bolt_pitch_mm * 1e-3,
+                    l_eff_m=max(x_span_m, 0.15),
+                    substrate_kind="solid_bar",
+                )
+        else:
+            model.x_rail_newmark_gamma = newmark_rail_composite_gamma(
+                e_rail_pa=rail_mat.youngs_modulus_pa,
+                a_rail_m2=x_rail_prof.area_m2,
+                e_beam_pa=eb_eff,
+                a_beam_m2=base_x_prof.area_m2,
+                bolt_pitch_m=spec.gantry.rail_bolt_pitch_mm * 1e-3,
+                l_eff_m=max(x_span_m, 0.15),
+                substrate_kind=sub_kind,
+                wall_thickness_m=base_x_prof.wall_thickness_m,
+                matrix_shear_retention=shear_ret,
+                cf_rail_mounting=spec.gantry.effective_cf_rail_mounting,
+            )
         model.x_beam_insert_mass_kg = sum(
             m.insert_mass_kg for m in model.members if m.role == "gantry"
         )
@@ -707,78 +755,123 @@ def _apply_corexy_gantry_rails(
             m.profile = m.profile.model_copy(update={"j_m4": m.profile.j_m4 * eta_j_y})
 
     # Chamber-temperature viscoelastic laminate softening on composite X-gantry beam
-    x_beam_mat = get_material(xm)
-    if x_beam_mat.tg_c is not None and abs(chamber_c - 25.0) > 1e-6:
-        eff_e = x_beam_mat.effective_modulus_pa(chamber_c)
-        eff_g = x_beam_mat.effective_shear_modulus_at_temp_pa(chamber_c)
-        for mid in ("x_gantry_l", "x_gantry_r"):
-            m_xb = member_by_id[mid]
-            m_xb.material = m_xb.material.model_copy(
-                update={
-                    "youngs_modulus_pa": eff_e,
-                    "shear_modulus_pa": eff_g,
-                }
-            )
-
-    # Physical X-beam cut length (between XY-joint faces) and bolted X-rail cut length
-    # (build_X + 50 mm) are shorter than the outer frame width w; scale bare beam and
-    # folded rail/backer densities across geometric [0, w] so FEA M, y_moving_mass, and BOM match.
+    is_unsupported_rail = xp == "unsupported_rail"
     x_beam_span = corexy_x_beam_span_m(spec)
     x_rail_len = corexy_x_rail_len_m(spec)
     beam_len_scale = x_beam_span / max(w, 1e-9)
     rail_len_scale = x_rail_len / max(w, 1e-9)
-    for mid in ("x_gantry_l", "x_gantry_r"):
-        m_xb = member_by_id[mid]
-        m_xb.material = m_xb.material.model_copy(
-            update={"density_kg_m3": m_xb.material.density_kg_m3 * beam_len_scale}
-        )
 
-    x_boost_iy = 0.0
-    x_boost_iz = 0.0
-    cf_mount = spec.gantry.effective_cf_rail_mounting
-    if spec.gantry.rail_backer_material != "none" and not spec.gantry.effective_dual_x_rails:
-        backer_mat = get_material(spec.gantry.rail_backer_material)
-        backer_prof = _make_x_backer_profile(
-            base_x_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
-        )
+    if is_unsupported_rail:
+        # Unsupported bare linear rail X-gantry (e.g. Monolith Zero): rail IS the X-gantry beam.
+        # Construct x_gantry_l/r directly from oriented x_rail_profile & rail_material with zero
+        # phantom beam double-counting, and bolt any opposite-face backer directly onto the steel rail.
+        bare_rail_prof = _oriented_bare_rail_profile(x_rail_prof, x_mount)
+        base_x_prof = bare_rail_prof
         for mid in ("x_gantry_l", "x_gantry_r"):
-            d_iy_x, d_iz_x, _ = _apply_bolted_rail_with_opposite_backer(
-                member_by_id[mid],
-                nmap,
-                x_rail_prof,
-                rail_mat,
-                backer_prof,
-                backer_mat,
-                x_normals[0],
-                beam_shape=base_x_prof.shape,
-                bolt_pitch_m=bolt_pitch_m,
-                l_eff_m=w,
-                chamber_temp_c=chamber_c,
-                cf_rail_mounting=cf_mount,
-                mass_length_scale=rail_len_scale,
+            m_xb = member_by_id[mid]
+            m_xb.profile = bare_rail_prof
+            m_xb.material = rail_mat.model_copy(
+                update={"density_kg_m3": rail_mat.density_kg_m3 * beam_len_scale}
             )
-            x_boost_iy += d_iy_x
-            x_boost_iz += d_iz_x
+            m_xb.rail_mass_kg = m_xb.mass_kg(nmap)
+            m_xb.backer_mass_kg = 0.0
+            m_xb.backer_material_id = ""
+            m_xb.insert_mass_kg = 0.0
+
+        x_boost_iy = 0.0
+        x_boost_iz = 0.0
+        if spec.gantry.rail_backer_material != "none":
+            backer_mat = get_material(spec.gantry.rail_backer_material)
+            backer_prof = _make_x_backer_profile(
+                x_rail_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
+            )
+            opposite_normal = [-x_normals[0]]
+            for mid in ("x_gantry_l", "x_gantry_r"):
+                d_iy_x, d_iz_x, _ = _apply_bolted_linear_rail(
+                    member_by_id[mid],
+                    nmap,
+                    backer_prof,
+                    backer_mat,
+                    opposite_normal,
+                    beam_shape="solid_bar",
+                    bolt_pitch_m=bolt_pitch_m,
+                    l_eff_m=x_beam_span,
+                    track_as_rail=False,
+                    chamber_temp_c=chamber_c,
+                    mass_length_scale=beam_len_scale,
+                )
+                x_boost_iy += d_iy_x
+                x_boost_iz += d_iz_x
+        x_beam_insert_mass_kg = 0.0
     else:
+        x_beam_mat = get_material(xm)
+        if x_beam_mat.tg_c is not None and abs(chamber_c - 25.0) > 1e-6:
+            eff_e = x_beam_mat.effective_modulus_pa(chamber_c)
+            eff_g = x_beam_mat.effective_shear_modulus_at_temp_pa(chamber_c)
+            for mid in ("x_gantry_l", "x_gantry_r"):
+                m_xb = member_by_id[mid]
+                m_xb.material = m_xb.material.model_copy(
+                    update={
+                        "youngs_modulus_pa": eff_e,
+                        "shear_modulus_pa": eff_g,
+                    }
+                )
+
+        # Physical X-beam cut length (between XY-joint faces) and bolted X-rail cut length
+        # (build_X + 50 mm) are shorter than the outer frame width w; scale bare beam and
+        # folded rail/backer densities across geometric [0, w] so FEA M, y_moving_mass, and BOM match.
         for mid in ("x_gantry_l", "x_gantry_r"):
-            d_iy_x, d_iz_x, _ = _apply_bolted_linear_rail(
-                member_by_id[mid],
-                nmap,
-                x_rail_prof,
-                rail_mat,
-                x_normals,
-                beam_shape=base_x_prof.shape,
-                bolt_pitch_m=bolt_pitch_m,
-                l_eff_m=w,
-                chamber_temp_c=chamber_c,
-                cf_rail_mounting=cf_mount,
-                mass_length_scale=rail_len_scale,
+            m_xb = member_by_id[mid]
+            m_xb.material = m_xb.material.model_copy(
+                update={"density_kg_m3": m_xb.material.density_kg_m3 * beam_len_scale}
             )
-            x_boost_iy += d_iy_x
-            x_boost_iz += d_iz_x
-    x_beam_insert_mass_kg = _apply_cf_two_wall_clamped_inserts(
-        member_by_id, nmap, spec, x_beam_span
-    )
+
+        x_boost_iy = 0.0
+        x_boost_iz = 0.0
+        cf_mount = spec.gantry.effective_cf_rail_mounting
+        if spec.gantry.rail_backer_material != "none" and not spec.gantry.effective_dual_x_rails:
+            backer_mat = get_material(spec.gantry.rail_backer_material)
+            backer_prof = _make_x_backer_profile(
+                base_x_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
+            )
+            for mid in ("x_gantry_l", "x_gantry_r"):
+                d_iy_x, d_iz_x, _ = _apply_bolted_rail_with_opposite_backer(
+                    member_by_id[mid],
+                    nmap,
+                    x_rail_prof,
+                    rail_mat,
+                    backer_prof,
+                    backer_mat,
+                    x_normals[0],
+                    beam_shape=base_x_prof.shape,
+                    bolt_pitch_m=bolt_pitch_m,
+                    l_eff_m=w,
+                    chamber_temp_c=chamber_c,
+                    cf_rail_mounting=cf_mount,
+                    mass_length_scale=rail_len_scale,
+                )
+                x_boost_iy += d_iy_x
+                x_boost_iz += d_iz_x
+        else:
+            for mid in ("x_gantry_l", "x_gantry_r"):
+                d_iy_x, d_iz_x, _ = _apply_bolted_linear_rail(
+                    member_by_id[mid],
+                    nmap,
+                    x_rail_prof,
+                    rail_mat,
+                    x_normals,
+                    beam_shape=base_x_prof.shape,
+                    bolt_pitch_m=bolt_pitch_m,
+                    l_eff_m=w,
+                    chamber_temp_c=chamber_c,
+                    cf_rail_mounting=cf_mount,
+                    mass_length_scale=rail_len_scale,
+                )
+                x_boost_iy += d_iy_x
+                x_boost_iz += d_iz_x
+        x_beam_insert_mass_kg = _apply_cf_two_wall_clamped_inserts(
+            member_by_id, nmap, spec, x_beam_span
+        )
     x_boost_iy *= 0.5
     x_boost_iz *= 0.5
     x_boost_j = 0.5 * sum(

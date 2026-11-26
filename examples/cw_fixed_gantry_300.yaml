@@ -1,0 +1,140 @@
+name: CW Fixed Gantry Conversion (MONOLITH 300)
+description: >-
+  CloakedWayne's MONOLITH 300 Fixed Gantry Conversion (Road to 50k testbed; Monolith Discord
+  #members-projects thread 1564391176369606726): 300x300 fixed-gantry CoreXY converted from a
+  Voron V2.4 300 LDO kit with top-mounted electronics bay (Octopus Pro + RPi), 4040/2020 frame
+  with 3 mm bolted Al 5052 structural panels + 20 mm foil-faced PIR insulation + 500 W SLM PTC
+  chamber heater (19.5 -> 80 C in 9 min), AWD 10 mm EPDM belts @ 89 N (20 lbf), Carbonara CF
+  X-beam (2-wall clamped inserts) + Hollow MGN12H front rail, inner-mounted MGN12H Y-rails,
+  SLM Al XY-joints, 4x LDO 2504AH-S45R @ 48 V + 2 mm PTFE gaskets, Monolith Belt-Coplanar
+  SLM CPAP Toolhead (WS9290 @ 45% PWM + Beacon probe + 50 mm HF 80 W hotend + 37:1 worm
+  extruder), Cra-Z 2+2+2 GE5C kinematic leadscrew Z bed suspension, and Simpla isolation feet.
+architecture: corexy
+frame:
+  width_mm: 460
+  depth_mm: 460
+  height_mm: 500
+  profile: extrusion_2020
+  upright_profile: extrusion_4040
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  corner_joint_type: corner_cube
+  enclosed_panels: true
+  top_panel: true
+  panel_mounting: bolted_structural
+  panel_material: aluminum_5052_sheet
+  panel_thickness_mm: 3.0
+  bolt_panels_to_gantry: true
+  gantry_top_clearance_mm: 110.0
+  # Road to 50k baseline uses rigid_bolted (178.8 Hz X MZV / 123.0 Hz Y ZV vs CW 175 / 115 Hz);
+  # switch to rubber_feet (166.3 / 117.7 Hz) or anti_vib_pads (9.5 Hz base mode) to study Simpla isolation feet.
+  feet_type: rigid_bolted
+  chamber_temp_c: 80.0
+  chamber_heater_id: monolith_500w_ptc
+  chamber_insulation_mm: 20.0
+  rear_bottom_extrusion: true
+gantry:
+  drive_mode: awd
+  belt_routing: monolith_short
+  double_shear_pulleys: true
+  bracket_material: slm_aluminum
+  x_beam_profile: cf_tube_20x20_carbonara
+  x_beam_material: carbon_fiber_torsional_45
+  cf_rail_mounting: two_wall_clamped_inserts
+  x_rail_profile: mgn12_hollow_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  x_rail_mount: front
+  y_rail_mount: inner
+  carriage_mass_g: 235.0
+  stepper_thermal_gasket: ptfe_2mm
+  idler_axial_preload: disc_spring_m5
+  belt:
+    type: gt2_10mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 89.0
+kinematics:
+  build_volume_mm: [300, 300, 250]
+  max_velocity_mm_s: 900
+  max_accel_mm_s2: 50000
+  max_z_velocity_mm_s: 25
+  max_z_accel_mm_s2: 300
+  square_corner_velocity_mm_s: 50.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ah_s45r
+    name: Monolith LDO 42STH48-2504AH-S45R (45mm Round Shaft, 2m Cable)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 2.2
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    # Monolith updates document LDO 2504AH-S45R @ 36 V (or 48 V on 5160HV/Kraken); 2.2 A avoids >180 C steady winding temp at 80 C chamber.
+    supply_voltage_v: 36.0
+    rotor_inertia_kg_m2: 8.45e-6
+    motor_mass_g: 372
+    insulation_class: H
+  z_stepper:
+    name: NEMA17-48mm Cra-Z Leadscrew Z
+    holding_torque_nm: 0.55
+    rated_current_a: 2.0
+    inductance_mh: 2.7
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 8.2e-6
+    motor_mass_g: 360
+toolhead:
+  preset_id: monolith_toolhead_cpap
+  name: Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)
+  total_mass_g: 143
+  cog_offset_mm: [0, -9.5, -1.5]
+  nozzle_offset_mm: [0, -14.0, -44.0]
+  mount_material: slm_aluminum
+  body_construction: extruder_as_chassis
+  internal_stiffness_n_per_mm: 2400.0
+  z_probe_type: static_eddy
+  cpap_blower_id: wm9290_24v
+  cpap_hose_id_mm: 15.0
+  cpap_pwm_pct: 45.0
+  shared_heatsink_cpap_duct: true
+  belt_plane_z_offset_mm: -1.5
+  envelope_mm: [52, 56, 78]
+  hotend:
+    preset_id: monolith_50mm_hf
+    name: Monolith 50mm+V6 HF Hotend (80W PT1000)
+    mount_style: rigid_4bolt_m3
+    structural_stiffness_n_per_mm: 920.0
+    overall_length_mm: 68.0
+    mass_g: 52.0
+    heater_power_w: 80
+    block_material: copper_c110
+    block_mass_g: 22
+    nozzle_material: copper_c110
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 50
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 10.5
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 2.4
+    part_cooling_cfm: 19.5
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 37.0
+    max_push_force_n: 72
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: atp5_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 750
+  mass_g: 2650
+  z_drive: leadscrew_triple
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom
+  target_temp_c: 100.0
+  mount_type: craz_kinematic_ge5c

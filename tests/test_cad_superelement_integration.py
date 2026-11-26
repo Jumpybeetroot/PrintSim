@@ -1364,3 +1364,56 @@ def test_microwaved_bowden_chube_and_exact_cutout_chube_superelements() -> None:
     assert audit["toolhead_preset"]["trust_pct"] >= 86
     assert audit["hotend_clamp"]["cad_superelement_id"] == "chube_conduction"
     assert audit["hotend_clamp"]["trust_pct"] >= 86
+
+
+def test_el_fuego_slm_toolhead_superelement_and_chube_integration() -> None:
+    """Verify baked El Fuego 3-part SLM toolhead CMS, material scaling, and Chube/Tricorn pairing."""
+    from printsim.schema import TOOLHEAD_PRESETS
+
+    client = TestClient(app)
+    resp = client.get("/api/assets/hardware/toolheads/el_fuego/visual.glb")
+    assert resp.status_code == 200
+    assert resp.content[:4] == b"glTF"
+
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
+    th_p = TOOLHEAD_PRESETS["el_fuego"]
+    base.use_cad_superelements = True
+    base.toolhead.preset_id = "el_fuego"
+    base.toolhead.name = str(th_p["name"])
+    base.toolhead.total_mass_g = float(th_p["total_mass_g"])
+    base.toolhead.cog_offset_mm = tuple(float(v) for v in th_p["cog_offset_mm"])
+    base.toolhead.nozzle_offset_mm = tuple(float(v) for v in th_p["nozzle_offset_mm"])
+    base.toolhead.mount_material = str(th_p["mount_material"])
+    base.toolhead.body_material = "slm_aluminum"
+    base.toolhead.cpap_blower_id = str(th_p["cpap_blower_id"])
+    base.toolhead.shared_heatsink_cpap_duct = True
+    base.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
+
+    asm_al = build_assembly(base)
+    se_th_al = next(se for se in asm_al.superelements if se.id == "toolhead_mount")
+    se_he_cond = next(se for se in asm_al.superelements if se.id == "nozzle_stem")
+    assert se_th_al.asset_id == "el_fuego"
+    assert se_he_cond.asset_id == "chube_conduction"
+    assert se_th_al.mass_kg == pytest.approx(0.09385, abs=0.002)
+    assert asm_al.toolhead_stage_stiffnesses_n_per_mm["backplate_only_n_per_mm"] == 0.0
+    assert 850.0 <= asm_al.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"] <= 1250.0
+
+    # Material scaling: slm_aluminum (68 GPa) -> titanium_grade5 (113.8 GPa) scales stiffness ~1.67x
+    s_ti = base.model_copy(deep=True)
+    s_ti.toolhead.body_material = "titanium_grade5"
+    asm_ti = build_assembly(s_ti)
+    se_th_ti = next(se for se in asm_ti.superelements if se.id == "toolhead_mount")
+    assert se_th_ti.mass_kg > se_th_al.mass_kg * 1.60
+    assert (
+        se_th_ti.to_summary_dict()["port_stiffness_n_per_mm"]["kx"]
+        > se_th_al.to_summary_dict()["port_stiffness_n_per_mm"]["kx"] * 1.60
+    )
+
+    # Full multiphysics evaluation succeeds cleanly with Chube Conduction & Tricorn Long
+    rep = evaluate_printer(base)
+    assert rep.modal_fea.shaper_x.effective_freq_hz > 40.0
+    assert rep.modal_fea.shaper_y.effective_freq_hz > 40.0
+
+    audit = {e["id"]: e for e in build_model_confidence_audit(base)["entries"]}
+    assert audit["toolhead_preset"]["cad_superelement_id"] == "el_fuego"
+    assert audit["toolhead_preset"]["trust_pct"] >= 85

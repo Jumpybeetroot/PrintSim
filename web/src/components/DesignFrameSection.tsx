@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ARCH_LABELS,
   BRACING_LABELS,
+  CHAMBER_HEATER_LABELS,
   FRONT_BRACE_LABELS,
   TOP_BRACE_LABELS,
   Z_DRIVE_LABELS,
 } from "../constants/printerLabels";
 import {
   CatalogResponse,
+  ChamberHeaterType,
   CornerJointType,
   ExtrusionFillingInfo,
   ExtrusionFillingType,
@@ -42,9 +44,11 @@ const COREXY_V24_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
   { id: "400", label: "400 mm", frame: [560, 560, 580], build: [400, 400, 400], bed: [400, 400] },
 ];
 
-// Real Voron Trident (fixed gantry) outer edge-to-edge 2020 frame dimensions:
+// Real Voron Trident (fixed gantry) outer edge-to-edge 2020 frame dimensions,
+// plus Monolith Zero (120×120×120 build on 230×230×300 1515 frame):
 // 250/300/350 share 500 mm verticals (250 mm Z travel); 400 scales to 550 mm (300 mm Z).
 const COREXY_TRIDENT_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
+  { id: "120", label: "Zero 120", frame: [230, 230, 300], build: [120, 120, 120], bed: [120, 120] },
   { id: "250", label: "250 mm", frame: [410, 410, 500], build: [250, 250, 250], bed: [250, 250] },
   { id: "300", label: "300 mm", frame: [460, 460, 500], build: [300, 300, 250], bed: [300, 300] },
   { id: "350", label: "350 mm", frame: [510, 510, 500], build: [350, 350, 250], bed: [350, 350] },
@@ -73,10 +77,12 @@ function inferProfileOuterDimsMm(profileId: string, profiles: ProfileItem[]): [n
   if (profileId.includes("3030")) return [30, 30];
   if (profileId.includes("2040")) return [20, 40];
   if (profileId.includes("2020")) return [20, 20];
+  if (profileId.includes("1515")) return [15, 15];
   return [20, 20];
 }
 
 function shortProfileCode(profileId: string, profileLabelFn: (id: string) => string): string {
+  if (profileId === "extrusion_1515") return "1515";
   if (profileId.startsWith("extrusion_")) {
     return profileId.replace(/^extrusion_/, "");
   }
@@ -167,6 +173,7 @@ const PANEL_MATERIALS: Array<{ id: string; label: string; shortLabel: string }> 
 ];
 
 const FRAME_EXTRUSION_IDS = new Set([
+  "extrusion_1515",
   "extrusion_2020",
   "extrusion_2040",
   "extrusion_3030",
@@ -1018,6 +1025,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           p.id.startsWith("extrusion_")
         );
         const fallbackUprights = [
+          { id: "extrusion_1515", name: "1515 Aluminum Extrusion" },
           { id: "extrusion_2020", name: "2020 Aluminum Extrusion" },
           { id: "extrusion_2040", name: "2040 Aluminum Extrusion" },
           { id: "extrusion_3030", name: "3030 Aluminum Extrusion" },
@@ -1628,6 +1636,36 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
               ]}
             />
           </div>
+
+          {spec.architecture === "corexy" && (
+            <div className="field-row">
+              <label className="checkbox-row">
+                <input
+                  id="df-rear-bottom-extrusion-27"
+                  type="checkbox"
+                  checked={spec.frame.rear_bottom_extrusion ?? true}
+                  onChange={(e) => {
+                    const nextVal = e.target.checked;
+                    update(
+                      (d) => {
+                        d.frame.rear_bottom_extrusion = nextVal;
+                      },
+                      nextVal
+                        ? "Rear Bottom Extrusion: Removed → Installed"
+                        : "Rear Bottom Extrusion: Installed → Removed"
+                    );
+                  }}
+                />
+                <span>Rear Bottom Extrusion</span>
+              </label>
+              {showHints && (
+                <div className="hint-line">
+                  Closes the rear lower frame loop for torsional rigidity; uncheck for rear-pass-through
+                  or under-bed electronics clearance.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </details>
 
@@ -1854,6 +1892,63 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             <div className="hint-line">
               Heated chambers drive aluminum-steel bimetallic gantry bow, frame Z-drift, and
               printed bracket E(T) softening near polymer Tg.
+            </div>
+          )}
+        </div>
+
+        <div className="field-row">
+          <label htmlFor="df-chamber-heater-25">Chamber Heater</label>
+          <select
+            id="df-chamber-heater-25"
+            value={spec.frame.chamber_heater_id ?? "none"}
+            onChange={(e) => {
+              const nextVal = e.target.value as ChamberHeaterType;
+              const prevLbl =
+                CHAMBER_HEATER_LABELS[spec.frame.chamber_heater_id ?? "none"] ??
+                spec.frame.chamber_heater_id ??
+                "None (Passive)";
+              const nextLbl = CHAMBER_HEATER_LABELS[nextVal] ?? nextVal;
+              update(
+                (d) => {
+                  d.frame.chamber_heater_id = nextVal;
+                },
+                `Chamber Heater: ${prevLbl} → ${nextLbl}`
+              );
+            }}
+          >
+            <option value="none">None (Passive)</option>
+            <option value="monolith_100w_ptc">Monolith 100W 24V PTC</option>
+            <option value="monolith_500w_ptc">Monolith 500W AC PTC</option>
+          </select>
+        </div>
+
+        <div className="field-row">
+          <label htmlFor="df-chamber-insulation-mm-26">PIR Insulation (mm)</label>
+          <input
+            id="df-chamber-insulation-mm-26"
+            type="number"
+            min={0}
+            max={50}
+            step={5}
+            value={spec.frame.chamber_insulation_mm ?? 0}
+            title="Polyisocyanurate (PIR) foam panel insulation thickness (0, 10, or 20 mm typical) for lower enclosure heat loss UA"
+            onChange={(e) => {
+              const parsed = Number(e.target.value);
+              if (!Number.isFinite(parsed)) return;
+              const clamped = Math.max(0, Math.min(50, Math.round(parsed)));
+              const prev = spec.frame.chamber_insulation_mm ?? 0;
+              if (clamped === prev) return;
+              update(
+                (d) => {
+                  d.frame.chamber_insulation_mm = clamped;
+                },
+                `PIR Insulation: ${prev} → ${clamped} mm`
+              );
+            }}
+          />
+          {showHints && (
+            <div className="hint-line">
+              10–20 mm PIR foam cuts enclosure UA heat loss and speeds 60 °C chamber heat-up.
             </div>
           )}
         </div>

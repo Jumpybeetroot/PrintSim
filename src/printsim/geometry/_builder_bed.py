@@ -182,7 +182,8 @@ def _attach_bed_mount_compliance(
     cfg = resolve_bed_mount(spec)
     t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
     h_standoff_m = float(cfg.get("standoff_height_mm", 14.0)) * 1e-3
-    half_subframe_m = 0.010  # half of a 2020 bed subframe extrusion
+    frame_h_m = get_profile(spec.frame.profile).height_m
+    half_subframe_m = 0.5 * min(frame_h_m, 0.020)  # half of bed subframe extrusion (7.5 mm on 1515, 10 mm on 2020+)
 
     bed_kg = spec.bed.mass_g * 1e-3
     bed_frame_kg = 0.0
@@ -322,6 +323,44 @@ def _compute_z_carriage_spring_stiffness(
     return float(k_z_drive_col_n_m), float(k_shear), float(k_rot)
 
 
+_FLYING_Z_JOINT_TYPE_MULT: dict[str, float] = {
+    "single": 1.0,
+    "double": 1.65,
+}
+_FLYING_Z_JOINT_MAT_MULT: dict[str, float] = {
+    "printed": 1.0,
+    "hybrid": 1.22,
+    "slm": 1.55,
+    "milled": 1.60,
+}
+
+
+def _compute_flying_z_joint_spring_stiffness(
+    spec: PrinterSpec,
+    k_z_drive_col_n_m: float,
+) -> tuple[float, float, float]:
+    """Return 6-DOF flying-gantry V2 Z-joint stiffnesses ``(k_normal_z, k_shear_xy, k_rot_xyz)`` (SI).
+
+    Scales baseline single-carriage printed GE5C Z-joint stiffness (1.2 MN/m lateral shear,
+    65 N·m/rad spherical rotational restraint) by ``z_joint_type`` (single=1.0, double=1.65)
+    and ``z_joint_material`` (printed=1.0, hybrid=1.22, slm=1.55, milled=1.60 lateral with
+    controlled XY rotational compliance spacers).
+    """
+    type_mult = _FLYING_Z_JOINT_TYPE_MULT.get(spec.gantry.z_joint_type, 1.0)
+    mat_key = spec.gantry.z_joint_material
+    mat_mult = _FLYING_Z_JOINT_MAT_MULT.get(mat_key, 1.0)
+    k_shear = 1.2e6 * type_mult * mat_mult
+    # Milled Z-joint kits retain controlled rotational compliance spacers so QGL tilts do not bind
+    rot_mat_mult = 1.20 if mat_key == "milled" else mat_mult
+    k_rot = 65.0 * type_mult * rot_mat_mult
+    k_normal = (
+        float(k_z_drive_col_n_m)
+        * (1.0 + 0.12 * (type_mult - 1.0))
+        * (1.0 + 0.08 * (mat_mult - 1.0))
+    )
+    return float(k_normal), float(k_shear), float(k_rot)
+
+
 def _compute_corexy_z_drive_stiffness(
     spec: PrinterSpec,
     z_gantry: float,
@@ -437,9 +476,16 @@ def _setup_corexy_z_drive_nodes_and_bed(
         # anchored between base and top perimeter rails with LMK10LUU flanged linear bearings.
         y_rod_f = d * 0.25
         y_rod_r = d * 0.75
+        if spec.frame.rear_bottom_extrusion:
+            nodes.append(
+                _b.StructuralNode("b_rear_mid", np.array([w * 0.5, d, 0.0]), lumped_mass_kg=z_motor_kg, role="frame")
+            )
+        else:
+            for n in nodes:
+                if n.id in ("b_rl", "b_rr"):
+                    n.lumped_mass_kg += 0.5 * z_motor_kg
         nodes.extend(
             [
-                _b.StructuralNode("b_rear_mid", np.array([w * 0.5, d, 0.0]), lumped_mass_kg=z_motor_kg, role="frame"),
                 _b.StructuralNode("b_left_mid", np.array([0.0, y_mid, 0.0]), role="frame"),
                 _b.StructuralNode("b_right_mid", np.array([w, y_mid, 0.0]), role="frame"),
                 _b.StructuralNode("t_left_mid", np.array([0.0, y_mid, h]), role="frame"),
@@ -590,15 +636,19 @@ def _add_corexy_bed_subframe_members(
             )
 
         if z_drive == "leadscrew_triple":
-            ext_2020 = get_profile("extrusion_2020")
-            # Bare 2020 Z-arm + Z-joint gusset + cast-Al bed edge stiffness (axial leadscrew/nut
+            ext_sub = (
+                get_profile("extrusion_1515")
+                if fp == "extrusion_1515"
+                else get_profile("extrusion_2020")
+            )
+            # Bare 2020/1515 Z-arm + Z-joint gusset + cast-Al bed edge stiffness (axial leadscrew/nut
             # compliance lives cleanly in the 6-DOF z_bed_drive_* CBUSH springs, not arm Iy dilution).
             bed_arm_prof = ProfileSpec.model_construct(
                 id="bed_trident_arm_profile",
                 name=f"3-Point Z Bed Arm + Carriage ({t_mm:.1f}mm {spec.bed.plate_material})",
                 shape="extrusion",
-                width_m=ext_2020.width_m,
-                height_m=ext_2020.height_m,
+                width_m=ext_sub.width_m,
+                height_m=ext_sub.height_m,
                 area_m2=1.4e-3,
                 iy_m4=25.0 * iy_triple_arm,
                 iz_m4=5.0e-7,
@@ -620,37 +670,37 @@ def _add_corexy_bed_subframe_members(
                     )
                 )
 
-            # 2020 T-subframe composite with bolted cast-Al bed plate diaphragm:
-            # - Front crossbar (X): out-of-plane composite Iy + 2020 torsion J around X.
-            # - Central spine (Y): in-plane cast-Al plate diaphragm Iz + composite Iy + 2020-scale torsion J.
+            # 2020/1515 T-subframe composite with bolted cast-Al bed plate diaphragm:
+            # - Front crossbar (X): out-of-plane composite Iy + extrusion torsion J around X.
+            # - Central spine (Y): in-plane cast-Al plate diaphragm Iz + composite Iy + extrusion-scale torsion J.
             bed_crossbar_prof = ProfileSpec.model_construct(
                 id="bed_trident_subframe_crossbar_profile",
-                name=f"2020 T-Subframe Crossbar + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
+                name=f"T-Subframe Crossbar + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
                 shape="extrusion",
-                width_m=ext_2020.width_m,
-                height_m=ext_2020.height_m,
+                width_m=ext_sub.width_m,
+                height_m=ext_sub.height_m,
                 area_m2=1.4e-3,
-                iy_m4=ext_2020.iy_m4 + 1.9932e-6 * (t_ratio**3),
-                iz_m4=ext_2020.iz_m4 + 2.5e-7 * t_ratio,
-                j_m4=ext_2020.j_m4 + 1.0e-6 * (t_ratio**3),
+                iy_m4=ext_sub.iy_m4 + 1.9932e-6 * (t_ratio**3),
+                iz_m4=ext_sub.iz_m4 + 2.5e-7 * t_ratio,
+                j_m4=ext_sub.j_m4 + 1.0e-6 * (t_ratio**3),
             )
             # For 3-pt mounts, individual standoff springs attach directly at bed_t_fl/fr/rear_mount
             # so roll loads bypass spine torsion. For 4-pt mounts (centroidal spring at bed_frame),
             # include the 4-corner carrier roll transfer into the front crossbar.
             spine_j_m4 = (
-                ext_2020.j_m4 + 1.489e-7 * (t_ratio**3)
+                ext_sub.j_m4 + 1.489e-7 * (t_ratio**3)
                 if trident_bed_anchors is not None
-                else ext_2020.j_m4 + 1.9932e-6 * (t_ratio**3)
+                else ext_sub.j_m4 + 1.9932e-6 * (t_ratio**3)
             )
             bed_spine_prof = ProfileSpec.model_construct(
                 id="bed_trident_subframe_spine_profile",
-                name=f"2020 T-Subframe Spine + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
+                name=f"T-Subframe Spine + Plate ({t_mm:.1f}mm {spec.bed.plate_material})",
                 shape="extrusion",
-                width_m=ext_2020.width_m,
-                height_m=ext_2020.height_m,
+                width_m=ext_sub.width_m,
+                height_m=ext_sub.height_m,
                 area_m2=1.4e-3,
-                iy_m4=ext_2020.iy_m4 + 6.0e-6 * (t_ratio**3),
-                iz_m4=ext_2020.iz_m4 + 4.0e-6 * t_ratio,
+                iy_m4=ext_sub.iy_m4 + 6.0e-6 * (t_ratio**3),
+                iz_m4=ext_sub.iz_m4 + 4.0e-6 * t_ratio,
                 j_m4=spine_j_m4,
             )
             for mid, n0, n1, prof in (

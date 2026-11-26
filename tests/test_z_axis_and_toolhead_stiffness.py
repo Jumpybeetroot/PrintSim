@@ -54,6 +54,7 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
         "chube_air",
         "mellow_goliath_air",
         "chube_conduction",
+        "monolith_50mm_hf",
         "chube_compact",
     ]
     assert set(HOTEND_CATALOG.keys()) == set(ordered_ids)
@@ -94,6 +95,7 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
         "chube_air",
         "mellow_goliath_air",
         "chube_conduction",
+        "monolith_50mm_hf",
         "chube_compact",
     ]
     statics = []
@@ -455,12 +457,12 @@ def test_api_and_mcp_expose_new_catalogs_and_hotend_overrides() -> None:
     resp = client.get("/api/catalog")
     assert resp.status_code == 200
     payload = resp.json()
-    assert len(payload["hotend_presets"]) == 12
+    assert len(payload["hotend_presets"]) == 13
     assert len(payload["z_drive_mechanisms"]) == 12
     assert len(payload["z_rail_profiles"]) == 6
 
     mcp_cat = dispatch_tool("list_catalog", {})
-    assert len(mcp_cat["hotend_presets"]) == 12
+    assert len(mcp_cat["hotend_presets"]) == 13
     assert len(mcp_cat["z_drive_mechanisms"]) == 12
     assert len(mcp_cat["z_rail_profiles"]) == 6
 
@@ -1030,6 +1032,9 @@ def test_gantry_weight_classes_catalog_and_validation() -> None:
         ("stiffness_opt_printed", 185.0, "pet_cf_printed"),
         ("cnc_aluminum_light", 210.0, "aluminum_6061_t6"),
         ("monolith_cnc_awd", 214.0, "aluminum_6061_t6"),
+        ("monolith_slm_mgn12h", 182.4, "slm_aluminum"),
+        ("dderg_ti_mgn9h", 134.6, "aluminum_6061_t6"),
+        ("monolith_sheet_metal", 235.0, "sheet_metal_steel"),
         ("cnc_aluminum_hd", 280.0, "aluminum_6061_t6"),
     ]
     assert list(GANTRY_WEIGHT_CLASSES.keys()) == [cid for cid, _, _ in expected_classes]
@@ -1204,6 +1209,7 @@ def test_hotend_mass_g_presets_nozzle_cantilever_resonance_and_mass_conservation
         "chube_compact": 63.0,
         "chube_air": 79.0,
         "chube_conduction": 90.0,
+        "monolith_50mm_hf": 52.0,
     }
     assert set(HOTEND_CATALOG.keys()) == set(expected_masses_g.keys())
     assert HotendSpec().mass_g == pytest.approx(45.0, abs=1e-9)

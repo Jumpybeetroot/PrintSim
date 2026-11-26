@@ -779,7 +779,11 @@ def condense_parametric_bracket(
     target_elements = int(bracket_params.get("target_elements", 380))
     mat = get_material(material_id)
     raw_fdm = fdm_anisotropic if fdm_anisotropic is not None else bracket_params.get("fdm_anisotropic")
-    is_fdm = bool(raw_fdm) if raw_fdm is not None else bool(mat.is_printed_polymer)
+    is_fdm = (
+        bool(raw_fdm)
+        if raw_fdm is not None
+        else bool(mat.is_printed_polymer or mat.is_slm_metal)
+    )
     interface_mode: Literal["rbe3", "rbe2"] = bracket_params.get("interface_mode", "rbe3")
     fixed_face: FaceName = bracket_params.get("fixed_face", "min_y")
     load_face: FaceName = bracket_params.get("load_face", "max_y")

@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
+import { CPAP_BLOWER_LABELS } from "../constants/printerLabels";
 import { humanizeId } from "../utils/displayText";
 import {
   CatalogResponse,
+  CpapBlowerType,
   HotendMountStyle,
   HotendPresetItem,
   PrinterSpecData,
@@ -244,6 +246,26 @@ const FALLBACK_HOTEND_PRESETS: HotendPresetItem[] = [
     heatsink_thermal_resistance_k_w: 2.4,
     structural_stiffness_n_per_mm: 265,
     max_temp_c: 450,
+  },
+  {
+    id: "monolith_50mm_hf",
+    name: "Monolith 50mm+V6 HF Hotend (80W PT1000)",
+    short_name: "Monolith 50mm HF",
+    mount_style: "rigid_4bolt_m3",
+    mass_g: 52,
+    overall_length_mm: 68,
+    heater_power_w: 80,
+    block_material: "copper_c110",
+    block_mass_g: 22,
+    nozzle_material: "copper_c110",
+    melt_zone_length_mm: 50,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 10.5,
+    heatbreak_wall_mm: 0.25,
+    heatbreak_id_mm: 2.0,
+    heatsink_thermal_resistance_k_w: 2.4,
+    structural_stiffness_n_per_mm: 920,
+    max_temp_c: 350,
   },
 ];
 
@@ -731,6 +753,135 @@ export const DesignThermalSection: React.FC<DesignThermalSectionProps> = ({
                   />
                 </div>
               </div>
+
+              {(() => {
+                const currentCpapBlower: CpapBlowerType =
+                  spec.toolhead.cpap_blower_id ?? "none";
+                const currentHoseIdMm = spec.toolhead.cpap_hose_id_mm ?? 15;
+                const currentCpapPwm = spec.toolhead.cpap_pwm_pct ?? 100;
+                const cpapActive = currentCpapBlower !== "none";
+                return (
+                  <div className="sub-block">
+                    <div className="sub-block-title">
+                      <span>CPAP Blower &amp; Duct</span>
+                      <span className="sub-block-tag">
+                        {CPAP_BLOWER_LABELS[currentCpapBlower] ?? currentCpapBlower}
+                      </span>
+                    </div>
+
+                    <div className="field-row">
+                      <label htmlFor="dp-cpap-blower-id">CPAP Blower</label>
+                      <select
+                        id="dp-cpap-blower-id"
+                        value={currentCpapBlower}
+                        title="Remote brushless CPAP part-cooling blower (reduces toolhead mass and boosts cooling flow; exhaust heating & hose drag modeled)"
+                        onChange={(e) => {
+                          const nextVal = e.target.value as CpapBlowerType;
+                          const prevLbl =
+                            CPAP_BLOWER_LABELS[currentCpapBlower] ?? currentCpapBlower;
+                          const nextLbl = CPAP_BLOWER_LABELS[nextVal] ?? nextVal;
+                          update(
+                            (d) => {
+                              d.toolhead.cpap_blower_id = nextVal;
+                              if (nextVal !== "none") {
+                                if (d.toolhead.cpap_hose_id_mm == null) {
+                                  d.toolhead.cpap_hose_id_mm = 15;
+                                }
+                                if (d.toolhead.cpap_pwm_pct == null) {
+                                  d.toolhead.cpap_pwm_pct = 100;
+                                }
+                              }
+                            },
+                            `CPAP Blower: ${prevLbl} → ${nextLbl}`
+                          );
+                        }}
+                      >
+                        <option value="none">Onboard Fans (No CPAP)</option>
+                        <option value="ws7040_24v">WS7040 24V (5.8 dm³/s)</option>
+                        <option value="wm9290_24v">WM9290 24V (9.2 dm³/s, Quietest)</option>
+                        <option value="wm7575_220vac">WM7575 220VAC (11.6 dm³/s)</option>
+                      </select>
+                    </div>
+
+                    {cpapActive && (
+                      <>
+                        <div className="field-grid-2">
+                          <div className="field-row">
+                            <label htmlFor="dp-cpap-hose-id-mm">CPAP Hose ID (mm)</label>
+                            <select
+                              id="dp-cpap-hose-id-mm"
+                              value={currentHoseIdMm}
+                              title="Internal diameter of flexible CPAP hose: 15 mm HT silicone is lighter & tighter routing; 18 mm standard gives higher flow"
+                              onChange={(e) => {
+                                const nextMm = Number(e.target.value);
+                                if (!Number.isFinite(nextMm) || nextMm <= 0) return;
+                                update(
+                                  (d) => {
+                                    d.toolhead.cpap_hose_id_mm = nextMm;
+                                  },
+                                  `CPAP Hose ID: ${currentHoseIdMm} → ${nextMm} mm`
+                                );
+                              }}
+                            >
+                              {currentHoseIdMm !== 15 && currentHoseIdMm !== 18 && (
+                                <option value={currentHoseIdMm}>
+                                  {currentHoseIdMm} mm (Custom)
+                                </option>
+                              )}
+                              <option value={15}>15 mm HT</option>
+                              <option value={18}>18 mm Std</option>
+                            </select>
+                          </div>
+                          <div className="field-row">
+                            <label htmlFor="dp-cpap-pwm-pct">CPAP Duty (%)</label>
+                            <input
+                              id="dp-cpap-pwm-pct"
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={5}
+                              value={currentCpapPwm}
+                              title="CPAP blower PWM duty cycle (%)"
+                              onChange={(e) => {
+                                const parsed = Number(e.target.value);
+                                if (!Number.isFinite(parsed)) return;
+                                const clamped = Math.max(0, Math.min(100, Math.round(parsed)));
+                                if (clamped === currentCpapPwm) return;
+                                update(
+                                  (d) => {
+                                    d.toolhead.cpap_pwm_pct = clamped;
+                                  },
+                                  `CPAP Duty: ${currentCpapPwm}% → ${clamped}%`
+                                );
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <label className="checkbox-row">
+                          <input
+                            id="dp-shared-heatsink-cpap-duct"
+                            type="checkbox"
+                            checked={Boolean(spec.toolhead.shared_heatsink_cpap_duct)}
+                            onChange={(e) => {
+                              const nextVal = e.target.checked;
+                              update(
+                                (d) => {
+                                  d.toolhead.shared_heatsink_cpap_duct = nextVal;
+                                },
+                                nextVal
+                                  ? "Shared Heatsink CPAP Duct: Off → Enabled (Kalico)"
+                                  : "Shared Heatsink CPAP Duct: Enabled → Off"
+                              );
+                            }}
+                          />
+                          <span>Shared Heatsink CPAP Duct (Kalico min-PWM bleed)</span>
+                        </label>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               <details className="sub-accordion">
                 <summary>

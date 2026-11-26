@@ -71,3 +71,60 @@ def test_fastapi_endpoints() -> None:
     )
     assert r_opt.status_code == 200
     assert r_opt.json()["best_objective"] >= r_opt.json()["baseline_objective"]
+
+
+def test_studio_catalog_presets_are_generic_and_grouped_by_type() -> None:
+    """Studio /api/catalog exposes only generic printer-type presets; specific builds stay test-only."""
+    client = TestClient(create_app())
+    r_cat = client.get("/api/catalog")
+    assert r_cat.status_code == 200
+    presets = r_cat.json()["presets"]
+    assert len(presets) >= 6
+
+    categories = {p["category"] for p in presets}
+    assert categories == {"corexy", "cartesian_bedslinger", "delta"}
+
+    forbidden_tokens = (
+        "voron",
+        "trident",
+        "monolith",
+        "vzbot",
+        "doomcube",
+        "ratrig",
+        "v-core",
+        "flsun",
+        "v400",
+        "cw_fixed",
+        "cloakedwayne",
+        "i3-style",
+    )
+    for p in presets:
+        assert p.get("short_name")
+        assert p.get("category_label")
+        assert p.get("summary")
+        haystack = f"{p['id']} {p['name']} {p['short_name']} {p['description']}".lower()
+        for tok in forbidden_tokens:
+            assert tok not in haystack, f"Specific build reference {tok!r} leaked into Studio preset {p['id']}"
+
+        # Every Studio default preset must also be fetchable via /api/presets/{id}
+        r_get = client.get(f"/api/presets/{p['id']}")
+        assert r_get.status_code == 200
+        assert r_get.json()["id"] == p["id"]
+
+    # Specific printer builds remain accessible for testing via /api/presets/{id}, not in /api/catalog
+    catalog_ids = {p["id"] for p in presets}
+    for test_build_id in (
+        "voron_trident_300",
+        "corexy_voron_style",
+        "voron_monolith_awd",
+        "vzbot_330_awd",
+        "doomcube_4040",
+        "ratrig_vcore31_300",
+        "flsun_v400_delta",
+        "monolith_sheet_metal_v2",
+        "monolith_zero_m0",
+        "cw_fixed_gantry_300",
+    ):
+        assert test_build_id not in catalog_ids
+        r_test = client.get(f"/api/presets/{test_build_id}")
+        assert r_test.status_code == 200

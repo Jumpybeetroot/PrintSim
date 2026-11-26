@@ -26,9 +26,15 @@ class MaterialSpec(BaseModel):
     cost_per_kg_usd: float = Field(10.0, ge=0, description="Estimated raw material cost (USD/kg)")
     color_hex: str = "#8a95a5"
 
-    # Orthotropic FDM / composite ratios and Mahieux-Reifsnider (2002) viscoelastic parameters
+    # Orthotropic FDM / composite / SLM build-direction ratios and Mahieux-Reifsnider (2002) viscoelastic parameters
     e2_ratio: float = Field(1.0, gt=0, le=1.5, description="Transverse in-plane E2 / E1 ratio")
-    e3_ratio: float = Field(1.0, gt=0, le=1.5, description="Interlayer Z-axis E3 / E1 ratio")
+    e3_ratio: float = Field(1.0, gt=0, le=1.5, description="Interlayer / build-direction Z-axis E3 / E1 ratio")
+    z_strength_ratio: float = Field(
+        1.0,
+        gt=0,
+        le=1.2,
+        description="Build-direction Z-axis yield / interlayer strength ratio sigma_z / sigma_xy",
+    )
     g12_ratio: float | None = Field(
         None, gt=0, le=1.5, description="Optional in-plane shear G12 / E1 ratio"
     )
@@ -47,6 +53,24 @@ class MaterialSpec(BaseModel):
         14.0, gt=1.0, le=40.0, description="Mahieux-Reifsnider Weibull transition exponent m"
     )
     is_printed_polymer: bool = False
+    is_slm_metal: bool = False
+    bolted_joint_stiffness_factor: float = Field(
+        1.0,
+        gt=0.1,
+        le=1.2,
+        description="Bolted mating-face contact stiffness factor vs CNC-machined billet (0.92-0.94 for as-sintered/bead-blasted SLM)",
+    )
+    surface_roughness_ra_um: float | None = Field(
+        None,
+        ge=0.0,
+        description="Typical as-delivered surface roughness Ra (um; ~0.8-1.6 CNC vs ~6-15 SLM)",
+    )
+    porosity_pct: float = Field(
+        0.0,
+        ge=0.0,
+        le=15.0,
+        description="Typical residual internal micro-porosity (%)",
+    )
 
     @property
     def effective_shear_modulus_pa(self) -> float:
@@ -128,6 +152,7 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.012,
         cost_per_kg_usd=11.0,
         color_hex="#c6d0db",
+        surface_roughness_ra_um=1.2,
     ),
     "aluminum_7075_t6": MaterialSpec(
         id="aluminum_7075_t6",
@@ -142,6 +167,7 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         damping_ratio=0.011,
         cost_per_kg_usd=24.0,
         color_hex="#cbd5e1",
+        surface_roughness_ra_um=1.2,
     ),
     "mic6_aluminum": MaterialSpec(
         id="mic6_aluminum",
@@ -469,6 +495,176 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
         e_rubbery_ratio=0.42,
         mahieux_m=15.0,
         is_printed_polymer=True,
+    ),
+    # TreeD PC-PBT-GF high-HDT structural filament (Monolith updates / TheAdeo HDT-testing)
+    "pc_pbt_gf_printed": MaterialSpec(
+        id="pc_pbt_gf_printed",
+        name="3D-Printed PC-PBT-GF (4.6 GPa, 132°C HDT)",
+        youngs_modulus_pa=4.6e9,
+        poisson_ratio=0.36,
+        density_kg_m3=1320.0,
+        yield_strength_pa=68e6,
+        thermal_conductivity_w_mk=0.28,
+        specific_heat_j_kgk=1280.0,
+        thermal_expansion_1_k=32e-6,
+        damping_ratio=0.038,
+        cost_per_kg_usd=85.0,
+        color_hex="#334155",
+        e2_ratio=0.52,
+        e3_ratio=0.40,
+        tg_c=138.0,
+        hdt_c=132.0,
+        e_rubbery_ratio=0.32,
+        mahieux_m=14.0,
+        is_printed_polymer=True,
+    ),
+    # SLM / LPBF 3D-Printed Metals (EOS / SLM Solutions / JLCPCB / IN3DTEC datasheets)
+    # Distinct from CNC wrought billet: mild Z-build anisotropy (e3_ratio 0.93-0.97, z_strength_ratio 0.90-0.95),
+    # rougher as-sintered/bead-blasted mating faces (Ra 8-10 um -> bolted_joint_stiffness_factor 0.92-0.94),
+    # micro-porosity (0.3-0.8%), alloy-specific CTE (AlSi10Mg 20.5 vs 6061-T6 23.6 ppm/K), and lower k.
+    "slm_aluminum": MaterialSpec(
+        id="slm_aluminum",
+        name="SLM 3D-Printed Aluminum (AlSi10Mg)",
+        youngs_modulus_pa=68.0e9,
+        poisson_ratio=0.33,
+        shear_modulus_pa=25.6e9,
+        density_kg_m3=2670.0,
+        yield_strength_pa=240e6,
+        thermal_conductivity_w_mk=140.0,
+        specific_heat_j_kgk=900.0,
+        thermal_expansion_1_k=20.5e-6,
+        damping_ratio=0.015,
+        cost_per_kg_usd=180.0,
+        color_hex="#b8c4d0",
+        e3_ratio=0.93,
+        z_strength_ratio=0.90,
+        is_slm_metal=True,
+        bolted_joint_stiffness_factor=0.92,
+        surface_roughness_ra_um=10.0,
+        porosity_pct=0.5,
+    ),
+    "slm_ti6al4v": MaterialSpec(
+        id="slm_ti6al4v",
+        name="SLM 3D-Printed Titanium (Ti-6Al-4V Gr.5/23)",
+        youngs_modulus_pa=110.0e9,
+        poisson_ratio=0.34,
+        shear_modulus_pa=41.0e9,
+        density_kg_m3=4410.0,
+        yield_strength_pa=960e6,
+        thermal_conductivity_w_mk=6.8,
+        specific_heat_j_kgk=526.0,
+        thermal_expansion_1_k=8.8e-6,
+        damping_ratio=0.012,
+        cost_per_kg_usd=360.0,
+        color_hex="#7c7d8c",
+        e3_ratio=0.96,
+        z_strength_ratio=0.95,
+        is_slm_metal=True,
+        bolted_joint_stiffness_factor=0.93,
+        surface_roughness_ra_um=8.0,
+        porosity_pct=0.3,
+    ),
+    # Laser-cut mild / 304 steel sheet metal gantry plates (Monolith Sheet Metal v1.5: 3-3.2mm & 4.7-5mm)
+    "sheet_metal_steel": MaterialSpec(
+        id="sheet_metal_steel",
+        name="Laser-Cut Structural Steel Plate (3-5mm)",
+        youngs_modulus_pa=200.0e9,
+        poisson_ratio=0.29,
+        shear_modulus_pa=77.5e9,
+        density_kg_m3=7850.0,
+        yield_strength_pa=250e6,
+        thermal_conductivity_w_mk=45.0,
+        specific_heat_j_kgk=490.0,
+        thermal_expansion_1_k=12.0e-6,
+        damping_ratio=0.008,
+        cost_per_kg_usd=8.0,
+        color_hex="#64748b",
+        surface_roughness_ra_um=3.2,
+    ),
+    # SLM 316L Stainless, 17-4PH H900, Maraging Steel MS1, & CuCrZr Copper
+    "slm_316l_steel": MaterialSpec(
+        id="slm_316l_steel",
+        name="SLM 316L Stainless Steel",
+        youngs_modulus_pa=185.0e9,
+        poisson_ratio=0.30,
+        shear_modulus_pa=71.2e9,
+        density_kg_m3=7970.0,
+        yield_strength_pa=470e6,
+        thermal_conductivity_w_mk=15.0,
+        specific_heat_j_kgk=500.0,
+        thermal_expansion_1_k=15.8e-6,
+        damping_ratio=0.010,
+        cost_per_kg_usd=210.0,
+        color_hex="#94a3b8",
+        e3_ratio=0.97,
+        z_strength_ratio=0.92,
+        is_slm_metal=True,
+        bolted_joint_stiffness_factor=0.93,
+        surface_roughness_ra_um=8.0,
+        porosity_pct=0.3,
+    ),
+    "slm_17_4ph_steel": MaterialSpec(
+        id="slm_17_4ph_steel",
+        name="SLM 17-4PH Stainless Steel (H900 Aged)",
+        youngs_modulus_pa=190.0e9,
+        poisson_ratio=0.29,
+        shear_modulus_pa=73.6e9,
+        density_kg_m3=7780.0,
+        yield_strength_pa=1050e6,
+        thermal_conductivity_w_mk=16.5,
+        specific_heat_j_kgk=460.0,
+        thermal_expansion_1_k=10.8e-6,
+        damping_ratio=0.010,
+        cost_per_kg_usd=235.0,
+        color_hex="#7c8798",
+        e3_ratio=0.95,
+        z_strength_ratio=0.94,
+        is_slm_metal=True,
+        bolted_joint_stiffness_factor=0.93,
+        surface_roughness_ra_um=8.0,
+        porosity_pct=0.3,
+    ),
+    "slm_maraging_steel": MaterialSpec(
+        id="slm_maraging_steel",
+        name="SLM Maraging Steel MS1 (1.2709)",
+        youngs_modulus_pa=180.0e9,
+        poisson_ratio=0.30,
+        shear_modulus_pa=69.2e9,
+        density_kg_m3=8050.0,
+        yield_strength_pa=1000e6,
+        thermal_conductivity_w_mk=20.0,
+        specific_heat_j_kgk=450.0,
+        thermal_expansion_1_k=10.3e-6,
+        damping_ratio=0.009,
+        cost_per_kg_usd=260.0,
+        color_hex="#6b7280",
+        e3_ratio=0.96,
+        z_strength_ratio=0.94,
+        is_slm_metal=True,
+        bolted_joint_stiffness_factor=0.94,
+        surface_roughness_ra_um=8.0,
+        porosity_pct=0.3,
+    ),
+    "slm_cucrzr": MaterialSpec(
+        id="slm_cucrzr",
+        name="SLM Copper Alloy CuCrZr (Aged Conformal-Cooled)",
+        youngs_modulus_pa=120.0e9,
+        poisson_ratio=0.34,
+        shear_modulus_pa=44.8e9,
+        density_kg_m3=8860.0,
+        yield_strength_pa=255e6,
+        thermal_conductivity_w_mk=320.0,
+        specific_heat_j_kgk=385.0,
+        thermal_expansion_1_k=17.2e-6,
+        damping_ratio=0.013,
+        cost_per_kg_usd=290.0,
+        color_hex="#b96d4b",
+        e3_ratio=0.95,
+        z_strength_ratio=0.90,
+        is_slm_metal=True,
+        bolted_joint_stiffness_factor=0.93,
+        surface_roughness_ra_um=9.0,
+        porosity_pct=0.8,
     ),
     # Structural & Enclosure Panel Materials (MatWeb / 3A Composites Dibond datasheets)
     "acrylic_pmma": MaterialSpec(

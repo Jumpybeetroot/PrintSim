@@ -281,7 +281,7 @@ def test_superelement_coarse_bracket_bbox_guyan_rbe3_and_singular_shift_invert()
 def test_fdm_constitutive_tensor_uses_e3_ratio_and_spd_for_all_printed_polymers() -> None:
     """Verify constitutive_matrix_3d uses mat.e3_ratio, reciprocity, and is strictly SPD."""
     printed_mats = [m for m in MATERIAL_CATALOG.values() if m.is_printed_polymer]
-    assert len(printed_mats) == 5
+    assert len(printed_mats) == 6
 
     for mat in printed_mats:
         D = constitutive_matrix_3d(mat, fdm_anisotropic=True)

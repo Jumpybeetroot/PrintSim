@@ -151,9 +151,17 @@ def compute_toolhead_link_props(
     body_mat = get_material(spec.toolhead.effective_body_material)
     hm_mat = get_material(spec.toolhead.effective_hotend_mount_material)
 
-    e_car = car_mat.effective_modulus_pa(chamber_c) * probe_comp
+    e_car = (
+        car_mat.effective_modulus_pa(chamber_c)
+        * float(car_mat.bolted_joint_stiffness_factor)
+        * probe_comp
+    )
     e_body = body_mat.effective_modulus_pa(chamber_c) * probe_comp
-    e_hm = hm_mat.effective_modulus_pa(chamber_c) * probe_comp
+    e_hm = (
+        hm_mat.effective_modulus_pa(chamber_c)
+        * float(hm_mat.bolted_joint_stiffness_factor)
+        * probe_comp
+    )
     body_retention = body_mat.modulus_retention_at_temp(chamber_c)
 
     cog_x_mm, cog_y_mm, _ = spec.toolhead.cog_offset_mm

@@ -46,7 +46,7 @@ from printsim.kinematics.solvers import (
     compute_drive_stiffness_details_n_per_m,
     compute_drive_stiffness_n_per_m,
 )
-from printsim.schema import GANTRY_BRACKET_CATALOG, resolve_frame_feet
+from printsim.schema import GANTRY_BRACKET_CATALOG, get_material, resolve_frame_feet
 
 
 _BOTTLENECK_LABELS: dict[str, str] = {
@@ -540,8 +540,13 @@ def _recommend_shaper(
             slack_margin_ratio=slack_margin_ratio,
         )
         zeta_motor = 0.080 if is_foc else 0.050
-        bkt_id = str(assembly.spec.gantry.bracket_material).lower()
-        zeta_bracket = 0.020 if any(tok in bkt_id for tok in ("al_", "steel", "cnc", "ti")) else 0.044
+        bkt_mat = get_material(assembly.spec.gantry.bracket_material)
+        if bkt_mat.is_printed_polymer:
+            zeta_bracket = 0.044
+        elif bkt_mat.is_slm_metal:
+            zeta_bracket = 0.024
+        else:
+            zeta_bracket = 0.020
         zeta_base = (
             (shares_pct["frame"] / 100.0) * zeta_frame
             + (shares_pct["belt"] / 100.0) * zeta_belt

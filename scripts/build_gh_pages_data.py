@@ -90,8 +90,8 @@ def main() -> None:
     # 2. Copy baked visual.glb meshes to static /api/assets/hardware/...
     glb_count = _copy_hardware_glbs()
 
-    # 3. Pre-bake all example presets (spec, simulation, BOM) for instant <1s switching
-    presets = load_presets()
+    # 3. Pre-bake Studio default presets (spec, simulation, BOM) for instant <1s switching
+    presets = load_presets(include_test_builds=False)
     preset_index: list[str] = []
     for preset_id, spec in presets.items():
         preset_index.append(preset_id)

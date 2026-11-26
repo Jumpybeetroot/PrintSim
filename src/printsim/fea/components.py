@@ -55,6 +55,7 @@ _G_ACC = _get_printdb_const(
 _RAIL_CARRIAGE_CATALOG: dict[str, tuple[float, float, int, float, float, float, float, float]] = {
     "mgn9_rail": (1.588e-3, 0.0045, 2, 0.0189, 1860.0, 0.0289, 2550.0, 0.35),
     "mgn12_rail": (2.381e-3, 0.0060, 2, 0.0217, 2840.0, 0.0324, 3920.0, 0.50),
+    "mgn12_hollow_rail": (2.381e-3, 0.0060, 2, 0.0217, 2840.0, 0.0324, 3920.0, 0.50),
     "mgn15_rail": (3.175e-3, 0.0075, 2, 0.0267, 4610.0, 0.0434, 6370.0, 0.75),
     "hgh15_rail": (3.175e-3, 0.0075, 4, 0.0394, 11380.0, 0.0568, 14700.0, 1.20),
     # Round linear ball bushings (LM8UU/LM10UU/LM12UU & LUU long equivalent baseline)
@@ -67,6 +68,7 @@ _RAIL_CARRIAGE_CATALOG: dict[str, tuple[float, float, int, float, float, float, 
 _RAIL_BLOCK_MASS_G: dict[str, tuple[float, float]] = {
     "mgn9_rail": (16.0, 26.0),
     "mgn12_rail": (34.0, 54.0),
+    "mgn12_hollow_rail": (34.0, 54.0),
     "mgn15_rail": (59.0, 92.0),
     "hgh15_rail": (180.0, 180.0),
     "steel_rod_8mm": (16.0, 31.0),
@@ -74,6 +76,10 @@ _RAIL_BLOCK_MASS_G: dict[str, tuple[float, float]] = {
     "steel_rod_12mm": (41.0, 76.0),
 }
 _hydrate_rail_catalog(_RAIL_CARRIAGE_CATALOG, _RAIL_BLOCK_MASS_G)
+# Keep Hollow MGN12H synchronized with PrintDB-hydrated solid MGN12H ball geometry & block mass
+# (thin hollow-wall raceway compliance is applied via the 0.92x multiplier in hertzian_rail_carriage_stiffness).
+_RAIL_CARRIAGE_CATALOG["mgn12_hollow_rail"] = _RAIL_CARRIAGE_CATALOG["mgn12_rail"]
+_RAIL_BLOCK_MASS_G["mgn12_hollow_rail"] = _RAIL_BLOCK_MASS_G["mgn12_rail"]
 
 _PRELOAD_FRACTION: dict[str, float] = RAIL_PRELOAD_FRACTIONS
 
@@ -186,6 +192,9 @@ def hertzian_rail_carriage_stiffness(
     # 15% Hung carriage-skirt structural compliance referenced to Z1 nominal block stiffness
     k_skirt = _raw_hertz_radial(f_pre_z1) / 0.15
     k_eff_radial = (k_hertz_raw * k_skirt) / max(k_hertz_raw + k_skirt, 1e-9)
+    if key == "mgn12_hollow_rail":
+        # Thin hollow rail wall adds ~8% local raceway backing compliance vs solid MGN12R
+        k_eff_radial *= 0.92
 
     k_yy = k_eff_radial
     k_zz = k_eff_radial * (1.05 if (n_rows == 4 and not is_rod_bushing) else 1.0)
@@ -460,9 +469,10 @@ def belt_effective_ea_n(
     else:
         a_crimp, q_crimp = 0.52, 2.3
     crimp_factor = 1.0 - a_crimp * math.exp(-q0 / q_crimp)
+    elastomer_seating = max(float(belt.elastomer_seating_factor), 0.1)
 
     ea_raw = float(ea_override_n) if ea_override_n is not None else belt.stiffness_ea_n
-    ea_cord = max(ea_raw * crimp_factor, 1.0)
+    ea_cord = max(ea_raw * crimp_factor * elastomer_seating, 1.0)
 
     # 2. Pulley/idler wrap flexural-fillet seating compliance
     n_tan = max(float(n_pulley_tangents), 0.0)
@@ -494,12 +504,13 @@ def gerbert_tooth_mesh_stiffness_n_m(
     q0 = max(float(belt.pretension_n), 0.25) / w_mm
     # Radial belt pressure T0/(w*R) seats belt tooth flanks into pulley grooves (Koyama 1979; Gerbert 1978)
     seating_factor = 0.22 + 0.78 * (1.0 - math.exp(-q0 / 2.2))
+    elastomer_seating = max(float(belt.elastomer_seating_factor), 0.1)
     k_t_base = (
         float(tooth_shear_override)
         if tooth_shear_override is not None
         else float(belt.tooth_shear_k_n_per_m_mm)
     )
-    k_t = k_t_base * belt.tooth_modulus_retention(chamber_temp_c) * seating_factor
+    k_t = k_t_base * belt.tooth_modulus_retention(chamber_temp_c) * seating_factor * elastomer_seating
     p_m = belt.pitch_mm * 1e-3
     z_e = max(float(belt.pulley_teeth) * (float(belt.wrap_angle_deg) / 360.0), 1.0)
     ea_safe = max(float(ea_eff_n), 100.0)
@@ -508,11 +519,68 @@ def gerbert_tooth_mesh_stiffness_n_m(
     return k_t * w_mm * math.tanh(lam * z_e) / max(math.tanh(lam), 1e-9)
 
 
+_F695_REF_TEMP_C = 22.0
+_F695_STEEL_CTE_PER_K = 11.5e-6  # Hardened 52100/440C bearing steel CTE (11.5 um/(m*K))
+_F695_OD_UM = 13_000.0  # 13.0 mm steel F695 OD in micrometers
+# Calibrated nominal ISO P6 room-temp diametral interference: 13 mm * 12.1 ppm/K * (66 - 22 K) = 6.9212 um
+_F695_NOMINAL_P6_INTERFERENCE_UM = _F695_OD_UM * (23.6e-6 - _F695_STEEL_CTE_PER_K) * (66.0 - _F695_REF_TEMP_C)
+
+
+def compute_stepper_mount_temp_c(spec: PrinterSpec) -> tuple[float, float]:
+    """Compute XY stepper mounting-face equilibrium temperature and self-heating rise (°C).
+
+    Calibrated to Monolith's 25 W stepper in an 80 °C heated chamber study
+    (109.1 max / 104.1 avg bare -> 95.7 max / 90.0 avg with 2 mm PTFE gasket):
+      - Bare mount:        R_mount = 1.06 K/W (+26.5 °C @ 25 W)
+      - 2 mm PTFE gasket:  R_mount = 0.50 K/W (+12.5 °C @ 25 W, ~14 °C reduction)
+    """
+    chamber_c = float(spec.frame.chamber_temp_c)
+    p_w = min(max(float(spec.kinematics.xy_stepper.power_dissipation_w), 0.0), 40.0)
+    r_mount = 0.50 if spec.gantry.stepper_thermal_gasket == "ptfe_2mm" else 1.06
+    rise_c = max(0.0, p_w * r_mount)
+    mount_temp_c = max(chamber_c, chamber_c + rise_c)
+    return float(mount_temp_c), float(rise_c)
+
+
+def compute_bearing_cte_clearance_um(
+    spec: PrinterSpec,
+    bearing_temp_c: float,
+) -> tuple[float, bool]:
+    """Compute F695 steel-in-metal press-fit thermal radial clearance (µm) and warning flag.
+
+    Computes differential diametral thermal expansion directly from the housing material's CTE
+    ``alpha_mat`` vs hardened bearing steel (``11.5e-6 /K``):
+      - CNC 6061-T6 / 7075-T6 (``23.6 ppm/K``): Δα = 12.1 ppm/K -> zero interference at ``66.0 °C``.
+      - SLM AlSi10Mg (``20.5 ppm/K``): Δα = 9.0 ppm/K -> zero interference at ``~81.2 °C`` (25.6% slower).
+      - SLM 316L (``15.8 ppm/K``): Δα = 4.3 ppm/K -> zero interference at ``~145.8 °C``.
+      - SLM Ti-6Al-4V (``8.8 ppm/K``), SLM 17-4PH (``10.8``), SLM MS1 (``10.3``), & steel sheet:
+        no thermal press-fit loosening in heated printer chambers.
+    M5 Belleville disc springs (``disc_spring_m5``) maintain axial preload and eliminate play.
+    """
+    from printsim.schema.materials import get_material
+
+    bkt_mat = get_material(spec.gantry.bracket_material)
+    if bkt_mat.is_printed_polymer:
+        return 0.0, False
+    delta_alpha = float(bkt_mat.thermal_expansion_1_k) - _F695_STEEL_CTE_PER_K
+    if delta_alpha <= 1.0e-6:
+        return 0.0, False
+    t_loss_c = _F695_REF_TEMP_C + _F695_NOMINAL_P6_INTERFERENCE_UM / (_F695_OD_UM * delta_alpha)
+    t_brg = float(bearing_temp_c)
+    if t_brg <= t_loss_c:
+        return 0.0, False
+    if spec.gantry.effective_idler_axial_preload == "disc_spring_m5":
+        return 0.0, False
+    clearance_um = 0.5 * _F695_OD_UM * delta_alpha * (t_brg - t_loss_c)
+    return float(clearance_um), True
+
+
 def idler_shaft_and_bearing_stiffness(
     belt: BeltSpec,
     double_shear: bool,
     bracket_e_pa: float,
     radial_play_um_override: float | None = None,
+    thermal_clearance_um: float = 0.0,
 ) -> dict[str, float]:
     """Compute steel idler/motor shaft bending, polymer root flex, F695/625 bearing stiffness, & cam-out slip limit."""
     d_m = max(float(belt.idler_shaft_diameter_mm), 2.0) * 1e-3
@@ -546,13 +614,17 @@ def idler_shaft_and_bearing_stiffness(
     delta_r_m = 0.00044e-3 * (q_max ** (2.0 / 3.0)) / (d_ball_mm ** (1.0 / 3.0))
     k_brg_single = 1.5 * f_brg / max(delta_r_m, 1e-9)
     k_bearing = 2.0 * k_brg_single
+    cte_play_um = max(float(thermal_clearance_um), 0.0)
+    if cte_play_um > 0.0:
+        # Loss of outer-ring press-fit reduces radial bearing seat conformity
+        k_bearing /= 1.0 + 0.08 * cte_play_um
 
     k_idler = (k_shaft * k_bearing) / max(k_shaft + k_bearing, 1e-9)
     bearing_play_um = (
         float(radial_play_um_override)
         if radial_play_um_override is not None
         else _ISO_5753_RADIAL_PLAY_UM.get(belt.bearing_clearance_class, 7.5)
-    )
+    ) + cte_play_um
 
     # Euler-Eytelwein belt wrap friction + curvilinear tooth cam-out minimum slack tension
     mu_eff = 0.35
@@ -599,6 +671,13 @@ class ThermalStructuralReport:
     x_beam_tg_warning: bool = False
     x_beam_has_tg: bool = False
     gantry_bow_direction: str = "neutral"
+    motor_mount_temp_c: float = 25.0
+    bearing_temp_c: float = 25.0
+    bearing_cte_clearance_um: float = 0.0
+    bearing_cte_pressfit_warning: bool = False
+    toolhead_belt_cog_z_offset_mm: float = 0.0
+    toolhead_nozzle_y_lever_mm: float = 0.0
+    toolhead_x_roll_warning: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -622,6 +701,13 @@ class ThermalStructuralReport:
             "x_beam_tg_warning": bool(self.x_beam_tg_warning),
             "x_beam_has_tg": bool(self.x_beam_has_tg),
             "gantry_bow_direction": self.gantry_bow_direction,
+            "motor_mount_temp_c": round(self.motor_mount_temp_c, 1),
+            "bearing_temp_c": round(self.bearing_temp_c, 1),
+            "bearing_cte_clearance_um": round(self.bearing_cte_clearance_um, 2),
+            "bearing_cte_pressfit_warning": bool(self.bearing_cte_pressfit_warning),
+            "toolhead_belt_cog_z_offset_mm": round(self.toolhead_belt_cog_z_offset_mm, 2),
+            "toolhead_nozzle_y_lever_mm": round(self.toolhead_nozzle_y_lever_mm, 2),
+            "toolhead_x_roll_warning": bool(self.toolhead_x_roll_warning),
         }
 
 
@@ -699,10 +785,11 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     delta_t = chamber_c - 25.0
 
     # 1. X-rail Newmark shear-lag gamma & 6-DOF Hertzian carriage stiffness
-    x_beam_prof = get_profile(spec.gantry.x_beam_profile)
-    x_beam_mat = get_material(spec.gantry.x_beam_material)
+    is_unsupported_rail = spec.gantry.x_beam_profile == "unsupported_rail"
     x_rail_prof = get_profile(spec.gantry.x_rail_profile)
     rail_mat = get_material(spec.gantry.rail_material)
+    x_beam_prof = x_rail_prof if is_unsupported_rail else get_profile(spec.gantry.x_beam_profile)
+    x_beam_mat = rail_mat if is_unsupported_rail else get_material(spec.gantry.x_beam_material)
 
     x_gantry_members = [m for m in assembly.members if m.id in ("x_gantry_l", "x_gantry_r")]
     l_x = (
@@ -711,7 +798,9 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
         else max(spec.frame.width_mm * 1e-3, 0.15)
     )
     bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
-    if x_beam_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):
+    if is_unsupported_rail:
+        sub_kind = "solid_bar"
+    elif x_beam_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):
         sub_kind = "carbon_tube"
     elif x_beam_prof.shape == "solid_bar":
         sub_kind = "solid_bar"
@@ -727,18 +816,35 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     )
 
     cf_mount = spec.gantry.effective_cf_rail_mounting
-    gamma_rail = newmark_rail_composite_gamma(
-        e_rail_pa=rail_mat.youngs_modulus_pa,
-        a_rail_m2=x_rail_prof.area_m2,
-        e_beam_pa=eb_eff,
-        a_beam_m2=x_beam_prof.area_m2,
-        bolt_pitch_m=bolt_pitch_m,
-        l_eff_m=l_x,
-        substrate_kind=sub_kind,
-        wall_thickness_m=x_beam_prof.wall_thickness_m,
-        matrix_shear_retention=x_beam_shear_ret,
-        cf_rail_mounting=cf_mount,
-    )
+    if is_unsupported_rail:
+        if spec.gantry.rail_backer_material == "none":
+            gamma_rail = 1.0
+        else:
+            bk_mat_0 = get_material(spec.gantry.rail_backer_material)
+            w_bk_0 = max(x_rail_prof.width_m, 0.009)
+            t_bk_0 = spec.gantry.rail_backer_thickness_mm * 1e-3
+            gamma_rail = newmark_rail_composite_gamma(
+                e_rail_pa=bk_mat_0.youngs_modulus_pa,
+                a_rail_m2=w_bk_0 * t_bk_0,
+                e_beam_pa=rail_mat.youngs_modulus_pa,
+                a_beam_m2=x_rail_prof.area_m2,
+                bolt_pitch_m=bolt_pitch_m,
+                l_eff_m=l_x,
+                substrate_kind="solid_bar",
+            )
+    else:
+        gamma_rail = newmark_rail_composite_gamma(
+            e_rail_pa=rail_mat.youngs_modulus_pa,
+            a_rail_m2=x_rail_prof.area_m2,
+            e_beam_pa=eb_eff,
+            a_beam_m2=x_beam_prof.area_m2,
+            bolt_pitch_m=bolt_pitch_m,
+            l_eff_m=l_x,
+            substrate_kind=sub_kind,
+            wall_thickness_m=x_beam_prof.wall_thickness_m,
+            matrix_shear_retention=x_beam_shear_ret,
+            cf_rail_mounting=cf_mount,
+        )
 
     rail_qual = resolve_rail_quality(spec)
     carriage = hertzian_rail_carriage_stiffness(
@@ -750,7 +856,7 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
         stiffness_mult_override=rail_qual["stiffness_mult"],
         drag_mult_override=rail_qual["drag_mult"],
     )
-    if spec.gantry.effective_dual_x_rails:
+    if spec.gantry.effective_dual_x_rails and not is_unsupported_rail:
         z_track = 0.5 * (x_beam_prof.height_m + x_rail_prof.height_m)
         eta_steiner = dual_rail_steiner_efficiency(
             spec.gantry.x_beam_profile,
@@ -764,71 +870,107 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
 
     # 2. Timoshenko (1925) partial-interaction bimetallic bow on X gantry
     x_mount = spec.gantry.effective_x_rail_mount
-    eb, ab, ib, alphab = (
-        eb_eff,
-        x_beam_prof.area_m2,
-        x_beam_prof.iy_m4 if x_mount in ("top", "bottom") else x_beam_prof.iz_m4,
-        x_beam_mat.thermal_expansion_1_k,
-    )
-    er, ar, ir, alphar = (
-        rail_mat.youngs_modulus_pa,
-        x_rail_prof.area_m2,
-        x_rail_prof.iy_m4,
-        rail_mat.thermal_expansion_1_k,
-    )
-    beam_dim = x_beam_prof.height_m if x_mount in ("top", "bottom") else x_beam_prof.width_m
-    c_rail = 0.5 * beam_dim + 0.5 * x_rail_prof.height_m
-
-    ei_sum = eb * ib + er * ir
-    ea_inv = 1.0 / max(eb * ab, 1.0) + 1.0 / max(er * ar, 1.0)
-
-    def _bimetallic_bow_signed(dt_val: float, use_backer: bool) -> tuple[float, float]:
-        if x_mount == "dual_top_bottom" or spec.architecture == "delta":
-            return 0.0, 0.0
-        kappa_0 = (alphab - alphar) * dt_val * c_rail / (c_rail**2 + ei_sum * ea_inv)
-        kappa_signed_0 = gamma_rail * kappa_0
-        bow_0 = abs(kappa_signed_0) * (l_x**2) / 8.0 * 1e6
-        if not use_backer or spec.gantry.rail_backer_material == "none":
-            return bow_0, float(kappa_signed_0)
-
-        bk_mat = get_material(spec.gantry.rail_backer_material)
-        w_bk = min(beam_dim, max(x_rail_prof.width_m, 0.012))
-        t_bk = spec.gantry.rail_backer_thickness_mm * 1e-3
-        ak = w_bk * t_bk
-        ik = w_bk * (t_bk**3) / 12.0
-        ek = bk_mat.youngs_modulus_pa
-        alphak = bk_mat.thermal_expansion_1_k
-        ck = 0.5 * beam_dim + 0.5 * t_bk
-        ei_tot = ei_sum + ek * ik
-        gamma_k = newmark_rail_composite_gamma(
-            e_rail_pa=ek,
-            a_rail_m2=ak,
-            e_beam_pa=eb,
-            a_beam_m2=ab,
-            bolt_pitch_m=bolt_pitch_m,
-            l_eff_m=l_x,
-            substrate_kind=sub_kind,
-            wall_thickness_m=x_beam_prof.wall_thickness_m,
-            matrix_shear_retention=x_beam_shear_ret,
-            cf_rail_mounting=cf_mount,
+    if is_unsupported_rail:
+        if spec.gantry.rail_backer_material == "none" or spec.architecture == "delta":
+            bow_actual_um = 0.0
+            signed_kappa_actual = 0.0
+        else:
+            bk_mat = get_material(spec.gantry.rail_backer_material)
+            w_bk = max(x_rail_prof.width_m, 0.009)
+            t_bk = spec.gantry.rail_backer_thickness_mm * 1e-3
+            ak = w_bk * t_bk
+            ik = w_bk * (t_bk**3) / 12.0
+            ek = bk_mat.youngs_modulus_pa
+            alphak = bk_mat.thermal_expansion_1_k
+            er_b, ar_b, ir_b, alphar_b = (
+                rail_mat.youngs_modulus_pa,
+                x_rail_prof.area_m2,
+                x_rail_prof.iy_m4,
+                rail_mat.thermal_expansion_1_k,
+            )
+            ck_b = 0.5 * x_rail_prof.height_m + 0.5 * t_bk
+            ei_sum_b = er_b * ir_b + ek * ik
+            ea_inv_b = 1.0 / max(er_b * ar_b, 1.0) + 1.0 / max(ek * ak, 1.0)
+            kappa_b = gamma_rail * (alphak - alphar_b) * delta_t * ck_b / (ck_b**2 + ei_sum_b * ea_inv_b)
+            signed_kappa_actual = float(kappa_b)
+            bow_actual_um = abs(signed_kappa_actual) * (l_x**2) / 8.0 * 1e6
+        backer_reduction_pct = 0.0
+    else:
+        eb, ab, ib, alphab = (
+            eb_eff,
+            x_beam_prof.area_m2,
+            x_beam_prof.iy_m4 if x_mount in ("top", "bottom") else x_beam_prof.iz_m4,
+            x_beam_mat.thermal_expansion_1_k,
         )
-        m_mat = np.array(
-            [
-                [1.0 / (eb * ab) + 1.0 / (er * ar) + (c_rail**2) / ei_tot, 1.0 / (eb * ab) - (c_rail * ck) / ei_tot],
-                [1.0 / (eb * ab) - (c_rail * ck) / ei_tot, 1.0 / (eb * ab) + 1.0 / (ek * ak) + (ck**2) / ei_tot],
-            ],
-            dtype=float,
+        er, ar, ir, alphar = (
+            rail_mat.youngs_modulus_pa,
+            x_rail_prof.area_m2,
+            x_rail_prof.iy_m4,
+            rail_mat.thermal_expansion_1_k,
         )
-        rhs = np.array([(alphab - alphar) * dt_val, (alphab - alphak) * dt_val], dtype=float)
-        p_r, p_k = np.linalg.solve(m_mat, rhs)
-        kappa_bk = float((gamma_rail * p_r * c_rail - gamma_k * p_k * ck) / ei_tot)
-        return abs(kappa_bk) * (l_x**2) / 8.0 * 1e6, kappa_bk
+        beam_dim = x_beam_prof.height_m if x_mount in ("top", "bottom") else x_beam_prof.width_m
+        c_rail = 0.5 * beam_dim + 0.5 * x_rail_prof.height_m
 
-    def _bimetallic_bow_um(dt_val: float, use_backer: bool) -> float:
-        return _bimetallic_bow_signed(dt_val, use_backer)[0]
+        ei_sum = eb * ib + er * ir
+        ea_inv = 1.0 / max(eb * ab, 1.0) + 1.0 / max(er * ar, 1.0)
 
-    bow_no_backer_um = _bimetallic_bow_um(delta_t, use_backer=False)
-    bow_actual_um, signed_kappa_actual = _bimetallic_bow_signed(delta_t, use_backer=True)
+        def _bimetallic_bow_signed(dt_val: float, use_backer: bool) -> tuple[float, float]:
+            if x_mount == "dual_top_bottom" or spec.architecture == "delta":
+                return 0.0, 0.0
+            kappa_0 = (alphab - alphar) * dt_val * c_rail / (c_rail**2 + ei_sum * ea_inv)
+            kappa_signed_0 = gamma_rail * kappa_0
+            bow_0 = abs(kappa_signed_0) * (l_x**2) / 8.0 * 1e6
+            if not use_backer or spec.gantry.rail_backer_material == "none":
+                return bow_0, float(kappa_signed_0)
+
+            bk_mat = get_material(spec.gantry.rail_backer_material)
+            w_bk = min(beam_dim, max(x_rail_prof.width_m, 0.012))
+            t_bk = spec.gantry.rail_backer_thickness_mm * 1e-3
+            ak = w_bk * t_bk
+            ik = w_bk * (t_bk**3) / 12.0
+            ek = bk_mat.youngs_modulus_pa
+            alphak = bk_mat.thermal_expansion_1_k
+            ck = 0.5 * beam_dim + 0.5 * t_bk
+            ei_tot = ei_sum + ek * ik
+            gamma_k = newmark_rail_composite_gamma(
+                e_rail_pa=ek,
+                a_rail_m2=ak,
+                e_beam_pa=eb,
+                a_beam_m2=ab,
+                bolt_pitch_m=bolt_pitch_m,
+                l_eff_m=l_x,
+                substrate_kind=sub_kind,
+                wall_thickness_m=x_beam_prof.wall_thickness_m,
+                matrix_shear_retention=x_beam_shear_ret,
+                cf_rail_mounting=cf_mount,
+            )
+            m_mat = np.array(
+                [
+                    [1.0 / (eb * ab) + 1.0 / (er * ar) + (c_rail**2) / ei_tot, 1.0 / (eb * ab) - (c_rail * ck) / ei_tot],
+                    [1.0 / (eb * ab) - (c_rail * ck) / ei_tot, 1.0 / (eb * ab) + 1.0 / (ek * ak) + (ck**2) / ei_tot],
+                ],
+                dtype=float,
+            )
+            rhs = np.array([(alphab - alphar) * dt_val, (alphab - alphak) * dt_val], dtype=float)
+            p_r, p_k = np.linalg.solve(m_mat, rhs)
+            kappa_bk = float((gamma_rail * p_r * c_rail - gamma_k * p_k * ck) / ei_tot)
+            return abs(kappa_bk) * (l_x**2) / 8.0 * 1e6, kappa_bk
+
+        def _bimetallic_bow_um(dt_val: float, use_backer: bool) -> float:
+            return _bimetallic_bow_signed(dt_val, use_backer)[0]
+
+        bow_actual_um, signed_kappa_actual = _bimetallic_bow_signed(delta_t, use_backer=True)
+
+        if spec.architecture == "delta":
+            backer_reduction_pct = 0.0
+        elif x_mount == "dual_top_bottom":
+            backer_reduction_pct = 100.0
+        elif spec.gantry.rail_backer_material != "none":
+            ref_0 = _bimetallic_bow_um(1.0, use_backer=False)
+            ref_bk = _bimetallic_bow_um(1.0, use_backer=True)
+            backer_reduction_pct = max(0.0, min(100.0, 100.0 * (1.0 - ref_bk / max(ref_0, 1e-12))))
+        else:
+            backer_reduction_pct = 0.0
 
     # Positive signed_kappa means beam expands more than rail (beam face convex -> center bows away from rail);
     # negative means rail expands more (CF beam vs steel rail -> steel rail convex -> center bows toward rail).
@@ -840,17 +982,6 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
         bow_direction = "toward_rail"
     else:
         bow_direction = "neutral"
-
-    if spec.architecture == "delta":
-        backer_reduction_pct = 0.0
-    elif x_mount == "dual_top_bottom":
-        backer_reduction_pct = 100.0
-    elif spec.gantry.rail_backer_material != "none":
-        ref_0 = _bimetallic_bow_um(1.0, use_backer=False)
-        ref_bk = _bimetallic_bow_um(1.0, use_backer=True)
-        backer_reduction_pct = max(0.0, min(100.0, 100.0 * (1.0 - ref_bk / max(ref_0, 1e-12))))
-    else:
-        backer_reduction_pct = 0.0
 
     # 3. Heated bed thermal gradient bow + rigid 4-pt thermal taco buckling
     bed_temp = float(spec.bed.target_temp_c)
@@ -869,16 +1000,31 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     h_active = max(min(spec.kinematics.build_volume_mm[2], spec.frame.height_mm - 80.0) * 1e-3, 0.15)
     frame_z_drift_um = (frame_mat.thermal_expansion_1_k - alpha_z_drive) * h_active * delta_t * 1e6
 
-    # 5. Bracket polymer modulus retention E(T) & Tg warning
+    # 5. Stepper self-heating mount temperature, polymer bracket E(T) retention, & bearing CTE press-fit
+    motor_mount_temp_c, _ = compute_stepper_mount_temp_c(spec)
+    bearing_temp_c = chamber_c
+    bearing_cte_clearance_um, bearing_cte_pressfit_warning = compute_bearing_cte_clearance_um(
+        spec, bearing_temp_c
+    )
+
     bkt_mat = get_material(spec.gantry.bracket_material)
-    ret_factor = bkt_mat.modulus_retention_at_temp(chamber_c)
+    ret_factor = bkt_mat.modulus_retention_at_temp(motor_mount_temp_c)
     retention_pct = ret_factor * 100.0
     tg_warn = False
     if bkt_mat.tg_c is not None:
-        if chamber_c >= (bkt_mat.tg_c - 5.0) or ret_factor < 0.80:
+        if motor_mount_temp_c >= (bkt_mat.tg_c - 5.0) or ret_factor < 0.80:
             tg_warn = True
     elif ret_factor < 0.80:
         tg_warn = True
+
+    # 6. Toolhead belt-plane CoG alignment & X-roll lever diagnostic
+    toolhead_belt_cog_z_offset_mm = abs(
+        float(spec.toolhead.cog_offset_mm[2]) - float(spec.toolhead.belt_plane_z_offset_mm)
+    )
+    toolhead_nozzle_y_lever_mm = abs(float(spec.toolhead.nozzle_offset_mm[1]))
+    toolhead_x_roll_warning = bool(
+        toolhead_belt_cog_z_offset_mm > 15.0 or toolhead_nozzle_y_lever_mm > 22.0
+    )
 
     # Aggregate Z-axis thermal error
     z_bow_factor = 1.0 if x_mount in ("top", "bottom") else 0.25
@@ -910,4 +1056,11 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
         x_beam_tg_warning=x_beam_tg_warn,
         x_beam_has_tg=x_beam_has_tg,
         gantry_bow_direction=bow_direction,
+        motor_mount_temp_c=motor_mount_temp_c,
+        bearing_temp_c=bearing_temp_c,
+        bearing_cte_clearance_um=bearing_cte_clearance_um,
+        bearing_cte_pressfit_warning=bearing_cte_pressfit_warning,
+        toolhead_belt_cog_z_offset_mm=toolhead_belt_cog_z_offset_mm,
+        toolhead_nozzle_y_lever_mm=toolhead_nozzle_y_lever_mm,
+        toolhead_x_roll_warning=toolhead_x_roll_warning,
     )

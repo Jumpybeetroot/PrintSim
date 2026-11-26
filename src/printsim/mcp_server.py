@@ -31,6 +31,7 @@ from printsim.geometry import (
     generate_bom,
     list_dxf_exportable_parts,
 )
+from printsim.presets import STUDIO_DEFAULT_PRESET_IDS, is_studio_default_preset
 from printsim.schema import (
     BED_MOUNT_CATALOG,
     EXTRUSION_FILLINGS,
@@ -766,6 +767,12 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             ],
             "part_presets": ["corner_gusset", "xy_motor_mount", "toolhead_carriage", "cantilever_bar"],
             "presets": _list_preset_ids(),
+            "default_presets": [
+                pid for pid in STUDIO_DEFAULT_PRESET_IDS if pid in _list_preset_ids()
+            ],
+            "test_benchmark_presets": [
+                pid for pid in _list_preset_ids() if not is_studio_default_preset(pid)
+            ],
         }
 
     if name == "get_preset_yaml":

@@ -493,7 +493,11 @@ def optimize_solid_topology(
     emin_ratio = 1e-3
 
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
+    is_fdm = (
+        fdm_anisotropic
+        if fdm_anisotropic is not None
+        else bool(mat.is_printed_polymer or mat.is_slm_metal)
+    )
     hx_m, hy_m, hz_m = hx_mm * 1e-3, hy_mm * 1e-3, hz_mm * 1e-3  # meters (strict SI)
     elem_vol_m3 = hx_m * hy_m * hz_m
 

@@ -853,6 +853,7 @@ from printsim.geometry._builder_bed import (  # noqa: E402
     _apply_z_guideway,
     _attach_bed_mount_compliance,
     _compute_corexy_z_drive_stiffness,
+    _compute_flying_z_joint_spring_stiffness,
     _compute_mount_offsets_m,
     _compute_z_carriage_spring_stiffness,
     _make_bed_virtual_material,
@@ -870,6 +871,7 @@ from printsim.geometry._builder_gantry import (  # noqa: E402
     _compute_newmark_rail_gamma,
     _make_x_backer_profile,
     _member_local_axes,
+    _oriented_bare_rail_profile,
     _populate_linear_rail_telemetry,
     _x_rail_mount_normals,
     _y_rail_mount_normals,
@@ -1315,7 +1317,7 @@ def _build_corexy(
     bed_cfg = resolve_bed_mount(spec)
     t_bed_m = float(spec.bed.plate_thickness_mm) * 1e-3
     h_standoff_m = float(bed_cfg.get("standoff_height_mm", 14.0)) * 1e-3
-    half_subframe_m = 0.010
+    half_subframe_m = 0.5 * min(get_profile(spec.frame.profile).height_m, 0.020)
     top_clear_m = min(float(spec.frame.gantry_top_clearance_mm) * 1e-3, max(h - 0.16, 0.025))
     if is_flying:
         z_bed = orig_z
@@ -1339,7 +1341,13 @@ def _build_corexy(
     z_subframe = max(0.025, z_bed - t_bed_m - h_standoff_m - half_subframe_m)
 
     is_awd = spec.gantry.drive_mode == "awd"
-    cnc_motor_mount_kg = 0.11 if bool(bkt_info["cnc_machined"]) else 0.0
+    if bkt_info.get("manufacturing_process") == "slm":
+        # Topology-optimized hollow SLM motor mounts save ~40% volume vs solid 3-axis CNC billet,
+        # scaled by alloy density relative to SLM AlSi10Mg (2670 kg/m³).
+        bkt_mat_obj = get_material(spec.gantry.bracket_material)
+        cnc_motor_mount_kg = 0.065 * (bkt_mat_obj.density_kg_m3 / 2670.0)
+    else:
+        cnc_motor_mount_kg = 0.11 if bool(bkt_info["cnc_machined"]) else 0.0
     rear_motor_kg = xy_motor_kg + cnc_motor_mount_kg
     front_motor_kg = (xy_motor_kg + 0.03 + cnc_motor_mount_kg) if is_awd else 0.0
     front_role = "mount" if is_awd else "frame"
@@ -1381,6 +1389,9 @@ def _build_corexy(
                 StructuralNode("b_bed_rr", np.array([w, y_bed_r, 0.0]), role="frame"),
             ]
         )
+        k_zj_n, k_zj_s, k_zj_r = _compute_flying_z_joint_spring_stiffness(
+            spec, k_z_drive_col_n_m
+        )
         for tag in ("fl", "fr", "rl", "rr"):
             fastener_springs.append(
                 FastenerSpring(
@@ -1388,9 +1399,9 @@ def _build_corexy(
                     bay="z_joint",
                     shell_node_id=f"col_g_{tag}",
                     frame_node_id=f"g_{tag}",
-                    k_shear_n_m=1.2e6,
-                    k_normal_n_m=k_z_drive_col_n_m,
-                    k_rot_nm_rad=65.0,
+                    k_shear_n_m=k_zj_s,
+                    k_normal_n_m=k_zj_n,
+                    k_rot_nm_rad=k_zj_r,
                     normal_vec=(0.0, 0.0, 1.0),
                     offset_m=(0.0, 0.0, 0.0),
                 )
@@ -1445,11 +1456,12 @@ def _build_corexy(
 
     # Base perimeter (split only where Z-rail/rod columns or Z-motors anchor)
     _add_member(members, "base_front", "b_fl", "b_fr", fp, fm)
-    if z_drive in ("leadscrew_triple", "leadscrew_single", "leadscrew_dual_belt_sync"):
-        _add_member(members, "base_rear_l", "b_rl", "b_rear_mid", fp, fm)
-        _add_member(members, "base_rear_r", "b_rear_mid", "b_rr", fp, fm)
-    else:
-        _add_member(members, "base_rear", "b_rl", "b_rr", fp, fm)
+    if spec.frame.rear_bottom_extrusion:
+        if z_drive in ("leadscrew_triple", "leadscrew_single", "leadscrew_dual_belt_sync"):
+            _add_member(members, "base_rear_l", "b_rl", "b_rear_mid", fp, fm)
+            _add_member(members, "base_rear_r", "b_rear_mid", "b_rr", fp, fm)
+        else:
+            _add_member(members, "base_rear", "b_rl", "b_rr", fp, fm)
 
     if z_drive == "leadscrew_dual":
         _add_member(members, "base_left_f", "b_fl", "b_left_mid", fp, fm)
@@ -1670,10 +1682,14 @@ def _build_corexy(
         if m.role == "gantry"
     )
     x_backer_mass = sum(m.backer_mass_kg for m in members if m.role == "gantry")
-    x_rail_len = corexy_x_rail_len_m(spec)
-    x_rail_mass = x_rail_prof.area_m2 * x_rail_len * rail_mat.density_kg_m3
-    if spec.gantry.effective_dual_x_rails:
-        x_rail_mass *= 2.0
+    if xp == "unsupported_rail":
+        # Bare rail IS the X-gantry beam (x_beam_mass == 0.0; rail_mass_kg holds exact bare rail mass)
+        x_rail_mass = sum(m.rail_mass_kg for m in members if m.role == "gantry")
+    else:
+        x_rail_len = corexy_x_rail_len_m(spec)
+        x_rail_mass = x_rail_prof.area_m2 * x_rail_len * rail_mat.density_kg_m3
+        if spec.gantry.effective_dual_x_rails:
+            x_rail_mass *= 2.0
 
     # In CoreXY, X moves toolhead; Y moves toolhead + X beam + X rail + backer + CF inserts + Y carriages + gantry bracket delta
     x_moving = toolhead_kg + 0.04  # plus belt segment

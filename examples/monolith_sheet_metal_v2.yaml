@@ -1,0 +1,124 @@
+name: Monolith v1.5 Sheet Metal AWD 300
+description: Monolith Builder v1.5 laser-cut steel sheet-metal AWD CoreXY (3-3.2mm XY-joints, 4.7-5mm motor mounts, 10mm EPDM belts, Hollow MGN12H X-rail on Carbonara CF beam, Double SLM V2 Z-joints, 2mm PTFE stepper gaskets, 500W SLM PTC chamber heater, 20mm PIR insulation, WM9290 CPAP, and Cra-Z kinematic bed suspension)
+architecture: corexy
+frame:
+  width_mm: 460
+  depth_mm: 460
+  height_mm: 500
+  profile: extrusion_2020
+  upright_profile: extrusion_4040
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  corner_joint_type: corner_cube
+  enclosed_panels: true
+  panel_mounting: bolted_structural
+  panel_material: aluminum_5052_sheet
+  panel_thickness_mm: 3.0
+  chamber_temp_c: 80.0
+  chamber_heater_id: monolith_500w_ptc
+  chamber_insulation_mm: 20.0
+  rear_bottom_extrusion: true
+gantry:
+  drive_mode: awd
+  belt_routing: monolith_short
+  double_shear_pulleys: true
+  bracket_material: sheet_metal_steel
+  x_beam_profile: cf_tube_20x20_carbonara
+  x_beam_material: carbon_fiber_torsional_45
+  x_rail_profile: mgn12_hollow_rail
+  y_rail_profile: mgn12_rail
+  rail_material: steel_4140
+  x_rail_mount: front
+  y_rail_mount: inner
+  carriage_mass_g: 235.0
+  stepper_thermal_gasket: ptfe_2mm
+  idler_axial_preload: disc_spring_m5
+  z_joint_type: double
+  z_joint_material: slm
+  belt:
+    type: gt2_10mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 89.0
+kinematics:
+  build_volume_mm: [300, 300, 250]
+  max_velocity_mm_s: 900
+  max_accel_mm_s2: 35000
+  max_z_velocity_mm_s: 25
+  max_z_accel_mm_s2: 300
+  square_corner_velocity_mm_s: 12.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ah_s45r
+    name: Monolith LDO 42STH48-2504AH-S45R (45mm Round Shaft, 2m Cable)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 2.2
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 48.0
+    rotor_inertia_kg_m2: 8.45e-6
+    motor_mass_g: 372
+    insulation_class: H
+  z_stepper:
+    name: NEMA17-48mm Belted Quad-Z
+    holding_torque_nm: 0.55
+    rated_current_a: 2.0
+    inductance_mh: 2.7
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 8.2e-6
+    motor_mass_g: 360
+toolhead:
+  preset_id: monolith_toolhead_cpap
+  name: Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)
+  total_mass_g: 143
+  cog_offset_mm: [0, -9.5, -1.5]
+  nozzle_offset_mm: [0, -14.0, -44.0]
+  mount_material: slm_aluminum
+  body_construction: extruder_as_chassis
+  internal_stiffness_n_per_mm: 2400.0
+  cpap_blower_id: wm9290_24v
+  cpap_hose_id_mm: 15.0
+  cpap_pwm_pct: 55.0
+  shared_heatsink_cpap_duct: true
+  belt_plane_z_offset_mm: -1.5
+  envelope_mm: [52, 56, 78]
+  hotend:
+    preset_id: monolith_50mm_hf
+    name: Monolith 50mm+V6 HF Hotend (80W PT1000)
+    mount_style: rigid_4bolt_m3
+    structural_stiffness_n_per_mm: 920.0
+    overall_length_mm: 68.0
+    mass_g: 52.0
+    heater_power_w: 80
+    block_material: copper_c110
+    block_mass_g: 22
+    nozzle_material: copper_c110
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 50
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 10.5
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 2.4
+    part_cooling_cfm: 19.5
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 37.0
+    max_push_force_n: 72
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: atp5_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 750
+  mass_g: 2650
+  z_drive: belted_quad_z
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: gt2_9mm_z_belt
+  target_temp_c: 110.0
+  mount_type: craz_kinematic_ge5c

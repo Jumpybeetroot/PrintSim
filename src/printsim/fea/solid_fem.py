@@ -106,13 +106,15 @@ def constitutive_matrix_3d(mat: MaterialSpec, fdm_anisotropic: bool = False) -> 
         D[3, 3] = D[4, 4] = D[5, 5] = g
         return D
 
-    # Transversely isotropic compliance matrix S for FDM printed parts (XY strong, Z layer-bond weaker)
+    # Transversely isotropic compliance matrix S for FDM printed polymers & SLM LPBF metals
+    # (XY build plane stiffer/stronger than build-direction Z axis).
     E_xy = E
     E_z = E * float(mat.e3_ratio)
     nu_xy = nu
     # Enforce thermodynamic positive-definiteness: 1 - nu_xy - 2 * nu_xz^2 * (E_z / E_xy) > 0
     max_nu_xz = 0.9 * math.sqrt(max(1.0 - nu_xy, 1e-6) * E_xy / max(2.0 * E_z, 1e-12))
-    nu_xz = min(nu * 0.85, max_nu_xz)
+    nu_xz_target = nu * math.sqrt(float(mat.e3_ratio)) if mat.is_slm_metal else (nu * 0.85)
+    nu_xz = min(nu_xz_target, max_nu_xz)
     G_xy = E_xy / (2.0 * (1.0 + nu_xy))
     G_xz = E_z / (2.0 * (1.0 + nu_xz))
 
@@ -419,7 +421,11 @@ def solve_solid_voxel_fea(
 ) -> SolidFEAResult:
     """Solve 3D linear elastic Hex8 (QM6-3D incompatible-mode) FEA on a voxel or rectilinear grid."""
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
+    is_fdm = (
+        fdm_anisotropic
+        if fdm_anisotropic is not None
+        else bool(mat.is_printed_polymer or mat.is_slm_metal)
+    )
 
     occ = np.argwhere(grid)
     n_elem = len(occ)
@@ -586,7 +592,12 @@ def solve_solid_voxel_fea(
     max_z_tensile_mpa = float(max(0.0, np.max(szz))) * 1e-6
 
     yield_mpa = mat.yield_strength_pa * 1e-6
-    z_layer_mpa = yield_mpa * (0.55 if is_fdm else 1.0)
+    if is_fdm and mat.is_slm_metal:
+        z_layer_mpa = yield_mpa * float(mat.z_strength_ratio)
+    elif is_fdm:
+        z_layer_mpa = yield_mpa * 0.55
+    else:
+        z_layer_mpa = yield_mpa
     sf_iso = yield_mpa / max(max_vm_mpa, 1e-6)
     sf_z = z_layer_mpa / max(max_z_tensile_mpa, 1e-6)
     safety_factor = min(sf_iso, sf_z)
@@ -594,7 +605,7 @@ def solve_solid_voxel_fea(
     if safety_factor >= 1.0:
         failure_mode = "safe"
     elif is_fdm and sf_z < sf_iso:
-        failure_mode = "fdm_layer_delamination"
+        failure_mode = "slm_build_z_yield" if mat.is_slm_metal else "fdm_layer_delamination"
     else:
         failure_mode = "isotropic_yield"
 

@@ -1,5 +1,5 @@
-name: Delta Racer 240 (3-Tower Carbon)
-description: High-speed 3-tower delta printer with ultra-light effector and carbon parallel arms
+name: Delta 240 (3-Tower Carbon)
+description: High-speed 3-tower delta printer with ultra-light Bowden effector and carbon parallel arms
 architecture: delta
 frame:
   width_mm: 420

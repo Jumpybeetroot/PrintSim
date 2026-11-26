@@ -551,10 +551,34 @@ def _compute_scores_and_diagnostics(
                 "blocking radial thermal expansion."
             )
         if thermal_structural.bracket_tg_warning:
+            mount_t = float(
+                getattr(thermal_structural, "motor_mount_temp_c", thermal_structural.chamber_temp_c)
+            )
+            gasket_tip = (
+                " Adding 2mm PTFE stepper gaskets cuts motor-mount temperature by ~14 C."
+                if spec.gantry.stepper_thermal_gasket == "none"
+                else ""
+            )
             diag.append(
                 f"Polymer bracket thermal softening near Tg ({spec.gantry.bracket_material} retains "
                 f"{thermal_structural.bracket_modulus_retention_pct:.1f}% modulus at "
-                f"{thermal_structural.chamber_temp_c:.0f} C chamber): main limit is bracket polymer Tg stiffness retention."
+                f"{mount_t:.0f} C motor-mount / {thermal_structural.chamber_temp_c:.0f} C chamber): "
+                f"main limit is bracket polymer Tg stiffness retention.{gasket_tip}"
+            )
+        if bool(getattr(thermal_structural, "bearing_cte_pressfit_warning", False)):
+            brg_t = float(getattr(thermal_structural, "bearing_temp_c", thermal_structural.chamber_temp_c))
+            brg_clr = float(getattr(thermal_structural, "bearing_cte_clearance_um", 0.0))
+            diag.append(
+                f"F695 bearing press-fit CTE clearance risk ({brg_clr:.1f} um at {brg_t:.0f} C bearing temp "
+                "in aluminum housing >66 C): add M5 Belleville disc springs (10x5.2x0.25 mm) for axial preload."
+            )
+        if bool(getattr(thermal_structural, "toolhead_x_roll_warning", False)):
+            cog_dz = float(getattr(thermal_structural, "toolhead_belt_cog_z_offset_mm", 0.0))
+            noz_dy = float(getattr(thermal_structural, "toolhead_nozzle_y_lever_mm", 0.0))
+            diag.append(
+                f"Toolhead X-roll torque overhang (CoG-to-belt Z offset {cog_dz:.1f} mm, nozzle Y lever "
+                f"{noz_dy:.1f} mm): aligns inertia off the MGN12H roll neutral axis — belt-coplanar "
+                "toolhead geometry (e.g. Monolith Toolhead) minimizes X-axis roll ringing."
             )
         elif spec.toolhead.mount_material != spec.gantry.bracket_material:
             th_mat = get_material(spec.toolhead.mount_material)

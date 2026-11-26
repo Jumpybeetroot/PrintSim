@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from scipy.linalg import solve
 
 from printsim.schema import PrinterSpec, get_material
+from printsim.thermal.chamber import simulate_chamber_and_cpap
 from printsim.thermal.filaments import get_filament
 
 
@@ -44,6 +46,7 @@ class HotendThermalReport:
     extruder_pressure_flow_limit_mm3_s: float = 0.0
     required_push_force_n: float = 0.0
     nozzle_pressure_drop_mpa: float = 0.0
+    chamber_cpap: dict[str, Any] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +73,7 @@ class HotendThermalReport:
             "nozzle_pressure_drop_mpa": round(self.nozzle_pressure_drop_mpa, 2),
             "heatup_curve": self.heatup_curve,
             "axial_profile": self.axial_profile,
+            "chamber_cpap": self.chamber_cpap,
         }
 
 
@@ -391,6 +395,7 @@ def simulate_hotend_thermal(
     t_target = target_temp_c if target_temp_c is not None else fil.print_temp_c
     t_amb = max(he.ambient_temp_c, spec.frame.chamber_temp_c)
     delta_t = max(t_target - t_amb, 1.0)
+    chamber_rep = simulate_chamber_and_cpap(spec, hotend_target_temp_c=t_target)
 
     # 1. Heatbreak axial thermal resistance R_hb = L / (k * A)
     r_in = (he.heatbreak_id_mm * 1e-3) * 0.5
@@ -400,6 +405,11 @@ def simulate_hotend_thermal(
 
     # 2. Steady heat leak through heatbreak + parasitic radiation/filament conduction into heatsink
     r_hs = he.heatsink_thermal_resistance_k_w
+    if spec.toolhead.cpap_blower_id != "none" and spec.toolhead.shared_heatsink_cpap_duct:
+        if chamber_rep.kalico_shared_duct_active and chamber_rep.cpap_delivered_cfm > 0.0:
+            # High-static-pressure CPAP bleed air through shared heatsink duct slightly lowers R_hs
+            hs_boost = 1.0 + 0.18 * min(1.0, chamber_rep.cpap_delivered_cfm / 10.0)
+            r_hs = r_hs / hs_boost
     q_hb_w = delta_t / (r_hb + r_hs)
     q_parasitic_w = 0.016 * delta_t
     t_cold = t_amb + (q_hb_w + q_parasitic_w) * r_hs
@@ -526,7 +536,19 @@ def simulate_hotend_thermal(
     max_lin_speed = max_flow / (0.20 * 0.40)
 
     # 6. Part-cooling overhang & bridging capability
-    eff_cooling = he.part_cooling_cfm / max(fil.cooling_demand, 0.2)
+    if spec.toolhead.cpap_blower_id != "none":
+        temp_cool_factor = max(
+            0.35,
+            min(
+                1.0,
+                (fil.glass_transition_c - chamber_rep.cpap_outlet_air_temp_c)
+                / max(fil.glass_transition_c - 25.0, 10.0),
+            ),
+        )
+        effective_cfm = chamber_rep.cpap_delivered_cfm * temp_cool_factor
+    else:
+        effective_cfm = he.part_cooling_cfm
+    eff_cooling = effective_cfm / max(fil.cooling_demand, 0.2)
     max_overhang = min(78.0, max(38.0, 42.0 + 18.0 * math.log1p(eff_cooling * 0.55)))
     bridge_sag = max(0.05, 1.45 / (1.0 + 0.38 * eff_cooling))
 
@@ -554,6 +576,7 @@ def simulate_hotend_thermal(
         extruder_pressure_flow_limit_mm3_s=flow_pressure,
         required_push_force_n=req_push_force_n,
         nozzle_pressure_drop_mpa=dp_at_max_pa * 1e-6,
+        chamber_cpap=chamber_rep.to_dict(),
     )
 
 

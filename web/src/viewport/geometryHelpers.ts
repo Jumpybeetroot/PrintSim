@@ -238,6 +238,23 @@ export interface ToolheadMatAppearance {
 
 export function getToolheadMaterialAppearance(matId?: string | null): ToolheadMatAppearance {
   switch (matId) {
+    case "slm_aluminum":
+      // Bead-blasted / as-sintered SLM AlSi10Mg: satin matte metallic vs shiny machined billet
+      return { hex: 0xb8c4d0, metalness: 0.72, roughness: 0.42, shortLabel: "SLM AlSi10Mg" };
+    case "slm_ti6al4v":
+      return { hex: 0x7c7d8c, metalness: 0.74, roughness: 0.4, shortLabel: "SLM Ti64" };
+    case "slm_316l_steel":
+      return { hex: 0x94a3b8, metalness: 0.78, roughness: 0.38, shortLabel: "SLM 316L" };
+    case "slm_17_4ph_steel":
+      return { hex: 0x7c8798, metalness: 0.78, roughness: 0.38, shortLabel: "SLM 17-4PH" };
+    case "slm_maraging_steel":
+      return { hex: 0x6b7280, metalness: 0.76, roughness: 0.4, shortLabel: "SLM MS1" };
+    case "slm_cucrzr":
+      return { hex: 0xb96d4b, metalness: 0.76, roughness: 0.38, shortLabel: "SLM CuCrZr" };
+    case "sheet_metal_steel":
+      return { hex: 0x64748b, metalness: 0.82, roughness: 0.32, shortLabel: "Steel Sheet" };
+    case "titanium_grade5":
+      return { hex: 0x8b8896, metalness: 0.85, roughness: 0.24, shortLabel: "CNC Ti64" };
     case "aluminum_6061_t6":
       return { hex: 0xcbd5e1, metalness: 0.86, roughness: 0.22, shortLabel: "CNC Al 6061" };
     case "aluminum_7075_t6":

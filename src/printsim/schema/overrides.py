@@ -345,10 +345,14 @@ def resolve_belt(spec: PrinterSpec) -> dict[str, Any]:
 
 
 def _material_bracket_stiffness_n_m(spec: PrinterSpec) -> float:
+    from printsim.fea.components import compute_stepper_mount_temp_c
     from printsim.schema.materials import get_material
 
     bkt_mat = get_material(spec.gantry.bracket_material)
-    e_bkt = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
+    motor_mount_temp_c, _ = compute_stepper_mount_temp_c(spec)
+    e_bkt = bkt_mat.effective_modulus_pa(motor_mount_temp_c) * float(
+        bkt_mat.bolted_joint_stiffness_factor
+    )
     k_ref = 5.0e5
     ds_mult = 1.45 if spec.gantry.double_shear_pulleys else 1.0
     awd_mult = 1.65 if (spec.architecture == "corexy" and spec.gantry.drive_mode == "awd") else 1.0
@@ -372,7 +376,11 @@ def resolve_gantry_bracket(spec: PrinterSpec) -> dict[str, Any]:
     )
     base_mass_delta_g = float(bkt_info["carriage_mass_delta_g"])
     base_creep_n = float(bkt_info["creep_tension_limit_n"])
-    base_damping = -0.003 if bool(bkt_info["cnc_machined"]) else 0.004
+    if bkt_info.get("manufacturing_process") == "slm":
+        # As-sintered rough bolted interfaces & cellular microstructure damp slightly more than CNC billet
+        base_damping = -0.0015
+    else:
+        base_damping = -0.003 if bool(bkt_info["cnc_machined"]) else 0.004
 
     ov = spec.model_overrides.gantry_bracket
     stiff_n_m = (

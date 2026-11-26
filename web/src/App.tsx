@@ -109,11 +109,20 @@ const MOUNT_MATERIAL_LABELS: Record<string, string> = {
   abs_printed: "Printed ABS",
   pet_cf_printed: "Printed PET-CF15",
   pa12_cf_printed: "Printed PA12-CF",
+  pc_pbt_gf_printed: "Printed PC-PBT-GF",
   ppa_cf_printed: "Printed PPA-CF",
   pps_cf_printed: "Printed PPS-CF",
+  slm_aluminum: "SLM AlSi10Mg",
+  slm_ti6al4v: "SLM Ti-6Al-4V",
+  slm_maraging_steel: "SLM MS1 Steel",
+  slm_316l_steel: "SLM 316L Steel",
+  slm_17_4ph_steel: "SLM 17-4PH",
+  slm_cucrzr: "SLM CuCrZr",
+  sheet_metal_steel: "Sheet Metal Steel",
   carbon_fiber_plate: "3K Carbon Fiber Plate",
   aluminum_6061_t6: "CNC Al 6061",
   aluminum_7075_t6: "CNC Al 7075",
+  titanium_grade5: "CNC Ti-6Al-4V",
 };
 
 const Z_RAIL_LABELS: Record<string, string> = {
@@ -173,6 +182,7 @@ const Y_RAIL_MOUNT_LABELS: Record<string, string> = {
 const RAIL_PROFILE_LABELS: Record<string, string> = {
   mgn9_rail: "MGN9H",
   mgn12_rail: "MGN12H",
+  mgn12_hollow_rail: "Hollow MGN12H",
 };
 
 const DRIVE_TYPE_LABELS: Record<string, string> = {
@@ -187,6 +197,7 @@ const BED_MOUNT_LABELS: Record<string, string> = {
   captive_belleville_kinematic: "Captive Belleville Kinematic",
   dual_leaf_ti_kinematic: "Dual-Leaf Ti Kinematic",
   spherical_3pt_ratrig: "RatRig 3-Pt Spherical",
+  craz_kinematic_ge5c: "Monolith Cra-Z 2+2+2 GE5C",
   trident_3pt_standoffs: "Trident 3-Pt Bakelite",
   whopping_pochard_kinematic: "Whopping Pochard Leaf-Spring",
   rigid_4pt: "4-Pt Rigid",
@@ -807,7 +818,7 @@ function describeSpecDiff(
 
 export default function App() {
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
-  const [selectedPreset, setSelectedPreset] = useState<string>("voron_trident_300");
+  const [selectedPreset, setSelectedPreset] = useState<string>("corexy_fixed_gantry_300");
   const [filamentId, setFilamentId] = useState<string>("pla");
   const [spec, setSpec] = useState<PrinterSpecData | null>(null);
   const [yamlText, setYamlText] = useState<string>("");
@@ -1431,8 +1442,7 @@ export default function App() {
         const data: CatalogResponse = await res.json();
         setCatalog(data);
         const firstId =
-          data.presets.find((p) => p.id === "voron_trident_300")?.id ||
-          data.presets.find((p) => p.id === "corexy_voron_style")?.id ||
+          data.presets.find((p) => p.id === "corexy_fixed_gantry_300")?.id ||
           data.presets[0]?.id;
 
         const sharedSpec = decodeSpecFromHash(window.location.hash);
@@ -1713,10 +1723,9 @@ export default function App() {
     setGcodeText("");
     gcodeTextRef.current = "";
     const defaultId =
-      catalogRef.current?.presets.find((p) => p.id === "voron_trident_300")?.id ||
-      catalogRef.current?.presets.find((p) => p.id === "corexy_voron_style")?.id ||
+      catalogRef.current?.presets.find((p) => p.id === "corexy_fixed_gantry_300")?.id ||
       catalogRef.current?.presets[0]?.id ||
-      "voron_trident_300";
+      "corexy_fixed_gantry_300";
     await loadPreset(defaultId);
     setSavedDrawerOpen(false);
   }, [clearSpecHashIfPresent, loadPreset]);

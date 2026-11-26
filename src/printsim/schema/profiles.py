@@ -151,6 +151,17 @@ def _solid_rect(
 
 # Standard Misumi / Bosch Rexroth T-slot / V-slot extrusion properties (real datasheet values)
 PROFILE_CATALOG: dict[str, ProfileSpec] = {
+    "extrusion_1515": ProfileSpec(
+        id="extrusion_1515",
+        name="1515 T-Slot Extrusion (15x15mm, 1.1mm Wall)",
+        shape="extrusion",
+        width_m=0.015,
+        height_m=0.015,
+        area_m2=8.50e-5,  # 85 mm^2 = 0.230 kg/m (MakerBeam / LDO Voron V0 & Monolith Zero 1515)
+        iy_m4=0.198e-8,  # 0.198 cm^4
+        iz_m4=0.198e-8,
+        j_m4=0.032e-8,  # 0.032 cm^4 open T-slot St. Venant torsion constant
+    ),
     "extrusion_2020": ProfileSpec(
         id="extrusion_2020",
         name="2020 T-Slot Extrusion (20x20mm)",
@@ -268,6 +279,9 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "ti_tube_20x20x1_2": _hollow_square_tube(
         "ti_tube_20x20x1_2", "Titanium Square Tube 20x20x1.2mm", 20.0, 1.2
     ),
+    "al_tube_12x12x1": _hollow_square_tube(
+        "al_tube_12x12x1", "Aluminum Square Tube 12x12x1.0mm (Monolith Zero)", 12.0, 1.0
+    ),
     "al_tube_20x20x2": _hollow_square_tube(
         "al_tube_20x20x2", "Aluminum Square Tube 20x20x2.0mm", 20.0, 2.0
     ),
@@ -286,6 +300,23 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "mgn12_rail": _solid_rect("mgn12_rail", "MGN12H Linear Rail (12x8mm)", 12.0, 8.0, "rail").model_copy(
         update={"area_m2": 0.650 / 7850.0}
     ),
+    # Monolith revised Hollow MGN12 / ULS lightweight X-rail (~32% lighter linear mass: 0.44 kg/m,
+    # ~18% lower Iy/Iz due to machined internal cavity; Monolith3D/MISC/Hollow_MGN12_rails).
+    "mgn12_hollow_rail": _solid_rect(
+        "mgn12_hollow_rail", "Hollow MGN12H Linear Rail (12x8mm, 440 g/m)", 12.0, 8.0, "rail"
+    ).model_copy(
+        update={
+            "area_m2": 0.440 / 7850.0,
+            "iy_m4": 4.10e-10,
+            "iz_m4": 9.40e-10,
+            "j_m4": 6.90e-10,
+        }
+    ),
+    # Sentinel for rail-only unsupported X-gantries (e.g. Monolith Zero bare MGN12H X-rail;
+    # builder_gantry constructs the X member directly from x_rail_profile + optional rail backer).
+    "unsupported_rail": _solid_rect(
+        "unsupported_rail", "Unsupported Bare Linear Rail (No X-Beam)", 12.0, 8.0, "rail"
+    ).model_copy(update={"area_m2": 0.650 / 7850.0}),
     "mgn15_rail": _solid_rect("mgn15_rail", "MGN15H Linear Rail (15x10mm)", 15.0, 10.0, "rail").model_copy(
         update={"area_m2": 1.060 / 7850.0}
     ),

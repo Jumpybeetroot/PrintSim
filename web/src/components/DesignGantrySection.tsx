@@ -16,6 +16,7 @@ import {
   DriveType,
   GantryBracketInfo,
   GantryWeightClassItem,
+  IdlerAxialPreloadType,
   PrinterSpecData,
   RailBackerMaterialType,
   RailBlockType,
@@ -23,8 +24,11 @@ import {
   RailPreloadType,
   RailQualityType,
   SimulationResponse,
+  StepperThermalGasketType,
   XRailMountType,
   YRailMountType,
+  ZJointMaterialType,
+  ZJointType,
 } from "../types";
 import {
   ModelOverrideControl,
@@ -62,6 +66,7 @@ const X_BEAM_METAL_PROFILE_IDS = new Set([
   "extrusion_2020",
   "extrusion_2040",
   "cnc_al_beam_20x20",
+  "al_tube_12x12x1",
   "al_tube_20x20x2",
   "extrusion_3030",
 ]);
@@ -74,6 +79,7 @@ const X_BEAM_LIGHTWEIGHT_TUBE_IDS = new Set([
   "cf_tube_30x20x2",
   "cf_tube_25x25x2",
   "ti_tube_20x20x1_2",
+  "unsupported_rail",
 ]);
 
 const X_BEAM_MATERIAL_IDS = new Set([
@@ -127,6 +133,18 @@ export const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
     color_hex: "#333840",
   },
   {
+    id: "pc_pbt_gf_printed",
+    name: "3D-Printed PC-PBT-GF (4.6 GPa, 132°C HDT)",
+    short_name: "Printed PC-PBT-GF",
+    youngs_modulus_gpa: 4.6,
+    hdt_c: 132,
+    creep_tension_limit_n: 72,
+    cnc_machined: false,
+    kit_cost_usd: 78,
+    carriage_mass_delta_g: 8,
+    color_hex: "#334155",
+  },
+  {
     id: "ppa_cf_printed",
     name: "3D-Printed PPA-CF Annealed (11.8 GPa)",
     short_name: "Printed PPA-CF",
@@ -151,6 +169,84 @@ export const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
     color_hex: "#23272e",
   },
   {
+    id: "slm_aluminum",
+    name: "SLM 3D-Printed Aluminum AlSi10Mg (68 GPa)",
+    short_name: "SLM AlSi10Mg",
+    youngs_modulus_gpa: 68.0,
+    hdt_c: 300,
+    creep_tension_limit_n: 230,
+    cnc_machined: true,
+    manufacturing_process: "slm",
+    kit_cost_usd: 135,
+    carriage_mass_delta_g: 10,
+    color_hex: "#b8c4d0",
+  },
+  {
+    id: "slm_ti6al4v",
+    name: "SLM 3D-Printed Titanium Ti-6Al-4V (110 GPa)",
+    short_name: "SLM Ti-6Al-4V",
+    youngs_modulus_gpa: 110.0,
+    hdt_c: 450,
+    creep_tension_limit_n: 340,
+    cnc_machined: true,
+    manufacturing_process: "slm",
+    kit_cost_usd: 295,
+    carriage_mass_delta_g: 28,
+    color_hex: "#7c7d8c",
+  },
+  {
+    id: "slm_maraging_steel",
+    name: "SLM Maraging Steel MS1 1.2709 (180 GPa)",
+    short_name: "SLM MS1 Steel",
+    youngs_modulus_gpa: 180.0,
+    hdt_c: 450,
+    creep_tension_limit_n: 380,
+    cnc_machined: true,
+    manufacturing_process: "slm",
+    kit_cost_usd: 275,
+    carriage_mass_delta_g: 64,
+    color_hex: "#6b7280",
+  },
+  {
+    id: "slm_316l_steel",
+    name: "SLM 316L Stainless Steel (185 GPa)",
+    short_name: "SLM 316L Steel",
+    youngs_modulus_gpa: 185.0,
+    hdt_c: 450,
+    creep_tension_limit_n: 340,
+    cnc_machined: true,
+    manufacturing_process: "slm",
+    kit_cost_usd: 220,
+    carriage_mass_delta_g: 62,
+    color_hex: "#94a3b8",
+  },
+  {
+    id: "slm_17_4ph_steel",
+    name: "SLM 17-4PH Stainless Steel H900 (190 GPa)",
+    short_name: "SLM 17-4PH",
+    youngs_modulus_gpa: 190.0,
+    hdt_c: 450,
+    creep_tension_limit_n: 380,
+    cnc_machined: true,
+    manufacturing_process: "slm",
+    kit_cost_usd: 245,
+    carriage_mass_delta_g: 60,
+    color_hex: "#7c8798",
+  },
+  {
+    id: "sheet_metal_steel",
+    name: "Monolith Laser-Cut Steel Sheet Metal (3–5mm, 200 GPa)",
+    short_name: "Sheet Metal Steel",
+    youngs_modulus_gpa: 200.0,
+    hdt_c: 400,
+    creep_tension_limit_n: 320,
+    cnc_machined: true,
+    manufacturing_process: "sheet_metal",
+    kit_cost_usd: 85,
+    carriage_mass_delta_g: 55,
+    color_hex: "#64748b",
+  },
+  {
     id: "aluminum_6061_t6",
     name: "CNC Aluminum 6061-T6 (68.9 GPa)",
     short_name: "CNC Al 6061",
@@ -158,6 +254,7 @@ export const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
     hdt_c: 300,
     creep_tension_limit_n: 250,
     cnc_machined: true,
+    manufacturing_process: "cnc",
     kit_cost_usd: 210,
     carriage_mass_delta_g: 42,
     color_hex: "#c6d0db",
@@ -170,6 +267,7 @@ export const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
     hdt_c: 300,
     creep_tension_limit_n: 280,
     cnc_machined: true,
+    manufacturing_process: "cnc",
     kit_cost_usd: 285,
     carriage_mass_delta_g: 46,
     color_hex: "#cbd5e1",
@@ -221,6 +319,33 @@ const FALLBACK_GANTRY_WEIGHT_CLASSES: GantryWeightClassItem[] = [
       "Scale-weighed LDO Monolith CNC 6061 AWD (CloakedWayne): 2× 75.9 g CNC XY-joints + 2× 48.3 g LDO MGN12H + fasteners = 256 g dressed (214 g base + 42 g Al; MGN9H ~210 g).",
   },
   {
+    id: "monolith_slm_mgn12h",
+    name: "Monolith SLM Aluminum XY-Joints (Scale-Weighed)",
+    short_name: "Monolith SLM Al",
+    carriage_mass_g: 182.4,
+    suggested_bracket_material: "slm_aluminum",
+    notes:
+      "1-piece SLM AlSi10Mg XY-joints (47.9 g bare each; 96.2 g w/ MGN12H carriage -> 192.4 g dressed pair, saving 56 g/pair vs LDO CNC MGN12H).",
+  },
+  {
+    id: "dderg_ti_mgn9h",
+    name: "dderg Ultralight Milled + Hollow Ti Live-Shafts (MGN9H)",
+    short_name: "dderg Ti MGN9H",
+    carriage_mass_g: 134.6,
+    suggested_bracket_material: "aluminum_6061_t6",
+    notes:
+      "dderg lightweight milled XY-joints with hollow Ti live shafts & Ti hardware (42.1 g bare / 67.3 g w/ MGN9H -> 134.6 g pair, -67.6 g vs LDO MGN9H).",
+  },
+  {
+    id: "monolith_sheet_metal",
+    name: "Monolith v1.5 Sheet Metal (3–3.2mm XY-Joints)",
+    short_name: "Monolith Sheet Metal",
+    carriage_mass_g: 235,
+    suggested_bracket_material: "sheet_metal_steel",
+    notes:
+      "Monolith Builder v1.5 laser-cut steel gantry (3–3.2 mm XY-joint plates, 4.7–5 mm motor mounts & tensioners, 40×9 mm Z belt clamps).",
+  },
+  {
     id: "cnc_al_heavy",
     name: "CNC Aluminum Heavy-Duty (280g)",
     short_name: "CNC Al Heavy",
@@ -248,7 +373,11 @@ function inferAutoXBeamMaterial(profileId: string, currentMaterial: string): str
     return isCarbonTubeMaterial(currentMaterial) ? null : "carbon_fiber_torsional_45";
   }
   if (profileId.startsWith("ti_tube_")) return "titanium_grade5";
-  if (profileId.startsWith("steel_tube_") || profileId.startsWith("steel_rod_")) {
+  if (
+    profileId === "unsupported_rail" ||
+    profileId.startsWith("steel_tube_") ||
+    profileId.startsWith("steel_rod_")
+  ) {
     return "steel_4140";
   }
   if (
@@ -293,6 +422,15 @@ const BUS_VOLTAGE_PRESETS = [24, 36, 48, 60];
 const LINEAR_RAIL_PROFILES: Array<{ id: string; label: string; shortLabel: string }> = [
   { id: "mgn9_rail", label: "MGN9H (9×6.5mm)", shortLabel: "MGN9H" },
   { id: "mgn12_rail", label: "MGN12H (12×8mm)", shortLabel: "MGN12H" },
+];
+
+const X_LINEAR_RAIL_PROFILES: Array<{ id: string; label: string; shortLabel: string }> = [
+  ...LINEAR_RAIL_PROFILES,
+  {
+    id: "mgn12_hollow_rail",
+    label: "Hollow MGN12H (12×8mm, 440 g/m)",
+    shortLabel: "Hollow MGN12H",
+  },
 ];
 
 const FALLBACK_X_RAIL_MOUNTS: RailMountOption<XRailMountType>[] = [
@@ -345,7 +483,7 @@ const FALLBACK_Y_RAIL_MOUNTS: RailMountOption<YRailMountType>[] = [
 
 function railProfileShort(id?: string): string {
   if (!id) return "MGN12H";
-  const found = LINEAR_RAIL_PROFILES.find((r) => r.id === id);
+  const found = X_LINEAR_RAIL_PROFILES.find((r) => r.id === id);
   if (found) return found.shortLabel;
   if (id.includes("mgn9")) return "MGN9H";
   if (id.includes("mgn12")) return "MGN12H";
@@ -868,11 +1006,20 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
   const bracketDeltaG = customBracketOverride
     ? Math.round(customBracketOverride.mass_delta_g ?? 0)
     : Math.round(selectedBracket.carriage_mass_delta_g ?? 0);
+  const isSelectedBracketSlm =
+    selectedBracket.manufacturing_process === "slm" || selectedBracket.id.startsWith("slm_");
+  const isSelectedBracketSheetMetal =
+    selectedBracket.manufacturing_process === "sheet_metal" ||
+    selectedBracket.id === "sheet_metal_steel";
   const bracketDeltaShortLabel = customBracketOverride
     ? "CAD"
-    : selectedBracket.cnc_machined
-      ? "Al"
-      : selectedBracket.short_name.replace(/^Printed\s+/i, "");
+    : isSelectedBracketSlm
+      ? "SLM"
+      : isSelectedBracketSheetMetal
+        ? "Steel"
+        : selectedBracket.cnc_machined
+          ? "CNC Al"
+          : selectedBracket.short_name.replace(/^Printed\s+/i, "");
   const baseCarriageMassG = Math.round(carriageMassDraft);
   const dressedMovingXYJointsG = baseCarriageMassG + bracketDeltaG;
   const simMassSummary = sim?.geometry?.mass_summary ?? null;
@@ -892,12 +1039,14 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
     xRailMounts.find((m) => m.id === currentXRailMount) ?? xRailMounts[0];
   const selectedYRailMount =
     yRailMounts.find((m) => m.id === currentYRailMount) ?? yRailMounts[0];
+  const isFlyingGantry =
+    spec.architecture === "corexy" && spec.bed.z_drive === "belted_quad_z";
   const currentXRailProfile = spec.gantry.x_rail_profile || "mgn12_rail";
   const currentYRailProfile = spec.gantry.y_rail_profile || "mgn9_rail";
-  const xRailProfileOptions = LINEAR_RAIL_PROFILES.some((r) => r.id === currentXRailProfile)
-    ? LINEAR_RAIL_PROFILES
+  const xRailProfileOptions = X_LINEAR_RAIL_PROFILES.some((r) => r.id === currentXRailProfile)
+    ? X_LINEAR_RAIL_PROFILES
     : [
-        ...LINEAR_RAIL_PROFILES,
+        ...X_LINEAR_RAIL_PROFILES,
         { id: currentXRailProfile, label: profileLabel(currentXRailProfile), shortLabel: railProfileShort(currentXRailProfile) },
       ];
   const yRailProfileOptions = LINEAR_RAIL_PROFILES.some((r) => r.id === currentYRailProfile)
@@ -1079,7 +1228,7 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                             ))}
                           </optgroup>
                           {lightTubes.length > 0 && (
-                            <optgroup label="Carbon Fiber & Titanium Tubes">
+                            <optgroup label="Carbon Fiber, Titanium & Bare Rail">
                               {lightTubes.map((p) => (
                                 <option key={p.id} value={p.id}>
                                   {p.name}
@@ -1162,6 +1311,8 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                     <optgroup label="2GT — Proven on 3D Printers (2 mm pitch)">
                       <option value="gt2_6mm">{BELT_LABELS.gt2_6mm}</option>
                       <option value="gt2_9mm">{BELT_LABELS.gt2_9mm}</option>
+                      <option value="gt2_10mm">{BELT_LABELS.gt2_10mm}</option>
+                      <option value="gt3_10mm">{BELT_LABELS.gt3_10mm}</option>
                       <option value="gt2_12mm">{BELT_LABELS.gt2_12mm}</option>
                     </optgroup>
                     <optgroup label="2GT — Experimental Custom Hardware">
@@ -1779,8 +1930,9 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                     {showHints && (
                       <div className="hint-line">
                         Motor mounts &amp; XY joints flex in series with belts. Printed ABS creeps
-                        above ~45 N belt tension in heated chambers; annealed PPA-CF/PPS-CF or CNC
-                        aluminum prevent creep &amp; sharpen resonance.
+                        above ~45 N in heated chambers; annealed PPA-CF/PPS-CF, SLM printed metals
+                        (lighter hollow geometry, 0.92–0.94× rough-face contact, lower CTE), or CNC
+                        billet aluminum prevent creep &amp; sharpen resonance.
                       </div>
                     )}
                     <div className="bracket-readout-row">
@@ -1798,6 +1950,10 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                       <div className="bracket-pill-row">
                         {bracketCreepRisk ? (
                           <span className="badge-pill bad">Creep Risk</span>
+                        ) : isSelectedBracketSlm ? (
+                          <span className="badge-pill ok">SLM Metal</span>
+                        ) : isSelectedBracketSheetMetal ? (
+                          <span className="badge-pill ok">Sheet Metal</span>
                         ) : selectedBracket.cnc_machined ? (
                           <span className="badge-pill ok">CNC Rigid</span>
                         ) : (
@@ -1861,7 +2017,11 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                           max: 0.1,
                           step: 0.001,
                           decimals: 3,
-                          fallbackBaseline: selectedBracket.cnc_machined ? -0.002 : 0.004,
+                          fallbackBaseline: isSelectedBracketSlm
+                            ? -0.0015
+                            : selectedBracket.cnc_machined
+                              ? -0.003
+                              : 0.004,
                           tooltip: "Modal damping contribution from bracket material hysteresis",
                         },
                       ]}
@@ -1983,6 +2143,97 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                       <strong>{dressedMovingXYJointsG}g</strong> dressed moving XY-joints
                     </div>
                   </div>
+
+                  <div className="field-row">
+                    <label htmlFor="dp-stepper-thermal-gasket">Stepper Thermal Gasket</label>
+                    <select
+                      id="dp-stepper-thermal-gasket"
+                      value={spec.gantry.stepper_thermal_gasket ?? "none"}
+                      title="2mm PTFE thermal barrier between NEMA 17/23 motor face and printed/metal bracket cuts conducted mount heat by ~14 °C"
+                      onChange={(e) => {
+                        const nextVal = e.target.value as StepperThermalGasketType;
+                        const prevLbl =
+                          (spec.gantry.stepper_thermal_gasket ?? "none") === "ptfe_2mm"
+                            ? "2mm PTFE"
+                            : "None";
+                        const nextLbl = nextVal === "ptfe_2mm" ? "2mm PTFE" : "None";
+                        update(
+                          (d) => {
+                            d.gantry.stepper_thermal_gasket = nextVal;
+                          },
+                          `Stepper Thermal Gasket: ${prevLbl} → ${nextLbl}`
+                        );
+                      }}
+                    >
+                      <option value="none">None (Direct Mount)</option>
+                      <option value="ptfe_2mm">2mm PTFE (-14 °C Mount)</option>
+                    </select>
+                    {showHints && (
+                      <div className="hint-line">
+                        2 mm PTFE motor gaskets insulate printed mounts from stepper face heat (−14 °C)
+                        to preserve polymer modulus and prevent belt-tension creep.
+                      </div>
+                    )}
+                  </div>
+
+                  {isFlyingGantry && (
+                    <div className="field-grid-2">
+                      <div className="field-row">
+                        <label htmlFor="dp-z-joint-type">V2 Z-Joints</label>
+                        <select
+                          id="dp-z-joint-type"
+                          value={spec.gantry.z_joint_type ?? "single"}
+                          title="Voron 2.4 flying-gantry corner Z-joint topology: single stock vs Monolith double-shear twin-arm"
+                          onChange={(e) => {
+                            const nextVal = e.target.value as ZJointType;
+                            const prevLbl =
+                              (spec.gantry.z_joint_type ?? "single") === "double"
+                                ? "Double"
+                                : "Single";
+                            const nextLbl = nextVal === "double" ? "Double" : "Single";
+                            update(
+                              (d) => {
+                                d.gantry.z_joint_type = nextVal;
+                              },
+                              `V2 Z-Joints: ${prevLbl} → ${nextLbl}`
+                            );
+                          }}
+                        >
+                          <option value="single">Single</option>
+                          <option value="double">Double</option>
+                        </select>
+                      </div>
+                      <div className="field-row">
+                        <label htmlFor="dp-z-joint-material">Z-Joint Material</label>
+                        <select
+                          id="dp-z-joint-material"
+                          value={spec.gantry.z_joint_material ?? "printed"}
+                          title="Voron 2.4 flying-gantry corner Z-joint material stiffness and thermal stability"
+                          onChange={(e) => {
+                            const nextVal = e.target.value as ZJointMaterialType;
+                            const matLabels: Record<ZJointMaterialType, string> = {
+                              printed: "Printed",
+                              hybrid: "Hybrid",
+                              slm: "SLM Al",
+                              milled: "Milled 6061",
+                            };
+                            const prevKey = spec.gantry.z_joint_material ?? "printed";
+                            update(
+                              (d) => {
+                                d.gantry.z_joint_material = nextVal;
+                              },
+                              `Z-Joint Material: ${matLabels[prevKey]} → ${matLabels[nextVal]}`
+                            );
+                          }}
+                        >
+                          <option value="printed">Printed</option>
+                          <option value="hybrid">Hybrid</option>
+                          <option value="slm">SLM Al</option>
+                          <option value="milled">Milled 6061</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
 
                   {simMassSummary && (
                     <div
@@ -2725,6 +2976,34 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                         ))}
                       </select>
                     </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label htmlFor="dp-idler-axial-preload">Idler Axial Preload</label>
+                    <select
+                      id="dp-idler-axial-preload"
+                      value={spec.gantry.idler_axial_preload ?? "auto"}
+                      title="M5 Belleville disc springs axially preload F695/695-2RS idler bearing stacks to eliminate axial play and reduce CTE press-fit binding"
+                      onChange={(e) => {
+                        const nextVal = e.target.value as IdlerAxialPreloadType;
+                        const labels: Record<IdlerAxialPreloadType, string> = {
+                          auto: "Auto",
+                          none: "None",
+                          disc_spring_m5: "M5 Disc Springs",
+                        };
+                        const prevKey = spec.gantry.idler_axial_preload ?? "auto";
+                        update(
+                          (d) => {
+                            d.gantry.idler_axial_preload = nextVal;
+                          },
+                          `Idler Axial Preload: ${labels[prevKey]} → ${labels[nextVal]}`
+                        );
+                      }}
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="none">None</option>
+                      <option value="disc_spring_m5">M5 Disc Springs</option>
+                    </select>
                   </div>
                   <ModelOverrideControl
                     visible={advancedMode}

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "el_fuego",
+  "name": "El Fuego SLM Toolhead (AlSi10Mg + Ti Plate)",
+  "source_cad": "el_fuego/{main_body_al,belt_plate_rev1,extruder_plate_ti}.stl",
+  "source_url": "https://discord.com/channels/1227971059764953230/1382552084490096670",
+  "baked_at": "2026-11-26T15:51:12Z",
+  "reference_material_id": "slm_aluminum",
+  "reference_youngs_modulus_pa": 68000000000.0,
+  "reference_density_kg_m3": 2670.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 83474,
+  "num_elements": 241890,
+  "num_dofs": 250422,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.011688,
+  "mass_kg": 0.093851,
+  "com_mm": [
+    -0.4494,
+    -13.2212,
+    -12.8085
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -0.322,
+    -19.932,
+    2.28
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 42318.802,
+    "ky": 127968.059,
+    "kz": 21366.066
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 3549.903,
+    "kry": 7885.022,
+    "krz": 13812.353
+  },
+  "fixed_interface_freqs_hz": [
+    797.73,
+    1184.4,
+    1229.3,
+    1579.85,
+    1654.76,
+    2921.14,
+    3420.18,
+    3515.95
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23998,
+  "visual_bytes": 706256,
+  "cad_trust_pct": 85,
+  "source_hash": "14e292149f3bd935e41ee744e5d49dd3b634582f1d3a45ef3ecb85fa42f2a98c"
+}

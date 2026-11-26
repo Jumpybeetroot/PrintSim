@@ -45,11 +45,24 @@ BracketMaterialType = Literal[
     "abs_printed",
     "pet_cf_printed",
     "pa12_cf_printed",
+    "pc_pbt_gf_printed",
     "ppa_cf_printed",
     "pps_cf_printed",
+    "slm_aluminum",
+    "slm_ti6al4v",
+    "slm_maraging_steel",
+    "slm_316l_steel",
+    "slm_17_4ph_steel",
+    "sheet_metal_steel",
     "aluminum_6061_t6",
     "aluminum_7075_t6",
 ]
+ChamberHeaterType = Literal["none", "monolith_100w_ptc", "monolith_500w_ptc"]
+CpapBlowerType = Literal["none", "ws7040_24v", "wm9290_24v", "wm7575_220vac"]
+StepperThermalGasketType = Literal["none", "ptfe_2mm"]
+IdlerAxialPreloadType = Literal["auto", "none", "disc_spring_m5"]
+ZJointType = Literal["single", "double"]
+ZJointMaterialType = Literal["printed", "hybrid", "slm", "milled"]
 DriveModeType = Literal["2wd", "awd"]
 XRailMountType = Literal["front", "top", "bottom", "dual_top_bottom"]
 YRailMountType = Literal["top", "inner", "bottom"]
@@ -87,6 +100,7 @@ BedMountType = Literal[
     "captive_belleville_kinematic",
     "dual_leaf_ti_kinematic",
     "spherical_3pt_ratrig",
+    "craz_kinematic_ge5c",
     "rigid_4pt",
     "floating_4pt",
     "silicone_4pt",
@@ -99,6 +113,8 @@ BeltRoutingType = Literal["stock_corexy", "monolith_short"]
 BeltType = Literal[
     "gt2_6mm",
     "gt2_9mm",
+    "gt2_10mm",
+    "gt3_10mm",
     "gt2_12mm",
     "gt2_15mm",
     "gt2_dual_9mm",
@@ -170,6 +186,58 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "validation_tier": "proven",
         "theoretical_summary": "Gates PowerGrip 2GT 9mm (28.35 kN quasi-static datasheet EA x 2.0 dynamic factor, exact pulley-to-pulley spans).",
         "practical_issues": [],
+    },
+    "gt2_10mm": {
+        "id": "gt2_10mm",
+        "label": "Gates 2GT 10mm (Monolith)",
+        "profile_family": "2gt",
+        "pitch_mm": 2.0,
+        "width_mm": 10.0,
+        "hardware_width_mm": 10.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_static_n": 31500.0,  # Exact Gates PowerGrip 2GT 10mm quasi-static catalog EA (10/9 x 9mm)
+        "dynamic_stiffening_factor": 2.0,
+        "ea_default_core_n": 63000.0,
+        "linear_mass_kg_m": 0.01236,  # Scale-weighed Monolith 2x1658 mm = 41.0 g (12.36 g/m)
+        "max_working_tension_n": 105.0,
+        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "elastomer_seating_factor": 1.0,
+        "rolling_drag_mult": 1.0,
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 7.20,
+        "validation_tier": "proven",
+        "theoretical_summary": "Gates PowerGrip 2GT 10mm EPDM fiberglass (scale-weighed 12.36 g/m; Monolith Road-to-50k baseline: 113.8 Hz ZV @ 283 Hz / ~89 N).",
+        "practical_issues": [],
+    },
+    "gt3_10mm": {
+        "id": "gt3_10mm",
+        "label": "Gates GT3 (2MGT) 10mm",
+        "profile_family": "2mgt",
+        "pitch_mm": 2.0,
+        "width_mm": 10.0,
+        "hardware_width_mm": 10.0,
+        "default_core": "fiberglass",
+        "body_material": "epdm",
+        "ea_static_n": 31500.0,  # Same tension cords as 2GT, softer elastomer matrix
+        "dynamic_stiffening_factor": 1.94,
+        "ea_default_core_n": 61110.0,
+        "linear_mass_kg_m": 0.01499,  # Scale-weighed Monolith 2x1658 mm = 49.7 g (14.99 g/m)
+        "max_working_tension_n": 105.0,
+        "tooth_shear_k_n_per_m_mm": 4.9e4,
+        "elastomer_seating_factor": 0.90,  # Softer elastomer needs more tension/elongation to reach cord stiffness
+        "rolling_drag_mult": 1.18,  # Higher pulley-wrap hysteresis & rolling resistance (Monolith belt shootout)
+        "min_pulley_teeth": 16,
+        "min_back_idler_mm": 12.0,
+        "max_temp_c": 110.0,
+        "cost_usd_per_m": 8.00,
+        "validation_tier": "proven",
+        "theoretical_summary": "Gates GT3 2MGT 10mm (scale-weighed 14.99 g/m; Monolith matched-tension shootout: 110.6 Hz ZV @ 257 Hz pluck vs 113.8 Hz for GT2 EPDM due to softer base elastomer & higher rolling drag).",
+        "practical_issues": [
+            "Softer base elastomer requires higher tension/elongation to match GT2 EPDM cord stiffness and increases pulley rolling resistance.",
+        ],
     },
     "gt2_12mm": {
         "id": "gt2_12mm",
@@ -829,6 +897,29 @@ HOTEND_CATALOG: dict[str, dict] = {
         "cost_usd": 230.0,
         "notes": "Open-source Okano Tricorn Long (STEP CAD: 66 mm overall, 53.5 mm melt zone w/ V6 nozzle, 31.4 g CuCrZr block, 3×40W 4×40mm heaters, inverted Ti-6Al-4V heatbreak 0.45 mm wall, SLM Ti crown/shield + M3 Dragon mount); 116k-elem Tet4 FEA calibrated unbraced stiffness 262/264 N/mm (higher w/ Microwaved Ti bottom brace)",
     },
+    "monolith_50mm_hf": {
+        "id": "monolith_50mm_hf",
+        "preset_id": "monolith_50mm_hf",
+        "name": "Monolith 50mm+V6 HF Hotend (80W PT1000)",
+        "short_name": "Monolith 50mm HF",
+        "mount_style": "rigid_4bolt_m3",
+        "structural_stiffness_n_per_mm": 920.0,
+        "mass_g": 52.0,
+        "overall_length_mm": 68.0,
+        "melt_zone_length_mm": 50.0,
+        "heater_power_w": 80.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 22.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.25,
+        "heatbreak_length_mm": 10.5,
+        "heatbreak_id_mm": 2.0,
+        "heatsink_thermal_resistance_k_w": 2.4,
+        "max_temp_c": 350.0,
+        "cost_usd": 145.0,
+        "notes": "Monolith Toolhead 50 mm + V6 cloverleaf HF meltzone with vertical-preload threadless heatbreak & PT1000; bench-tested to 83 mm³/s LDO ABS @ 300 °C / 85 °C chamber (80 W heater, ~90% PWM).",
+    },
 }
 _hydrate_hotend_catalog(HOTEND_CATALOG)
 
@@ -1319,6 +1410,23 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "cost_usd": 58.0,
         "notes": "3-point spherical ball-socket Z-arm pivots with radial thermal glide slot: eliminates tramming bind on large 300-500mm beds with high vertical Tap stiffness",
     },
+    "craz_kinematic_ge5c": {
+        "id": "craz_kinematic_ge5c",
+        "name": "Monolith Cra-Z 2+2+2 Double-Wishbone GE5C",
+        "short_name": "Monolith Cra-Z",
+        "mount_points": 3,
+        "k_axial_n_per_mm": 34000.0,
+        "k_lateral_n_per_mm": 24000.0,
+        "k_restraint_thermal_n_per_m": 0.0,
+        "k_restraint_thermal": 0.0,
+        "damping_delta": 0.002,
+        "standoff_height_mm": 15.0,
+        "radial_dof_mode": "double_wishbone_ge5c",
+        "tap_rated": True,
+        "mount_inset_ratio": 0.38,
+        "cost_usd": 78.0,
+        "notes": "Monolith SLM 2+2+2 double-wishbone bed suspension with GE5C spherical bearings close to Z rails + cylindrical bed-edge joints, gravity-preloaded in XY; zero thermal taco bow, drop-in for 3-screw Trident or 4-belt fixed-gantry V2.",
+    },
     "rigid_4pt": {
         "id": "rigid_4pt",
         "name": "4-Point Rigid Hard-Bolted Standoffs",
@@ -1544,6 +1652,18 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
         "carriage_mass_delta_g": 6.0,
         "color_hex": "#333840",
     },
+    "pc_pbt_gf_printed": {
+        "id": "pc_pbt_gf_printed",
+        "name": "3D-Printed PC-PBT-GF (4.6 GPa, 132°C HDT)",
+        "short_name": "Printed PC-PBT-GF",
+        "youngs_modulus_gpa": 4.6,
+        "hdt_c": 132.0,
+        "creep_tension_limit_n": 72.0,
+        "cnc_machined": False,
+        "kit_cost_usd": 78.0,
+        "carriage_mass_delta_g": 8.0,
+        "color_hex": "#334155",
+    },
     "ppa_cf_printed": {
         "id": "ppa_cf_printed",
         "name": "3D-Printed PPA-CF Annealed (10.8 GPa)",
@@ -1568,6 +1688,84 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
         "carriage_mass_delta_g": 12.0,
         "color_hex": "#23272e",
     },
+    "slm_aluminum": {
+        "id": "slm_aluminum",
+        "name": "SLM 3D-Printed Aluminum AlSi10Mg (68 GPa)",
+        "short_name": "SLM AlSi10Mg",
+        "youngs_modulus_gpa": 68.0,
+        "hdt_c": 300.0,
+        "creep_tension_limit_n": 230.0,
+        "cnc_machined": True,
+        "manufacturing_process": "slm",
+        "kit_cost_usd": 135.0,
+        "carriage_mass_delta_g": 10.0,
+        "color_hex": "#b8c4d0",
+    },
+    "slm_ti6al4v": {
+        "id": "slm_ti6al4v",
+        "name": "SLM 3D-Printed Titanium Ti-6Al-4V (110 GPa)",
+        "short_name": "SLM Ti-6Al-4V",
+        "youngs_modulus_gpa": 110.0,
+        "hdt_c": 450.0,
+        "creep_tension_limit_n": 340.0,
+        "cnc_machined": True,
+        "manufacturing_process": "slm",
+        "kit_cost_usd": 295.0,
+        "carriage_mass_delta_g": 28.0,
+        "color_hex": "#7c7d8c",
+    },
+    "slm_maraging_steel": {
+        "id": "slm_maraging_steel",
+        "name": "SLM Maraging Steel MS1 1.2709 (180 GPa)",
+        "short_name": "SLM MS1 Steel",
+        "youngs_modulus_gpa": 180.0,
+        "hdt_c": 450.0,
+        "creep_tension_limit_n": 380.0,
+        "cnc_machined": True,
+        "manufacturing_process": "slm",
+        "kit_cost_usd": 275.0,
+        "carriage_mass_delta_g": 64.0,
+        "color_hex": "#6b7280",
+    },
+    "slm_316l_steel": {
+        "id": "slm_316l_steel",
+        "name": "SLM 316L Stainless Steel (185 GPa)",
+        "short_name": "SLM 316L Steel",
+        "youngs_modulus_gpa": 185.0,
+        "hdt_c": 450.0,
+        "creep_tension_limit_n": 340.0,
+        "cnc_machined": True,
+        "manufacturing_process": "slm",
+        "kit_cost_usd": 220.0,
+        "carriage_mass_delta_g": 62.0,
+        "color_hex": "#94a3b8",
+    },
+    "slm_17_4ph_steel": {
+        "id": "slm_17_4ph_steel",
+        "name": "SLM 17-4PH Stainless Steel H900 (190 GPa)",
+        "short_name": "SLM 17-4PH",
+        "youngs_modulus_gpa": 190.0,
+        "hdt_c": 450.0,
+        "creep_tension_limit_n": 380.0,
+        "cnc_machined": True,
+        "manufacturing_process": "slm",
+        "kit_cost_usd": 245.0,
+        "carriage_mass_delta_g": 60.0,
+        "color_hex": "#7c8798",
+    },
+    "sheet_metal_steel": {
+        "id": "sheet_metal_steel",
+        "name": "Monolith Laser-Cut Steel Sheet Metal (3–5mm, 200 GPa)",
+        "short_name": "Sheet Metal Steel",
+        "youngs_modulus_gpa": 200.0,
+        "hdt_c": 400.0,
+        "creep_tension_limit_n": 320.0,
+        "cnc_machined": True,
+        "manufacturing_process": "sheet_metal",
+        "kit_cost_usd": 85.0,
+        "carriage_mass_delta_g": 55.0,
+        "color_hex": "#64748b",
+    },
     "aluminum_6061_t6": {
         "id": "aluminum_6061_t6",
         "name": "CNC Aluminum 6061-T6 (68.9 GPa)",
@@ -1576,6 +1774,7 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
         "hdt_c": 300.0,
         "creep_tension_limit_n": 250.0,
         "cnc_machined": True,
+        "manufacturing_process": "cnc",
         "kit_cost_usd": 210.0,
         "carriage_mass_delta_g": 42.0,
         "color_hex": "#c6d0db",
@@ -1588,6 +1787,7 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
         "hdt_c": 300.0,
         "creep_tension_limit_n": 280.0,
         "cnc_machined": True,
+        "manufacturing_process": "cnc",
         "kit_cost_usd": 285.0,
         "carriage_mass_delta_g": 46.0,
         "color_hex": "#cbd5e1",
@@ -1636,6 +1836,30 @@ GANTRY_WEIGHT_CLASSES: dict[str, dict] = {
         "carriage_mass_g": 214.0,
         "suggested_bracket_material": "aluminum_6061_t6",
         "notes": "Scale-weighed LDO Monolith CNC 6061 AWD (CloakedWayne #updates): 2x 75.9 g assembled CNC XY-joints (151.8 g) + 2x 48.3 g LDO MGN12H blocks (96.6 g) + ~7.6 g X-beam fasteners = 256 g dressed (214 g base + 42 g Al delta; MGN9H builds save ~46 g -> ~210 g dressed).",
+    },
+    "monolith_slm_mgn12h": {
+        "id": "monolith_slm_mgn12h",
+        "name": "Monolith SLM Aluminum XY-Joints (Scale-Weighed)",
+        "short_name": "Monolith SLM Al",
+        "carriage_mass_g": 182.4,
+        "suggested_bracket_material": "slm_aluminum",
+        "notes": "1-piece SLM AlSi10Mg XY-joints (47.9 g bare each; 96.2 g w/ MGN12H carriage -> 192.4 g dressed pair, saving 56 g/pair vs LDO CNC MGN12H).",
+    },
+    "dderg_ti_mgn9h": {
+        "id": "dderg_ti_mgn9h",
+        "name": "dderg Ultralight Milled + Hollow Ti Live-Shafts (MGN9H)",
+        "short_name": "dderg Ti MGN9H",
+        "carriage_mass_g": 134.6,
+        "suggested_bracket_material": "aluminum_6061_t6",
+        "notes": "dderg lightweight milled XY-joints with hollow Ti live shafts & Ti hardware (42.1 g bare / 67.3 g w/ MGN9H -> 134.6 g pair, -67.6 g vs LDO MGN9H).",
+    },
+    "monolith_sheet_metal": {
+        "id": "monolith_sheet_metal",
+        "name": "Monolith v1.5 Sheet Metal (3–3.2mm XY-Joints)",
+        "short_name": "Monolith Sheet Metal",
+        "carriage_mass_g": 235.0,
+        "suggested_bracket_material": "sheet_metal_steel",
+        "notes": "Monolith Builder v1.5 laser-cut steel gantry (3–3.2 mm XY-joint plates, 4.7–5 mm motor mounts & tensioners, 40x9 mm Z belt clamps).",
     },
     "cnc_aluminum_hd": {
         "id": "cnc_aluminum_hd",
@@ -1872,6 +2096,20 @@ class FrameSpec(BaseModel):
     chamber_temp_c: float = Field(
         25.0, ge=15.0, le=120.0, description="Ambient/heated enclosure chamber air temperature (C)"
     )
+    chamber_heater_id: ChamberHeaterType = Field(
+        "none",
+        description="Active chamber PTC heater kit: none, monolith_100w_ptc (100W 24V + 2x 3628), or monolith_500w_ptc (500W AC + 2x 5032)",
+    )
+    chamber_insulation_mm: float = Field(
+        0.0,
+        ge=0.0,
+        le=50.0,
+        description="Internal PIR rigid chamber insulation foam thickness (mm; e.g., 10 mm Monolith Zero, 20 mm Fixed Gantry)",
+    )
+    rear_bottom_extrusion: bool = Field(
+        True,
+        description="Include lower rear horizontal perimeter extrusion (affects whole-frame torsion and spatial IS uniformity across bed)",
+    )
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
 
@@ -1943,6 +2181,14 @@ class BeltSpec(BaseModel):
     @property
     def tooth_shear_k_n_per_m_mm(self) -> float:
         return float(self.catalog_entry["tooth_shear_k_n_per_m_mm"])
+
+    @property
+    def elastomer_seating_factor(self) -> float:
+        return float(self.catalog_entry.get("elastomer_seating_factor", 1.0))
+
+    @property
+    def rolling_drag_mult(self) -> float:
+        return float(self.catalog_entry.get("rolling_drag_mult", 1.0))
 
     @property
     def min_pulley_teeth(self) -> int:
@@ -2121,6 +2367,22 @@ class GantrySpec(BaseModel):
         140.0, ge=20.0, le=1200.0, description="Combined X/Y gantry carriages & joints (g)"
     )
     belt: BeltSpec = Field(default_factory=BeltSpec)
+    stepper_thermal_gasket: StepperThermalGasketType = Field(
+        "none",
+        description="Stepper-to-bracket thermal isolation gasket: none or ptfe_2mm (drops motor mount temp ~14 C in 80 C chambers)",
+    )
+    idler_axial_preload: IdlerAxialPreloadType = Field(
+        "auto",
+        description="Axial preload on F695/695 live-shaft bearings to prevent Al-housing CTE press-fit loss >66 C: auto (disc_spring_m5 on monolith_short), none, or disc_spring_m5",
+    )
+    z_joint_type: ZJointType = Field(
+        "single",
+        description="Flying-gantry V2 Z-joint carriage count per corner: single (1 carriage) or double (2 carriages per Z rail)",
+    )
+    z_joint_material: ZJointMaterialType = Field(
+        "printed",
+        description="Flying-gantry V2 Z-joint construction: printed, hybrid, slm, or milled (LDO Milled Z-Joint Kit w/ compliant spacers)",
+    )
     custom_bracket_override: CustomBracketOverride | None = Field(
         None,
         description="Optional custom CAD/CMS-condensed bracket stiffness & mass injected into full-printer FEA",
@@ -2155,6 +2417,13 @@ class GantrySpec(BaseModel):
                 else "single_wall_bare"
             )
         return self.cf_rail_mounting
+
+    @property
+    def effective_idler_axial_preload(self) -> Literal["none", "disc_spring_m5"]:
+        """Resolve 'auto' axial bearing preload (Monolith short-path kits use M5 Belleville disc springs)."""
+        if self.idler_axial_preload == "auto":
+            return "disc_spring_m5" if self.belt_routing == "monolith_short" else "none"
+        return self.idler_axial_preload
 
 
 class StepperSpec(BaseModel):
@@ -2362,6 +2631,40 @@ STEPPER_CATALOG: dict[str, dict] = {
         "insulation_class": "H",
         "has_encoder": False,
         "unit_cost_usd": 26.0,
+    },
+    "ldo_2504ah_s45r": {
+        "preset_id": "ldo_2504ah_s45r",
+        "name": "Monolith LDO 42STH48-2504AH-S45R (45mm Round Shaft, 2m Cable)",
+        "holding_torque_nm": 0.55,
+        "rated_current_a": 2.5,
+        "run_current_a": 2.0,
+        "phase_resistance_ohm": 1.2,
+        "inductance_mh": 1.5,
+        "rotor_inertia_kg_m2": 8.45e-6,
+        "motor_mass_g": 372.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 29.0,
+    },
+    "ldo_2504ah_s80": {
+        "preset_id": "ldo_2504ah_s80",
+        "name": "Monolith Zero LDO 42STH48-2504AH-S80 (80mm Shaft)",
+        "holding_torque_nm": 0.55,
+        "rated_current_a": 2.5,
+        "run_current_a": 1.8,
+        "phase_resistance_ohm": 1.2,
+        "inductance_mh": 1.5,
+        "rotor_inertia_kg_m2": 8.6e-6,
+        "motor_mass_g": 385.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 31.0,
     },
     "ldo_2804ah": {
         "preset_id": "ldo_2804ah",
@@ -2875,6 +3178,32 @@ class ToolheadSpec(BaseModel):
         ),
     )
     envelope_mm: tuple[float, float, float] = (68.0, 74.0, 95.0)
+    cpap_blower_id: CpapBlowerType = Field(
+        "none",
+        description="Remote CPAP part-cooling blower: none (onboard fans), ws7040_24v (5.8 dm3/s), wm9290_24v (9.2 dm3/s), or wm7575_220vac (11.6 dm3/s)",
+    )
+    cpap_hose_id_mm: float = Field(
+        15.0,
+        ge=10.0,
+        le=25.0,
+        description="CPAP air hose internal diameter (mm; 15 mm HT hose vs 18 mm standard hose)",
+    )
+    cpap_pwm_pct: float = Field(
+        60.0,
+        ge=0.0,
+        le=100.0,
+        description="Nominal CPAP blower PWM duty cycle (%)",
+    )
+    shared_heatsink_cpap_duct: bool = Field(
+        False,
+        description="Enforce Kalico [heater_fan] minimum CPAP airflow through hotend heatsink duct when hotend > 50 C",
+    )
+    belt_plane_z_offset_mm: float = Field(
+        0.0,
+        ge=-40.0,
+        le=40.0,
+        description="Vertical offset from X-beam centerline to XY drive belt plane (mm); 0 mm = centered/coplanar",
+    )
     hotend: HotendSpec = Field(default_factory=HotendSpec)
     extruder: ExtruderSpec = Field(default_factory=ExtruderSpec)
 
@@ -2904,6 +3233,10 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 350.0,
         "z_probe_type": "static_eddy",
+        "default_hardware_summary": (
+            "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, "
+            "5015 + 4010 fans, MGN12H carriage & static eddy probe (hotend added separately)."
+        ),
     },
     "stealthburner_tap": {
         "preset_id": "stealthburner_tap",
@@ -2915,6 +3248,10 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 350.0,
         "z_probe_type": "printed_tap",
+        "default_hardware_summary": (
+            "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, "
+            "5015 + 4010 fans & Printed Voron Tap carriage (hotend added separately)."
+        ),
     },
     "xol_compact": {
         "preset_id": "xol_compact",
@@ -2926,6 +3263,10 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 650.0,
         "z_probe_type": "static_eddy",
+        "default_hardware_summary": (
+            "Sherpa Mini direct-drive extruder + NEMA14 pancake, PA12-CF cage, "
+            "dual cooling blowers, MGN12H carriage & static eddy probe (hotend added separately)."
+        ),
     },
     "a4t_beacon": {
         "preset_id": "a4t_beacon",
@@ -2937,6 +3278,10 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 1150.0,
         "z_probe_type": "static_eddy",
+        "default_hardware_summary": (
+            "Wristwatch G2 / compact direct-drive extruder + NEMA14 pancake, PPA-CF cage, "
+            "dual blowers, MGN12H carriage & static Beacon probe (hotend added separately)."
+        ),
     },
     "dragon_burner": {
         "preset_id": "dragon_burner",
@@ -2948,6 +3293,10 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 720.0,
         "z_probe_type": "static_eddy",
+        "default_hardware_summary": (
+            "Orbiter 2 / Sherpa compact direct-drive extruder, PA12-CF shroud, "
+            "dual 4010 blowers, MGN12H carriage & static eddy probe (hotend added separately)."
+        ),
     },
     "archetype_cpap": {
         "preset_id": "archetype_cpap",
@@ -2959,6 +3308,28 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "plate_sandwich_cf",
         "internal_stiffness_n_per_mm": 1800.0,
         "z_probe_type": "static_eddy",
+        "default_hardware_summary": (
+            "Lightweight direct-drive extruder (Sherpa/Orbiter-class), CF/Al plate sandwich, "
+            "remote CPAP duct (no onboard blowers), MGN12H carriage & static eddy probe (hotend added separately)."
+        ),
+    },
+    "monolith_toolhead_cpap": {
+        "preset_id": "monolith_toolhead_cpap",
+        "name": "Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)",
+        "total_mass_g": 143.0,
+        "cog_offset_mm": [0.0, -9.5, -1.5],
+        "nozzle_offset_mm": [0.0, -14.0, -44.0],
+        "mount_material": "slm_aluminum",
+        "body_construction": "extruder_as_chassis",
+        "internal_stiffness_n_per_mm": 2400.0,
+        "z_probe_type": "static_eddy",
+        "cpap_blower_id": "ws7040_24v",
+        "cpap_hose_id_mm": 15.0,
+        "belt_plane_z_offset_mm": -1.5,
+        "default_hardware_summary": (
+            "Integrated 37:1 worm-gear direct-drive extruder, SLM Al belt-coplanar CPAP chassis "
+            "(WS7040 24V, 15 mm hose), MGN12H carriage & static eddy probe (hotend added separately)."
+        ),
     },
     "microwaved_bowden": {
         "preset_id": "microwaved_bowden",
@@ -2971,6 +3342,11 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "internal_stiffness_n_per_mm": 5340.0,
         "z_probe_type": "static_eddy",
         "extruder_type": "bowden",
+        "default_hardware_summary": (
+            "Remote Bowden extruder (no onboard motor) — 130 g includes SLM Ti/Al body (43.4 g), "
+            "Ti bottom brace & shield (2.9 g), MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), "
+            "Beacon RevH & ECAS coupler (hotend added separately)."
+        ),
     },
     "microwaved_bowden_chube": {
         "preset_id": "microwaved_bowden_chube",
@@ -2983,6 +3359,32 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "internal_stiffness_n_per_mm": 2990.0,
         "z_probe_type": "static_eddy",
         "extruder_type": "bowden",
+        "default_hardware_summary": (
+            "Remote Bowden extruder (no onboard motor) — 135 g includes SLM Al Chube V1 body (~56.5 g), "
+            "MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), Beacon RevH & ECAS coupler "
+            "(hotend added separately)."
+        ),
+    },
+    "el_fuego": {
+        "preset_id": "el_fuego",
+        "name": "El Fuego SLM (CPAP + Sherpa Micro + Beacon)",
+        "total_mass_g": 262.0,
+        "cog_offset_mm": [0.0, -10.5, 2.0],
+        "nozzle_offset_mm": [-0.3, -27.7, -63.7],
+        "mount_material": "slm_aluminum",
+        "body_construction": "cnc_monoblock",
+        "internal_stiffness_n_per_mm": 1007.0,
+        "z_probe_type": "static_eddy",
+        "cpap_blower_id": "wm7575_220vac",
+        "cpap_hose_id_mm": 19.0,
+        "shared_heatsink_cpap_duct": True,
+        "extruder_type": "direct_drive",
+        "default_hardware_summary": (
+            "Sherpa Micro direct-drive extruder + NEMA14 pancake (~105 g, pulls CoG to Z +2.0 mm), "
+            "3-part SLM CAD chassis (94.2 g: AlSi10Mg main body + Al belt plate + Ti extruder plate), "
+            "MGN12H carriage (48.3 g), Beacon RevH & fasteners, plus WM7575 CPAP (19 mm hose) w/ shared "
+            "heatsink bleed. Hotend added separately; 3D mesh renders chassis only."
+        ),
     },
     "heavy_uhf_long": {
         "preset_id": "heavy_uhf_long",
@@ -2994,6 +3396,118 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 250.0,
         "z_probe_type": "static_eddy",
+        "default_hardware_summary": (
+            "Heavy direct-drive extruder, multi-blower UHF ABS shroud, long-nozzle drop spacer, "
+            "MGN12H carriage & static eddy probe (hotend added separately)."
+        ),
+    },
+}
+
+# Remote CPAP part-cooling blower catalog (Monolith3D ducted flow & exhaust-heating benchmarks)
+CPAP_BLOWER_CATALOG: dict[str, dict[str, Any]] = {
+    "none": {
+        "id": "none",
+        "name": "Onboard Toolhead Fans (No CPAP)",
+        "short_name": "Onboard Fans",
+        "ducted_max_dm3_s": 0.0,
+        "ducted_max_cfm": 0.0,
+        "min_stable_pwm_pct": 0.0,
+        "exhaust_heating_at_100pct_c": 0.0,
+        "max_static_pressure_pa": 0.0,
+        "voltage_v": 24.0,
+        "acoustic_profile": "standard",
+        "cost_usd": 0.0,
+        "notes": "Uses HotendSpec.part_cooling_cfm directly without remote CPAP hose dynamics.",
+    },
+    "ws7040_24v": {
+        "id": "ws7040_24v",
+        "name": "WS7040-24-V200 Brushless CPAP (5.8 dm³/s)",
+        "short_name": "WS7040 24V",
+        "ducted_max_dm3_s": 5.8,
+        "ducted_max_cfm": 12.29,
+        "min_stable_pwm_pct": 18.0,
+        "exhaust_heating_at_100pct_c": 5.5,
+        "max_static_pressure_pa": 6500.0,
+        "voltage_v": 24.0,
+        "acoustic_profile": "moderate",
+        "cost_usd": 42.0,
+        "printdb_id": "components/fans/ws7040-24-v200-cpap",
+        "notes": "Monolith benchmarked 5.8 dm³/s ducted max (~12.3 CFM) with +5.5 °C exhaust heating at 100% PWM.",
+    },
+    "wm9290_24v": {
+        "id": "wm9290_24v",
+        "name": "WM9290-24V Brushless CPAP (9.2 dm³/s, Quietest)",
+        "short_name": "WM9290 24V",
+        "ducted_max_dm3_s": 9.2,
+        "ducted_max_cfm": 19.49,
+        "min_stable_pwm_pct": 12.0,
+        "exhaust_heating_at_100pct_c": 4.2,
+        "max_static_pressure_pa": 7500.0,
+        "voltage_v": 24.0,
+        "acoustic_profile": "quiet",
+        "cost_usd": 78.0,
+        "printdb_id": "components/fans/wm9290-24v-cpap",
+        "notes": "Monolith benchmarked 9.2 dm³/s ducted max (~19.5 CFM), smooth control down to 1.0 dm³/s at 25% PWM, quietest acoustic spectrum.",
+    },
+    "wm7575_220vac": {
+        "id": "wm7575_220vac",
+        "name": "WM7575-220VAC High-Output CPAP (11.6 dm³/s)",
+        "short_name": "WM7575 AC",
+        "ducted_max_dm3_s": 11.6,
+        "ducted_max_cfm": 24.58,
+        "min_stable_pwm_pct": 20.0,
+        "exhaust_heating_at_100pct_c": 6.8,
+        "max_static_pressure_pa": 9000.0,
+        "voltage_v": 220.0,
+        "acoustic_profile": "loud_hf",
+        "cost_usd": 95.0,
+        "printdb_id": "components/fans/wm7575-220vac-cpap",
+        "notes": "Monolith benchmarked 11.6 dm³/s ducted max (~24.6 CFM) with loud high-frequency acoustic spectrum.",
+    },
+}
+
+# Active PTC chamber heater duct kits (Monolith3D Builder / SLM_Chamber_Heater_Ducts)
+CHAMBER_HEATER_CATALOG: dict[str, dict[str, Any]] = {
+    "none": {
+        "id": "none",
+        "name": "Passive Bed Heating Only (No Active Heater)",
+        "short_name": "None (Passive)",
+        "power_w": 0.0,
+        "voltage_v": 0.0,
+        "fan_count": 0,
+        "fan_size": "none",
+        "ptc_dims_mm": (0.0, 0.0),
+        "circulation_cfm": 0.0,
+        "cost_usd": 0.0,
+        "notes": "Chamber heated solely by bed convection/radiation.",
+    },
+    "monolith_100w_ptc": {
+        "id": "monolith_100w_ptc",
+        "name": "Monolith 100W 24V SLM PTC Heater (2× 3628 Fans)",
+        "short_name": "Monolith 100W PTC",
+        "power_w": 100.0,
+        "voltage_v": 24.0,
+        "fan_count": 2,
+        "fan_size": "3628",
+        "ptc_dims_mm": (98.0, 32.0),
+        "circulation_cfm": 14.0,
+        "cost_usd": 58.0,
+        "printdb_id": "assemblies/printers/monolith-chamber-heater-100w-slm",
+        "notes": "Monolith Builder 100W 24V PTC (98x32 mm) + SLM duct + 2x 3628 fans + 4x M3x15 F-F standoffs (panel or extrusion mount).",
+    },
+    "monolith_500w_ptc": {
+        "id": "monolith_500w_ptc",
+        "name": "Monolith 500W AC SLM PTC Heater (2× 5032 Fans)",
+        "short_name": "Monolith 500W PTC",
+        "power_w": 500.0,
+        "voltage_v": 120.0,
+        "fan_count": 2,
+        "fan_size": "5032",
+        "ptc_dims_mm": (140.0, 50.0),
+        "circulation_cfm": 32.0,
+        "cost_usd": 115.0,
+        "printdb_id": "assemblies/printers/monolith-chamber-heater-500w-slm",
+        "notes": "Monolith Builder 500W AC PTC (140x50 mm) + SLM duct + 2x 5032 fans + 4x M3x15 F-F standoffs (panel, fixed, or flying gantry mount).",
     },
 }
 

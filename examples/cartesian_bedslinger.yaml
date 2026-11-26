@@ -1,5 +1,5 @@
-name: Cartesian Bedslinger 220 (i3-Style)
-description: Classic 220mm open portal Cartesian printer with 2040/2020 frame and moving Y bed
+name: Cartesian Bedslinger 220
+description: Classic 220 mm open-portal Cartesian printer with 2040/2020 frame, dual leadscrew Z, and moving Y bed
 architecture: cartesian_bedslinger
 frame:
   width_mm: 360

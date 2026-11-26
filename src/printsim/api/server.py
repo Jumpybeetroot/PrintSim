@@ -51,13 +51,16 @@ from printsim.geometry import (
     export_part_step_bytes,
     generate_bom,
 )
+from printsim.presets import build_catalog_presets_payload, load_presets
 from printsim.schema import (
     BEARING_RADIAL_PLAY_UM,
     BED_MOUNT_CATALOG,
     BELT_CATALOG,
     BELT_ROUTING_CATALOG,
+    CHAMBER_HEATER_CATALOG,
     CORNER_JOINT_BASE_2020,
     CORNER_JOINT_IWAN_DAMPING,
+    CPAP_BLOWER_CATALOG,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
     FRONT_BRACE_CATALOG,
@@ -297,15 +300,8 @@ def _resolve_spec(spec: PrinterSpec | None, yaml_text: str | None) -> PrinterSpe
     raise HTTPException(status_code=422, detail="Provide either 'spec' or 'yaml_text'")
 
 
-def _load_presets() -> dict[str, PrinterSpec]:
-    presets: dict[str, PrinterSpec] = {}
-    if EXAMPLES_DIR.exists():
-        for p in sorted(EXAMPLES_DIR.glob("*.yaml")):
-            try:
-                presets[p.stem] = PrinterSpec.from_yaml(p)
-            except Exception:
-                continue
-    return presets
+def _load_presets(*, include_test_builds: bool = True) -> dict[str, PrinterSpec]:
+    return load_presets(include_test_builds=include_test_builds)
 
 
 def create_app() -> FastAPI:
@@ -329,7 +325,6 @@ def create_app() -> FastAPI:
 
     @api.get("/api/catalog")
     def catalog() -> dict:
-        presets = _load_presets()
         return {
             "materials": [m.model_dump(mode="json") for m in MATERIAL_CATALOG.values()],
             "profiles": [p.model_dump(mode="json") for p in PROFILE_CATALOG.values()],
@@ -399,6 +394,8 @@ def create_app() -> FastAPI:
             "z_probes": list(Z_PROBE_CATALOG.values()),
             "belts": list(BELT_CATALOG.values()),
             "belt_routings": list(BELT_ROUTING_CATALOG.values()),
+            "cpap_blowers": list(CPAP_BLOWER_CATALOG.values()),
+            "chamber_heaters": list(CHAMBER_HEATER_CATALOG.values()),
             "hotend_presets": list(HOTEND_CATALOG.values()),
             "hotend_mount_styles": [
                 {
@@ -470,20 +467,12 @@ def create_app() -> FastAPI:
                 {"id": "toolhead_carriage", "name": "Direct-Drive X-Carriage Plate"},
                 {"id": "cantilever_bar", "name": "60mm Solid Test Cantilever Bar"},
             ],
-            "presets": [
-                {
-                    "id": pid,
-                    "name": spec.name,
-                    "architecture": spec.architecture,
-                    "description": spec.description,
-                }
-                for pid, spec in presets.items()
-            ],
+            "presets": build_catalog_presets_payload(),
         }
 
     @api.get("/api/presets/{preset_id}")
     def get_preset(preset_id: str) -> dict:
-        presets = _load_presets()
+        presets = _load_presets(include_test_builds=True)
         if preset_id not in presets:
             raise HTTPException(status_code=404, detail=f"Preset '{preset_id}' not found")
         spec = presets[preset_id]

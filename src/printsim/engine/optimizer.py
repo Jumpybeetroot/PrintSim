@@ -14,10 +14,19 @@ Objective = Literal["balanced", "speed", "rigidity", "budget"]
 
 TOOLHEAD_MOUNT_STIFFNESS_N_PER_MM: dict[str, float] = {
     "abs_printed": 380.0,
+    "pc_pbt_gf_printed": 580.0,
     "pet_cf_printed": 650.0,
     "pa12_cf_printed": 800.0,
+    "pps_cf_printed": 1050.0,
     "ppa_cf_printed": 1150.0,
+    "slm_aluminum": 1740.0,
     "aluminum_6061_t6": 1850.0,
+    "aluminum_7075_t6": 1950.0,
+    "slm_ti6al4v": 2150.0,
+    "slm_maraging_steel": 2300.0,
+    "slm_316l_steel": 2320.0,
+    "slm_17_4ph_steel": 2350.0,
+    "sheet_metal_steel": 2400.0,
 }
 
 _PANEL_CONFIG_OPTIONS: tuple[tuple[str, str, float], ...] = (

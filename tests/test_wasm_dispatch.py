@@ -16,7 +16,10 @@ def test_wasm_dispatch_catalog_presets_and_hardware() -> None:
     cat_env = dispatch_api_request("GET", "/api/catalog")
     assert cat_env["status"] == 200
     cat = json.loads(cat_env["body_text"])
-    assert len(cat["presets"]) >= 5
+    assert len(cat["presets"]) >= 6
+    assert {p["category"] for p in cat["presets"]} == {"corexy", "cartesian_bedslinger", "delta"}
+    assert "voron_trident_300" not in {p["id"] for p in cat["presets"]}
+    assert "corexy_fixed_gantry_300" in {p["id"] for p in cat["presets"]}
     assert len(cat["materials"]) >= 10
     assert len(cat["steppers"]) >= 10
 

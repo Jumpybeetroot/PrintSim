@@ -201,6 +201,193 @@
   padding-top: 0;
 }
 
+/* Expandable Printer Type Picker in .design-header */
+.printer-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.printer-picker-trigger {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
+}
+
+.printer-picker-trigger:hover {
+  background: var(--panel-hover);
+  border-color: var(--border-strong);
+}
+
+.printer-picker-trigger.open {
+  background: var(--panel-hover);
+  border-color: var(--accent);
+}
+
+.printer-picker-current {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.printer-picker-chevron {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  display: inline-block;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.printer-picker-trigger.open .printer-picker-chevron {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+.printer-picker-panel {
+  background: var(--inset);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.printer-type-group + .printer-type-group {
+  border-top: 1px solid var(--border);
+}
+
+.printer-type-toggle {
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.14s, background 0.14s;
+}
+
+.printer-type-toggle:hover {
+  color: var(--text);
+  background: var(--panel-hover);
+}
+
+.printer-type-toggle.expanded {
+  color: var(--text);
+}
+
+.printer-type-toggle-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.printer-type-chevron {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  display: inline-block;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.printer-type-toggle.expanded .printer-type-chevron {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+.printer-type-name {
+  min-width: 0;
+}
+
+.printer-type-active-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.printer-type-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 6px 14px;
+}
+
+.printer-preset-option {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
+}
+
+.printer-preset-option:hover {
+  background: var(--panel-hover);
+}
+
+.printer-preset-option.active {
+  background: rgb(var(--accent-rgb) / 0.12);
+  border-left-color: var(--accent);
+}
+
+.printer-preset-name {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.printer-preset-option.active .printer-preset-name {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.printer-preset-summary {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: 1.25;
+}
+
 /* Jump bar: stays at the top of the Printer tab while its sections scroll. */
 .section-jump {
   position: sticky;

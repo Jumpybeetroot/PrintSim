@@ -47,6 +47,8 @@ export const Z_DRIVE_LABELS: Record<string, string> = {
 export const BELT_LABELS: Record<PrinterSpecData["gantry"]["belt"]["type"], string> = {
   gt2_6mm: "GT2 6mm",
   gt2_9mm: "GT2 9mm",
+  gt2_10mm: "GT2 10mm (Monolith)",
+  gt3_10mm: "GT3 (2MGT) 10mm",
   gt2_12mm: "GT2 12mm",
   gt2_15mm: "GT2 15mm",
   gt2_dual_9mm: "Dual 2GT 9mm (18mm)",
@@ -58,6 +60,19 @@ export const BELT_LABELS: Record<PrinterSpecData["gantry"]["belt"]["type"], stri
   at3_gen3_16mm: "AT3 Gen III 16mm",
   htd3m_15mm: "HTD 3M 15mm Steel/TPU",
   at5_16mm: "AT5 16mm Heavy Steel",
+};
+
+export const CHAMBER_HEATER_LABELS: Record<string, string> = {
+  none: "None (Passive)",
+  monolith_100w_ptc: "Monolith 100W 24V PTC",
+  monolith_500w_ptc: "Monolith 500W AC PTC",
+};
+
+export const CPAP_BLOWER_LABELS: Record<string, string> = {
+  none: "Onboard Fans",
+  ws7040_24v: "WS7040 24V (5.8 dm³/s)",
+  wm9290_24v: "WM9290 24V (9.2 dm³/s)",
+  wm7575_220vac: "WM7575 220VAC (11.6 dm³/s)",
 };
 
 export const SHAPER_LABELS: Record<InputShaperType, string> = {
@@ -83,7 +98,7 @@ export const AWD_SYNC_LABELS: Record<AwdSyncMode, string> = {
 export function getBeltDefaults(
   beltType: PrinterSpecData["gantry"]["belt"]["type"]
 ): { pitch_mm: number; core: PrinterSpecData["gantry"]["belt"]["core"] } {
-  if (beltType.startsWith("gt2_")) {
+  if (beltType.startsWith("gt2_") || beltType.startsWith("gt3_")) {
     return { pitch_mm: 2.0, core: "fiberglass" };
   }
   if (beltType.startsWith("3gt_")) {

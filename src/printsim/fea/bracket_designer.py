@@ -607,7 +607,11 @@ def design_and_evaluate_bracket(
         engine=engine,
     )
     mat = get_material(material_id)
-    is_fdm = fdm_anisotropic if fdm_anisotropic is not None else bool(mat.is_printed_polymer)
+    is_fdm = (
+        fdm_anisotropic
+        if fdm_anisotropic is not None
+        else bool(mat.is_printed_polymer or mat.is_slm_metal)
+    )
     f_vec = (float(force_n[0]), float(force_n[1]), float(force_n[2]))
 
     dims = _bracket_layout_dims(

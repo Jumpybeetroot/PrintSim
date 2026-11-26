@@ -1199,6 +1199,124 @@ def bake_microwaved_bowden_chube(
 
 
 # ---------------------------------------------------------------------------
+# 6C. El Fuego Toolhead (KhaymKhaym — SLM AlSi10Mg + Belt Plate + Ti Extruder Plate)
+# ---------------------------------------------------------------------------
+
+
+def bake_el_fuego(
+    cad_dir: Path,
+    assets_root: Path | None = None,
+    visuals_only: bool = False,
+) -> BakedAssetResult:
+    """Bake El Fuego Toolhead (KhaymKhaym, Monolith Discord) 3-part SLM metal assembly.
+
+    Source release STLs (pinned 2025-09-13 in Monolith #user-projects > El Fuego Toolhead):
+      1. ``main_body_al.stl`` — 1-piece SLM AlSi10Mg wishbone CPAP shroud + conduction plate (83.75 g)
+      2. ``belt_plate_rev1.stl`` — Monolith MGN12H carriage belt plate (6.87 g Al / 19.97 g Steel)
+      3. ``extruder_plate_ti.stl`` — Titanium thermal-break extruder plate for Burgo Sherpa Micro (3.62 g)
+
+    Rigid-body datum alignment (``shift = [-0.340, +13.950, -79.930]`` mm):
+      - Port 0 ``[0.0, 0.0, 0.0]`` mm: MGN12H 4× M3 (20×20 mm) carriage face on ``belt_plate_rev1`` (Y = 0)
+      - Port 1 ``[-0.322, -19.932, +2.280]`` mm: Chube 6× M3 Ø18 mm PCD (+ Tricorn dual pattern) hotend
+        mounting flange on the underside of the AlSi10Mg conduction center plate (66 mm Chube nozzle sits
+        at Z = -63.72 mm, 1.92 mm below the CPAP halo ring at Z = -61.80 mm).
+    """
+    import trimesh
+
+    el_dir = cad_dir / "el_fuego"
+    if not el_dir.is_dir():
+        el_dir = cad_dir
+    body_raw = trimesh.load(str(el_dir / "main_body_al.stl"), force="mesh")
+    # Retain primary 144,858-face watertight solid (drops 5 tiny floating export slivers)
+    body = sorted(body_raw.split(only_watertight=False), key=lambda m: len(m.faces), reverse=True)[0].copy()
+    belt = trimesh.load(str(el_dir / "belt_plate_rev1.stl"), force="mesh").copy()
+    extp = trimesh.load(str(el_dir / "extruder_plate_ti.stl"), force="mesh").copy()
+
+    shift = np.array([-0.340, 13.950, -79.930], dtype=np.float64)
+    for m in (body, belt, extp):
+        m.apply_translation(shift)
+
+    # Combined 3-part assembly mesh for conforming voxel-Tet4 condensation
+    combined_mesh = trimesh.util.concatenate([body, belt, extp])
+
+    def _port0_mgn12_bolts(coords_mm: np.ndarray) -> np.ndarray:
+        on_face = np.abs(coords_mm[:, 1]) <= 0.85
+        near_bolt = np.zeros(len(coords_mm), dtype=bool)
+        for bx in (-10.0, 10.0):
+            for bz in (-10.0, 10.0):
+                near_bolt |= np.hypot(coords_mm[:, 0] - bx, coords_mm[:, 2] - bz) <= 4.2
+        return on_face & near_bolt
+
+    p1_x, p1_y, p1_z = -0.322, -19.932, 2.280
+    chube_bolt_xy = [
+        (p1_x + 9.0 * math.cos(math.radians(a)), p1_y + 9.0 * math.sin(math.radians(a)))
+        for a in (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
+    ]
+
+    def _port1_hotend_flange(coords_mm: np.ndarray) -> np.ndarray:
+        on_flange = np.abs(coords_mm[:, 2] - p1_z) <= 0.85
+        near_bolt = np.zeros(len(coords_mm), dtype=bool)
+        for bx, by in chube_bolt_xy:
+            near_bolt |= np.hypot(coords_mm[:, 0] - bx, coords_mm[:, 1] - by) <= 4.2
+        return on_flange & near_bolt
+
+    visual_parts: list[VisualPart] = [
+        VisualPart(body, "el_fuego_main_body", COLOR_SLM_AL, metallic=0.85, roughness=0.32),
+        VisualPart(belt, "el_fuego_belt_plate", COLOR_STAINLESS, metallic=0.88, roughness=0.28),
+        VisualPart(extp, "el_fuego_extruder_plate_ti", COLOR_SATIN_TI, metallic=0.86, roughness=0.34),
+    ]
+
+    spec = BakedAssetSpec(
+        category="toolheads",
+        asset_id="el_fuego",
+        name="El Fuego SLM Toolhead (AlSi10Mg + Ti Plate)",
+        source_cad="el_fuego/{main_body_al,belt_plate_rev1,extruder_plate_ti}.stl",
+        source_url="https://discord.com/channels/1227971059764953230/1382552084490096670",
+        reference_material_id="slm_aluminum",
+        cad_trust_pct=85,
+        port0=PortDefinition((0.0, 0.0, 0.0), _port0_mgn12_bolts),
+        port1=PortDefinition((p1_x, p1_y, p1_z), _port1_hotend_flange),
+        n_internal_modes=8,
+        mesh_size_mm=1.45,
+        is_multi_material=False,  # Scales across SLM AlSi10Mg / Al 6061 / Ti-6Al-4V / 316L / 17-4PH!
+        is_fdm_anisotropic=False,
+        part_recipe={
+            "chassis_parts": [
+                "El Fuego Toolhead - Main Body - Aluminum.stl (31.37 cm³, 83.75 g AlSi10Mg)",
+                "El Fuego Toolhead - Belt Plate - Rev1 - Steel or Aluminum.stl (2.54 cm³, 6.87 g Al / 19.97 g Steel)",
+                "El Fuego Toolhead - Extruder Plate for Burgo Sherpa - Titanium.stl (0.82 cm³, 3.62 g Ti-6Al-4V)",
+            ],
+            "carriage_bolt_pattern": "4x M3 (20x20 mm MGN12H)",
+            "hotend_mount_interface": "Dual Chube 6x M3 Ø18 mm PCD + Tricorn/Dragon conduction plate",
+            "port1_offset_mm": [p1_x, p1_y, p1_z],
+            "metrology": "GOM Scan 1 MV200 pre-machine report (Aire Fuego GS1, <=20 um contact-face dev)",
+        },
+        visual_max_triangles=24000,
+        fea_surface_max_triangles=60000,
+    )
+    regions = (
+        []
+        if visuals_only
+        else [
+            MaterialRegion(
+                combined_mesh,
+                "slm_aluminum",
+                "el_fuego_slm_chassis",
+                fdm_anisotropic=False,
+                color_hex=COLOR_SLM_AL,
+            )
+        ]
+    )
+    return _bake_or_refresh_visuals(
+        spec,
+        regions,
+        visual_parts=visual_parts,
+        assets_root=assets_root,
+        visuals_only=visuals_only,
+    )
+
+
+# ---------------------------------------------------------------------------
 # 7. Coupled Microwaved Bowden + Tricorn Long Assembly (Parallel Bottom Brace)
 # ---------------------------------------------------------------------------
 
@@ -1616,6 +1734,7 @@ def main() -> None:
             "microwaved_bowden_chube",
             lambda: bake_microwaved_bowden_chube(args.cad_dir, args.out_dir, visuals_only=vo),
         ),
+        ("el_fuego", lambda: bake_el_fuego(args.cad_dir, args.out_dir, visuals_only=vo)),
         (
             "microwaved_bowden__tricorn_long",
             lambda: bake_microwaved_bowden_tricorn_long(args.cad_dir, args.out_dir, visuals_only=vo),

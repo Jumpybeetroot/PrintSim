@@ -1,0 +1,108 @@
+name: CoreXY Flying Gantry 300 (2WD)
+description: Standard 300 mm³ aluminum 2020 CoreXY with belted quad-Z flying gantry, MGN12/MGN9 linear rails, 2WD 6 mm belts, and enclosed panels
+architecture: corexy
+frame:
+  width_mm: 460
+  depth_mm: 460
+  height_mm: 480
+  profile: extrusion_2020
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  brace_profile: brace_rod_10mm
+  brace_material: aluminum_6063_t5
+  enclosed_panels: true
+  panel_mounting: clip_enclosure
+  panel_material: acrylic_pmma
+  panel_thickness_mm: 3.0
+gantry:
+  drive_mode: 2wd
+  double_shear_pulleys: false
+  x_beam_profile: extrusion_2020
+  x_beam_material: aluminum_6063_t5
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn9_rail
+  rail_material: steel_4140
+  dual_x_rails: false
+  carriage_mass_g: 201
+  belt:
+    type: gt2_6mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 28.0
+kinematics:
+  build_volume_mm: [300, 300, 300]
+  max_velocity_mm_s: 450
+  max_accel_mm_s2: 8000
+  max_z_velocity_mm_s: 25
+  max_z_accel_mm_s2: 300
+  square_corner_velocity_mm_s: 5.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ac
+    name: NEMA17-48mm (2.5A 24V)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.45
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+  z_stepper:
+    preset_id: ldo_2504ac
+    name: NEMA17-48mm Belted Z-Drive
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.0
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 6.8e-6
+    motor_mass_g: 340
+toolhead:
+  preset_id: custom
+  name: Standard Direct-Drive Toolhead
+  total_mass_g: 365
+  cog_offset_mm: [0, -22, -28]
+  nozzle_offset_mm: [0, -26, -66]
+  mount_material: abs_printed
+  body_construction: multi_piece_clamshell
+  internal_stiffness_n_per_mm: 350.0
+  envelope_mm: [68, 74, 95]
+  hotend:
+    preset_id: phaetus_dragon_hf
+    mount_style: dragon_4bolt_m25
+    structural_stiffness_n_per_mm: 550.0
+    overall_length_mm: 62.2
+    name: Phaetus Dragon HF
+    heater_power_w: 50
+    block_material: copper_c110
+    block_mass_g: 13
+    nozzle_material: brass_c360
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 17.5
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 12
+    heatbreak_wall_mm: 0.20
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 3.4
+    part_cooling_cfm: 9.0
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 5.0
+    max_push_force_n: 55
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 650
+  mass_g: 2800
+  z_drive: belted_quad_z
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: gt2_6mm_z_belt

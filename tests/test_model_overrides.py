@@ -774,7 +774,7 @@ def test_item_confidence_registry_completeness_all_14_catalogs() -> None:
             assert isinstance(meta["basis"], str) and len(meta["basis"].strip()) > 10
             assert isinstance(meta["caveat"], str) and len(meta["caveat"].strip()) > 10
             total_options += 1
-    assert total_options == 99
+    assert total_options == 112
 
 
 def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
@@ -801,14 +801,14 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "extrusion_filling": 6,
         "frame_feet": 4,
         "rail_quality": 4,
-        "belt": 13,
+        "belt": 15,
         "belt_routing": 2,
-        "gantry_bracket": 7,
-        "toolhead_preset": 9,
+        "gantry_bracket": 14,
+        "toolhead_preset": 11,
         "toolhead_construction": 6,
         "z_probe": 4,
-        "hotend_clamp": 12,
-        "bed_mount": 11,
+        "hotend_clamp": 13,
+        "bed_mount": 12,
         "z_drive_mechanism": 12,
     }
     for spec_cat in catalog_complete_specs:
@@ -844,6 +844,7 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "stealthburner",
         "microwaved_bowden",
         "microwaved_bowden_chube",
+        "el_fuego",
         "xol_compact",
         "archetype_cpap",
         "heavy_uhf_long",
@@ -852,12 +853,13 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         s.toolhead.preset_id = pid
         e = _by_id(s)["toolhead_preset"]
         th_scores[pid] = e["trust_pct"]
-        assert len(e["options_breakdown"]) == 9
+        assert len(e["options_breakdown"]) == len(TOOLHEAD_PRESETS)
         assert [x["id"] for x in e["options_breakdown"] if x["active"]] == [pid]
     assert th_scores == {
         "stealthburner": 86,
         "microwaved_bowden": 85,  # elevated from 84 -> 85 by baked 75k-elem Tet4 CAD CMS superelement
         "microwaved_bowden_chube": 86,  # elevated from 84 -> 86 by baked 75.3k-elem Tet4 CAD CMS superelement
+        "el_fuego": 85,  # elevated from 83 -> 85 by baked 241.9k-elem Tet4 CAD CMS superelement
         "xol_compact": 82,
         "archetype_cpap": 72,
         "heavy_uhf_long": 56,
@@ -945,7 +947,7 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         s.toolhead.hotend.preset_id = hid
         e = _by_id(s)["hotend_clamp"]
         he_scores[hid] = e["trust_pct"]
-        assert len(e["options_breakdown"]) == 12
+        assert len(e["options_breakdown"]) == 13
         assert [x["id"] for x in e["options_breakdown"] if x["active"]] == [hid]
     assert he_scores == {
         "tricorn_long": 88,      # elevated from 78 -> 88 by baked 116k-elem Tet4 CAD CMS superelement

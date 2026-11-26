@@ -3829,6 +3829,91 @@ export const MetricsPanel: React.FC<Props> = ({
                   </div>
                 )}
 
+                {ts.motor_mount_temp_c != null && (
+                  <div
+                    className="metric-kv"
+                    title={
+                      sim.spec.gantry.stepper_thermal_gasket === "ptfe_2mm"
+                        ? "Estimated stepper motor mounting flange temperature with 2 mm PTFE thermal barrier (−14 °C mount reduction)"
+                        : "Estimated stepper motor mounting flange temperature conducting into the gantry bracket (add a 2 mm PTFE gasket to drop ~14 °C)"
+                    }
+                  >
+                    <span>Motor Mount Temp</span>
+                    <span
+                      className={`metric-val metric-val-with-delta ${
+                        ts.motor_mount_temp_c >= 90
+                          ? "tag-bad"
+                          : ts.motor_mount_temp_c >= 75
+                            ? "tag-warn"
+                            : "tag-ok"
+                      }`}
+                    >
+                      {ts.motor_mount_temp_c.toFixed(1)} °C
+                      {sim.spec.gantry.stepper_thermal_gasket === "ptfe_2mm" && (
+                        <span className="badge-pill ok">PTFE −14 °C</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {(ts.bearing_cte_clearance_um != null ||
+                  ts.bearing_temp_c != null ||
+                  ts.bearing_cte_pressfit_warning) && (
+                  <div
+                    className="metric-kv"
+                    title="F695/695-2RS steel bearing inside aluminum housing: differential CTE expansion at elevated chamber temperature can loosen press-fit or alter radial clearance"
+                  >
+                    <span>
+                      F695 Bearing CTE
+                      {ts.bearing_temp_c != null && (
+                        <span className="metric-sub-inline">
+                          {ts.bearing_temp_c.toFixed(0)} °C
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={`metric-val metric-val-with-delta ${
+                        ts.bearing_cte_pressfit_warning ? "tag-bad" : "tag-ok"
+                      }`}
+                    >
+                      {ts.bearing_cte_clearance_um != null
+                        ? `${ts.bearing_cte_clearance_um >= 0 ? "+" : ""}${ts.bearing_cte_clearance_um.toFixed(1)} µm`
+                        : "OK"}
+                      {ts.bearing_cte_pressfit_warning && (
+                        <span className="badge-pill bad">Bearing CTE Warning</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {(ts.toolhead_belt_cog_z_offset_mm != null || ts.toolhead_x_roll_warning) && (
+                  <div
+                    className="metric-kv"
+                    title="Vertical Z lever arm between belt drive plane and toolhead CoG; large offsets excite X-axis roll modes under acceleration"
+                  >
+                    <span>
+                      Belt-Plane CoG Offset
+                      {ts.toolhead_nozzle_y_lever_mm != null && (
+                        <span className="metric-sub-inline">
+                          Nozzle Y {ts.toolhead_nozzle_y_lever_mm.toFixed(1)} mm
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={`metric-val metric-val-with-delta ${
+                        ts.toolhead_x_roll_warning ? "tag-warn" : "tag-ok"
+                      }`}
+                    >
+                      {ts.toolhead_belt_cog_z_offset_mm != null
+                        ? `${Math.abs(ts.toolhead_belt_cog_z_offset_mm).toFixed(1)} mm`
+                        : "—"}
+                      {ts.toolhead_x_roll_warning && (
+                        <span className="badge-pill warn">X-Roll Coupling</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
                 <div className="precision-mini-grid">
                   <div
                     className="precision-cell"
@@ -4440,6 +4525,63 @@ export const MetricsPanel: React.FC<Props> = ({
                   {th.max_overhang_deg.toFixed(0)}° • {th.bridge_sag_40mm_mm.toFixed(2)} mm sag
                 </span>
               </div>
+              {th.chamber_cpap && (
+                <div className="sub-block">
+                  <div className="sub-block-title">
+                    <span>Chamber &amp; CPAP Cooling</span>
+                    {th.chamber_cpap.kalico_shared_duct_active && (
+                      <span className="badge-pill info">Kalico Shared Duct</span>
+                    )}
+                  </div>
+                  <div
+                    className="metric-kv"
+                    title={`Enclosure heat loss UA = ${th.chamber_cpap.enclosure_ua_w_per_k.toFixed(2)} W/K · Heater ${Math.round(th.chamber_cpap.chamber_heater_power_w)} W · PIR ${Math.round(th.chamber_cpap.chamber_insulation_mm)} mm`}
+                  >
+                    <span>
+                      Chamber Equilibrium / 60 °C Time
+                      {th.chamber_cpap.chamber_heater_power_w > 0 && (
+                        <span className="metric-sub-inline">
+                          {Math.round(th.chamber_cpap.chamber_heater_power_w)} W PTC
+                        </span>
+                      )}
+                    </span>
+                    <span className="metric-val">
+                      {th.chamber_cpap.chamber_steady_temp_c.toFixed(1)} °C ·{" "}
+                      {th.chamber_cpap.chamber_heatup_time_60c_s != null
+                        ? `${(th.chamber_cpap.chamber_heatup_time_60c_s / 60).toFixed(1)} min`
+                        : "N/A"}
+                    </span>
+                  </div>
+                  {th.chamber_cpap.cpap_blower_id !== "none" && (
+                    <>
+                      <div
+                        className="metric-kv"
+                        title={`Hose ID ${th.chamber_cpap.cpap_hose_id_mm} mm (flow factor ${th.chamber_cpap.cpap_hose_flow_factor.toFixed(2)}, +${th.chamber_cpap.cpap_hose_moving_mass_g.toFixed(0)} g moving mass) @ ${Math.round(th.chamber_cpap.cpap_effective_pwm_pct)}% eff. PWM`}
+                      >
+                        <span>CPAP Delivered Flow</span>
+                        <span className="metric-val">
+                          {th.chamber_cpap.cpap_delivered_dm3_s.toFixed(1)} dm³/s ·{" "}
+                          {th.chamber_cpap.cpap_delivered_cfm.toFixed(1)} CFM
+                        </span>
+                      </div>
+                      <div
+                        className="metric-kv"
+                        title="Compression & blower motor heat added to CPAP air stream at current PWM"
+                      >
+                        <span>CPAP Exhaust ΔT / Outlet</span>
+                        <span
+                          className={`metric-val ${
+                            th.chamber_cpap.cpap_exhaust_temp_rise_c >= 6 ? "tag-warn" : ""
+                          }`}
+                        >
+                          +{th.chamber_cpap.cpap_exhaust_temp_rise_c.toFixed(1)} °C ·{" "}
+                          {th.chamber_cpap.cpap_outlet_air_temp_c.toFixed(1)} °C
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {axPts.length > 0 && (
                 <svg viewBox="0 0 260 68" style={{ width: "100%", height: 68, marginTop: 4 }}>
                   <rect x="0" y="0" width="260" height="68" rx="4" fill="#0d131d" />

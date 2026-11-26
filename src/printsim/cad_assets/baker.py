@@ -831,6 +831,43 @@ def _mesh_regions_tet4(
         out_npz = tmp / "tet_mesh.npz"
 
         if len(regions) == 1:
+            if isinstance(regions[0].solid, trimesh.Trimesh):
+                tm = regions[0].solid.copy()
+                # Multi-shell STL assemblies (e.g., 3-part bolted toolhead STLs) fuse cleanly via
+                # snapped conforming 5-tet-per-voxel rasterization; single watertight STLs try Gmsh first.
+                comps = tm.split(only_watertight=False)
+                if len(comps) == 1 and tm.is_watertight:
+                    if len(tm.faces) > fea_surface_max_triangles:
+                        tm = decimate_trimesh_qem(tm, target_triangles=fea_surface_max_triangles)
+                    stl_path = tmp / "watertight.stl"
+                    tm.export(str(stl_path))
+                    proc3d = subprocess.run(
+                        [
+                            sys.executable,
+                            "-P",
+                            str(Path(__file__).resolve()),
+                            "--gmsh-worker-stl",
+                            str(stl_path),
+                            str(out_npz),
+                            str(float(mesh_size_mm)),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if proc3d.returncode == 0 and out_npz.exists():
+                        with np.load(out_npz) as data:
+                            pts_mm = np.ascontiguousarray(data["points_mm"], dtype=np.float64)
+                            tets = np.ascontiguousarray(data["tets"], dtype=np.int32)
+                        if len(tets) > 0:
+                            return pts_mm, tets, np.zeros(len(tets), dtype=np.int32)
+                pts_mm, tets = _mesh_solid_voxel_tet4(
+                    tm,
+                    mesh_size_mm=mesh_size_mm,
+                    snap_coords_mm=snap_coords_mm,
+                )
+                return pts_mm, tets, np.zeros(len(tets), dtype=np.int32)
+
             geom_path = _export_shape_for_gmsh(regions[0].solid, tmp / "region_0")
             if geom_path.suffix == ".step":
                 proc = subprocess.run(

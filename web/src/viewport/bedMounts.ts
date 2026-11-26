@@ -12,6 +12,7 @@ export const BED_MOUNT_STANDOFF_HEIGHT_MM: Record<BedMountType, number> = {
   dual_leaf_ti_kinematic: 14,
   cnc_kelvin_magnetic: 15,
   spherical_3pt_ratrig: 15,
+  craz_kinematic_ge5c: 15,
   kinematic_3pt: 16,
   captive_belleville_kinematic: 16,
   silicone_4pt: 16,
@@ -24,6 +25,7 @@ const THREE_POINT_BED_MOUNTS: ReadonlySet<BedMountType> = new Set<BedMountType>(
   "captive_belleville_kinematic",
   "dual_leaf_ti_kinematic",
   "spherical_3pt_ratrig",
+  "craz_kinematic_ge5c",
   "trident_3pt_standoffs",
   "whopping_pochard_kinematic",
 ]);
@@ -1597,7 +1599,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
 
       registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
     });
-  } else if (bedMountType === "spherical_3pt_ratrig") {
+  } else if (bedMountType === "spherical_3pt_ratrig" || bedMountType === "craz_kinematic_ge5c") {
     // 3d. RatRig V-Core 3/4 3-Pt Spherical Pivot Kinematic (15 mm, Tap-Rated)
     //     Machined spherical ball-socket joint (chrome bearing sphere in dark-anodized housing + radial slot base bracket)
     const flexTopInsetY = Math.min(3.4 * s, effectiveStandoffH * 0.25);

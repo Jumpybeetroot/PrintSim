@@ -34,13 +34,20 @@ from printsim.geometry import (
     export_panels_dxf_bytes,
     generate_bom,
 )
+from printsim.presets import (
+    build_catalog_presets_payload,
+    find_examples_dir as _find_examples_dir,
+    load_presets,
+)
 from printsim.schema import (
     BEARING_RADIAL_PLAY_UM,
     BED_MOUNT_CATALOG,
     BELT_CATALOG,
     BELT_ROUTING_CATALOG,
+    CHAMBER_HEATER_CATALOG,
     CORNER_JOINT_BASE_2020,
     CORNER_JOINT_IWAN_DAMPING,
+    CPAP_BLOWER_CATALOG,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
     FRONT_BRACE_CATALOG,
@@ -74,30 +81,7 @@ _BRACKET_TYPE_TO_CMS: dict[str, str] = {
 }
 
 
-def _find_examples_dir() -> Path:
-    here = Path(__file__).resolve()
-    # Installed in repo: src/printsim/wasm_dispatch.py -> parents[2] / examples
-    for parent in (here.parents[2], here.parents[1], Path("/printsim")):
-        cand = parent / "examples"
-        if cand.is_dir():
-            return cand
-    return here.parents[2] / "examples"
-
-
-def load_presets() -> dict[str, PrinterSpec]:
-    presets: dict[str, PrinterSpec] = {}
-    examples_dir = _find_examples_dir()
-    if examples_dir.exists():
-        for p in sorted(examples_dir.glob("*.yaml")):
-            try:
-                presets[p.stem] = PrinterSpec.from_yaml(p)
-            except Exception:
-                continue
-    return presets
-
-
 def build_catalog_payload() -> dict[str, Any]:
-    presets = load_presets()
     return {
         "materials": [m.model_dump(mode="json") for m in MATERIAL_CATALOG.values()],
         "profiles": [p.model_dump(mode="json") for p in PROFILE_CATALOG.values()],
@@ -167,6 +151,8 @@ def build_catalog_payload() -> dict[str, Any]:
         "z_probes": list(Z_PROBE_CATALOG.values()),
         "belts": list(BELT_CATALOG.values()),
         "belt_routings": list(BELT_ROUTING_CATALOG.values()),
+        "cpap_blowers": list(CPAP_BLOWER_CATALOG.values()),
+        "chamber_heaters": list(CHAMBER_HEATER_CATALOG.values()),
         "hotend_presets": list(HOTEND_CATALOG.values()),
         "hotend_mount_styles": [
             {
@@ -238,15 +224,7 @@ def build_catalog_payload() -> dict[str, Any]:
             {"id": "toolhead_carriage", "name": "Direct-Drive X-Carriage Plate"},
             {"id": "cantilever_bar", "name": "60mm Solid Test Cantilever Bar"},
         ],
-        "presets": [
-            {
-                "id": pid,
-                "name": spec.name,
-                "architecture": spec.architecture,
-                "description": spec.description,
-            }
-            for pid, spec in presets.items()
-        ],
+        "presets": build_catalog_presets_payload(),
     }
 
 
@@ -325,7 +303,7 @@ def dispatch_api_request(
 
         if verb == "GET" and clean_path.startswith("/api/presets/"):
             preset_id = clean_path.split("/api/presets/", 1)[1]
-            presets = load_presets()
+            presets = load_presets(include_test_builds=True)
             if preset_id not in presets:
                 return _err_json(f"Preset '{preset_id}' not found", status=404)
             spec = presets[preset_id]

@@ -42,6 +42,7 @@ PHASE1_ASSETS: list[tuple[str, str]] = [
     ("hotends", "tricorn_long"),
     ("toolheads", "microwaved_bowden"),
     ("toolheads", "microwaved_bowden_chube"),
+    ("toolheads", "el_fuego"),
 ]
 
 REQUIRED_MANIFEST_KEYS = {
@@ -400,6 +401,7 @@ def test_cli_list_assets_and_missing_asset_graceful() -> None:
     assert len(payload["hotends"]) >= 5
     assert "microwaved_bowden" in payload["toolheads"]
     assert "microwaved_bowden_chube" in payload["toolheads"]
+    assert "el_fuego" in payload["toolheads"]
     assert "microwaved_bowden__tricorn_long" in payload["assemblies"]
 
 

@@ -1,5 +1,5 @@
-name: HyperCoreXY 300 (Carbon Gantry + Truss)
-description: High-acceleration speedbench CoreXY with 3030 frame, full truss bracing, carbon fiber X tube, 9mm fiberglass belts, and UHF hotend
+name: CoreXY Carbon Truss 300
+description: High-acceleration CoreXY with 3030 frame, full 3D truss bracing, carbon fiber X tube, 9 mm fiberglass belts, and ultra-high-flow hotend
 architecture: corexy
 frame:
   width_mm: 470

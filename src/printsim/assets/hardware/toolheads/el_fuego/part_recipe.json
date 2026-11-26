@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "el_fuego",
+  "source_cad": "el_fuego/{main_body_al,belt_plate_rev1,extruder_plate_ti}.stl",
+  "source_url": "https://discord.com/channels/1227971059764953230/1382552084490096670",
+  "regions": [
+    {
+      "label": "el_fuego_slm_chassis",
+      "material_id": "slm_aluminum",
+      "fdm_anisotropic": false
+    }
+  ],
+  "chassis_parts": [
+    "El Fuego Toolhead - Main Body - Aluminum.stl (31.37 cm\u00b3, 83.75 g AlSi10Mg)",
+    "El Fuego Toolhead - Belt Plate - Rev1 - Steel or Aluminum.stl (2.54 cm\u00b3, 6.87 g Al / 19.97 g Steel)",
+    "El Fuego Toolhead - Extruder Plate for Burgo Sherpa - Titanium.stl (0.82 cm\u00b3, 3.62 g Ti-6Al-4V)"
+  ],
+  "carriage_bolt_pattern": "4x M3 (20x20 mm MGN12H)",
+  "hotend_mount_interface": "Dual Chube 6x M3 \u00d818 mm PCD + Tricorn/Dragon conduction plate",
+  "port1_offset_mm": [
+    -0.322,
+    -19.932,
+    2.28
+  ],
+  "metrology": "GOM Scan 1 MV200 pre-machine report (Aire Fuego GS1, <=20 um contact-face dev)"
+}

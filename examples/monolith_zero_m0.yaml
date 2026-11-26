@@ -1,0 +1,121 @@
+name: Monolith Zero (M0) AWD 120
+description: Ultra-compact 1515-frame Monolith Zero AWD CoreXY with bare unsupported MGN12H X-rail, 6mm high-tension GT2 belts, LDO 2504AH-S80 steppers, belt-coplanar Monolith CPAP toolhead (WS7040 + 50mm HF hotend), 100W SLM PTC chamber heater, 10mm PIR insulation, and synced triple-lead-screw Z
+architecture: corexy
+frame:
+  width_mm: 230
+  depth_mm: 230
+  height_mm: 300
+  profile: extrusion_1515
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  corner_joint_type: corner_cube
+  enclosed_panels: true
+  panel_mounting: bolted_structural
+  panel_material: aluminum_5052_sheet
+  panel_thickness_mm: 3.0
+  chamber_temp_c: 65.0
+  chamber_heater_id: monolith_100w_ptc
+  chamber_insulation_mm: 10.0
+  rear_bottom_extrusion: true
+gantry:
+  drive_mode: awd
+  belt_routing: monolith_short
+  double_shear_pulleys: true
+  bracket_material: slm_aluminum
+  x_beam_profile: unsupported_rail
+  x_beam_material: steel_4140
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn9_rail
+  rail_material: steel_4140
+  x_rail_mount: front
+  y_rail_mount: inner
+  carriage_mass_g: 134.6
+  stepper_thermal_gasket: ptfe_2mm
+  idler_axial_preload: disc_spring_m5
+  belt:
+    type: gt2_6mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 44.5
+kinematics:
+  build_volume_mm: [120, 120, 120]
+  max_velocity_mm_s: 1000
+  max_accel_mm_s2: 50000
+  max_z_velocity_mm_s: 25
+  max_z_accel_mm_s2: 350
+  square_corner_velocity_mm_s: 25.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ah_s80
+    name: Monolith Zero LDO 42STH48-2504AH-S80 (80mm Shaft)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.8
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 48.0
+    rotor_inertia_kg_m2: 8.6e-6
+    motor_mass_g: 385
+    insulation_class: H
+  z_stepper:
+    name: NEMA17-40mm Synced Triple-Z
+    holding_torque_nm: 0.45
+    rated_current_a: 1.5
+    inductance_mh: 3.0
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 5.4e-6
+    motor_mass_g: 280
+toolhead:
+  preset_id: monolith_toolhead_cpap
+  name: Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)
+  total_mass_g: 143
+  cog_offset_mm: [0, -9.5, -1.5]
+  nozzle_offset_mm: [0, -14.0, -44.0]
+  mount_material: slm_aluminum
+  body_construction: extruder_as_chassis
+  internal_stiffness_n_per_mm: 2400.0
+  cpap_blower_id: ws7040_24v
+  cpap_hose_id_mm: 15.0
+  cpap_pwm_pct: 60.0
+  shared_heatsink_cpap_duct: true
+  belt_plane_z_offset_mm: -1.5
+  envelope_mm: [52, 56, 78]
+  hotend:
+    preset_id: monolith_50mm_hf
+    name: Monolith 50mm+V6 HF Hotend (80W PT1000)
+    mount_style: rigid_4bolt_m3
+    structural_stiffness_n_per_mm: 920.0
+    overall_length_mm: 68.0
+    mass_g: 52.0
+    heater_power_w: 80
+    block_material: copper_c110
+    block_mass_g: 22
+    nozzle_material: copper_c110
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 50
+    heatbreak_material: titanium_grade5
+    heatbreak_length_mm: 10.5
+    heatbreak_wall_mm: 0.25
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 2.4
+    part_cooling_cfm: 12.3
+    max_temp_c: 350
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 37.0
+    max_push_force_n: 72
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [120, 120]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 5.0
+  heater_power_w: 150
+  mass_g: 420
+  z_drive: leadscrew_triple
+  z_rail_profile: mgn12_rail
+  z_leadscrew_type: tr8x4_pom
+  target_temp_c: 105.0
+  mount_type: kinematic_3pt
