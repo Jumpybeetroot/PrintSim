@@ -18,12 +18,13 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          python-version: "3.12"
 
       - name: Install Python dependencies
         run: uv sync --extra dev
 
       - name: Run pytest suite
-        run: uv run pytest -v
+        run: uv run pytest -n auto -q --tb=short
 
       - name: CLI evaluation smoke check
         run: uv run printsim evaluate examples/corexy_voron_style.yaml --json --no-segments > /dev/null

@@ -323,29 +323,33 @@ def test_design_and_test_bracket_exports_stl_and_step_and_tet10(tmp_path: Path) 
     mesh_hex = trimesh.load(str(stl_hex), force="mesh")
     assert mesh_hex.is_watertight
 
-    stl_tet = tmp_path / "gusset_tet10.stl"
-    step_tet = tmp_path / "gusset_tet10.step"
-    res_tet = _call_mcp(
-        "design_and_test_bracket",
-        {
-            "bracket_type": "corner_gusset",
-            "arm_length_mm": 45.0,
-            "height_mm": 22.0,
-            "wall_thickness_mm": 6.0,
-            "rib_thickness_mm": 6.0,
-            "material_id": "ppa_cf_printed",
-            "engine": "tet10",
-            "output_stl_path": str(stl_tet),
-            "output_step_path": str(step_tet),
-        },
-    )
-    assert res_tet["engine"] == "tet10"
-    assert res_tet["exported_stl_path"] == str(stl_tet.resolve())
-    assert res_tet["exported_step_path"] == str(step_tet.resolve())
-    assert step_tet.exists() and b"ISO-10303-21" in step_tet.read_bytes()
-    assert stl_tet.exists() and stl_tet.stat().st_size > 200
-    assert res_tet["stiffness_n_per_mm"] > 100.0
-    assert res_tet["safety_factor"] > 1.0
+    from printsim.fea.tet_fem import is_tet_fea_available
+    from printsim.geometry.cad_b3d import is_cad_available
+
+    if is_cad_available() and is_tet_fea_available():
+        stl_tet = tmp_path / "gusset_tet10.stl"
+        step_tet = tmp_path / "gusset_tet10.step"
+        res_tet = _call_mcp(
+            "design_and_test_bracket",
+            {
+                "bracket_type": "corner_gusset",
+                "arm_length_mm": 45.0,
+                "height_mm": 22.0,
+                "wall_thickness_mm": 6.0,
+                "rib_thickness_mm": 6.0,
+                "material_id": "ppa_cf_printed",
+                "engine": "tet10",
+                "output_stl_path": str(stl_tet),
+                "output_step_path": str(step_tet),
+            },
+        )
+        assert res_tet["engine"] == "tet10"
+        assert res_tet["exported_stl_path"] == str(stl_tet.resolve())
+        assert res_tet["exported_step_path"] == str(step_tet.resolve())
+        assert step_tet.exists() and b"ISO-10303-21" in step_tet.read_bytes()
+        assert stl_tet.exists() and stl_tet.stat().st_size > 200
+        assert res_tet["stiffness_n_per_mm"] > 100.0
+        assert res_tet["safety_factor"] > 1.0
 
     # Validation check on out-of-range parameter
     with pytest.raises(ValueError, match="arm_length_mm"):

@@ -205,6 +205,11 @@ def test_v03_topology_and_bom_api_and_mcp(tmp_path: Path) -> None:
 
 def test_v04_build123d_step_and_gmsh_skfem_api_and_mcp(tmp_path: Path) -> None:
     """End-to-end check for v0.4 build123d STEP export and Gmsh + scikit-fem Tet10 FEA API & MCP."""
+    from printsim.fea.tet_fem import is_tet_fea_available
+    from printsim.geometry.cad_b3d import is_cad_available
+
+    if not (is_cad_available() and is_tet_fea_available()):
+        pytest.skip("Requires optional CAD + TetFEA extras (`uv sync --extra cad --extra tetfea`)")
     client = TestClient(create_app())
 
     # 1. Bracket STEP download
