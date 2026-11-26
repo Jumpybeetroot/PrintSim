@@ -24,7 +24,7 @@ Whenever a user request can be decomposed into **2 or more independent workstrea
 4. **When NOT to split**:
    - Do not spawn subagents for tiny single-file tweaks, quick one-command checks, or tightly coupled single-function refactors where coordination overhead exceeds execution time.
 5. **Integrate & verify**:
-   - After parallel workers finish, verify integration (`uv run pytest -v`, `npm run build --prefix web` if `web/` changed, and CLI smoke test) — optionally via a dedicated verifier subagent.
+   - After parallel workers finish, verify integration (`uv run pytest -n auto -q --tb=short`, `npm run build --prefix web` if `web/` changed, and `uv run printsim diagnose` / `evaluate` smoke test) — optionally via a dedicated verifier subagent.
 
 ## 2. Automatic Model & Reasoning-Level Routing
 
