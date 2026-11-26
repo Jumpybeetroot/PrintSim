@@ -1808,10 +1808,10 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
     },
     "pc_pbt_gf_printed": {
         "id": "pc_pbt_gf_printed",
-        "name": "3D-Printed PC-PBT-GF (4.6 GPa, 132°C HDT)",
+        "name": "3D-Printed PC-PBT-GF (6.1 GPa, 120°C HDT)",
         "short_name": "Printed PC-PBT-GF",
-        "youngs_modulus_gpa": 4.6,
-        "hdt_c": 132.0,
+        "youngs_modulus_gpa": 6.1,
+        "hdt_c": 120.0,
         "creep_tension_limit_n": 72.0,
         "cnc_machined": False,
         "kit_cost_usd": 78.0,
