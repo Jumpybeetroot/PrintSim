@@ -1,0 +1,22 @@
+name: CoreXY 300 X-Beam Material & Profile Sweep
+mode: printer
+base_spec: ../examples/corexy_voron_style.yaml
+include_gcode: false
+cases:
+  - label: Baseline Al 2020
+    overrides:
+      gantry.x_beam_profile: extrusion_2020
+      gantry.x_beam_material: aluminum_6063_t5
+  - label: CF 20x20x2 UD (1-wall)
+    overrides:
+      gantry.x_beam_profile: cf_tube_20x20x2
+      gantry.x_beam_material: carbon_fiber_tube
+  - label: Carbonara +-45 CF (2-wall)
+    overrides:
+      gantry.x_beam_profile: cf_tube_20x20_carbonara
+      gantry.x_beam_material: carbon_fiber_torsional_45
+  - label: Carbonara +-45 CF + Ti Backer
+    overrides:
+      gantry.x_beam_profile: cf_tube_20x20_carbonara
+      gantry.x_beam_material: carbon_fiber_torsional_45
+      gantry.rail_backer_material: titanium_grade5
