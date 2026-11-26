@@ -1,11 +1,12 @@
 """Bridge to PrintDB for hardware component specs, material properties, and physics constants.
 
 PrintDB (https://github.com/Jumpybeetroot/PrintDB) is an optional dependency
-providing version-controlled hardware datasheets, material properties, and physics
-reference constants with lossless SI conversion (``.to_si()``).
+providing version-controlled hardware datasheets, material properties, structural
+profiles, Z-drives, bed mounts, assemblies, and physics reference constants with
+lossless SI conversion (``.to_si()``).
 
 When ``printdb`` is installed and its repository root is accessible, PrintSim
-hydrates overlapping catalog entries and reference physics constants from PrintDB
+hydrates all matching catalog entries and reference physics constants from PrintDB
 at import time. When ``printdb`` is unavailable (e.g. restricted sandbox or minimal
 install), all callers transparently fall back to PrintSim's built-in defaults.
 """
@@ -98,13 +99,27 @@ def get_reference_constant(record_id: str, key: str, default: float) -> float:
 
 
 def hydrate_stepper_catalog(catalog: dict[str, dict[str, Any]]) -> None:
-    """Overlay PrintDB motor datasheet specs onto matching ``STEPPER_CATALOG`` entries."""
+    """Overlay PrintDB motor datasheet specs onto all matching ``STEPPER_CATALOG`` entries."""
     mapping: dict[str, str] = {
+        "excit3d_max": "components/motors/excit3d-max-ol",
+        "isik_ouroboros": "components/motors/isik-tech-ouroboros-encstp",
         "ldo_2504ac": "components/motors/ldo-42sth48-2504ac",
+        "ldo_2504ah": "components/motors/ldo-42sth48-2504ah",
         "ldo_2804ah": "components/motors/ldo-42sth48-2804ah",
-        "moons_420i": "components/motors/moons-ms17hd6p420i-04",
+        "kraken_motor_v2": "components/motors/kraken-motor-v2-60mm",
+        "ldo_60_3004": "components/motors/ldo-42sth60-3004ac",
+        "ldo_60_2004ah": "components/motors/ldo-42sth60-2004ah",
+        "ldo_09deg_2504": "components/motors/ldo-42sth48-2504mac",
         "ldo_09deg_2004mah": "components/motors/ldo-42sth48-2004mah-vrn",
         "moons_09deg_ha2p4200": "components/motors/moons-ms17ha2p4200",
+        "leadshine_42cm06": "components/motors/leadshine-42cm06",
+        "moons_420i": "components/motors/moons-ms17hd6p420i-04",
+        "stepperonline_2504s": "components/motors/stepperonline-17hs19-2504s",
+        "stepperonline_2004": "components/motors/stepperonline-17hs19-2004s1",
+        "stepperonline_09deg_2004": "components/motors/stepperonline-17hm19-2004s",
+        "ldo_40_1684ac": "components/motors/ldo-42sth40-1684ac",
+        "ldo_57_2804mac": "components/motors/ldo-57sth41-2804mac",
+        "stepperonline_23hs22_2804": "components/motors/stepperonline-23hs22-2804s",
     }
     for key, rid in mapping.items():
         if key not in catalog:
@@ -134,32 +149,53 @@ def hydrate_stepper_catalog(catalog: dict[str, dict[str, Any]]) -> None:
 
 
 def hydrate_belt_catalog(catalog: dict[str, dict[str, Any]]) -> None:
-    """Overlay PrintDB belt datasheet masses & geometry onto matching ``BELT_CATALOG`` entries."""
+    """Overlay PrintDB belt datasheet geometry onto all matching ``BELT_CATALOG`` entries."""
     mapping: dict[str, str] = {
         "gt2_6mm": "components/belts/gates-2gt-6mm-ll",
         "gt2_9mm": "components/belts/gates-2gt-9mm-ll",
+        "gt2_12mm": "components/belts/gates-2gt-12mm-ll",
+        "gt2_15mm": "components/belts/gates-2gt-15mm-ll",
+        "gt2_dual_9mm": "components/belts/gates-2gt-dual-9mm",
+        "3gt_9mm": "components/belts/gates-3gt-9mm",
+        "3gt_12mm": "components/belts/gates-3gt-12mm",
+        "3gt_15mm": "components/belts/gates-3gt-15mm",
+        "at3_10mm": "components/belts/elatech-at3-10mm",
+        "at3_16mm": "components/belts/elatech-at3-16mm",
+        "at3_gen3_16mm": "components/belts/contitech-at3-gen3-16mm",
+        "htd3m_15mm": "components/belts/elatech-htd3m-15mm",
+        "at5_16mm": "components/belts/elatech-at5-16mm",
     }
     for key, rid in mapping.items():
         if key not in catalog:
             continue
-        si = get_record_specs(rid, si=True)
         raw = get_record_specs(rid, si=False)
-        if not si or not raw:
+        if not raw:
             continue
         entry = catalog[key]
         if raw.get("pitch_mm") is not None:
             entry["pitch_mm"] = float(raw["pitch_mm"])
         if raw.get("width_mm") is not None:
             entry["width_mm"] = float(raw["width_mm"])
-        # Note: keep PrintSim's calibrated linear_mass_kg_m (0.0083 kg/m for 6mm) when
-        # PrintDB's rounded 8.4 g/m differs only by ~1%, preserving Voron pluck-Hz calibration.
+        # Note: keep PrintSim's calibrated linear_mass_kg_m on 6/9 mm 2GT to preserve
+        # Voron pluck-Hz calibration.
         entry["printdb_id"] = rid
 
 
 def hydrate_hotend_catalog(catalog: dict[str, dict[str, Any]]) -> None:
-    """Overlay PrintDB hotend datasheet specs onto matching ``HOTEND_CATALOG`` entries."""
+    """Overlay PrintDB hotend datasheet/CAD specs onto all matching ``HOTEND_CATALOG`` entries."""
     mapping: dict[str, str] = {
+        "e3d_v6_groove": "components/hotends/e3d-v6-groove",
         "e3d_revo_voron": "components/hotends/e3d-revo-voron",
+        "phaetus_dragon_hf": "components/hotends/phaetus-dragon-hf",
+        "phaetus_dragon_uhf": "components/hotends/phaetus-dragon-uhf",
+        "phaetus_rapido_2_hf": "components/hotends/phaetus-rapido-2-hf",
+        "phaetus_rapido_2_uhf": "components/hotends/phaetus-rapido-2-uhf",
+        "mellow_goliath_air": "components/hotends/mellow-goliath-air",
+        "chube_compact": "components/hotends/lukes-lab-chube-compact",
+        "chube_air": "components/hotends/lukes-lab-chube-air",
+        "chube_conduction": "components/hotends/lukes-lab-chube-conduction",
+        "tricorn_short": "components/hotends/tricorn-short",
+        "tricorn_long": "components/hotends/tricorn-long",
     }
     for key, rid in mapping.items():
         if key not in catalog:
@@ -172,8 +208,15 @@ def hydrate_hotend_catalog(catalog: dict[str, dict[str, Any]]) -> None:
             entry["heater_power_w"] = float(raw["heater_power_w"])
         if raw.get("max_temp_c") is not None:
             entry["max_temp_c"] = float(raw["max_temp_c"])
-        # Note: PrintDB records bare Revo Voron mass (25 g); PrintSim's catalog mass_g (30 g)
-        # includes heater/thermistor/sock assembly used by BOM & toolhead modal calibrations.
+        if raw.get("overall_length_mm") is not None:
+            entry["overall_length_mm"] = float(raw["overall_length_mm"])
+        if raw.get("meltzone_length_mm") is not None:
+            entry["melt_zone_length_mm"] = float(raw["meltzone_length_mm"])
+        if raw.get("tip_stiffness_n_per_mm") is not None:
+            entry["structural_stiffness_n_per_mm"] = float(raw["tip_stiffness_n_per_mm"])
+        # Note: keep PrintSim's dressed mass_g on e3d_revo_voron (30 g w/ heater/sock vs 25 g bare).
+        if key != "e3d_revo_voron" and raw.get("mass_g") is not None:
+            entry["mass_g"] = float(raw["mass_g"])
         entry["printdb_id"] = rid
 
 
@@ -182,35 +225,66 @@ def hydrate_rail_catalog(
     block_mass_g: dict[str, tuple[float, float]],
 ) -> None:
     """Overlay PrintDB linear rail specs onto ``_RAIL_CARRIAGE_CATALOG`` & ``_RAIL_BLOCK_MASS_G``."""
-    mapping: dict[str, str] = {
-        "mgn9_rail": "components/linear_rails/hiwin-mgn9h",
-        "mgn12_rail": "components/linear_rails/hiwin-mgn12h",
+    # Map each rail profile key -> (short_c_id, long_h_id)
+    mapping: dict[str, tuple[str | None, str | None]] = {
+        "mgn9_rail": ("components/linear_rails/hiwin-mgn9c", "components/linear_rails/hiwin-mgn9h"),
+        "mgn12_rail": ("components/linear_rails/hiwin-mgn12c", "components/linear_rails/hiwin-mgn12h"),
+        "mgn15_rail": ("components/linear_rails/hiwin-mgn15c", "components/linear_rails/hiwin-mgn15h"),
+        "hgh15_rail": ("components/linear_rails/hiwin-hgh15ca", None),
+        "steel_rod_8mm": ("components/linear_rails/misumi-lm8uu-8mm-rod", None),
+        "steel_rod_10mm": ("components/linear_rails/misumi-lm10uu-10mm-rod", None),
+        "steel_rod_12mm": ("components/linear_rails/misumi-lm12uu-12mm-rod", None),
     }
-    for key, rid in mapping.items():
-        raw = get_record_specs(rid, si=False)
-        if not raw:
+    for key, (cid_c, cid_h) in mapping.items():
+        raw_c = get_record_specs(cid_c, si=False) if cid_c else None
+        raw_h = get_record_specs(cid_h, si=False) if cid_h else None
+        if not raw_c and not raw_h:
             continue
-        if key in block_mass_g and raw.get("carriage_mass_g") is not None:
-            c_mass, _h_mass = block_mass_g[key]
-            block_mass_g[key] = (c_mass, float(raw["carriage_mass_g"]))
-        if key in carriage_catalog and raw.get("dynamic_load_n") is not None:
-            d_b, r_y, n_rows, l1_c, c_c, l1_h, _c_h, seal_drag = carriage_catalog[key]
-            carriage_catalog[key] = (
-                d_b,
-                r_y,
-                n_rows,
-                l1_c,
-                c_c,
-                l1_h,
-                float(raw["dynamic_load_n"]),
-                seal_drag,
-            )
+        if key in block_mass_g:
+            c_mass, h_mass = block_mass_g[key]
+            if raw_c and raw_c.get("carriage_mass_g") is not None:
+                c_mass = float(raw_c["carriage_mass_g"])
+            if raw_h and raw_h.get("carriage_mass_g") is not None:
+                h_mass = float(raw_h["carriage_mass_g"])
+            block_mass_g[key] = (c_mass, h_mass)
+        if key in carriage_catalog:
+            d_b, r_y, n_rows, l1_c, c_c, l1_h, c_h, seal_drag = carriage_catalog[key]
+            if raw_c and raw_c.get("dynamic_load_n") is not None:
+                c_c = float(raw_c["dynamic_load_n"])
+            if raw_h and raw_h.get("dynamic_load_n") is not None:
+                c_h = float(raw_h["dynamic_load_n"])
+            carriage_catalog[key] = (d_b, r_y, n_rows, l1_c, c_c, l1_h, c_h, seal_drag)
 
 
 def hydrate_material_catalog(catalog: dict[str, Any]) -> None:
-    """Overlay PrintDB structural material SI properties onto ``MATERIAL_CATALOG``."""
+    """Overlay PrintDB structural material SI properties onto all matching ``MATERIAL_CATALOG`` entries."""
     mapping: dict[str, str] = {
+        "aluminum_6063_t5": "materials/aluminum-6063-t5",
         "aluminum_6061_t6": "materials/aluminum-6061-t6",
+        "aluminum_7075_t6": "materials/aluminum-7075-t6",
+        "mic6_aluminum": "materials/alcoa-mic6-cast-aluminum",
+        "atp5_aluminum": "materials/vista-atp5-cast-aluminum",
+        "carbon_fiber_3k_twill": "materials/carbon-fiber-3k-twill-tube",
+        "carbon_fiber_tube": "materials/carbon-fiber-ud-std-epoxy",
+        "carbon_fiber_high_tg": "materials/carbon-fiber-ud-high-tg",
+        "carbon_fiber_torsional_45": "materials/carbon-fiber-torsional-45-high-tg",
+        "carbon_fiber_m40j_hm": "materials/carbon-fiber-m40j-high-modulus",
+        "steel_4140": "materials/steel-4140",
+        "stainless_304": "materials/stainless-steel-304",
+        "titanium_grade5": "materials/titanium-grade5-ti6al4v",
+        "brass_c360": "materials/brass-c360",
+        "copper_c110": "materials/copper-c110",
+        "hardened_steel": "materials/hardened-tool-steel",
+        "abs_printed": "materials/generic-abs",
+        "pa12_cf_printed": "materials/generic-pa12-cf15",
+        "pet_cf_printed": "materials/generic-pet-cf15-annealed",
+        "ppa_cf_printed": "materials/generic-ppa-cf-annealed",
+        "pps_cf_printed": "materials/generic-pps-cf-annealed",
+        "acrylic_pmma": "materials/acrylic-pmma-sheet",
+        "polycarbonate": "materials/polycarbonate-sheet",
+        "acm_dibond": "materials/acm-dibond-panel",
+        "aluminum_5052_sheet": "materials/aluminum-5052-h32",
+        "carbon_fiber_plate": "materials/carbon-fiber-3k-plate",
     }
     for key, rid in mapping.items():
         if key not in catalog:
@@ -225,31 +299,138 @@ def hydrate_material_catalog(catalog: dict[str, Any]) -> None:
             mat.density_kg_m3 = float(si["density_kg_per_m3"])
         if si.get("yield_strength_pa") is not None:
             mat.yield_strength_pa = float(si["yield_strength_pa"])
-        if si.get("thermal_conductivity_w_per_mk") is not None:
+        if si.get("thermal_conductivity_w_per_mk") is not None and key != "abs_printed":
             mat.thermal_conductivity_w_mk = float(si["thermal_conductivity_w_per_mk"])
         if si.get("specific_heat_j_per_kgk") is not None:
             mat.specific_heat_j_kgk = float(si["specific_heat_j_per_kgk"])
-        if si.get("cte_per_k") is not None:
+        if si.get("cte_per_k") is not None and key != "abs_printed":
             mat.thermal_expansion_1_k = float(si["cte_per_k"])
 
 
 def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
-    """Overlay PrintDB polymer density & thermal conductivity onto ``FILAMENT_CATALOG``."""
+    """Overlay PrintDB polymer density onto all matching ``FILAMENT_CATALOG`` entries."""
     mapping: dict[str, str] = {
         "pla": "materials/generic-pla",
         "petg": "materials/generic-petg",
         "abs": "materials/generic-abs",
         "asa": "materials/generic-asa",
+        "pa12_cf": "materials/generic-pa12-cf15",
+        "tpu_95a": "materials/generic-tpu-95a",
     }
     for key, rid in mapping.items():
         if key not in catalog:
             continue
         si = get_record_specs(rid, si=True)
-        raw = get_record_specs(rid, si=False)
-        if not si or not raw:
+        if not si:
             continue
         fil = catalog[key]
         if si.get("density_kg_per_m3") is not None:
             fil.density_kg_m3 = float(si["density_kg_per_m3"])
         # Note: keep PrintSim's calibrated melt-zone thermal_conductivity_w_mk and Tg
         # (e.g. PLA Tg=58 C, ABS/ASA k=0.18 W/mK) used by Graetz flow benchmarks.
+
+
+def hydrate_profile_catalog(catalog: dict[str, Any]) -> None:
+    """Overlay PrintDB cross-section SI geometry onto all matching ``PROFILE_CATALOG`` entries."""
+    mapping: dict[str, str] = {
+        "extrusion_2020": "components/profiles/misumi-hfs5-2020",
+        "extrusion_2040": "components/profiles/misumi-hfs5-2040",
+        "extrusion_3030": "components/profiles/misumi-hfs6-3030",
+        "extrusion_4040": "components/profiles/misumi-hfs8-4040",
+        "extrusion_3060": "components/profiles/misumi-hfs6-3060",
+        "cnc_al_beam_20x20": "components/profiles/cnc-al-beam-20x20",
+        "cf_tube_20x20x1": "components/profiles/cf-tube-20x20x1",
+        "cf_tube_20x20x1_5": "components/profiles/cf-tube-20x20x1-5",
+        "cf_tube_20x20_carbonara": "components/profiles/carbonara-20x20-cf-xbeam",
+        "cf_tube_20x20x2": "components/profiles/cf-tube-20x20x2",
+        "cf_tube_30x20x2": "components/profiles/cf-tube-30x20x2",
+        "cf_tube_25x25x2": "components/profiles/cf-tube-25x25x2",
+        "ti_tube_20x20x1_2": "components/profiles/ti-tube-20x20x1-2",
+        "al_tube_20x20x2": "components/profiles/al-tube-20x20x2",
+        "al_tube_30x30x3": "components/profiles/al-tube-30x30x3",
+        "steel_tube_25x25x2": "components/profiles/steel-tube-25x25x2",
+        "mgn9_rail": "components/profiles/profile-mgn9-rail",
+        "mgn12_rail": "components/profiles/profile-mgn12-rail",
+        "mgn15_rail": "components/profiles/profile-mgn15-rail",
+        "steel_rod_8mm": "components/profiles/profile-steel-rod-8mm",
+        "steel_rod_10mm": "components/profiles/profile-steel-rod-10mm",
+        "steel_rod_12mm": "components/profiles/profile-steel-rod-12mm",
+        "brace_rod_10mm": "components/profiles/profile-brace-rod-10mm",
+        "al_flat_bar_25x5": "components/profiles/al-flat-bar-25x5",
+    }
+    for key, rid in mapping.items():
+        if key not in catalog:
+            continue
+        si = get_record_specs(rid, si=True)
+        if not si:
+            continue
+        prof = catalog[key]
+        if si.get("area_m2") is not None:
+            prof.area_m2 = float(si["area_m2"])
+        if si.get("iy_m4") is not None:
+            prof.iy_m4 = float(si["iy_m4"])
+        if si.get("iz_m4") is not None:
+            prof.iz_m4 = float(si["iz_m4"])
+        if si.get("j_m4") is not None:
+            prof.j_m4 = float(si["j_m4"])
+
+
+def hydrate_z_drive_catalog(catalog: dict[str, dict[str, Any]]) -> None:
+    """Attach canonical PrintDB IDs and specs onto ``Z_DRIVE_MECHANISM_CATALOG``."""
+    mapping: dict[str, str] = {
+        "tr8x4_pom": "components/z_drives/generic-tr8x4-pom",
+        "tr8x4_wobblex": "components/z_drives/miragec-tr8x4-wobblex",
+        "tr8x8_pom": "components/z_drives/generic-tr8x8-pom",
+        "tr8x8_brass": "components/z_drives/generic-tr8x8-brass",
+        "sfu1204_bk10": "components/z_drives/hiwin-sfu1204-bk10",
+        "sfu1204_wobblex": "components/z_drives/hiwin-sfu1204-bk10-wobblex",
+        "sfu1605_fk12": "components/z_drives/hiwin-sfu1605-fk12",
+        "gt2_6mm_z_belt": "components/z_drives/voron-gt2-6mm-belted-z",
+        "gt2_9mm_z_belt": "components/z_drives/voron-gt2-9mm-belted-z",
+        "gt2_9mm_planetary_z": "components/z_drives/generic-gt2-9mm-planetary-z",
+        "gt2_9mm_worm_z": "components/z_drives/generic-gt2-9mm-worm-z",
+        "kevinakasam_belted_z": "components/z_drives/kevinakasam-belted-z",
+    }
+    for key, rid in mapping.items():
+        if key not in catalog:
+            continue
+        raw = get_record_specs(rid, si=False)
+        if not raw:
+            continue
+        entry = catalog[key]
+        if raw.get("lead_mm") is not None:
+            entry["lead_mm"] = float(raw["lead_mm"])
+        if raw.get("backlash_um") is not None:
+            entry["backlash_um"] = float(raw["backlash_um"])
+        entry["printdb_id"] = rid
+
+
+def hydrate_bed_mount_catalog(catalog: dict[str, dict[str, Any]]) -> None:
+    """Attach canonical PrintDB IDs and specs onto ``BED_MOUNT_CATALOG``."""
+    mapping: dict[str, str] = {
+        "kinematic_3pt": "components/bed_mounts/generic-kinematic-3pt-maxwell",
+        "whopping_pochard_kinematic": "components/bed_mounts/whopping-pochard-leaf-kinematic",
+        "trident_3pt_standoffs": "components/bed_mounts/voron-trident-3pt-bakelite-ge5c",
+        "cnc_kelvin_magnetic": "components/bed_mounts/chaoticlab-cnc-kelvin-magnetic",
+        "captive_belleville_kinematic": "components/bed_mounts/generic-captive-belleville-kinematic",
+        "dual_leaf_ti_kinematic": "components/bed_mounts/annex-dual-leaf-ti-kinematic",
+        "spherical_3pt_ratrig": "components/bed_mounts/ratrig-spherical-3pt-kinematic",
+        "rigid_4pt": "components/bed_mounts/generic-rigid-4pt-standoffs",
+        "floating_4pt": "components/bed_mounts/generic-floating-4pt-tabs",
+        "silicone_4pt": "components/bed_mounts/generic-silicone-4pt-70a",
+        "springs_4pt": "components/bed_mounts/generic-springs-4pt-yellow",
+    }
+    for key, rid in mapping.items():
+        if key not in catalog:
+            continue
+        raw = get_record_specs(rid, si=False)
+        if not raw:
+            continue
+        entry = catalog[key]
+        if raw.get("axial_stiffness_n_per_mm") is not None:
+            entry["k_axial_n_per_mm"] = float(raw["axial_stiffness_n_per_mm"])
+        if raw.get("lateral_stiffness_n_per_mm") is not None:
+            entry["k_lateral_n_per_mm"] = float(raw["lateral_stiffness_n_per_mm"])
+        if raw.get("standoff_height_mm") is not None:
+            entry["standoff_height_mm"] = float(raw["standoff_height_mm"])
+        entry["printdb_id"] = rid

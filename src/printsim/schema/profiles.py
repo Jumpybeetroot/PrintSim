@@ -299,6 +299,10 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     ),
 }
 
+from printsim.schema.printdb_bridge import hydrate_profile_catalog as _hydrate_profile_catalog
+
+_hydrate_profile_catalog(PROFILE_CATALOG)
+
 
 def get_profile(profile_id: str) -> ProfileSpec:
     """Look up a structural profile by ID."""

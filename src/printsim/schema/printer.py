@@ -466,9 +466,11 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
     },
 }
 from printsim.schema.printdb_bridge import (
+    hydrate_bed_mount_catalog as _hydrate_bed_mount_catalog,
     hydrate_belt_catalog as _hydrate_belt_catalog,
     hydrate_hotend_catalog as _hydrate_hotend_catalog,
     hydrate_stepper_catalog as _hydrate_stepper_catalog,
+    hydrate_z_drive_catalog as _hydrate_z_drive_catalog,
 )
 
 _hydrate_belt_catalog(BELT_CATALOG)
@@ -2618,6 +2620,8 @@ STEPPER_CATALOG: dict[str, dict] = {
     },
 }
 _hydrate_stepper_catalog(STEPPER_CATALOG)
+_hydrate_z_drive_catalog(Z_DRIVE_MECHANISM_CATALOG)
+_hydrate_bed_mount_catalog(BED_MOUNT_CATALOG)
 
 
 class KinematicsSpec(BaseModel):
