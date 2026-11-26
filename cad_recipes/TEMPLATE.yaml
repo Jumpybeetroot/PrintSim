@@ -1,0 +1,84 @@
+# =============================================================================
+# PrintSim Declarative CAD-to-Superelement Recipe Template
+# =============================================================================
+# Copy this file to `cad_recipes/<asset_id>.yaml`, run `inspect_step_file()`
+# to measure bounding boxes, planar mounting faces, and hole coordinates,
+# then bake locally with `bake_from_recipe(..., fast=True)` before full QA.
+# =============================================================================
+
+schema_version: 1
+
+# Target bundle folder under `src/printsim/assets/hardware/<category>/<asset_id>/`
+# Common categories: hotends | toolheads | assemblies | gantry_brackets
+category: gantry_brackets
+asset_id: example_cnc_bracket
+name: Example CNC 6061-T6 Gantry Bracket
+
+# Path to source STEP (.step / .stp). Resolved relative to:
+#   1) this recipe file's directory, 2) CWD, 3) ./cad_sources/
+step_path: cad_sources/example_cnc_bracket.step
+source_url: https://example.com/hardware/example_cnc_bracket
+
+# Material catalog ID from `printsim.schema.materials`
+# Examples: titanium_grade5, aluminum_6061_t6, steel_4140, copper_c110, pa12_cf_printed
+reference_material_id: aluminum_6061_t6
+cad_trust_pct: 88                # Model confidence (0-100)
+is_fdm_anisotropic: false        # Set true for printed polymer parts
+
+# Meshing & Craig-Bampton CMS parameters
+# (`fast=True` overrides mesh_size_mm >= 2.8, n_internal_modes <= 4, visual <= 8000)
+mesh_size_mm: 1.6                # Tet4 target edge length in mm
+n_internal_modes: 8              # Fixed-interface internal Craig-Bampton modes
+visual_max_triangles: 24000      # GLB visual triangle budget (<= 35000 QA cap)
+
+# Optional rigid-body alignment applied in order: scale -> rotate_deg -> translate_mm
+transform:
+  scale: 1.0
+  rotate_deg: [0.0, 0.0, 0.0]    # Euler angles (deg) around X, Y, Z axes
+  translate_mm: [0.0, 0.0, 0.0]  # Shift (mm) so Port 0 sits at desired datum
+
+# Port 0 (Primary Mount / Anchor Interface)
+# Supported `kind`:
+#   - plane_box : {axis: 0|1|2, coord_mm: float, tol_mm: 0.45, bounds_mm: [[x0,x1],[y0,y1],[z0,z1]]}
+#   - z_annulus : {z_mm: float, r_min_mm: float, r_max_mm: float, center_xy_mm: [x,y], tol_mm: 0.45}
+#   - z_cap     : {z_max_mm: float, z_min_mm: float, center_xy_mm: [x,y], r_max_mm: float}
+#   - auto_face : automatically selects mount face near Z_max or Y_min (or tip near Z_min)
+port0:
+  kind: plane_box
+  vp_coord_mm: [0.0, 0.0, 0.0]   # Virtual Point coordinate in mm (post-transform)
+  params:
+    axis: 2                      # 0=X, 1=Y, 2=Z
+    coord_mm: 0.0
+    tol_mm: 0.45
+    # Optional 3D crop box in mm:
+    # bounds_mm: [[-20.0, 20.0], [-15.0, 15.0], [-0.5, 0.5]]
+
+# Port 1 (Tip / Output / Secondary Interface)
+port1:
+  kind: z_cap
+  vp_coord_mm: [0.0, 0.0, -45.0]
+  params:
+    z_min_mm: -45.5
+    z_max_mm: -43.5
+    center_xy_mm: [0.0, 0.0]
+    r_max_mm: 12.0
+
+# Optional per-solid multi-material & PBR appearance overrides
+# Omit `regions` for single-material parts using `reference_material_id`.
+regions:
+  - solid_index: 0               # Match by 0-based solid index (or use `solid_name`)
+    # solid_name: main_body
+    material_id: aluminum_6061_t6
+    label: bracket_body
+    color_hex: "#dfe6ef"
+    metallic: 0.85
+    roughness: 0.35
+    fdm_anisotropic: false
+
+# Optional Onshape Part Studio source metadata (used by `fetch_onshape_step`)
+onshape:
+  document_id: "000000000000000000000000"
+  workspace_id: "000000000000000000000000"
+  element_id: "000000000000000000000000"
+  # part_id: "JHD"
+  # configuration: "default"
