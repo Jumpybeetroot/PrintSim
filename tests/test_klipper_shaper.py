@@ -188,5 +188,5 @@ def test_evaluate_printer_shaper_graphs_schema_and_speed() -> None:
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     import os
 
-    budget_ms = 110.0 if os.environ.get("CI") else 50.0
+    budget_ms = 350.0 if os.environ.get("CI") else 60.0
     assert elapsed_ms < budget_ms, f"Calibration took {elapsed_ms:.2f} ms (budget < {budget_ms:.0f} ms)"

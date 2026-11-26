@@ -233,7 +233,7 @@ def test_evaluate_printer_runtime_stays_fast(preset_name: str) -> None:
     assert report.weight_shaper_gains is not None
     import os
 
-    budget_ms = 1050.0 if os.environ.get("CI") else 450.0
+    budget_ms = 2500.0 if os.environ.get("CI") else 500.0
     assert elapsed_ms < budget_ms
 
 

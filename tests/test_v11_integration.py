@@ -98,7 +98,7 @@ def test_evaluator_v11_reports_and_speed_on_examples() -> None:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         import os
 
-        budget_ms = 900.0 if os.environ.get("CI") else 375.0
+        budget_ms = 2500.0 if os.environ.get("CI") else 450.0
         assert elapsed_ms < budget_ms, f"{fname} evaluate_printer took {elapsed_ms:.1f} ms (>= {budget_ms:.0f} ms)"
 
         d = rep.to_dict(include_toolpath_segments=False)

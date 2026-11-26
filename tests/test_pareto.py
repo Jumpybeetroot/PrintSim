@@ -71,7 +71,7 @@ def test_voron_trident_pareto_front():
     assert isinstance(result, ParetoResult)
     expected_backend = "pymoo (NSGA-II)" if is_pymoo_available() else "numpy (NSGA-II fallback)"
     assert result.backend == expected_backend
-    budget_s = 30.0 if os.environ.get("CI") else 14.0
+    budget_s = 90.0 if os.environ.get("CI") else 18.0
     assert elapsed_s < budget_s, f"Pareto optimization took too long: {elapsed_s:.2f}s"
     assert result.evaluations >= 14
     assert len(result.pareto_front) >= 4

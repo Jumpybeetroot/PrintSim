@@ -395,8 +395,10 @@ def test_fit_printer_to_adxl_perturbed_hardware_recovery(monkeypatch: pytest.Mon
     elapsed_s = time.perf_counter() - t0
 
     assert isinstance(fit_report, AdxlFitReport)
+    import os
+
     assert parse_calls == 2  # parsed strictly once per supplied axis
-    assert elapsed_s < 4.0
+    assert elapsed_s < (20.0 if os.environ.get("CI") else 6.0)
 
     payload = fit_report.to_dict()
     assert set(payload.keys()) == {

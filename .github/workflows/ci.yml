@@ -28,7 +28,7 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
-        run: uv run pytest -n auto -q --tb=short
+        run: uv run pytest -n 2 -q --tb=short
 
       - name: CLI evaluation smoke check
         run: uv run printsim evaluate examples/corexy_voron_style.yaml --json --no-segments > /dev/null
