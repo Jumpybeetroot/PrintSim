@@ -1,5 +1,6 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import {
+  PrinterSpecData,
   RCSAData,
   SensitivityData,
   SubsystemKey,
@@ -8,6 +9,7 @@ import {
   WorkspaceFRFData,
 } from "../types";
 import { formatHzGain } from "../viewport/partClassifier";
+import { SurfaceTexturePreview } from "./SurfaceTexturePreview";
 
 const SUBSYSTEM_ORDER: SubsystemKey[] = ["toolhead", "gantry", "frame", "bed"];
 
@@ -49,11 +51,37 @@ export function workspaceHeatColors(
   };
 }
 
+function perpErrorHeatColor(errUm: number, scaleUm: number): string {
+  const t = Math.max(0, Math.min(1, Math.abs(errUm) / Math.max(scaleUm, 1)));
+  // Cyan (#22d3ee) -> Amber (#f59e0b) -> Red (#ef4444)
+  let r: number;
+  let g: number;
+  let b: number;
+  if (t < 0.5) {
+    const u = t / 0.5;
+    r = Math.round(34 + (245 - 34) * u);
+    g = Math.round(211 + (158 - 211) * u);
+    b = Math.round(238 + (11 - 238) * u);
+  } else {
+    const u = (t - 0.5) / 0.5;
+    r = Math.round(245 + (239 - 245) * u);
+    g = Math.round(158 + (68 - 158) * u);
+    b = Math.round(11 + (68 - 11) * u);
+  }
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 export const CncMetrologyContent: React.FC<{
   metrology?: TimeDomainMetrologyData;
   workspaceFrf?: WorkspaceFRFData;
   rcsa?: RCSAData;
-}> = ({ metrology, workspaceFrf, rcsa }) => {
+  spec?: PrinterSpecData;
+}> = ({ metrology, workspaceFrf, rcsa, spec }) => {
+  const [traceScenario, setTraceScenario] = useState<"corner" | "zigzag">("corner");
+  const hasZigzag = Boolean(
+    metrology?.zigzag_trace && (metrology.zigzag_trace.ideal_x_mm?.length ?? 0) >= 2
+  );
+  const effectiveScenario: "corner" | "zigzag" = hasZigzag ? traceScenario : "corner";
   const ballbarSvg = useMemo(() => {
     const angles = metrology?.ballbar_angles_deg;
     const errs = metrology?.ballbar_radial_error_um;
@@ -103,6 +131,142 @@ export const CncMetrologyContent: React.FC<{
     const ay = trace.actual_y_mm || [];
     const ux = trace.unshaped_x_mm || [];
     const uy = trace.unshaped_y_mm || [];
+    const cx = trace.shaped_cmd_x_mm || [];
+    const cy = trace.shaped_cmd_y_mm || [];
+    const n = Math.min(ix.length, iy.length);
+    if (n < 2) return null;
+
+    let iMinX = Infinity,
+      iMaxX = -Infinity,
+      iMinY = Infinity,
+      iMaxY = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (ix[i] < iMinX) iMinX = ix[i];
+      if (ix[i] > iMaxX) iMaxX = ix[i];
+      if (iy[i] < iMinY) iMinY = iy[i];
+      if (iy[i] > iMaxY) iMaxY = iy[i];
+    }
+    const idealSpan = Math.max(iMaxX - iMinX, iMaxY - iMinY, 1e-3);
+
+    const nAct = Math.min(n, ax.length, ay.length);
+    const nUn = Math.min(n, ux.length, uy.length);
+    const nCmd = Math.min(n, cx.length, cy.length);
+
+    let maxDev = 0;
+    for (let i = 0; i < nAct; i++) {
+      const d = Math.hypot((ax[i] ?? ix[i]) - ix[i], (ay[i] ?? iy[i]) - iy[i]);
+      if (d > maxDev) maxDev = d;
+    }
+    for (let i = 0; i < nUn; i++) {
+      const d = Math.hypot((ux[i] ?? ix[i]) - ix[i], (uy[i] ?? iy[i]) - iy[i]);
+      if (d > maxDev) maxDev = d;
+    }
+
+    let devGain = 1;
+    if (maxDev > 1e-5 && maxDev / idealSpan < 0.08) {
+      const rawGain = (0.14 * idealSpan) / maxDev;
+      const steps = [1, 2, 5, 10, 15, 20, 25];
+      devGain = steps.find((s) => s >= rawGain) ?? 25;
+    }
+
+    const scaledAct: Array<[number, number]> = [];
+    for (let i = 0; i < nAct; i++) {
+      scaledAct.push([
+        ix[i] + ((ax[i] ?? ix[i]) - ix[i]) * devGain,
+        iy[i] + ((ay[i] ?? iy[i]) - iy[i]) * devGain,
+      ]);
+    }
+    const scaledUn: Array<[number, number]> = [];
+    for (let i = 0; i < nUn; i++) {
+      scaledUn.push([
+        ix[i] + ((ux[i] ?? ix[i]) - ix[i]) * devGain,
+        iy[i] + ((uy[i] ?? iy[i]) - iy[i]) * devGain,
+      ]);
+    }
+    const scaledCmd: Array<[number, number]> = [];
+    for (let i = 0; i < nCmd; i++) {
+      scaledCmd.push([
+        ix[i] + ((cx[i] ?? ix[i]) - ix[i]) * devGain,
+        iy[i] + ((cy[i] ?? iy[i]) - iy[i]) * devGain,
+      ]);
+    }
+
+    let minX = iMinX,
+      maxX = iMaxX,
+      minY = iMinY,
+      maxY = iMaxY;
+    for (const [x, y] of scaledAct) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    for (const [x, y] of scaledUn) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    for (const [x, y] of scaledCmd) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+
+    const W = 240;
+    const H = 140;
+    const padL = 12;
+    const padR = 12;
+    const padT = 22;
+    const padB = 12;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const spanX = Math.max(maxX - minX, 1e-4);
+    const spanY = Math.max(maxY - minY, 1e-4);
+    const scale = Math.min(plotW / spanX, plotH / spanY);
+    const offX = padL + (plotW - spanX * scale) * 0.5;
+    const offY = padT + (plotH - spanY * scale) * 0.5;
+
+    const mapPt = (x: number, y: number): string => {
+      const sx = offX + (x - minX) * scale;
+      const sy = offY + (maxY - y) * scale;
+      return `${sx.toFixed(1)},${sy.toFixed(1)}`;
+    };
+
+    const idealPts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      idealPts.push(mapPt(ix[i], iy[i]));
+    }
+    const actPts = scaledAct.map(([x, y]) => mapPt(x, y));
+    const unPts = scaledUn.map(([x, y]) => mapPt(x, y));
+    const cmdPts = scaledCmd.map(([x, y]) => mapPt(x, y));
+
+    return {
+      W,
+      H,
+      padL,
+      padT,
+      plotW,
+      plotH,
+      devGain,
+      idealLine: idealPts.join(" "),
+      actualLine: actPts.join(" "),
+      unshapedLine: unPts.join(" "),
+      shapedCmdLine: cmdPts.length >= 2 ? cmdPts.join(" ") : "",
+    };
+  }, [metrology?.corner_trace]);
+
+  const zigzagSvg = useMemo(() => {
+    const trace = metrology?.zigzag_trace;
+    if (!trace) return null;
+    const ix = trace.ideal_x_mm || [];
+    const iy = trace.ideal_y_mm || [];
+    const ax = trace.actual_x_mm || [];
+    const ay = trace.actual_y_mm || [];
+    const ux = trace.unshaped_x_mm || [];
+    const uy = trace.unshaped_y_mm || [];
+    const perp = trace.perp_error_um || [];
     const n = Math.min(ix.length, iy.length);
     if (n < 2) return null;
 
@@ -132,10 +296,10 @@ export const CncMetrologyContent: React.FC<{
     }
 
     let devGain = 1;
-    if (maxDev > 1e-5 && maxDev / idealSpan < 0.08) {
-      const rawGain = (0.14 * idealSpan) / maxDev;
-      const steps = [1, 2, 5, 10, 15, 20, 25];
-      devGain = steps.find((s) => s >= rawGain) ?? 25;
+    if (maxDev > 1e-5 && maxDev / idealSpan < 0.06) {
+      const rawGain = (0.11 * idealSpan) / maxDev;
+      const steps = [1, 2, 5, 10, 15, 20];
+      devGain = steps.find((s) => s >= rawGain) ?? 20;
     }
 
     const scaledAct: Array<[number, number]> = [];
@@ -171,10 +335,10 @@ export const CncMetrologyContent: React.FC<{
     }
 
     const W = 240;
-    const H = 140;
+    const H = 148;
     const padL = 12;
     const padR = 12;
-    const padT = 22;
+    const padT = 24;
     const padB = 12;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
@@ -184,18 +348,48 @@ export const CncMetrologyContent: React.FC<{
     const offX = padL + (plotW - spanX * scale) * 0.5;
     const offY = padT + (plotH - spanY * scale) * 0.5;
 
-    const mapPt = (x: number, y: number): string => {
-      const sx = offX + (x - minX) * scale;
-      const sy = offY + (maxY - y) * scale;
-      return `${sx.toFixed(1)},${sy.toFixed(1)}`;
-    };
+    const toSvgXY = (x: number, y: number): [number, number] => [
+      offX + (x - minX) * scale,
+      offY + (maxY - y) * scale,
+    ];
 
     const idealPts: string[] = [];
     for (let i = 0; i < n; i++) {
-      idealPts.push(mapPt(ix[i], iy[i]));
+      const [sx, sy] = toSvgXY(ix[i], iy[i]);
+      idealPts.push(`${sx.toFixed(1)},${sy.toFixed(1)}`);
     }
-    const actPts = scaledAct.map(([x, y]) => mapPt(x, y));
-    const unPts = scaledUn.map(([x, y]) => mapPt(x, y));
+    const unPts = scaledUn.map(([x, y]) => {
+      const [sx, sy] = toSvgXY(x, y);
+      return `${sx.toFixed(1)},${sy.toFixed(1)}`;
+    });
+
+    let maxPerp = 0;
+    for (let i = 0; i < perp.length; i++) {
+      const v = Math.abs(perp[i] ?? 0);
+      if (v > maxPerp) maxPerp = v;
+    }
+    const perpScaleUm = Math.max(25, Math.ceil(Math.max(maxPerp, 1) / 10) * 10);
+
+    const segments: Array<{
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      color: string;
+    }> = [];
+    for (let i = 0; i < scaledAct.length - 1; i++) {
+      const [x1, y1] = toSvgXY(scaledAct[i][0], scaledAct[i][1]);
+      const [x2, y2] = toSvgXY(scaledAct[i + 1][0], scaledAct[i + 1][1]);
+      const e0 = Math.abs(perp[i] ?? 0);
+      const e1 = Math.abs(perp[i + 1] ?? e0);
+      segments.push({
+        x1,
+        y1,
+        x2,
+        y2,
+        color: perpErrorHeatColor(0.5 * (e0 + e1), perpScaleUm),
+      });
+    }
 
     return {
       W,
@@ -205,11 +399,12 @@ export const CncMetrologyContent: React.FC<{
       plotW,
       plotH,
       devGain,
+      perpScaleUm,
       idealLine: idealPts.join(" "),
-      actualLine: actPts.join(" "),
       unshapedLine: unPts.join(" "),
+      segments,
     };
-  }, [metrology?.corner_trace]);
+  }, [metrology?.zigzag_trace]);
 
   const hasMetrology = Boolean(metrology);
   const hasWorkspace = Boolean(
@@ -399,137 +594,381 @@ export const CncMetrologyContent: React.FC<{
         </div>
       )}
 
-      {/* 2. 90° Corner Ringing Zoom SVG Plot */}
+      {/* 2. Corner & Zig-Zag Ringing Zoom SVG Plot */}
       {metrology && (
         <div className="metrology-subblock">
-          <div className="metrology-subhead">
-            <span>90° Corner Ringing Zoom</span>
-            {cornerSvg && cornerSvg.devGain > 1 && (
-              <span className="metrology-submeta">×{cornerSvg.devGain} error zoom</span>
-            )}
+          <div className="metrology-subhead metrology-subhead-wrap">
+            <span>{hasZigzag ? "Corner & Zig-Zag Ringing" : "90° Corner Ringing Zoom"}</span>
+            <span className="metrology-head-right">
+              {hasZigzag && (
+                <span
+                  className="bottleneck-axis-tabs"
+                  role="group"
+                  aria-label="Metrology trace scenario"
+                >
+                  <button
+                    type="button"
+                    className={`bottleneck-axis-btn ${effectiveScenario === "corner" ? "active" : ""}`}
+                    aria-pressed={effectiveScenario === "corner"}
+                    onClick={() => setTraceScenario("corner")}
+                  >
+                    90° Corner
+                  </button>
+                  <button
+                    type="button"
+                    className={`bottleneck-axis-btn ${effectiveScenario === "zigzag" ? "active" : ""}`}
+                    aria-pressed={effectiveScenario === "zigzag"}
+                    onClick={() => setTraceScenario("zigzag")}
+                  >
+                    Zig-Zag S
+                  </button>
+                </span>
+              )}
+              {effectiveScenario === "corner" && cornerSvg && cornerSvg.devGain > 1 && (
+                <span className="metrology-submeta">×{cornerSvg.devGain} zoom</span>
+              )}
+              {effectiveScenario === "zigzag" && zigzagSvg && zigzagSvg.devGain > 1 && (
+                <span className="metrology-submeta">×{zigzagSvg.devGain} zoom</span>
+              )}
+            </span>
           </div>
 
-          {cornerSvg && (
-            <svg viewBox={`0 0 ${cornerSvg.W} ${cornerSvg.H}`} className="corner-zoom-svg">
-              <rect
-                x="0.5"
-                y="0.5"
-                width={cornerSvg.W - 1}
-                height={cornerSvg.H - 1}
-                rx="6"
-                fill="#0b111b"
-                stroke="#1e293b"
-                strokeWidth="1"
-              />
-              {/* Subtle reference cross */}
-              <line
-                x1={cornerSvg.padL}
-                y1={cornerSvg.padT + cornerSvg.plotH * 0.5}
-                x2={cornerSvg.padL + cornerSvg.plotW}
-                y2={cornerSvg.padT + cornerSvg.plotH * 0.5}
-                stroke="#162033"
-                strokeDasharray="2 3"
-              />
-              <line
-                x1={cornerSvg.padL + cornerSvg.plotW * 0.5}
-                y1={cornerSvg.padT}
-                x2={cornerSvg.padL + cornerSvg.plotW * 0.5}
-                y2={cornerSvg.padT + cornerSvg.plotH}
-                stroke="#162033"
-                strokeDasharray="2 3"
-              />
-              {/* Ideal dashed white 90° corner */}
-              <polyline
-                fill="none"
-                stroke="#e2e8f0"
-                strokeWidth="1.2"
-                strokeDasharray="4 3"
-                strokeOpacity="0.78"
-                points={cornerSvg.idealLine}
-              />
-              {/* Faded red unshaped ringing trace */}
-              {cornerSvg.unshapedLine && (
-                <polyline
-                  fill="none"
-                  stroke="#ef4444"
-                  strokeWidth="1.4"
-                  strokeOpacity="0.56"
-                  strokeLinejoin="round"
-                  points={cornerSvg.unshapedLine}
-                />
+          {effectiveScenario === "corner" && (
+            <>
+              {cornerSvg && (
+                <svg viewBox={`0 0 ${cornerSvg.W} ${cornerSvg.H}`} className="corner-zoom-svg">
+                  <rect
+                    x="0.5"
+                    y="0.5"
+                    width={cornerSvg.W - 1}
+                    height={cornerSvg.H - 1}
+                    rx="6"
+                    fill="#0b111b"
+                    stroke="#1e293b"
+                    strokeWidth="1"
+                  />
+                  {/* Subtle reference cross */}
+                  <line
+                    x1={cornerSvg.padL}
+                    y1={cornerSvg.padT + cornerSvg.plotH * 0.5}
+                    x2={cornerSvg.padL + cornerSvg.plotW}
+                    y2={cornerSvg.padT + cornerSvg.plotH * 0.5}
+                    stroke="#162033"
+                    strokeDasharray="2 3"
+                  />
+                  <line
+                    x1={cornerSvg.padL + cornerSvg.plotW * 0.5}
+                    y1={cornerSvg.padT}
+                    x2={cornerSvg.padL + cornerSvg.plotW * 0.5}
+                    y2={cornerSvg.padT + cornerSvg.plotH}
+                    stroke="#162033"
+                    strokeDasharray="2 3"
+                  />
+                  {/* Ideal dashed white 90° corner */}
+                  <polyline
+                    fill="none"
+                    stroke="#e2e8f0"
+                    strokeWidth="1.2"
+                    strokeDasharray="4 3"
+                    strokeOpacity="0.78"
+                    points={cornerSvg.idealLine}
+                  />
+                  {/* Optional shaped command reference curve */}
+                  {cornerSvg.shapedCmdLine && (
+                    <polyline
+                      fill="none"
+                      stroke="#38bdf8"
+                      strokeWidth="1.2"
+                      strokeDasharray="3 2"
+                      strokeOpacity="0.82"
+                      points={cornerSvg.shapedCmdLine}
+                    />
+                  )}
+                  {/* Faded red unshaped ringing trace */}
+                  {cornerSvg.unshapedLine && (
+                    <polyline
+                      fill="none"
+                      stroke="#ef4444"
+                      strokeWidth="1.4"
+                      strokeOpacity="0.56"
+                      strokeLinejoin="round"
+                      points={cornerSvg.unshapedLine}
+                    />
+                  )}
+                  {/* Bright emerald input-shaped trace */}
+                  {cornerSvg.actualLine && (
+                    <polyline
+                      fill="none"
+                      stroke="#10b981"
+                      strokeWidth="2.0"
+                      strokeLinejoin="round"
+                      points={cornerSvg.actualLine}
+                    />
+                  )}
+                  {/* Legend bar */}
+                  <line x1="8" y1="11" x2="18" y2="11" stroke="#e2e8f0" strokeWidth="1.2" strokeDasharray="3 2" />
+                  <text x="21" y="14" fill="#94a3b8" fontSize="8">
+                    Ideal
+                  </text>
+                  <line x1="50" y1="11" x2="60" y2="11" stroke="#ef4444" strokeWidth="1.5" strokeOpacity="0.7" />
+                  <text x="63" y="14" fill="#fca5a5" fontSize="8">
+                    Unshaped
+                  </text>
+                  <line x1="110" y1="11" x2="120" y2="11" stroke="#10b981" strokeWidth="2" />
+                  <text x="123" y="14" fill="#6ee7b7" fontSize="8">
+                    Shaped
+                  </text>
+                  {cornerSvg.shapedCmdLine && (
+                    <>
+                      <line x1="162" y1="11" x2="172" y2="11" stroke="#38bdf8" strokeWidth="1.3" strokeDasharray="3 2" />
+                      <text x="175" y="14" fill="#bfe3fb" fontSize="8">
+                        Cmd
+                      </text>
+                    </>
+                  )}
+                </svg>
               )}
-              {/* Bright emerald input-shaped trace */}
-              {cornerSvg.actualLine && (
-                <polyline
-                  fill="none"
-                  stroke="#10b981"
-                  strokeWidth="2.0"
-                  strokeLinejoin="round"
-                  points={cornerSvg.actualLine}
-                />
+
+              {(metrology.printed_path_error_um != null ||
+                metrology.shaper_path_smoothing_um != null ||
+                metrology.cross_track_error_um != null ||
+                metrology.along_track_lag_um != null) && (
+                <div className="kpi-grid">
+                  {metrology.printed_path_error_um != null && (
+                    <div
+                      className="kpi-box"
+                      title="True geometric nearest-point wall deviation from the ideal 90° path (excludes timing lag)"
+                    >
+                      <span className="kpi-label">Printed Path Error</span>
+                      <span
+                        className={`kpi-value metrology-kpi-sm ${
+                          metrology.printed_path_error_um > 60
+                            ? "tag-bad"
+                            : metrology.printed_path_error_um > 30
+                              ? "tag-warn"
+                              : "tag-ok"
+                        }`}
+                      >
+                        {metrology.printed_path_error_um.toFixed(1)} µm
+                      </span>
+                    </div>
+                  )}
+                  {metrology.shaper_path_smoothing_um != null && (
+                    <div
+                      className="kpi-box"
+                      title="Geometric corner rounding introduced purely by the input shaper's command filter"
+                    >
+                      <span className="kpi-label">Shaper Smoothing</span>
+                      <span className="kpi-value metrology-kpi-sm">
+                        {metrology.shaper_path_smoothing_um.toFixed(1)} µm
+                      </span>
+                    </div>
+                  )}
+                  {metrology.cross_track_error_um != null && (
+                    <div
+                      className="kpi-box"
+                      title="Perpendicular wall wobble normal to the toolpath direction (visible ghosting/ringing)"
+                    >
+                      <span className="kpi-label">Cross-Track Wobble</span>
+                      <span
+                        className={`kpi-value metrology-kpi-sm ${
+                          metrology.cross_track_error_um > 40
+                            ? "tag-bad"
+                            : metrology.cross_track_error_um > 18
+                              ? "tag-warn"
+                              : "tag-ok"
+                        }`}
+                      >
+                        {metrology.cross_track_error_um.toFixed(1)} µm
+                      </span>
+                    </div>
+                  )}
+                  {metrology.along_track_lag_um != null && (
+                    <div
+                      className="kpi-box"
+                      title="Timing delay along the travel direction from shaper convolution — NOT physical wall displacement (extrusion stays synchronized)"
+                    >
+                      <span className="kpi-label">Along-Track Lag</span>
+                      <span className="kpi-value metrology-kpi-sm metrology-kpi-muted">
+                        {metrology.along_track_lag_um.toFixed(1)} µm
+                      </span>
+                    </div>
+                  )}
+                </div>
               )}
-              {/* Legend bar */}
-              <line x1="10" y1="11" x2="22" y2="11" stroke="#e2e8f0" strokeWidth="1.2" strokeDasharray="3 2" />
-              <text x="25" y="14" fill="#94a3b8" fontSize="8">
-                Ideal
-              </text>
-              <line x1="62" y1="11" x2="74" y2="11" stroke="#ef4444" strokeWidth="1.5" strokeOpacity="0.7" />
-              <text x="77" y="14" fill="#fca5a5" fontSize="8">
-                Unshaped
-              </text>
-              <line x1="132" y1="11" x2="144" y2="11" stroke="#10b981" strokeWidth="2" />
-              <text x="147" y="14" fill="#6ee7b7" fontSize="8">
-                Shaped
-              </text>
-            </svg>
+
+              <div className="kpi-grid-3">
+                <div
+                  className="kpi-box"
+                  title={`Corner rounding ${(metrology.corner_rounding_um ?? 0).toFixed(1)} µm • Overshoot ${(metrology.corner_overshoot_um ?? 0).toFixed(1)} µm`}
+                >
+                  <span className="kpi-label">Rounding</span>
+                  <span className="kpi-value metrology-kpi-sm">
+                    {(metrology.corner_rounding_um ?? 0).toFixed(1)} µm
+                  </span>
+                  <span className="kpi-sub">
+                    +{(metrology.corner_overshoot_um ?? 0).toFixed(0)} µm over
+                  </span>
+                </div>
+                <div
+                  className="kpi-box"
+                  title={`Peak-to-peak ringing ${(metrology.ringing_peak_to_peak_um ?? 0).toFixed(1)} µm vs ${(metrology.ringing_unshaped_um ?? 0).toFixed(1)} µm unshaped`}
+                >
+                  <span className="kpi-label">Ringing</span>
+                  <span
+                    className={`kpi-value metrology-kpi-sm ${
+                      (metrology.ringing_peak_to_peak_um ?? 0) > 45
+                        ? "tag-bad"
+                        : (metrology.ringing_peak_to_peak_um ?? 0) > 20
+                          ? "tag-warn"
+                          : "tag-ok"
+                    }`}
+                  >
+                    {(metrology.ringing_peak_to_peak_um ?? 0).toFixed(1)} µm
+                  </span>
+                  <span className="kpi-sub tag-ok">
+                    -{Math.round(metrology.ringing_reduction_pct ?? 0)}% vs raw
+                  </span>
+                </div>
+                <div className="kpi-box" title="Distance for residual ringing to decay below visible threshold">
+                  <span className="kpi-label">Decay</span>
+                  <span className="kpi-value metrology-kpi-sm">
+                    {(metrology.ringing_decay_mm ?? 0).toFixed(1)} mm
+                  </span>
+                  <span className="kpi-sub">
+                    raw {(metrology.ringing_unshaped_um ?? 0).toFixed(0)} µm
+                  </span>
+                </div>
+              </div>
+            </>
           )}
 
-          <div className="kpi-grid-3">
-            <div
-              className="kpi-box"
-              title={`Corner rounding ${(metrology.corner_rounding_um ?? 0).toFixed(1)} µm • Overshoot ${(metrology.corner_overshoot_um ?? 0).toFixed(1)} µm`}
-            >
-              <span className="kpi-label">Rounding</span>
-              <span className="kpi-value" style={{ fontSize: 13 }}>
-                {(metrology.corner_rounding_um ?? 0).toFixed(1)} µm
-              </span>
-              <span className="kpi-sub">
-                +{(metrology.corner_overshoot_um ?? 0).toFixed(0)}µm over
-              </span>
-            </div>
-            <div
-              className="kpi-box"
-              title={`Peak-to-peak ringing ${(metrology.ringing_peak_to_peak_um ?? 0).toFixed(1)} µm vs ${(metrology.ringing_unshaped_um ?? 0).toFixed(1)} µm unshaped`}
-            >
-              <span className="kpi-label">Ringing</span>
-              <span
-                className={`kpi-value ${
-                  (metrology.ringing_peak_to_peak_um ?? 0) > 45
-                    ? "tag-bad"
-                    : (metrology.ringing_peak_to_peak_um ?? 0) > 20
-                      ? "tag-warn"
-                      : "tag-ok"
-                }`}
-                style={{ fontSize: 13 }}
-              >
-                {(metrology.ringing_peak_to_peak_um ?? 0).toFixed(1)} µm
-              </span>
-              <span className="kpi-sub" style={{ color: "var(--green)" }}>
-                -{Math.round(metrology.ringing_reduction_pct ?? 0)}% vs raw
-              </span>
-            </div>
-            <div className="kpi-box" title="Distance for residual ringing to decay below visible threshold">
-              <span className="kpi-label">Decay</span>
-              <span className="kpi-value" style={{ fontSize: 13 }}>
-                {(metrology.ringing_decay_mm ?? 0).toFixed(1)} mm
-              </span>
-              <span className="kpi-sub">
-                raw {(metrology.ringing_unshaped_um ?? 0).toFixed(0)} µm
-              </span>
-            </div>
-          </div>
+          {effectiveScenario === "zigzag" && zigzagSvg && (
+            <>
+              <svg viewBox={`0 0 ${zigzagSvg.W} ${zigzagSvg.H}`} className="corner-zoom-svg">
+                <defs>
+                  <linearGradient id="zigzagPerpScaleGrad" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#22d3ee" />
+                    <stop offset="50%" stopColor="#f59e0b" />
+                    <stop offset="100%" stopColor="#ef4444" />
+                  </linearGradient>
+                </defs>
+                <rect
+                  x="0.5"
+                  y="0.5"
+                  width={zigzagSvg.W - 1}
+                  height={zigzagSvg.H - 1}
+                  rx="6"
+                  fill="#0b111b"
+                  stroke="#1e293b"
+                  strokeWidth="1"
+                />
+                {/* Ideal dashed S-curve */}
+                <polyline
+                  fill="none"
+                  stroke="#e2e8f0"
+                  strokeWidth="1.15"
+                  strokeDasharray="4 3"
+                  strokeOpacity="0.72"
+                  points={zigzagSvg.idealLine}
+                />
+                {/* Faded red unshaped trace */}
+                {zigzagSvg.unshapedLine && (
+                  <polyline
+                    fill="none"
+                    stroke="#ef4444"
+                    strokeWidth="1.25"
+                    strokeOpacity="0.45"
+                    strokeLinejoin="round"
+                    points={zigzagSvg.unshapedLine}
+                  />
+                )}
+                {/* Perpendicular-error heatmap-colored shaped trace */}
+                {zigzagSvg.segments.map((seg, idx) => (
+                  <line
+                    key={`zz-${idx}`}
+                    x1={seg.x1.toFixed(1)}
+                    y1={seg.y1.toFixed(1)}
+                    x2={seg.x2.toFixed(1)}
+                    y2={seg.y2.toFixed(1)}
+                    stroke={seg.color}
+                    strokeWidth="2.1"
+                    strokeLinecap="round"
+                  />
+                ))}
+                {/* Legend bar */}
+                <line x1="8" y1="11" x2="18" y2="11" stroke="#e2e8f0" strokeWidth="1.2" strokeDasharray="3 2" />
+                <text x="21" y="14" fill="#94a3b8" fontSize="8">
+                  Ideal
+                </text>
+                <line x1="48" y1="11" x2="58" y2="11" stroke="#ef4444" strokeWidth="1.3" strokeOpacity="0.55" />
+                <text x="61" y="14" fill="#fca5a5" fontSize="8">
+                  Raw
+                </text>
+                <text x="128" y="14" fill="#94a3b8" fontSize="7.5" textAnchor="end">
+                  0 µm
+                </text>
+                <rect x="132" y="8" width="52" height="5" rx="2" fill="url(#zigzagPerpScaleGrad)" />
+                <text x="188" y="14" fill="#fca5a5" fontSize="7.5">
+                  {zigzagSvg.perpScaleUm} µm
+                </text>
+              </svg>
+
+              <div className="kpi-grid-3">
+                <div
+                  className="kpi-box"
+                  title="Geometric printed path error across rapid Zig-Zag S reversals"
+                >
+                  <span className="kpi-label">Path Error</span>
+                  <span
+                    className={`kpi-value metrology-kpi-sm ${
+                      (metrology.zigzag_path_error_um ?? 0) > 65
+                        ? "tag-bad"
+                        : (metrology.zigzag_path_error_um ?? 0) > 30
+                          ? "tag-warn"
+                          : "tag-ok"
+                    }`}
+                  >
+                    {(metrology.zigzag_path_error_um ?? 0).toFixed(1)} µm
+                  </span>
+                </div>
+                <div
+                  className="kpi-box"
+                  title="Geometric corner rounding introduced by input shaper across S-curve reversals"
+                >
+                  <span className="kpi-label">Smoothing</span>
+                  <span className="kpi-value metrology-kpi-sm">
+                    {(metrology.zigzag_shaper_smoothing_um ?? 0).toFixed(1)} µm
+                  </span>
+                </div>
+                <div
+                  className="kpi-box"
+                  title={`Residual zig-zag ringing ${(metrology.zigzag_residual_ringing_um ?? 0).toFixed(1)} µm vs ${(metrology.zigzag_unshaped_ringing_um ?? 0).toFixed(1)} µm unshaped`}
+                >
+                  <span className="kpi-label">Ringing</span>
+                  <span
+                    className={`kpi-value metrology-kpi-sm ${
+                      (metrology.zigzag_residual_ringing_um ?? 0) > 45
+                        ? "tag-bad"
+                        : (metrology.zigzag_residual_ringing_um ?? 0) > 20
+                          ? "tag-warn"
+                          : "tag-ok"
+                    }`}
+                  >
+                    {(metrology.zigzag_residual_ringing_um ?? 0).toFixed(1)} µm
+                  </span>
+                  <span className="kpi-sub">
+                    raw {(metrology.zigzag_unshaped_ringing_um ?? 0).toFixed(0)} µm
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
+
+      {/* 2b. Interactive Printed Wall Surface Texture Preview */}
+      {metrology && <SurfaceTexturePreview metrology={metrology} spec={spec} />}
 
       {/* 3. 5×5 Bed Workspace (x, y) Resonance Heatmap & RCSA Nozzle Whip */}
       {(hasWorkspace || hasRcsa) && (

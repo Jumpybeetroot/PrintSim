@@ -1184,6 +1184,16 @@ export interface KlipperShaperCandidate {
   attenuation_curve: number[];
 }
 
+export interface StepResponseData {
+  time_ms: number[];
+  unshaped: number[];
+  shaped: number[];
+  overshoot_unshaped_pct: number;
+  overshoot_shaped_pct: number;
+  settle_time_unshaped_ms: number;
+  settle_time_shaped_ms: number;
+}
+
 export interface AxisShaperGraph {
   axis: "X" | "Y";
   freqs_hz: number[];
@@ -1195,6 +1205,7 @@ export interface AxisShaperGraph {
   recommended_freq_hz: number;
   recommended_max_accel_mm_s2: number;
   candidates: KlipperShaperCandidate[];
+  step_response?: StepResponseData;
 }
 
 export interface ParetoPointData {
@@ -1545,6 +1556,20 @@ export interface StaticFeaData {
   }>;
 }
 
+export interface AdxlNozzleAxisDiagnostic {
+  carriage_peak_hz: number;
+  nozzle_peak_hz: number;
+  nozzle_to_carriage_ratio: number;
+  carriage_recommended_shaper: string;
+  carriage_recommended_freq_hz: number;
+  carriage_max_accel_mm_s2: number;
+  nozzle_recommended_shaper: string;
+  nozzle_recommended_freq_hz: number;
+  nozzle_max_accel_mm_s2: number;
+  carriage_raw_psd: number[];
+  has_significant_divergence: boolean;
+}
+
 export interface ModalFeaData {
   fundamental_freq_hz: number;
   nozzle_pitch_twist_freq_hz?: number;
@@ -1557,6 +1582,10 @@ export interface ModalFeaData {
   shaper_x: ShaperData | null;
   shaper_y: ShaperData | null;
   shaper_graphs?: { x: AxisShaperGraph; y: AxisShaperGraph };
+  adxl_vs_nozzle_diagnostic?: {
+    x: AdxlNozzleAxisDiagnostic;
+    y: AdxlNozzleAxisDiagnostic;
+  };
   modes: ModeShapeData[];
 }
 
@@ -1680,6 +1709,16 @@ export interface WorkspaceFRFData {
   midband_instability_risk: boolean;
 }
 
+export interface ZigzagTraceData {
+  ideal_x_mm: number[];
+  ideal_y_mm: number[];
+  actual_x_mm: number[];
+  actual_y_mm: number[];
+  unshaped_x_mm: number[];
+  unshaped_y_mm: number[];
+  perp_error_um: number[];
+}
+
 export interface TimeDomainMetrologyData {
   corner_rounding_um: number;
   corner_overshoot_um: number;
@@ -1687,6 +1726,10 @@ export interface TimeDomainMetrologyData {
   ringing_unshaped_um: number;
   ringing_reduction_pct: number;
   ringing_decay_mm: number;
+  printed_path_error_um?: number;
+  shaper_path_smoothing_um?: number;
+  cross_track_error_um?: number;
+  along_track_lag_um?: number;
   corner_trace: {
     ideal_x_mm: number[];
     ideal_y_mm: number[];
@@ -1694,7 +1737,17 @@ export interface TimeDomainMetrologyData {
     actual_y_mm: number[];
     unshaped_x_mm: number[];
     unshaped_y_mm: number[];
+    shaped_cmd_x_mm?: number[];
+    shaped_cmd_y_mm?: number[];
+    wall_dist_mm?: number[];
+    wall_dev_unshaped_um?: number[];
+    wall_dev_shaped_um?: number[];
   };
+  zigzag_path_error_um?: number;
+  zigzag_shaper_smoothing_um?: number;
+  zigzag_residual_ringing_um?: number;
+  zigzag_unshaped_ringing_um?: number;
+  zigzag_trace?: ZigzagTraceData;
   ballbar_radius_mm: number;
   ballbar_speed_mm_s: number;
   circularity_gxy_um: number;

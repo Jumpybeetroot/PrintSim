@@ -3344,6 +3344,7 @@ export const MetricsPanel: React.FC<Props> = ({
             {mod.shaper_graphs ? (
               <KlipperShaperPsdCard
                 graphs={mod.shaper_graphs}
+                adxlVsNozzle={mod.adxl_vs_nozzle_diagnostic}
                 frameDampingRatio={mod.frame_damping_ratio}
                 extrusionFilling={sim.geometry.extrusion_filling}
                 spec={sim.spec}
@@ -4380,6 +4381,7 @@ export const MetricsPanel: React.FC<Props> = ({
                   metrology={sim.time_domain_metrology}
                   workspaceFrf={sim.workspace_frf}
                   rcsa={sim.rcsa}
+                  spec={sim.spec}
                 />
               </DeepDiveAccordion>
             )}
