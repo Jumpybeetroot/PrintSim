@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "siboor_2wd_front_right",
+  "name": "Siboor CNC 6061 Front-Right Idler (2WD)",
+  "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
+  "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
+  "baked_at": "2026-11-26T19:07:55Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1287,
+  "num_elements": 3420,
+  "num_dofs": 3861,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.005774,
+  "mass_kg": 0.042842,
+  "com_mm": [
+    -5.0035,
+    22.4656,
+    0.0334
+  ],
+  "port0_mm": [
+    0.0,
+    18.0,
+    0.0
+  ],
+  "port1_mm": [
+    -18.0,
+    12.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 87713.965,
+    "ky": 66481.306,
+    "kz": 2087.176
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 275.703,
+    "kry": 1803.252,
+    "krz": 7007.816
+  },
+  "fixed_interface_freqs_hz": [
+    791.1,
+    2275.99,
+    2424.41,
+    12172.02,
+    13711.75,
+    13819.68
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21992,
+  "visual_bytes": 752076,
+  "cad_trust_pct": 88,
+  "source_hash": "75d78bc72f1f9a660c7b050e9a407f32d22b74ff148b58a43518875beabbc807"
+}

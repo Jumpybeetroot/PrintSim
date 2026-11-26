@@ -63,8 +63,10 @@ from printsim.schema import (
     CPAP_BLOWER_CATALOG,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
+    SUSPENSION_LINE_CATALOG,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
+    GANTRY_HARDWARE_KIT_CATALOG,
     GANTRY_WEIGHT_CLASSES,
     HOTEND_CATALOG,
     HOTEND_MOUNT_CLAMP_BASE_N_PER_MM,
@@ -334,6 +336,7 @@ def create_app() -> FastAPI:
             "toolhead_constructions": list(TOOLHEAD_CONSTRUCTION_CATALOG.values()),
             "extrusion_fillings": list(EXTRUSION_FILLINGS.values()),
             "gantry_brackets": list(GANTRY_BRACKET_CATALOG.values()),
+            "gantry_hardware_kits": list(GANTRY_HARDWARE_KIT_CATALOG.values()),
             "gantry_weight_classes": list(GANTRY_WEIGHT_CLASSES.values()),
             "x_rail_mounts": [
                 {"id": "front", "name": "Front Face (Voron Standard)", "short_name": "Front", "notes": "Bolted to front (-Y) face: max Y-accel bending stiffness; standard forward CoG"},
@@ -391,6 +394,7 @@ def create_app() -> FastAPI:
             ],
             "bed_mounts": list(BED_MOUNT_CATALOG.values()),
             "frame_feet": list(FRAME_FEET_CATALOG.values()),
+            "suspension_lines": list(SUSPENSION_LINE_CATALOG.values()),
             "z_probes": list(Z_PROBE_CATALOG.values()),
             "belts": list(BELT_CATALOG.values()),
             "belt_routings": list(BELT_ROUTING_CATALOG.values()),
@@ -487,7 +491,12 @@ def create_app() -> FastAPI:
         try:
             from printsim.cad_assets.registry import list_hardware_assets
         except ImportError:
-            return {"hotends": {}, "toolheads": {}}
+            return {
+                "hotends": {},
+                "toolheads": {},
+                "assemblies": {},
+                "gantry_brackets": {},
+            }
         return list_hardware_assets()
 
     @api.get("/api/assets/hardware/{category}/{asset_id}/visual.glb")

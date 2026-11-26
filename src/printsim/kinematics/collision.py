@@ -66,6 +66,33 @@ def check_frame_clearance(assembly: AssemblyModel) -> CollisionReport:
         carriage_clearance = beam_w + 18.0
         effector_top_clearance = beam_w + 25.0
         clear_z = fh - (max_z_car + carriage_clearance + effector_top_clearance)
+    elif (
+        spec.architecture == "corexy"
+        and bool(spec.frame.gantry_on_top_frame)
+        and not spec.is_flying_gantry
+    ):
+        # Gantry plane IS the top ring (VzBot): parts above the X beam live in the top hat, so the
+        # Z budget is the explicit stack bottom ring + bed carriage + build Z + nozzle drop + top-ring
+        # half height (VzBot 330 CAD: 20 + 80 + 400 + 54.2 + 10 = 564.2 <= 570 mm, 7.8 mm spare).
+        from printsim.schema.overrides import resolve_bed_mount
+
+        nozzle_drop = abs(float(spec.toolhead.nozzle_offset_mm[2]))
+        if (
+            spec.gantry.effective_x_rail_mount == "top"
+            and spec.toolhead.offset_datum_rail_mount != "top"
+        ):
+            nozzle_drop += 6.0  # builder top-mount datum shift (_attach_toolhead_cog_and_nozzle)
+        bed_cfg = resolve_bed_mount(spec)
+        # PEI + plate + mount standoff + bed sub-frame extrusion + ~35 mm Z-carriage / bearing-mount drop
+        bed_stack = (
+            1.0
+            + float(spec.bed.plate_thickness_mm)
+            + float(bed_cfg.get("standoff_height_mm", 14.0))
+            + prof.height_m * 1000.0
+            + 35.0
+        )
+        overhead_z = prof.height_m * 1000.0 * 1.5 + bed_stack + nozzle_drop
+        clear_z = fh - (bz + overhead_z)
     else:
         # Z clearance: bed + top frame stack (~85 mm) + build Z + upper toolhead half-height (0.5 * ez)
         overhead_z = 85.0 + 0.5 * ez

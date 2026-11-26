@@ -26,9 +26,12 @@ export interface PresetItem {
   name: string;
   short_name?: string;
   architecture: string;
+  base_kit?: "siboor" | "ldo" | "diy" | string;
   category?: string;
   category_label?: string;
+  hardware_kit?: string;
   summary?: string;
+  highlights?: string[];
   description: string;
 }
 
@@ -86,6 +89,56 @@ export type BracketMaterialType =
   | "sheet_metal_steel"
   | "aluminum_6061_t6"
   | "aluminum_7075_t6";
+
+export type GantryHardwareKitType =
+  | "auto"
+  | "voron_stock_printed"
+  | "ldo_voron_kit"
+  | "siboor_cnc_awd"
+  | "siboor_cnc_2wd"
+  | "monolith_ldo_cnc_awd"
+  | "monolith_ldo_cnc_2wd"
+  | "vzbot_330_awd"
+  | "vzbot_330_2wd"
+  | "procedural";
+
+export interface GantryHardwareKitSettings {
+  drive_mode?: "2wd" | "awd";
+  belt_routing?: BeltRoutingType;
+  bracket_material?: BracketMaterialType;
+  double_shear_pulleys?: boolean;
+  x_rail_profile?: string;
+  y_rail_profile?: string;
+  x_rail_mount?: XRailMountType;
+  y_rail_mount?: YRailMountType;
+  rail_block_type?: RailBlockType;
+  belt_type?: BeltType;
+  belt_pretension_n?: number;
+  carriage_mass_g?: number;
+  idler_axial_preload?: IdlerAxialPreloadType;
+  z_joint_material_flying?: ZJointMaterialType;
+  sibling_2wd_kit?: GantryHardwareKitType;
+  sibling_awd_kit?: GantryHardwareKitType;
+}
+
+export interface GantryHardwareKitItem {
+  id: GantryHardwareKitType | string;
+  name: string;
+  short_name: string;
+  description?: string;
+  default_bracket_material?: string;
+  drive_mode?: string;
+  kit_settings?: GantryHardwareKitSettings | null;
+}
+
+export interface CadGantryStationAsset {
+  asset_id: string;
+  visual_glb_url: string;
+  mass_g?: number;
+  stiffness_n_per_mm?: number | null;
+  port0_mm?: [number, number, number];
+  port1_mm?: [number, number, number];
+}
 
 export type ChamberHeaterType = "none" | "monolith_100w_ptc" | "monolith_500w_ptc";
 
@@ -148,13 +201,99 @@ export type BedMountType =
   | "rigid_4pt"
   | "floating_4pt"
   | "silicone_4pt"
+  | "silicone_4pt_clamped"
   | "springs_4pt";
 
 export type FrameFeetType =
   | "rigid_bolted"
   | "rubber_feet"
   | "anti_vib_pads"
-  | "paver_on_foam";
+  | "paver_on_foam"
+  | "suspended_lines";
+
+export type SuspensionLineType =
+  | "paracord_550"
+  | "uhmwpe_braid_200lb"
+  | "nylon_mono_100lb"
+  | "steel_cable_1_5mm"
+  | "bungee_cord_6mm";
+
+export type FrameBallastLocationType = "base" | "top" | "distributed";
+
+export interface SuspensionLineCatalogItem {
+  id: SuspensionLineType | string;
+  name: string;
+  short_name: string;
+  stiffness_ea_n: number;
+  break_strength_n: number;
+  design_factor: number;
+  loss_factor: number;
+  notes?: string;
+}
+
+export interface MountRigidBodyMode {
+  frequency_hz: number;
+  kind: string;
+  label: string;
+  mount_strain_share_pct: number;
+  in_shaper_band: boolean;
+  adxl_peak_ratio_x: number;
+  adxl_peak_ratio_y: number;
+}
+
+export interface MountAxisDynamics {
+  moving_mass_kg: number;
+  reduced_moving_mass_kg: number;
+  frame_recoil_ratio: number;
+  frame_recoil_um_per_mm: number;
+  recoil_freq_gain_pct: number;
+  retained_mount_compliance_um_per_n: number;
+}
+
+export interface MountingDynamics {
+  feet_type: FrameFeetType;
+  mount_damping_ratio: number;
+  total_mass_kg: number;
+  ballast_mass_kg: number;
+  ballast_location: FrameBallastLocationType;
+  rigid_body_modes: MountRigidBodyMode[];
+  lowest_sway_hz: number | null;
+  x: MountAxisDynamics;
+  y: MountAxisDynamics;
+  notes: string[];
+  suspension?: {
+    line: string;
+    line_length_mm: number;
+    line_count: number;
+    line_tension_n: number;
+    line_break_strength_n: number;
+    safety_factor: number;
+    design_factor: number;
+    static_stretch_mm: number;
+    pendulum_hz_analytic: number;
+    swing_resonant_line_length_mm: number;
+  };
+}
+
+export interface BeltDynamics {
+  installed_pretension_n: number;
+  operating_pretension_n: number;
+  thermal_tension_delta_n: number;
+  pretension_set_temp_c: number | null;
+  pluck_hz_150mm_installed: number;
+  pluck_hz_150mm_operating: number;
+  tension_mismatch_pct: number;
+  coupling_kappa: number;
+  tension_a_n?: number;
+  tension_b_n?: number;
+  pluck_hz_150mm_a?: number;
+  pluck_hz_150mm_b?: number;
+  effective_coupling?: number;
+  coupled_x_hz?: number;
+  coupled_y_hz?: number;
+  cross_peak_in_x?: number;
+  cross_peak_in_y?: number;
+}
 
 export type TopBraceType =
   | "none"
@@ -386,6 +525,7 @@ export interface ToolheadPresetItem {
   cpap_hose_id_mm?: number;
   shared_heatsink_cpap_duct?: boolean;
   belt_plane_z_offset_mm?: number;
+  offset_datum_rail_mount?: "front" | "top";
   default_hardware_summary?: string;
 }
 
@@ -476,11 +616,13 @@ export interface CatalogResponse {
   toolhead_constructions?: ToolheadConstructionCatalogItem[];
   extrusion_fillings?: ExtrusionFillingInfo[];
   gantry_brackets?: GantryBracketInfo[];
+  gantry_hardware_kits?: GantryHardwareKitItem[];
   gantry_weight_classes?: GantryWeightClassItem[];
   x_rail_mounts?: RailMountOption<XRailMountType>[];
   y_rail_mounts?: RailMountOption<YRailMountType>[];
   bed_mounts?: BedMountCatalogItem[];
   frame_feet?: FrameFeetCatalogItem[];
+  suspension_lines?: SuspensionLineCatalogItem[];
   z_probes?: ZProbeCatalogItem[];
   belts?: BeltCatalogItem[];
   belt_routings?: BeltRoutingCatalogItem[];
@@ -865,12 +1007,18 @@ export interface PrinterSpecData {
     top_panel?: boolean;
     bolt_panels_to_gantry?: boolean;
     gantry_top_clearance_mm?: number;
+    gantry_on_top_frame?: boolean;
+    side_panel_material?: string | null;
     trident_backbone?: boolean;
     top_brace?: TopBraceType;
     front_brace?: FrontBraceType;
     extrusion_filling?: ExtrusionFillingType;
     corner_joint_type?: CornerJointType;
     feet_type?: FrameFeetType;
+    suspension_line?: SuspensionLineType;
+    suspension_length_mm?: number;
+    ballast_mass_kg?: number;
+    ballast_location?: FrameBallastLocationType;
     chamber_temp_c?: number;
     chamber_heater_id?: ChamberHeaterType;
     chamber_insulation_mm?: number;
@@ -896,6 +1044,7 @@ export interface PrinterSpecData {
     belt_routing?: BeltRoutingType;
     double_shear_pulleys: boolean;
     bracket_material?: BracketMaterialType;
+    hardware_kit?: GantryHardwareKitType;
     custom_bracket_override?: CustomBracketOverrideData | null;
     carriage_mass_g: number;
     stepper_thermal_gasket?: StepperThermalGasketType;
@@ -908,6 +1057,8 @@ export interface PrinterSpecData {
       pulley_teeth: number;
       pitch_mm: number;
       pretension_n: number;
+      pretension_set_temp_c?: number | null;
+      tension_mismatch_pct?: number;
       wrap_angle_deg?: number;
       idler_shaft_diameter_mm?: number;
       back_idler_diameter_mm?: number | null;
@@ -960,6 +1111,7 @@ export interface PrinterSpecData {
     total_mass_g: number;
     cog_offset_mm: [number, number, number];
     nozzle_offset_mm?: [number, number, number];
+    offset_datum_rail_mount?: "front" | "top";
     mount_material?: ToolheadMountMaterial;
     body_construction?: ToolheadConstructionType | null;
     carriage_mount_material?: string | null;
@@ -1324,6 +1476,13 @@ export interface GeometryGantryBracketsData {
   kit_cost_usd: number;
   carriage_mass_delta_g: number;
   color_hex: string;
+  hardware_kit?: string;
+  hardware_kit_requested?: string;
+  hardware_kit_label?: string;
+  cad_backed?: boolean;
+  cad_xy_fea_active?: boolean;
+  cad_stiffness_n_per_mm?: number | null;
+  cad_assets?: Record<string, CadGantryStationAsset>;
 }
 
 export interface GeometryLinearRailsData {
@@ -1548,6 +1707,14 @@ export interface GeometryData {
   bed_mount_type?: BedMountType;
   bed_z_drive?: string;
   feet_type?: FrameFeetType;
+  suspension?: {
+    line: string;
+    length_mm: number;
+    line_tension_n: number;
+    lines: { anchor_mm: [number, number, number]; attach_mm: [number, number, number]; attach_node_id: string; anchor_node_id: string }[];
+  } | null;
+  ballast_mass_kg?: number;
+  ballast_location?: FrameBallastLocationType;
   bed_support_points_mm?: [number, number, number][];
   bed_mount_points_mm?: [number, number, number][];
   bed_subframe_z_mm?: number;
@@ -1633,6 +1800,8 @@ export interface ModalFeaData {
   shaper_x: ShaperData | null;
   shaper_y: ShaperData | null;
   shaper_graphs?: { x: AxisShaperGraph; y: AxisShaperGraph };
+  mounting_dynamics?: MountingDynamics | null;
+  belt_dynamics?: BeltDynamics | null;
   adxl_vs_nozzle_diagnostic?: {
     x: AdxlNozzleAxisDiagnostic;
     y: AdxlNozzleAxisDiagnostic;

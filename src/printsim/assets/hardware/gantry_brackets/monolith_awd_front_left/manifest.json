@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "monolith_awd_front_left",
+  "name": "LDO Monolith CNC 6061 Front-Left Drive (AWD 9mm)",
+  "source_cad": "front_left.step",
+  "source_url": "https://cad.onshape.com/documents/739b76283701789caa9999c7/w/434ca8ef5e541eb4a503de27",
+  "baked_at": "2026-11-26T19:05:40Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 2663,
+  "num_elements": 7160,
+  "num_dofs": 7989,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.00354,
+  "mass_kg": 0.089692,
+  "com_mm": [
+    22.8379,
+    16.3432,
+    0.1633
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    32.5,
+    7.5,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 283146.39,
+    "ky": 65235.792,
+    "kz": 19444.56
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 20428.514,
+    "kry": 28159.845,
+    "krz": 34157.121
+  },
+  "fixed_interface_freqs_hz": [
+    4047.2,
+    4966.75,
+    7026.99,
+    8121.62,
+    8574.23,
+    10302.94
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21978,
+  "visual_bytes": 867548,
+  "cad_trust_pct": 90,
+  "source_hash": "92204374c4351dce995f262492d417a86011dd00cf3171e050c43283da8d08ac"
+}

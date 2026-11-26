@@ -86,6 +86,13 @@ def _scale_group_stiffness(asm: AssemblyModel, group_id: str, scale: float) -> N
             sp.k_shear_n_m *= scale
             sp.k_normal_n_m *= scale
             sp.k_rot_nm_rad *= scale
+            if sp.k_diag_6dof is not None:
+                sp.k_diag_6dof = tuple(v * scale for v in sp.k_diag_6dof)
+
+    for se in asm.superelements:
+        se_gid = getattr(se, "part_group_id", "") or _classify_modal_group(se.id, getattr(se, "role", ""))[0]
+        if se_gid == group_id:
+            se.K_cb = se.K_cb * scale
 
 
 def _scale_group_mass(asm: AssemblyModel, group_id: str, scale: float) -> None:
@@ -291,7 +298,8 @@ def test_primary_limiting_mode_uniqueness_and_consistency(preset_name: str) -> N
         assert pm.mode_number in (4, 5)  # B-11 bed plate rotary inertia shifts Y limiting mode to #4
     elif preset_name == "voron_trident_300":
         assert lms["limiting_axis"] == "Y"
-        assert pm.mode_number == 2
+        assert pm.excited_axis == "Y"
+        assert pm.mode_number in (2, 4)  # Frame Y sway (#2) or ABS StealthBurner pitch whip (#4)
 
 
 @pytest.mark.parametrize("preset_name", ALL_PRESETS)

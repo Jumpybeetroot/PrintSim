@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "vzbot_330_xy_right",
+  "name": "VzBot 330 Y-Gantry XY-Joint Right",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-26T22:37:04Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 12173,
+  "num_elements": 39600,
+  "num_dofs": 36519,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.008128,
+  "mass_kg": 0.040771,
+  "com_mm": [
+    -38.3953,
+    2.0246,
+    0.0484
+  ],
+  "port0_mm": [
+    -23.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -43.5,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 591727.423,
+    "ky": 116086.478,
+    "kz": 57411.68
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 23167.604,
+    "kry": 62780.196,
+    "krz": 50512.988
+  },
+  "fixed_interface_freqs_hz": [
+    7058.84,
+    7859.41,
+    9762.67,
+    12133.7,
+    15100.52,
+    18261.62
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21989,
+  "visual_bytes": 878684,
+  "cad_trust_pct": 72,
+  "source_hash": "eddedf8da0d32b6f576d3544fac3b1d40323442baa77d8ecfb8ef79d9cacddcd"
+}

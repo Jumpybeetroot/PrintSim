@@ -21,6 +21,7 @@ from printsim.schema import TOOLHEAD_PRESETS, PrinterSpec, ToolheadSpec
 
 def _corexy_paneled() -> PrinterSpec:
     spec = PrinterSpec(architecture="corexy")
+    spec.use_cad_superelements = False
     spec.frame.bracing = "corner_gussets"
     spec.frame.enclosed_panels = True
     spec.frame.panel_mounting = "bolted_structural"
@@ -42,7 +43,7 @@ def test_toolhead_schema_internal_stiffness_defaults_bounds_and_presets() -> Non
 
     assert TOOLHEAD_PRESETS["stealthburner"]["internal_stiffness_n_per_mm"] == pytest.approx(350.0)
     assert TOOLHEAD_PRESETS["xol_compact"]["internal_stiffness_n_per_mm"] == pytest.approx(650.0)
-    assert TOOLHEAD_PRESETS["archetype_cpap"]["internal_stiffness_n_per_mm"] == pytest.approx(1800.0)
+    assert TOOLHEAD_PRESETS["archetype_cpap"]["internal_stiffness_n_per_mm"] == pytest.approx(950.0)
     assert TOOLHEAD_PRESETS["heavy_uhf_long"]["internal_stiffness_n_per_mm"] == pytest.approx(250.0)
 
     s = PrinterSpec()
@@ -338,3 +339,41 @@ def test_chamber_temperature_modulus_retention_on_internal_stiffness() -> None:
         sp for sp in build_assembly(s_al_70).fastener_springs if sp.id == "toolhead_cog_spring"
     )
     assert sp_al_70.k_shear_n_m == pytest.approx(sp_al_25.k_shear_n_m, rel=1e-9)
+
+
+def test_positive_cog_z_tbranch_and_non_collocated_modal_compliance() -> None:
+    """Top-heavy direct-drive toolheads (cog_z > 0, noz_z < 0) use a T-branch without collapsing Kx or frame share."""
+    from pathlib import Path
+
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    spec = PrinterSpec.from_yaml(examples_dir / "voron_trident_300.yaml")
+    spec.use_cad_superelements = False  # verify analytical T-branch directly
+    assert spec.toolhead.cog_offset_mm[2] > 0.0
+    assert spec.toolhead.nozzle_offset_mm[2] < 0.0
+
+    asm = build_assembly(spec)
+    node_ids = {n.id for n in asm.nodes}
+    member_ids = {m.id for m in asm.members}
+    assert "toolhead_chassis" in node_ids
+    assert {"toolhead_mount", "toolhead_mount_upper", "nozzle_stem"}.issubset(member_ids)
+
+    st = solve_static_fea(asm)
+    mo = solve_modal_fea(asm)
+    assert st.toolhead_stiffness_x_n_per_mm > 115.0
+    assert mo.shaper_y is not None
+    # Preset ships the Voron-documented 110 Hz belt pluck (9 N). A real stock Trident 300 at
+    # 2.2 lb measures Y MZV 40.8-42.2 Hz (docs/community_touchstones.md); model ~40.5 Hz here.
+    assert 36.0 <= mo.shaper_y.effective_freq_hz <= 46.0
+    assert mo.shaper_y.compliance_share_pct["frame"] > 12.0
+
+    # Softening the carriage mount (e.g. Voron Tap) must strictly LOWER Y shaper frequency & consistent-MZV accel
+    spec_mzv = spec.model_copy(deep=True)
+    spec_mzv.kinematics.input_shaper = "mzv"
+    spec_tap = spec_mzv.model_copy(deep=True)
+    spec_tap.toolhead.z_probe_type = "printed_tap"
+    mo_mzv = solve_modal_fea(build_assembly(spec_mzv))
+    mo_tap = solve_modal_fea(build_assembly(spec_tap))
+    assert mo_tap.shaper_y is not None and mo_mzv.shaper_y is not None
+    assert mo_tap.shaper_y.effective_freq_hz < mo_mzv.shaper_y.effective_freq_hz
+    assert mo_tap.recommended_max_accel_mm_s2 < mo_mzv.recommended_max_accel_mm_s2
+

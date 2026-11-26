@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_trident_z_mount_left",
+  "source_cad": "trident_assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Trident",
+  "regions": [
+    {
+      "label": "voron_trident_z_mount_left",
+      "material_id": "abs_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "datum": "exact_official_step_assembled_coords",
+  "step_subassembly": "Z_Assembly/Z_Motors/Z_Stepper_Left",
+  "shift_mm": [
+    390.0,
+    0.0,
+    510.0
+  ]
+}

@@ -212,6 +212,39 @@ print(bracket["stiffness_n_per_mm"], bracket["specific_stiffness_n_per_mm_per_g"
 
 ---
 
+### Mounting, Ballast & Belt Tension Fields
+
+| Field | Values | Effect |
+| :--- | :--- | :--- |
+| `frame.feet_type` | `rigid_bolted`, `rubber_feet`, `anti_vib_pads`, `paver_on_foam`, `suspended_lines` | Mount under (or above) the frame |
+| `frame.suspension_line`, `frame.suspension_length_mm` | catalog `suspension_lines`; 50–5000 mm | Line material and free length when suspended |
+| `frame.ballast_mass_kg`, `frame.ballast_location` | 0–200 kg; `base`, `top`, `distributed` | Dead weight on the frame corners |
+| `gantry.belt.pretension_set_temp_c` | °C or null | Temperature at which `pretension_n` was set; null = already the operating tension |
+| `gantry.belt.tension_mismatch_pct` | 0–80 % | CoreXY A/B belt tension difference |
+
+### Frame Topology & Panel Fields (VzBot-style builds)
+
+| Field | Values | Effect |
+| :--- | :--- | :--- |
+| `frame.gantry_on_top_frame` | `true` / `false` (fixed-gantry CoreXY only) | Y rails bolt to the top-ring Y extrusions: the gantry plane is the top ring, no separate gantry ring or stub columns; `gantry_top_clearance_mm` is ignored and Z clearance uses the explicit bed/nozzle stack |
+| `frame.side_panel_material` | material id or null | Left/right panel sheet when it differs from `panel_material` (e.g. 3 mm Al rear + polycarbonate sides) |
+| `gantry.hardware_kit` | `vzbot_330_awd`, `vzbot_330_2wd` (+ Voron/Siboor/Monolith kits) | CAD-baked VzBot rear motor mounts, front AWD/2WD mounts and XY joints, plus kit settings (MGN9H top X, inner MGN12H Y, 6 mm GT2 at 22 N) |
+| `toolhead.offset_datum_rail_mount` | `front` (default), `top` | X-rail mounting the CoG / nozzle offsets were measured on; the builder's top/bottom-mount datum shift is skipped when it matches `gantry.x_rail_mount` |
+| `toolhead.preset_id` | `vz_printhead_cnc` | CAD-measured Vz-Printhead CNC + HextrudORT Low + Goliath (343 g dressed, nozzle −54.2 mm below the tube axis) |
+
+Reference build: `examples/vzbot_330_awd.yaml` (official VzBoT3D BOM + `Vz-330_v1.2` STEP), also a Studio base machine (`/api/catalog` preset `vzbot_330_awd`, DIY / Self-Sourced Build group).
+
+`modal_fea.mounting_dynamics` (null on a rigidly bolted frame) lists the whole-printer rigid-body
+modes, frame recoil per axis and, when suspended, line tension and safety factor.
+`modal_fea.belt_dynamics` reports installed and operating tension, pluck frequency on a 150 mm
+span, and the A/B coupling and cross-axis peaks.
+
+`printsim belt-identify <spec> --axis X|Y [--point u,v,freq_hz ...] [--json]` separates the belt's
+in-place stiffness from the rest of the drive chain using the axis resonance measured at three or
+more toolhead positions (`fea/belt_identification.py`); without `--point` it returns the
+measurement plan and the model's predicted frequency at each position. Belt branch lengths in
+`evaluate_printer` follow `toolhead_rel_pos`.
+
 ## 6. Hands-Off Discord & Touchstone KB Research Workflow
 
 To gather empirical 3D-printer hardware specs (toolhead/hotend weights, gantry masses, polymer tests, and Klipper/Shake&Tune ADXL resonance data) from public 3D-printing Discord communities without manual babysitting, PrintSim combines:

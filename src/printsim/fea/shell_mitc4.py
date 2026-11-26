@@ -406,14 +406,35 @@ def fastener_spring_matrices(
     k_rot_nm_rad: float,
     normal_vec: np.ndarray,
     offset_vec: np.ndarray | None = None,
+    k_diag_6dof: tuple[float, float, float, float, float, float] | None = None,
 ) -> np.ndarray:
     """Build exact symmetric 12x12 two-node 3D CBUSH spring stiffness matrix.
 
     Node 0 is the shell perimeter node and Node 1 is the matching frame extrusion node.
+    If ``k_diag_6dof`` is provided (global 6-DOF diagonal stiffnesses ``(kx, ky, kz, krx, kry, krz)``),
+    constructs the exact 6-DOF zero-offset bearing/contact stiffness matrix directly.
     If ``offset_vec`` (``p_shell - p_frame`` in global meters) is nonzero, applies an
     exact rigid-body eccentric lever-arm transformation on Node 1 so rigid rotations
     have zero strain energy and parallel-axis composite flange bending is captured.
     """
+    if k_diag_6dof is not None:
+        k_diag = np.diag(np.asarray(k_diag_6dof, dtype=float))
+        if offset_vec is not None:
+            off = np.asarray(offset_vec, dtype=float)
+            if float(np.linalg.norm(off)) > 1e-12:
+                # Co-located bearing/interface lever-arm shift (p_bolt_face - p_raceway):
+                # shifting both ports by the same rigid arm preserves all 6 exact rigid-body
+                # zero modes while inducing exact parallel-axis roll/pitch/yaw compliance
+                # (C_eff = T_r^-1 K_6^-1 T_r^-T, e.g. lateral X force rolling a top/bottom rail).
+                t_r = np.eye(6, dtype=float)
+                t_r[0:3, 3:6] = -_skew(off)
+                k_diag = t_r.T @ k_diag @ t_r
+        k12 = np.zeros((12, 12), dtype=float)
+        k12[:6, :6] = k_diag
+        k12[6:, 6:] = k_diag
+        k12[:6, 6:] = -k_diag
+        k12[6:, :6] = -k_diag
+        return 0.5 * (k12 + k12.T)
     n_arr = np.asarray(normal_vec, dtype=float)
     n_len = float(np.linalg.norm(n_arr))
     if n_len < 1e-12:

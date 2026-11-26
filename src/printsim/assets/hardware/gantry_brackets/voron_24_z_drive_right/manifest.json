@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_24_z_drive_right",
+  "name": "Voron 2.4r2 Belted Z-Drive Pod B (ABS/ASA)",
+  "source_cad": "Voron_2.4r2_Assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-2",
+  "baked_at": "2026-11-26T19:22:41Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 4797,
+  "num_elements": 14280,
+  "num_dofs": 14391,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.001764,
+  "mass_kg": 0.097329,
+  "com_mm": [
+    -15.479,
+    21.0577,
+    -39.7513
+  ],
+  "port0_mm": [
+    0.0,
+    10.0,
+    -15.0
+  ],
+  "port1_mm": [
+    -12.0,
+    24.0,
+    -40.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 7001.416,
+    "ky": 2010.149,
+    "kz": 12973.938
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1465.473,
+    "kry": 2920.882,
+    "krz": 973.441
+  },
+  "fixed_interface_freqs_hz": [
+    139.44,
+    199.33,
+    420.54,
+    1068.85,
+    1699.76,
+    1731.82
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 25111,
+  "visual_bytes": 1100156,
+  "cad_trust_pct": 88,
+  "source_hash": "35f1cba5f9762024ff70603455706a7de325aa0be88c75b11ddc865fbc306f14"
+}

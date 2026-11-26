@@ -15,6 +15,7 @@ frame:
   panel_material: aluminum_5052_sheet
   panel_thickness_mm: 4.0
 gantry:
+  hardware_kit: monolith_ldo_cnc_awd
   drive_mode: awd
   belt_routing: monolith_short
   double_shear_pulleys: true
@@ -23,7 +24,11 @@ gantry:
   x_beam_material: carbon_fiber_torsional_45
   x_rail_profile: mgn12_rail
   y_rail_profile: mgn12_rail
+  x_rail_mount: front
+  y_rail_mount: inner
   rail_material: steel_4140
+  rail_block_type: H
+  idler_axial_preload: disc_spring_m5
   dual_x_rails: false
   # Scale-weighed LDO Monolith CNC 6061 AWD dressed XY-joints (CloakedWayne #updates):
   # 214 g + 42 g Al 6061 bracket delta = 256 g (2x 75.9 g LDO CNC XY-joints + 2x 48.3 g LDO MGN12H + ~7.6 g fasteners)
@@ -64,13 +69,13 @@ kinematics:
     motor_mass_g: 290
 toolhead:
   preset_id: archetype_cpap
-  name: Archetype CPAP Ultra-Low CoG
-  total_mass_g: 175
-  cog_offset_mm: [0, -12, -14]
-  nozzle_offset_mm: [0, -16, -50]
-  mount_material: aluminum_6061_t6
-  body_construction: plate_sandwich_cf
-  internal_stiffness_n_per_mm: 1800.0
+  name: Archetype Breakneck CPAP (Sherpa Micro)
+  total_mass_g: 248
+  cog_offset_mm: [0, -15.5, 12]
+  nozzle_offset_mm: [0, -21, -64]
+  mount_material: ppa_cf_printed
+  body_construction: compact_cage
+  internal_stiffness_n_per_mm: 950.0
   envelope_mm: [58, 62, 85]
   hotend:
     preset_id: chube_conduction

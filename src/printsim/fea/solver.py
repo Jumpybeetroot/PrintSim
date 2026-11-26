@@ -28,7 +28,7 @@ def _is_pseudo_profile_member(member: StructuralMember) -> bool:
     """Return True for stiffness-calibrated virtual links whose M*c/I is not physical stress."""
     if member.material.density_kg_m3 < 1.0:
         return True
-    if member.id in ("toolhead_mount", "nozzle_stem"):
+    if member.id in ("toolhead_mount", "toolhead_mount_upper", "nozzle_stem"):
         return True
     if member.id.startswith(("car_link_", "eff_link_", "panel_shear_")):
         return True
@@ -432,6 +432,9 @@ def solve_static_fea(
     nmap_fea = assembly.node_map
     r_th = nmap_fea[assembly.toolhead_node_id].position_m
     r_cog = nmap_fea[cog_id].position_m
+    junc_id = "toolhead_chassis" if "toolhead_chassis" in node_idx else cog_id
+    junc_dof = 6 * node_idx[junc_id]
+    r_junc = nmap_fea[junc_id].position_m
     r_noz = nmap_fea[noz_id].position_m
     r_bed = (
         nmap_fea[assembly.bed_node_id].position_m
@@ -475,16 +478,16 @@ def solve_static_fea(
         u_wp_noz = _bed_wp_disp(u_unit, dr_noz_bed)
         u_th = u_unit[th_dof : th_dof + 3]
         th_th = u_unit[th_dof + 3 : th_dof + 6]
-        u_cog = u_unit[cog_dof : cog_dof + 3]
-        th_cog = u_unit[cog_dof + 3 : cog_dof + 6]
+        u_junc = u_unit[junc_dof : junc_dof + 3]
+        th_junc = u_unit[junc_dof + 3 : junc_dof + 6]
         u_noz = u_unit[noz_dof : noz_dof + 3]
 
         p_th_at_noz = u_th + np.cross(th_th, r_noz - r_th)
-        p_cog_at_noz = u_cog + np.cross(th_cog, r_noz - r_cog)
+        p_junc_at_noz = u_junc + np.cross(th_junc, r_noz - r_junc)
 
         d1 = max(0.0, float((p_th_at_noz - u_wp_noz)[axis]))
-        d2 = max(0.0, float((p_cog_at_noz - p_th_at_noz)[axis]))
-        d3 = max(0.0, float((u_noz - p_cog_at_noz)[axis]))
+        d2 = max(0.0, float((p_junc_at_noz - p_th_at_noz)[axis]))
+        d3 = max(0.0, float((u_noz - p_junc_at_noz)[axis]))
         rel_disp = float((u_noz - u_wp_noz)[axis])
         disp_mm = abs(rel_disp) * 1e3
         return 1.0 / max(disp_mm, 1e-9), (d1, d2, d3)
@@ -684,20 +687,56 @@ def solve_static_fea(
     # cancelling to 0 net Y force on y_car_l / y_car_r.
     F_belt = np.zeros(n_dof, dtype=float)
     if assembly.spec.architecture == "corexy":
-        t0 = assembly.spec.gantry.belt.pretension_n
+        from printsim.fea.components import belt_operating_pretension_n
+
+        t0 = belt_operating_pretension_n(assembly.spec)
+        mismatch_frac = float(getattr(assembly.spec.gantry.belt, "tension_mismatch_pct", 0.0)) * 0.01
+        delta_t = t0 * mismatch_frac
+        # Stacked CoreXY A/B belt planes (vertical separation dz_belt = belt_width + 3 mm flange gap,
+        # fore/aft XY-joint idler-boss offset dy_idler = 14 mm). Even at equal A/B tension T0, the
+        # upper/lower Y-belt spans create a self-equilibrating twisting moment Mx = +-T0 * dz_belt
+        # on the left/right XY-joints; A/B tension mismatch adds pitch My and yaw racking Mz.
+        dz_belt = (float(assembly.spec.gantry.belt.width_mm) + 3.0) * 1e-3
+        dy_idler = 0.014
+        mx_stack = t0 * dz_belt
+        my_mismatch = 0.5 * delta_t * dz_belt
+        mz_mismatch = delta_t * dy_idler
+
+        # Apply belt tension at the physical CAD pulley/motor shaft nodes (pulley_*) when present
+        # so the 3D CAD motor mounts & front idlers bend/twist under belt preload while transmitting
+        # the exact self-equilibrating load into the frame corners g_*.
         belt_loads = [
-            ("g_rl", +2.0 * t0, -2.0 * t0),
-            ("g_rr", -2.0 * t0, -2.0 * t0),
-            ("g_fl", 0.0, +2.0 * t0),
-            ("g_fr", 0.0, +2.0 * t0),
-            ("y_car_l", +2.0 * t0, 0.0),
-            ("y_car_r", -2.0 * t0, 0.0),
+            ("pulley_rl" if "pulley_rl" in node_idx else "g_rl", +2.0 * t0, -2.0 * t0, 0.0, 0.0, 0.0),
+            ("pulley_rr" if "pulley_rr" in node_idx else "g_rr", -2.0 * t0, -2.0 * t0, 0.0, 0.0, 0.0),
+            ("pulley_fl" if "pulley_fl" in node_idx else "g_fl", 0.0, +2.0 * t0, 0.0, 0.0, 0.0),
+            ("pulley_fr" if "pulley_fr" in node_idx else "g_fr", 0.0, +2.0 * t0, 0.0, 0.0, 0.0),
         ]
-        for nid, fx, fy in belt_loads:
+        # Split XY-joint idler belt preload & eccentric stacked-belt moments 50/50 across y_car_* and
+        # x_beam_* when x_beam_* is present so both the XY-joint body and Y-carriage bearing flex.
+        if "x_beam_l" in node_idx and "x_beam_r" in node_idx:
+            belt_loads.extend(
+                [
+                    ("y_car_l", +t0, 0.0, +0.5 * mx_stack, +0.5 * my_mismatch, +0.5 * mz_mismatch),
+                    ("x_beam_l", +t0, 0.0, +0.5 * mx_stack, +0.5 * my_mismatch, +0.5 * mz_mismatch),
+                    ("y_car_r", -t0, 0.0, -0.5 * mx_stack, -0.5 * my_mismatch, -0.5 * mz_mismatch),
+                    ("x_beam_r", -t0, 0.0, -0.5 * mx_stack, -0.5 * my_mismatch, -0.5 * mz_mismatch),
+                ]
+            )
+        else:
+            belt_loads.extend(
+                [
+                    ("y_car_l", +2.0 * t0, 0.0, +mx_stack, +my_mismatch, +mz_mismatch),
+                    ("y_car_r", -2.0 * t0, 0.0, -mx_stack, -my_mismatch, -mz_mismatch),
+                ]
+            )
+        for nid, fx, fy, mx, my, mz in belt_loads:
             if nid in node_idx:
                 bi = 6 * node_idx[nid]
                 F_belt[bi + 0] += fx
                 F_belt[bi + 1] += fy
+                F_belt[bi + 3] += mx
+                F_belt[bi + 4] += my
+                F_belt[bi + 5] += mz
     u_belt = solve_rhs(F_belt)
 
     # 5. Combined worst-case envelope (gravity + belt preload + peak unit-circle XY acceleration)

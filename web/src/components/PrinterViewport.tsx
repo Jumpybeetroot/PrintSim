@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
@@ -37,7 +37,11 @@ import {
   getHotendProfileLUT,
   sampleProfileLUT,
 } from "../viewport/modalKinematics";
-import { buildAssemblyHardwareMeshes } from "../viewport/proceduralHardware";
+import {
+  ModalCadGantryItem,
+  buildAssemblyHardwareMeshes,
+  buildCadGantryStationMeshes,
+} from "../viewport/proceduralHardware";
 import { buildSolidPartFeaScene, buildTopologyOptScene } from "../viewport/solidPartScene";
 import {
   ModalBedMountItem,
@@ -170,24 +174,39 @@ export const PrinterViewport: React.FC<Props> = ({
 
   const hotendVisualGlbUrl = sim?.geometry?.toolhead_structure?.hotend_visual_glb_url ?? null;
   const toolheadVisualGlbUrl = sim?.geometry?.toolhead_structure?.toolhead_visual_glb_url ?? null;
+  const gantryCadAssets = sim?.geometry?.gantry_brackets?.cad_assets;
+
+  const cadGlbUrlsToLoad = useMemo(() => {
+    const urls = new Set<string>();
+    if (hotendVisualGlbUrl) urls.add(hotendVisualGlbUrl);
+    if (toolheadVisualGlbUrl) urls.add(toolheadVisualGlbUrl);
+    if (gantryCadAssets) {
+      for (const asset of Object.values(gantryCadAssets)) {
+        if (asset?.visual_glb_url) urls.add(asset.visual_glb_url);
+      }
+    }
+    return Array.from(urls).sort();
+  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl, gantryCadAssets]);
+
+  const cadGlbUrlsKey = cadGlbUrlsToLoad.join("|");
 
   useEffect(() => {
-    const urlsToFetch = [hotendVisualGlbUrl, toolheadVisualGlbUrl].filter(
-      (url): url is string => typeof url === "string" && url.length > 0 && !cadGlbResolvedCache.has(url)
+    const urlsToFetch = cadGlbUrlsToLoad.filter(
+      (url) => typeof url === "string" && url.length > 0 && !cadGlbResolvedCache.has(url)
     );
     if (urlsToFetch.length === 0) return;
     let cancelled = false;
-    for (const url of urlsToFetch) {
-      void loadCadGlbCached(url).then((loaded) => {
-        if (!cancelled && loaded) {
-          setCadGlbVersion((v) => v + 1);
-        }
-      });
-    }
+    void Promise.allSettled(urlsToFetch.map((url) => loadCadGlbCached(url))).then((results) => {
+      if (cancelled) return;
+      const anyLoaded = results.some((r) => r.status === "fulfilled" && r.value != null);
+      if (anyLoaded) {
+        setCadGlbVersion((v) => v + 1);
+      }
+    });
     return () => {
       cancelled = true;
     };
-  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl]);
+  }, [cadGlbUrlsKey, cadGlbUrlsToLoad]);
 
   useEffect(() => {
     if (!toolsMenuOpen) return;
@@ -345,6 +364,7 @@ export const PrinterViewport: React.FC<Props> = ({
     modalBedFrameNodeId?: string;
     modalBedMountItems: ModalBedMountItem[];
     modalGe5cItems: ModalGe5cJointItem[];
+    modalCadGantryItems: ModalCadGantryItem[];
     basePositions: Record<string, THREE.Vector3>;
     modalVectors: Record<string, THREE.Vector3>;
     modalRotations: Record<string, THREE.Vector3>;
@@ -385,6 +405,7 @@ export const PrinterViewport: React.FC<Props> = ({
     modalBedSubframeOffset: new THREE.Vector3(),
     modalBedMountItems: [],
     modalGe5cItems: [],
+    modalCadGantryItems: [],
     basePositions: {},
     modalVectors: {},
     modalRotations: {},
@@ -591,6 +612,10 @@ export const PrinterViewport: React.FC<Props> = ({
     const tmpAnchorNodePos = new THREE.Vector3();
     const tmpAnchorRotVec = new THREE.Vector3();
     const tmpAnchorQuat = new THREE.Quaternion();
+    const tmpCadPort1Pos = new THREE.Vector3();
+    const tmpCadDeltaWrapper = new THREE.Vector3();
+    const tmpCadDeltaMesh = new THREE.Vector3();
+    const tmpCadInvQuat = new THREE.Quaternion();
 
     const hasActiveModalMeshes = (): boolean =>
       stateRef.current.isModal &&
@@ -724,6 +749,7 @@ export const PrinterViewport: React.FC<Props> = ({
           modalBedFrameNodeId,
           modalBedMountItems,
           modalGe5cItems,
+          modalCadGantryItems,
           isolateToolheadModal: isIsoToolhead,
           modalAmpScale: ampScale,
           modalMotionScale: motionScale,
@@ -1392,6 +1418,63 @@ export const PrinterViewport: React.FC<Props> = ({
             }
           }
         }
+
+        if (modalCadGantryItems.length > 0) {
+          for (let ci = 0; ci < modalCadGantryItems.length; ci++) {
+            const item = modalCadGantryItems[ci];
+            if (!basePositions[item.anchorNodeId]) continue;
+            getPosInto(item.anchorNodeId, item.wrapper.position);
+            const anchorRot = !isIsoToolhead ? modalRotations[item.anchorNodeId] : undefined;
+            if (anchorRot && anchorRot.lengthSq() > 1e-8) {
+              tmpAnchorRotVec.copy(anchorRot).multiplyScalar(phase * 0.1);
+              setQuatFromClampedRotVec(tmpAnchorRotVec, maxStageAngle, tmpAnchorQuat);
+            } else {
+              tmpAnchorQuat.identity();
+            }
+            if (item.baseRotY !== 0) {
+              tmpYawQuat.setFromAxisAngle(tmpUpAxis, item.baseRotY);
+              item.wrapper.quaternion.copy(tmpAnchorQuat).multiply(tmpYawQuat);
+            } else {
+              item.wrapper.quaternion.copy(tmpAnchorQuat);
+            }
+
+            if (
+              item.port1NodeId &&
+              item.elasticMeshes &&
+              item.elasticMeshes.length > 0 &&
+              item.baseSpanWrapper &&
+              basePositions[item.port1NodeId]
+            ) {
+              getPosInto(item.port1NodeId, tmpCadPort1Pos);
+              tmpCadDeltaWrapper.subVectors(tmpCadPort1Pos, item.wrapper.position);
+              tmpCadInvQuat.copy(item.wrapper.quaternion).invert();
+              tmpCadDeltaWrapper.applyQuaternion(tmpCadInvQuat);
+              tmpCadDeltaWrapper.sub(item.baseSpanWrapper);
+
+              for (let ei = 0; ei < item.elasticMeshes.length; ei++) {
+                const em = item.elasticMeshes[ei];
+                tmpCadDeltaMesh.copy(tmpCadDeltaWrapper).applyMatrix3(em.wrapperToMesh3);
+                const dx = tmpCadDeltaMesh.x;
+                const dy = tmpCadDeltaMesh.y;
+                const dz = tmpCadDeltaMesh.z;
+                const posAttr = em.geometry.getAttribute("position") as THREE.BufferAttribute;
+                const arr = posAttr.array as Float32Array;
+                const rest = em.restPos;
+                const blend = em.blendS;
+                const count = blend.length;
+                for (let vi = 0; vi < count; vi++) {
+                  const s = blend[vi];
+                  if (s === 0) continue;
+                  const o = vi * 3;
+                  arr[o] = rest[o] + s * dx;
+                  arr[o + 1] = rest[o + 1] + s * dy;
+                  arr[o + 2] = rest[o + 2] + s * dz;
+                }
+                posAttr.needsUpdate = true;
+              }
+            }
+          }
+        }
       }
 
       renderer.render(scene, camera);
@@ -1799,6 +1882,7 @@ export const PrinterViewport: React.FC<Props> = ({
     stateRef.current.modalBedFrameNodeId = undefined;
     stateRef.current.modalBedMountItems = [];
     stateRef.current.modalGe5cItems = [];
+    stateRef.current.modalCadGantryItems = [];
     stateRef.current.modalRotations = {};
     stateRef.current.modalHotendLen = 0.45;
     stateRef.current.isModal = viewMode === "modal";
@@ -2117,10 +2201,8 @@ export const PrinterViewport: React.FC<Props> = ({
           matColor = new THREE.Color("#cbd5e1");
         } else if (m.role === "brace") {
           matColor = new THREE.Color("#38bdf8");
-        } else if (m.role === "gantry") {
-          matColor = isCarbonBeam
-            ? new THREE.Color(m.color_hex || "#1b2028")
-            : new THREE.Color("#f59e0b");
+        } else if (m.role === "gantry" && isCarbonBeam) {
+          matColor = new THREE.Color(m.color_hex || "#1b2028");
         } else if (m.role === "bed") {
           matColor = isBedPost
             ? new THREE.Color(m.color_hex || "#9aa8ba")
@@ -2438,6 +2520,40 @@ export const PrinterViewport: React.FC<Props> = ({
           hulaGrp.position.copy(p);
           group.add(hulaGrp);
         }
+      } else if (feetType === "suspended_lines") {
+        // Overhead anchors and the lines the frame hangs from (anchor node -> top frame corner)
+        const anchorGeo = new THREE.SphereGeometry(0.09, 14, 10);
+        const anchorMat = new THREE.MeshStandardMaterial({
+          color: 0x334155,
+          metalness: 0.65,
+          roughness: 0.35,
+        });
+        const lineMat = new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          roughness: 0.55,
+          metalness: 0.15,
+        });
+        const lineAxis = new THREE.Vector3(0, 1, 0);
+        for (const ln of geom.suspension?.lines ?? []) {
+          const anchorPos = basePos[ln.anchor_node_id];
+          const attachPos = basePos[ln.attach_node_id];
+          if (!anchorPos || !attachPos) continue;
+          const anchor = new THREE.Mesh(anchorGeo, anchorMat);
+          anchor.position.copy(anchorPos);
+          tagInspectable(anchor, feetInspectInfo);
+          group.add(anchor);
+          const span = new THREE.Vector3().subVectors(anchorPos, attachPos);
+          const length = span.length();
+          if (length < 1e-6) continue;
+          const lineMesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.03, 0.03, length, 8),
+            lineMat
+          );
+          lineMesh.position.copy(attachPos).addScaledVector(span, 0.5);
+          lineMesh.quaternion.setFromUnitVectors(lineAxis, span.clone().normalize());
+          tagInspectable(lineMesh, feetInspectInfo);
+          group.add(lineMesh);
+        }
       } else {
         const boltPadGeo = new THREE.CylinderGeometry(0.14, 0.17, 0.08, 12);
         const boltPadMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.5 });
@@ -2732,9 +2848,24 @@ export const PrinterViewport: React.FC<Props> = ({
         stiffenById,
         tagInspectable,
       });
-
-
-
+    } else if (viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity") {
+      const cadGantryRes = buildCadGantryStationMeshes({
+        group,
+        sim,
+        basePos,
+        deformedPos,
+        viewMode,
+        toolheadPunchIn,
+        adjointLens,
+        stiffenById,
+        tagInspectable,
+        getModalNodeScalar,
+        globalNodalStress,
+        memberSensMap,
+      });
+      if (viewMode === "modal") {
+        stateRef.current.modalCadGantryItems = cadGantryRes.modalItems;
+      }
     }
 
     // Heated bed plate (deforms with bed_surface in Frame FEA, animates in Modal mode, & tints in Sensitivity)
@@ -3110,6 +3241,23 @@ export const PrinterViewport: React.FC<Props> = ({
               ? basePos["bed_frame"]?.y
               : undefined;
 
+        const cadGantryAssetsForBed =
+          geom.gantry_brackets?.hardware_kit !== "procedural"
+            ? (geom.gantry_brackets?.cad_assets ?? null)
+            : null;
+        const hideProceduralTridentGe5c = Boolean(
+          cadGantryAssetsForBed &&
+            [
+              "trident_bed_arm_left",
+              "trident_bed_arm_right",
+              "trident_bed_arm_rear",
+              "trident_bed_arm",
+            ].some((k) => {
+              const url = cadGantryAssetsForBed[k]?.visual_glb_url;
+              return Boolean(url && cadGlbResolvedCache.has(url));
+            })
+        );
+
         const bedMountsResult = buildBedMountsGroup({
           bedMountType,
           zDriveMode,
@@ -3136,6 +3284,7 @@ export const PrinterViewport: React.FC<Props> = ({
           bedEmissive,
           bedEmissiveIntensity,
           onTagMesh: (mesh) => tagInspectable(mesh, bedInspectInfo),
+          hideProceduralTridentGe5c,
         });
         group.add(bedMountsResult.root);
 
@@ -3663,25 +3812,28 @@ export const PrinterViewport: React.FC<Props> = ({
         : undefined;
 
       const toolheadGlbLoaded = Boolean(cachedToolheadGlb);
+      const isStealthBurnerToolhead =
+        toolheadGlbLoaded &&
+        ((sim.spec.toolhead.preset_id || "").toLowerCase().includes("stealthburner") ||
+          (toolheadVisualGlbUrl || "").toLowerCase().includes("stealthburner"));
       const activeToolheadSeSummary =
         thStruct?.cad_superelements_active?.find((se) => se.category === "toolheads") ?? null;
-      const cadToolheadPort1Mm =
+      const rawCadToolheadPort1Mm: [number, number, number] | null =
         toolheadGlbLoaded && activeToolheadSeSummary?.port1_mm && activeToolheadSeSummary.port1_mm.length === 3
-          ? activeToolheadSeSummary.port1_mm
+          ? ([
+              activeToolheadSeSummary.port1_mm[0],
+              activeToolheadSeSummary.port1_mm[1],
+              activeToolheadSeSummary.port1_mm[2],
+            ] as [number, number, number])
           : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "microwaved_bowden"
             ? ([0, -9.76, 30.5] as [number, number, number])
             : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "microwaved_bowden_chube"
               ? ([0, -12.76, 27.5] as [number, number, number])
               : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "el_fuego"
                 ? ([-0.322, -19.932, 2.28] as [number, number, number])
-                : null;
-      const cadPort1Three = cadToolheadPort1Mm
-        ? new THREE.Vector3(
-            cadToolheadPort1Mm[0] * SCALE,
-            cadToolheadPort1Mm[2] * SCALE,
-            -cadToolheadPort1Mm[1] * SCALE
-          )
-        : null;
+                : isStealthBurnerToolhead
+                  ? ([0.2, -28.9, -1.9] as [number, number, number])
+                  : null;
       const isCadSelfContainedToolhead = toolheadGlbLoaded && !isDeltaArch && xRailMountTool === "front";
 
       let hotendLen = Math.max(Math.min(Math.abs(nozRelY) * 0.72, 0.56), 0.34);
@@ -3693,11 +3845,31 @@ export const PrinterViewport: React.FC<Props> = ({
         if (Number.isFinite(glbTipDrop) && glbTipDrop > 0.1) {
           hotendLen = Math.max(0.28, Math.min(1.1, glbTipDrop));
         }
-      } else if (cadPort1Three) {
+      } else if (rawCadToolheadPort1Mm) {
         const nominalHotendMm =
           thStruct?.hotend_overall_length_mm ?? sim.spec.toolhead.hotend.overall_length_mm ?? 62;
         hotendLen = Math.max(0.28, Math.min(1.1, nominalHotendMm * SCALE));
       }
+
+      // Voron StealthBurner swaps its internal printed hotend mount (Revo / Dragon / Rapido / V6)
+      // beneath Clockwork 2 (bottom at Z = +10.6 mm) so standard hotends always focus their nozzle tip
+      // at the cooling-duct datum (Z = -51.0 mm, ~2.5 mm below the red shroud at Z = -48.53 mm),
+      // while longer UHF/66+ mm hotends butt flush against CW2 (+10.6 mm) and protrude naturally below.
+      const cadToolheadPort1Mm: [number, number, number] | null =
+        rawCadToolheadPort1Mm && isStealthBurnerToolhead
+          ? ([
+              rawCadToolheadPort1Mm[0],
+              rawCadToolheadPort1Mm[1],
+              Math.min(10.6, -51.0 + hotendLen / SCALE),
+            ] as [number, number, number])
+          : rawCadToolheadPort1Mm;
+      const cadPort1Three = cadToolheadPort1Mm
+        ? new THREE.Vector3(
+            cadToolheadPort1Mm[0] * SCALE,
+            cadToolheadPort1Mm[2] * SCALE,
+            -cadToolheadPort1Mm[1] * SCALE
+          )
+        : null;
       const collarYRelToTh = nozRelY + hotendLen;
 
       const hotendGlbLoaded = Boolean(cachedHotendGlb);

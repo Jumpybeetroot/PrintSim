@@ -48,6 +48,7 @@ const AUTOSAVE_KEY = "printsim_studio_autosave_v1";
 const SAVED_BUILDS_KEY = "printsim_studio_saved_builds_v1";
 const SHOW_HINTS_KEY = "printsim_studio_show_hints_v1";
 const ADVANCED_MODE_KEY = "printsim_studio_advanced_mode_v1";
+const BASE_MACHINE_CHOSEN_KEY = "printsim_studio_base_machine_chosen_v1";
 const MAX_SAVED_BUILDS = 30;
 const MAX_GCODE_CHARS = 100_000;
 
@@ -440,6 +441,22 @@ export function loadAdvancedModePreference(): boolean {
 export function saveAdvancedModePreference(enabled: boolean): void {
   try {
     window.localStorage.setItem(ADVANCED_MODE_KEY, enabled ? "1" : "0");
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function loadBaseMachineChosenPreference(): boolean {
+  try {
+    return window.localStorage.getItem(BASE_MACHINE_CHOSEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveBaseMachineChosenPreference(chosen: boolean): void {
+  try {
+    window.localStorage.setItem(BASE_MACHINE_CHOSEN_KEY, chosen ? "1" : "0");
   } catch {
     // Ignore storage errors
   }

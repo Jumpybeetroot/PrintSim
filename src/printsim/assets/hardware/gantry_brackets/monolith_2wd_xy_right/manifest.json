@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "monolith_2wd_xy_right",
+  "name": "LDO Monolith CNC 6061 XY-Joint Right (2WD 9mm)",
+  "source_cad": "LDO_2WD_9mm.step",
+  "source_url": "https://github.com/Monolith3D/LDO_Monolith_Gantry_Kits",
+  "baked_at": "2026-11-26T19:06:25Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1214,
+  "num_elements": 2640,
+  "num_dofs": 3642,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.006763,
+  "mass_kg": 0.033071,
+  "com_mm": [
+    -31.4012,
+    -12.5097,
+    1.6097
+  ],
+  "port0_mm": [
+    -18.0,
+    -18.5,
+    0.0
+  ],
+  "port1_mm": [
+    -45.0,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 33269.175,
+    "ky": 15636.247,
+    "kz": 2908.736
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 3266.999,
+    "kry": 2623.043,
+    "krz": 4731.764
+  },
+  "fixed_interface_freqs_hz": [
+    5486.48,
+    7573.81,
+    10730.38,
+    13978.59,
+    14895.45,
+    16676.36
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21982,
+  "visual_bytes": 850308,
+  "cad_trust_pct": 90,
+  "source_hash": "687f2b88a8c43a8c5181a7e4b1138f99a640562e94fde50bf2d24f2172c776df"
+}

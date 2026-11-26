@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { TooltipLayer } from "./components/TooltipLayer";
+import { BaseMachineModal } from "./components/BaseMachineModal";
 import { BaselineCompareDrawer } from "./components/BaselineCompareDrawer";
 import { DesignPanel } from "./components/DesignPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
@@ -30,9 +31,11 @@ import {
   clearAutoSavedSession,
   deleteSavedBuild,
   loadAutoSavedSession,
+  loadBaseMachineChosenPreference,
   loadSavedBuilds,
   parseSettingsFile,
   saveAutoSavedSession,
+  saveBaseMachineChosenPreference,
   SavedBuildEntry,
   serializeSettingsFile,
   StudioPersistedSettings,
@@ -203,6 +206,7 @@ const BED_MOUNT_LABELS: Record<string, string> = {
   rigid_4pt: "4-Pt Rigid",
   floating_4pt: "4-Pt Floating",
   silicone_4pt: "4-Pt Silicone",
+  silicone_4pt_clamped: "4-Pt Silicone Clamped",
   springs_4pt: "4-Pt Springs",
 };
 
@@ -211,6 +215,7 @@ const FRAME_FEET_LABELS: Record<string, string> = {
   rubber_feet: "Rubber / TPU Feet",
   anti_vib_pads: "Anti-Vib Pads / HULA",
   paver_on_foam: "Concrete Paver on Foam",
+  suspended_lines: "Suspended From Lines",
 };
 
 const Z_PROBE_LABELS: Record<string, string> = {
@@ -818,7 +823,8 @@ function describeSpecDiff(
 
 export default function App() {
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
-  const [selectedPreset, setSelectedPreset] = useState<string>("corexy_fixed_gantry_300");
+  const [selectedPreset, setSelectedPreset] = useState<string>("ldo_voron_trident_revd_300");
+  const [baseMachineModalOpen, setBaseMachineModalOpen] = useState<boolean>(false);
   const [filamentId, setFilamentId] = useState<string>("pla");
   const [spec, setSpec] = useState<PrinterSpecData | null>(null);
   const [yamlText, setYamlText] = useState<string>("");
@@ -1418,6 +1424,7 @@ export default function App() {
     async (presetId: string) => {
       if (!presetId) return;
       setSelectedPreset(presetId);
+      saveBaseMachineChosenPreference(true);
       setActiveSavedBuildId(null);
       setOptMessage(null);
       clearSpecHashIfPresent();
@@ -1442,6 +1449,7 @@ export default function App() {
         const data: CatalogResponse = await res.json();
         setCatalog(data);
         const firstId =
+          data.presets.find((p) => p.id === "ldo_voron_trident_revd_300")?.id ||
           data.presets.find((p) => p.id === "corexy_fixed_gantry_300")?.id ||
           data.presets[0]?.id;
 
@@ -1478,7 +1486,11 @@ export default function App() {
             }
           }
           if (!restoredOk && firstId) {
+            const alreadyChose = loadBaseMachineChosenPreference();
             await loadPreset(firstId);
+            if (!alreadyChose) {
+              setBaseMachineModalOpen(true);
+            }
           }
         }
         hasHydratedRef.current = true;
@@ -2831,6 +2843,7 @@ export default function App() {
           sim={sim}
           selectedPreset={selectedPreset}
           onSelectPreset={loadPreset}
+          onOpenBaseMachineChooser={() => setBaseMachineModalOpen(true)}
           filamentId={filamentId}
           onFilamentChange={handleFilamentChange}
           spec={spec}
@@ -2933,6 +2946,17 @@ export default function App() {
           error={error}
         />
       </main>
+
+      <BaseMachineModal
+        open={baseMachineModalOpen}
+        presets={catalog?.presets ?? []}
+        selectedPreset={selectedPreset}
+        onSelectPreset={loadPreset}
+        onClose={() => {
+          saveBaseMachineChosenPreference(true);
+          setBaseMachineModalOpen(false);
+        }}
+      />
 
       <ParetoModal
         open={paretoOpen}

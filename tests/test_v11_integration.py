@@ -359,6 +359,7 @@ def test_human_readable_fea_modal_and_grouped_sensitivity_diagnoses() -> None:
     bolted_spec.frame.panel_mounting = "bolted_structural"
     bolted_spec.frame.panel_material = "aluminum_5052_sheet"
     bolted_spec.frame.panel_thickness_mm = 4.0
+    bolted_spec.use_cad_superelements = False  # keep front_frame_columns in top 5 stiffen targets
     trident_rep = evaluate_printer(trident_spec)
     monolith_rep = evaluate_printer(bolted_spec)
     assert trident_rep.sensitivity is not None and monolith_rep.sensitivity is not None

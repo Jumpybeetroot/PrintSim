@@ -108,6 +108,7 @@ def hydrate_stepper_catalog(catalog: dict[str, dict[str, Any]]) -> None:
         "ldo_2504ah_s45r": "components/motors/ldo-42sth48-2504ah-s45r",
         "ldo_2504ah_s80": "components/motors/ldo-42sth48-2504ah-s80",
         "ldo_2804ah": "components/motors/ldo-42sth48-2804ah",
+        "ldo_2804ac": "components/motors/ldo-42sth48-2804ac",
         "kraken_motor_v2": "components/motors/kraken-motor-v2-60mm",
         "ldo_60_3004": "components/motors/ldo-42sth60-3004ac",
         "ldo_60_2004ah": "components/motors/ldo-42sth60-2004ah",
@@ -439,6 +440,7 @@ def hydrate_bed_mount_catalog(catalog: dict[str, dict[str, Any]]) -> None:
         "rigid_4pt": "components/bed_mounts/generic-rigid-4pt-standoffs",
         "floating_4pt": "components/bed_mounts/generic-floating-4pt-tabs",
         "silicone_4pt": "components/bed_mounts/generic-silicone-4pt-70a",
+        "silicone_4pt_clamped": "components/bed_mounts/vzbot-silicone-4pt-m3-clamped",
         "springs_4pt": "components/bed_mounts/generic-springs-4pt-yellow",
     }
     for key, rid in mapping.items():

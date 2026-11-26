@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "siboor_2wd_xy_right",
+  "name": "Siboor CNC 6061 XY-Joint Right (2WD)",
+  "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
+  "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
+  "baked_at": "2026-11-26T19:08:13Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1887,
+  "num_elements": 4260,
+  "num_dofs": 5661,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.006037,
+  "mass_kg": 0.053364,
+  "com_mm": [
+    -26.1467,
+    -13.0025,
+    -4.8716
+  ],
+  "port0_mm": [
+    0.0,
+    -14.0,
+    -14.0
+  ],
+  "port1_mm": [
+    -32.0,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 2465.125,
+    "ky": 6838.216,
+    "kz": 3469.63
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1850.932,
+    "kry": 840.537,
+    "krz": 3514.636
+  },
+  "fixed_interface_freqs_hz": [
+    2017.83,
+    2792.17,
+    3395.98,
+    4496.83,
+    4951.52,
+    5444.03
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21984,
+  "visual_bytes": 835500,
+  "cad_trust_pct": 88,
+  "source_hash": "26a9d7528a12cbdb64a35898d943af0f855e221bc4764da933d5cb0b87a0210b"
+}

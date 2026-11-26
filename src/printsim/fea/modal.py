@@ -24,6 +24,9 @@ from printsim.fea.beam3d import (
 from printsim.fea.components import (
     belt_damping_ratio,
     belt_flexural_rigidity_nm2,
+    belt_operating_pretension_n,
+    belt_thermal_tension_delta_n,
+    operating_belt,
 )
 from printsim.fea.klipper_shaper import (
     DEFAULT_SHAPER_DAMPING_RATIO,
@@ -48,6 +51,7 @@ from printsim.kinematics.solvers import (
 )
 from printsim.schema import GANTRY_BRACKET_CATALOG, get_material, resolve_frame_feet
 
+_G_ACC = 9.80665  # standard gravity (m/s^2)
 
 _BOTTLENECK_LABELS: dict[str, str] = {
     "frame": "Frame & Gantry Structure",
@@ -133,6 +137,8 @@ class ModalResult:
     worst_print_mode_number: int = 1
     limiting_modal_summary: dict | None = None
     adxl_vs_nozzle_diagnostic: dict | None = None
+    mounting_dynamics: dict | None = None
+    belt_dynamics: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -145,6 +151,8 @@ class ModalResult:
             "worst_print_mode_number": self.worst_print_mode_number,
             "limiting_modal_summary": self.limiting_modal_summary,
             "adxl_vs_nozzle_diagnostic": self.adxl_vs_nozzle_diagnostic,
+            "mounting_dynamics": self.mounting_dynamics,
+            "belt_dynamics": self.belt_dynamics,
             "shaper_x": _shaper_dict(self.shaper_x) if self.shaper_x else None,
             "shaper_y": _shaper_dict(self.shaper_y) if self.shaper_y else None,
             "shaper_graphs": {
@@ -427,7 +435,7 @@ def _recommend_shaper(
 
     if assembly is not None:
         spec = assembly.spec
-        belt = spec.gantry.belt
+        belt = operating_belt(spec)
         details = compute_drive_stiffness_details_n_per_m(assembly, axis)
         k_motor_raw = float(details["k_motor_axis_n_m"]) * _foc_motor_stiffness_multiplier(assembly)
         m_rot = _reflected_rotor_mass_kg(assembly)
@@ -535,7 +543,7 @@ def _recommend_shaper(
     if assembly is not None:
         # Ross-Ungar-Kerwin modal strain-energy weighted damping across frame, belt, motor, & bracket
         zeta_belt = belt_damping_ratio(
-            assembly.spec.gantry.belt,
+            operating_belt(assembly.spec),
             chamber_temp_c=assembly.spec.frame.chamber_temp_c,
             slack_margin_ratio=slack_margin_ratio,
         )
@@ -890,6 +898,8 @@ def _classify_modal_group(member_id: str, role: str = "", bay: str = "") -> tupl
         return "frame_feet", "Machine Feet & Benchtop Pads"
     if bay == "z_joint" or mid.startswith("z_joint"):
         return "z_gantry_joints", "Z-Axis Gantry Joints"
+    if bay == "y_carriage" or mid.startswith("y_car_bearing_"):
+        return "y_rail_carriages", "Y-Rail Carriage Bearings (Hertzian)"
     if bay in ("bed_z_drive", "z_guide") or mid.startswith(("z_bed_drive_", "z_rod_brg_")):
         return "bed_support", "Bed Support & Z Arms"
     if bay == "top_brace" or mid.startswith(("bay_top_brace", "top_brace")):
@@ -1027,11 +1037,12 @@ def _precompute_modal_element_blocks(
                 k_rot_nm_rad=sp.k_rot_nm_rad,
                 normal_vec=np.asarray(sp.normal_vec, dtype=float),
                 offset_vec=np.asarray(sp.offset_m, dtype=float),
+                k_diag_6dof=sp.k_diag_6dof,
             )
             dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
         bay_raw = sp.bay
         bay_prefix = _canonical_bay_key(bay_raw)
-        if bay_raw not in ("bed_mount", "bed_z_drive", "z_guide", "toolhead", "feet", "z_joint") and bay_prefix in (
+        if bay_raw not in ("bed_mount", "bed_z_drive", "z_guide", "toolhead", "feet", "z_joint", "y_carriage") and bay_prefix in (
             "left",
             "right",
             "rear",
@@ -1614,7 +1625,7 @@ def _receptance_structural_freq_and_psd(
     significant modes so soft low-frequency feet-bounce modes with small residues
     cannot saturate internal structural modes to 1.0.
     """
-    weighted = [(f, r, r / (f * f)) for f, r in rmodes if f >= 5.0 and r > 0.0]
+    weighted = [(f, abs(r), abs(r) / (f * f)) for f, r in rmodes if f >= 5.0 and abs(r) > 1e-24]
     if not weighted:
         return fallback_hz, []
     wmax = max(w for _, _, w in weighted)
@@ -1663,7 +1674,7 @@ def _eval_panel_drum_status(
     ke_panel = float(phi_p @ np.where(free_panel_mask, m_phi, 0.0)) / m_gen
     ke_th_total = max(0.0, float(phi[free_th_mask] @ m_phi[free_th_mask]) / m_gen)
     is_drum = (
-        (ke_panel > 0.52 and noz_norm_all < 0.12 and ke_th_total < 0.04)
+        (ke_panel > 0.55 and noz_norm_all < 0.12 and ke_th_total < 0.055)
         or (ke_panel > 0.58 and noz_norm_all < 0.25 and ke_th_total < 0.04)
         or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.28)
         or (ke_panel > 0.80 and noz_norm_all < 0.28 and ke_th_total < 0.06)
@@ -1673,74 +1684,362 @@ def _eval_panel_drum_status(
     return is_drum, ke_panel, gantry_max, ke_panel > 0.50
 
 
-def _compute_benchtop_feet_series_compliance(
-    assembly: AssemblyModel,
-    M_ff: np.ndarray,
-    free_dofs: np.ndarray,
-    node_idx: dict[str, int],
-    feet_springs: list,
-    feet_cfg: dict,
-    th_idx: int,
-    bed_idx: int | None,
-) -> tuple[float, float]:
-    """Compute physical series rocking+shear compliance ``(c_feet_x, c_feet_y)`` [m/N] (B-14).
+# Mount (feet / suspension-line) rigid-body modes: a mode counts as a mount mode when at least
+# this share of its strain energy sits in the mount springs.
+MOUNT_MODE_STRAIN_SHARE = 0.50
+# Mount modes below the Klipper resonance-test band are reported in `mounting_dynamics` only.
+MOUNT_MODE_BAND_FLOOR_HZ = 5.0
+# Cap on the reduced-mass correction m * A_dyn (keeps the reduced moving mass >= 45% of m).
+_MOUNT_MASS_RATIO_CAP = 0.55
 
-    Uses the feet-sprung geometry (``k_feet``, ``z_cog``, ``K_theta``, ``m_printer / M_tot``)
-    and vertical nozzle-to-bed lever fraction ``(dz_nb / h_frame)^2`` in strict SI compliance
-    units [m/N] — eliminating the fixed-45 Hz heuristic penalty so series coupling automatically
-    scales with actual axis frequency ``f_eff^2``.
+
+def mount_decoupling_factor(freq_ratio: float) -> float:
+    """Inertial decoupling ``d(r) = r^4 / (1 + r^4)`` of a mount mode at ``r = f / f_mount``.
+
+    A mount mode far above the frequency of interest (``r << 1``) acts as a quasi-static
+    spring (``d -> 0``: its static residue is kept). Far below it (``r >> 1``) the frame is
+    inertially free of the mount (``d -> 1``: the static residue is dropped and the frame
+    recoils as a free mass). The quartic form is the regularised limit of the undamped modal
+    receptance factor ``1 / (1 - r^2)`` with the resonance singularity at ``r = 1`` removed,
+    because the mount mode itself is drawn as its own peak on the shaper graph.
     """
-    base_mass_kg = float(feet_cfg.get("base_mass_kg", 0.0))
-    feet_nids = sorted({sp.frame_node_id for sp in feet_springs if sp.frame_node_id in node_idx})
-    if not feet_nids:
-        return 0.0, 0.0
+    r = max(float(freq_ratio), 0.0)
+    r4 = r**4
+    return r4 / (1.0 + r4)
 
-    n_free = len(free_dofs)
-    v_x = np.zeros(n_free, dtype=float)
-    z_vec = np.zeros(n_free, dtype=float)
-    z_feet = sum(float(assembly.nodes[node_idx[nid]].position_m[2]) for nid in feet_nids) / len(
-        feet_nids
-    )
-    z_top = max(float(n.position_m[2]) for n in assembly.nodes)
-    h_frame = max(0.1, z_top - z_feet)
-    z_bed = float(assembly.nodes[bed_idx].position_m[2]) if bed_idx is not None else z_feet
-    dz_nb = abs(float(assembly.nodes[th_idx].position_m[2]) - z_bed)
-    lever_ratio2 = max(0.04, min(0.25, (dz_nb / h_frame) ** 2))
 
-    n_nodal_dofs = 6 * len(assembly.nodes)
-    for fi, gdof in enumerate(free_dofs):
-        if int(gdof) < n_nodal_dofs and int(gdof) % 6 == 0:
-            ni = int(gdof) // 6
-            v_x[fi] = 1.0
-            z_vec[fi] = float(assembly.nodes[ni].position_m[2]) - z_feet
+def solve_mount_coupled_axis(
+    mount_modes: list[dict],
+    axis: str,
+    c_static_m_per_n: float,
+    c_drive_m_per_n: float,
+    m_moving_kg: float,
+    residue_key: str | None = None,
+) -> dict[str, float]:
+    """Couple one drive axis to the mount's rigid-body modes (modal receptance, fixed point).
 
-    M_tot = max(float(v_x @ M_ff @ v_x), 1e-6)
-    m_printer = max(M_tot - base_mass_kg, 0.5)
-    z_cog = max(0.02, float(v_x @ M_ff @ z_vec) / M_tot)
+    The FE static nozzle-to-bed compliance on compliant mounts is the complete modal sum
+    ``c_static = sum_k R_k``. Mount modes below the axis resonance do not respond
+    quasi-statically there, so their residues are removed in proportion to ``d(r_k)``
+    (inertia relief), and the frame they release recoils against the moving mass:
 
-    coords = [assembly.nodes[node_idx[nid]].position_m for nid in feet_nids]
-    x_c = sum(float(c[0]) for c in coords) / len(coords)
-    y_c = sum(float(c[1]) for c in coords) / len(coords)
+        c_dyn  = c_static - sum_mount R_k d(r_k)
+        A_dyn  = sum_mount A_k d(r_k)          A_k = (phi_k^T F)^2 / m_gen,k   [1/kg]
+        m_red  = m (1 - m A_dyn)               (two-body reduced mass: 1 + m/M_f = 1/(1 - m A))
+        f      = 1 / (2 pi sqrt(m_red (c_dyn + c_drive)))
 
-    k_lat = 0.0
-    K_theta_x = 0.0
-    K_theta_y = 0.0
-    for sp in feet_springs:
-        if sp.frame_node_id not in node_idx:
-            continue
-        pos = assembly.nodes[node_idx[sp.frame_node_id]].position_m
-        dx = float(pos[0]) - x_c
-        dy = float(pos[1]) - y_c
-        k_lat += float(sp.k_shear_n_m)
-        K_theta_x += float(sp.k_normal_n_m) * (dx * dx) + float(sp.k_rot_nm_rad)
-        K_theta_y += float(sp.k_normal_n_m) * (dy * dy) + float(sp.k_rot_nm_rad)
+    solved by fixed-point iteration on ``r_k = f / f_k``. With no mount modes this returns the
+    static chain unchanged.
+    """
+    key_r = residue_key or f"r_{axis.lower()}"
+    key_a = f"a_{axis.lower()}"
+    c_static = max(float(c_static_m_per_n), 1e-12)
+    c_drv = max(float(c_drive_m_per_n), 0.0)
+    m = max(float(m_moving_kg), 1e-6)
+    two_pi = 2.0 * math.pi
+    f_static = 1.0 / (two_pi * math.sqrt(max(m * (c_static + c_drv), 1e-18)))
+    if not mount_modes:
+        return {
+            "c_dyn_m_per_n": c_static,
+            "m_reduced_kg": m,
+            "freq_hz": f_static,
+            "freq_static_hz": f_static,
+            "mass_ratio": 0.0,
+            "inertance_1_per_kg": 0.0,
+            "retained_mount_compliance_m_per_n": 0.0,
+        }
 
-    k_feet_x = 1.0 / (1.0 / max(k_lat, 1.0) + (z_cog * z_cog) / max(K_theta_x, 1e-3))
-    k_feet_y = 1.0 / (1.0 / max(k_lat, 1.0) + (z_cog * z_cog) / max(K_theta_y, 1e-3))
-    mass_scale = (m_printer / M_tot) ** 2
-    c_feet_x = lever_ratio2 * mass_scale / max(k_feet_x, 1.0)
-    c_feet_y = lever_ratio2 * mass_scale / max(k_feet_y, 1.0)
-    return float(c_feet_x), float(c_feet_y)
+    f = f_static
+    c_dyn = c_static
+    m_red = m
+    a_dyn = 0.0
+    retained = 0.0
+    for _ in range(8):
+        removed = 0.0
+        a_dyn = 0.0
+        retained = 0.0
+        for mm in mount_modes:
+            f_k = max(float(mm["freq_hz"]), 1e-3)
+            d = mount_decoupling_factor(f / f_k)
+            r_k = float(mm.get(key_r, 0.0))
+            removed += r_k * d
+            retained += r_k * (1.0 - d)
+            a_dyn += float(mm.get(key_a, 0.0)) * d
+        # Inertia relief may raise or lower the deformation compliance; keep it physical.
+        c_dyn = min(max(c_static - removed, 0.05 * c_static), 20.0 * c_static)
+        mass_ratio = min(max(m * a_dyn, 0.0), _MOUNT_MASS_RATIO_CAP)
+        m_red = m * (1.0 - mass_ratio)
+        f_new = 1.0 / (two_pi * math.sqrt(max(m_red * (c_dyn + c_drv), 1e-18)))
+        if abs(f_new - f) <= 1e-4 * max(f, 1.0):
+            f = f_new
+            break
+        f = 0.5 * (f + f_new)
+    return {
+        "c_dyn_m_per_n": c_dyn,
+        "m_reduced_kg": m_red,
+        "freq_hz": f,
+        "freq_static_hz": f_static,
+        "mass_ratio": min(max(m * a_dyn, 0.0), _MOUNT_MASS_RATIO_CAP),
+        "inertance_1_per_kg": a_dyn,
+        "retained_mount_compliance_m_per_n": max(retained, 0.0),
+    }
+
+
+def solve_corexy_cross_axis_coupling(
+    k_x_n_m: float,
+    k_y_n_m: float,
+    m_x_kg: float,
+    m_y_kg: float,
+    coupling: float,
+) -> dict[str, float]:
+    """Exact 2-DOF X/Y eigenproblem of a CoreXY whose A and B belt loops differ in stiffness.
+
+    With the motors holding, belt A stretches by ``x + y`` and belt B by ``x - y``, so
+    ``V = k_A (x + y)^2 / 2 + k_B (x - y)^2 / 2`` and
+
+        K = [[k_A + k_B, k_A - k_B], [k_A - k_B, k_A + k_B]],   M = diag(m_x, m_y).
+
+    Written per axis: ``K = [[k_x, c], [c, k_y]]`` with ``c = coupling * sqrt(k_x k_y)`` and
+    ``coupling = (k_A - k_B) / (k_A + k_B)`` for a belt-only drive. Matched belts (c = 0) leave
+    X and Y uncoupled; any mismatch puts each axis' resonance into the other axis' graph.
+    Returns the X- and Y-dominant coupled frequencies and the cross peak of each graph as
+    ``sqrt`` of its receptance-residue ratio to that graph's own main peak.
+    """
+    kx = max(float(k_x_n_m), 1e-6)
+    ky = max(float(k_y_n_m), 1e-6)
+    mx = max(float(m_x_kg), 1e-9)
+    my = max(float(m_y_kg), 1e-9)
+    c = max(-0.999, min(0.999, float(coupling))) * math.sqrt(kx * ky)
+    two_pi = 2.0 * math.pi
+    wx2, wy2 = kx / mx, ky / my
+    # det([[kx - w mx, c], [c, ky - w my]]) = 0  ->  w^2 - (wx2 + wy2) w + wx2 wy2 - c^2/(mx my) = 0
+    b_q = wx2 + wy2
+    disc = math.sqrt(max((wx2 - wy2) ** 2 + 4.0 * c * c / (mx * my), 0.0))
+    lam = (0.5 * (b_q - disc), 0.5 * (b_q + disc))
+    modes = []
+    for lam_j in lam:
+        lam_j = max(lam_j, 1e-12)
+        # Eigenvector from the better-conditioned row
+        if abs(kx - lam_j * mx) >= abs(ky - lam_j * my):
+            vec = (-c, kx - lam_j * mx)
+        else:
+            vec = (ky - lam_j * my, -c)
+        if abs(vec[0]) + abs(vec[1]) < 1e-30:
+            vec = (1.0, 0.0) if abs(wx2 - lam_j) <= abs(wy2 - lam_j) else (0.0, 1.0)
+        m_gen = mx * vec[0] ** 2 + my * vec[1] ** 2
+        modes.append(
+            {
+                "lam": lam_j,
+                "res_x": vec[0] ** 2 / (m_gen * lam_j),
+                "res_y": vec[1] ** 2 / (m_gen * lam_j),
+                "x_share": mx * vec[0] ** 2 / m_gen,
+            }
+        )
+    x_dom, y_dom = (modes[0], modes[1]) if modes[0]["x_share"] >= modes[1]["x_share"] else (modes[1], modes[0])
+    return {
+        "f_x_hz": math.sqrt(x_dom["lam"]) / two_pi,
+        "f_y_hz": math.sqrt(y_dom["lam"]) / two_pi,
+        "f_x_uncoupled_hz": math.sqrt(wx2) / two_pi,
+        "f_y_uncoupled_hz": math.sqrt(wy2) / two_pi,
+        # Y-dominant mode seen on the X graph, and X-dominant mode seen on the Y graph
+        "cross_peak_in_x": math.sqrt(min(1.0, y_dom["res_x"] / max(x_dom["res_x"], 1e-30))),
+        "cross_peak_in_y": math.sqrt(min(1.0, x_dom["res_y"] / max(y_dom["res_y"], 1e-30))),
+    }
+
+
+def _belt_tension_state(assembly: AssemblyModel) -> dict:
+    """Operating belt tension, pluck frequencies, and CoreXY A/B loop stiffness mismatch."""
+    spec = assembly.spec
+    belt = spec.gantry.belt
+    t_installed = float(belt.pretension_n)
+    t_op = belt_operating_pretension_n(spec)
+    mu = max(float(belt.linear_mass_kg_m), 1e-6)
+
+    def _pluck_hz(tension_n: float) -> float:
+        return (1.0 / (2.0 * 0.150)) * math.sqrt(max(tension_n, 0.0) / mu)
+
+    out: dict = {
+        "installed_pretension_n": round(t_installed, 2),
+        "operating_pretension_n": round(t_op, 2),
+        "thermal_tension_delta_n": round(belt_thermal_tension_delta_n(spec), 2),
+        "pretension_set_temp_c": belt.pretension_set_temp_c,
+        "pluck_hz_150mm_installed": round(_pluck_hz(t_installed), 1),
+        "pluck_hz_150mm_operating": round(_pluck_hz(t_op), 1),
+        "tension_mismatch_pct": round(float(belt.tension_mismatch_pct), 2),
+        "coupling_kappa": 0.0,
+    }
+    p = float(belt.tension_mismatch_pct)
+    if spec.architecture == "corexy" and p > 0.0:
+        belt_a = operating_belt(spec, 1.0 + p / 200.0)
+        belt_b = operating_belt(spec, 1.0 - p / 200.0)
+        k_a = float(
+            compute_drive_stiffness_details_n_per_m(assembly, "X", belt_override=belt_a)[
+                "k_belt_subsystem_n_m"
+            ]
+        )
+        k_b = float(
+            compute_drive_stiffness_details_n_per_m(assembly, "X", belt_override=belt_b)[
+                "k_belt_subsystem_n_m"
+            ]
+        )
+        out.update(
+            {
+                "tension_a_n": round(float(belt_a.pretension_n), 2),
+                "tension_b_n": round(float(belt_b.pretension_n), 2),
+                "pluck_hz_150mm_a": round(_pluck_hz(float(belt_a.pretension_n)), 1),
+                "pluck_hz_150mm_b": round(_pluck_hz(float(belt_b.pretension_n)), 1),
+                "k_belt_a_n_per_mm": round(k_a * 1e-3, 2),
+                "k_belt_b_n_per_mm": round(k_b * 1e-3, 2),
+                "coupling_kappa": (k_a - k_b) / max(k_a + k_b, 1e-9),
+            }
+        )
+    return out
+
+
+def _merge_psd_modes(
+    base: list[tuple[float, float]], extra: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """Merge extra ``(freq_hz, relative_peak)`` PSD modes, keeping the taller of peaks within 3 Hz."""
+    merged = list(base)
+    for f_e, p_e in extra:
+        for i, (f_b, p_b) in enumerate(merged):
+            if abs(f_b - f_e) < 3.0:
+                merged[i] = (f_b, max(p_b, p_e))
+                break
+        else:
+            merged.append((f_e, p_e))
+    return merged
+
+
+def _classify_mount_mode(p_frac_xyz: tuple[float, float, float], rot_mean: np.ndarray) -> str:
+    """Label a rigid-body mount mode from its translational effective-mass fractions."""
+    px, py, pz = p_frac_xyz
+    best = max(px, py, pz)
+    if best >= 0.45:
+        if best == pz:
+            return "bounce_z"
+        return "sway_x" if best == px else "sway_y"
+    ax = int(np.argmax(np.abs(rot_mean))) if float(np.linalg.norm(rot_mean)) > 1e-12 else 2
+    return ("rock_about_x", "rock_about_y", "yaw")[ax]
+
+
+_MOUNT_MODE_LABELS = {
+    "sway_x": "Whole-printer X sway",
+    "sway_y": "Whole-printer Y sway",
+    "bounce_z": "Whole-printer vertical bounce",
+    "rock_about_x": "Whole-printer rocking (front-back tilt)",
+    "rock_about_y": "Whole-printer rocking (left-right tilt)",
+    "yaw": "Whole-printer yaw twist",
+}
+
+
+def _build_mounting_dynamics(
+    assembly: AssemblyModel,
+    feet_cfg: dict,
+    mount_modes: list[dict],
+    total_mass_kg: float,
+    axis_x: dict[str, float],
+    axis_y: dict[str, float],
+    m_x_kg: float,
+    m_y_kg: float,
+) -> dict:
+    """Assemble the user-facing mount report: rigid-body modes, recoil, and suspension safety."""
+    spec = assembly.spec
+    is_suspended = bool(feet_cfg.get("is_suspended", False))
+    rb_modes = [
+        {
+            "frequency_hz": round(float(mm["freq_hz"]), 3),
+            "kind": mm["kind"],
+            "label": _MOUNT_MODE_LABELS.get(mm["kind"], mm["kind"]),
+            "mount_strain_share_pct": round(100.0 * float(mm["u_feet_share"]), 1),
+            "in_shaper_band": bool(float(mm["freq_hz"]) >= MOUNT_MODE_BAND_FLOOR_HZ),
+            # Peak height a toolhead accelerometer reads for this whole-printer mode, relative
+            # to the axis' main resonance peak (absolute motion; nozzle and bed move together).
+            "adxl_peak_ratio_x": round(float(mm.get("adxl_x", 0.0)), 3),
+            "adxl_peak_ratio_y": round(float(mm.get("adxl_y", 0.0)), 3),
+        }
+        for mm in sorted(mount_modes, key=lambda item: float(item["freq_hz"]))
+    ]
+
+    def _axis_block(sol: dict[str, float], m_kg: float) -> dict:
+        ratio = float(sol["mass_ratio"])
+        return {
+            "moving_mass_kg": round(float(m_kg), 4),
+            "reduced_moving_mass_kg": round(float(sol["m_reduced_kg"]), 4),
+            # Frame recoil per unit of toolhead travel relative to the frame (momentum balance)
+            "frame_recoil_ratio": round(ratio, 4),
+            "frame_recoil_um_per_mm": round(1e3 * ratio, 1),
+            # Drive-resonance rise from the frame recoiling as a free body: 1 / sqrt(1 - m A)
+            "recoil_freq_gain_pct": round(100.0 * (1.0 / math.sqrt(max(1.0 - ratio, 1e-6)) - 1.0), 2),
+            "retained_mount_compliance_um_per_n": round(
+                float(sol["retained_mount_compliance_m_per_n"]) * 1e6, 4
+            ),
+        }
+
+    sway = [float(mm["freq_hz"]) for mm in mount_modes if mm["kind"] in ("sway_x", "sway_y")]
+    out: dict = {
+        "feet_type": spec.frame.feet_type,
+        "mount_damping_ratio": round(float(feet_cfg.get("mount_damping_ratio", 0.05)), 4),
+        "total_mass_kg": round(float(total_mass_kg), 3),
+        "ballast_mass_kg": round(float(assembly.ballast_mass_kg), 3),
+        "ballast_location": spec.frame.ballast_location,
+        "rigid_body_modes": rb_modes,
+        "lowest_sway_hz": round(min(sway), 3) if sway else None,
+        "x": _axis_block(axis_x, m_x_kg),
+        "y": _axis_block(axis_y, m_y_kg),
+        "notes": [],
+    }
+    notes: list[str] = out["notes"]
+    in_band = [m for m in rb_modes if m["in_shaper_band"]]
+    if in_band:
+        lo = min(m["frequency_hz"] for m in in_band)
+        hi = max(m["frequency_hz"] for m in in_band)
+        span = f"{lo:.0f} Hz" if hi - lo < 1.0 else f"{lo:.0f}-{hi:.0f} Hz"
+        peak = max(max(m["adxl_peak_ratio_x"], m["adxl_peak_ratio_y"]) for m in in_band)
+        if peak >= 0.15:
+            notes.append(
+                f"Whole-printer mount modes at {span} sit inside the resonance-test band and reach "
+                f"{100.0 * peak:.0f}% of the main peak on a toolhead accelerometer, although nozzle "
+                "and bed move together in them."
+            )
+        else:
+            notes.append(
+                f"Whole-printer mount modes at {span} sit inside the resonance-test band but stay "
+                f"below {max(100.0 * peak, 1.0):.0f}% of the main peak on a toolhead accelerometer."
+            )
+    if is_suspended:
+        line_len_m = float(feet_cfg.get("line_length_m", 0.0))
+        tension_n = float(assembly.suspension_line_tension_n)
+        break_n = float(feet_cfg.get("line_break_strength_n", 0.0))
+        f_pend = math.sqrt(_G_ACC / max(line_len_m, 1e-3)) / (2.0 * math.pi)
+        v_max_mm_s = float(spec.kinematics.max_velocity_mm_s)
+        out["suspension"] = {
+            "line": feet_cfg.get("suspension_line", ""),
+            "line_length_mm": round(line_len_m * 1e3, 1),
+            "line_count": len([sp for sp in assembly.fastener_springs if sp.bay == "feet"]),
+            "line_tension_n": round(tension_n, 2),
+            "line_break_strength_n": round(break_n, 1),
+            "safety_factor": round(break_n / max(tension_n, 1e-6), 1),
+            "static_stretch_mm": round(
+                1e3 * tension_n * line_len_m / max(float(feet_cfg.get("line_ea_n", 0.0)), 1e-6), 2
+            ),
+            "pendulum_hz_analytic": round(f_pend, 3),
+            # Back-and-forth moves whose reversal rate v / (2 l) matches the pendulum pump the swing
+            "swing_resonant_line_length_mm": round(v_max_mm_s / (2.0 * f_pend), 0),
+        }
+        design_factor = float(feet_cfg.get("line_design_factor", 5.0))
+        out["suspension"]["design_factor"] = design_factor
+        if break_n / max(tension_n, 1e-6) < design_factor:
+            notes.append(
+                f"Line tension {tension_n:.0f} N is above 1/{design_factor:.0f} of the "
+                f"{break_n:.0f} N break strength: use a stronger line or more lines."
+            )
+        notes.append(
+            f"Pendulum sway at {f_pend:.2f} Hz is far below the shaper band, so the frame reacts "
+            "to toolhead moves as a free body; long straight moves reversing near that rate "
+            f"(about {v_max_mm_s / (2.0 * f_pend):.0f} mm lines at {v_max_mm_s:.0f} mm/s) build up visible swing."
+        )
+    return out
 
 
 def solve_modal_fea(
@@ -1920,6 +2219,7 @@ def solve_modal_fea(
 
     feet_cfg = resolve_frame_feet(assembly.spec) if has_feet else {}
     feet_base_mass_kg = float(feet_cfg.get("base_mass_kg", 0.0)) if has_feet else 0.0
+    mount_is_suspended = bool(feet_cfg.get("is_suspended", False))
     foot_node_ids = {sp.frame_node_id for sp in feet_springs if sp.frame_node_id in node_idx}
 
     # Exact workplane-compensated relative displacement extraction rows (dual to nozzle - (bed + theta_bed x dr))
@@ -1948,21 +2248,50 @@ def solve_modal_fea(
         cy_car_rel[6 * bed_idx + 5] -= float(dr_th[0])
         cy_car_rel[6 * bed_idx + 3] += float(dr_th[2])
 
-    # Exact unit-load static nozzle-to-bed structural compliance c_struct [m/N] (zero mode-truncation drift, B-01/B-02)
+    # Exact unit-load static nozzle-to-bed structural compliance c_struct [m/N] (zero mode-truncation drift, B-01/B-02).
+    # For top-heavy toolheads (cog_z > 0, noz_z < 0), out-of-phase toolhead pitch swings the nozzle
+    # opposite to the carriage (c_noz < c_car). In dynamic vibration / input shaping, opposite-phase
+    # pitch whip ADDS resonance compliance rather than stiffening the frame, so we form the exact
+    # zero-truncation non-collocated compliance c_eff = c_car + |c_noz - c_car| (bit-identical to
+    # c_noz whenever c_noz >= c_car, and linear in mount-mode residues r_eff = 2*r_car - r_noz).
     try:
         u_x_stat = lu_solver.solve(fx_exc[free_dofs]) if lu_solver is not None else np.linalg.solve(K_ff, fx_exc[free_dofs])
         u_y_stat = lu_solver.solve(fy_exc[free_dofs]) if lu_solver is not None else np.linalg.solve(K_ff, fy_exc[free_dofs])
-        c_struct_fe_x = max(1e-12, float(cx_rel[free_dofs] @ u_x_stat))
-        c_struct_fe_y = max(1e-12, float(cy_rel[free_dofs] @ u_y_stat))
-        c_struct_fe_car_x = max(1e-12, float(cx_car_rel[free_dofs] @ u_x_stat))
-        c_struct_fe_car_y = max(1e-12, float(cy_car_rel[free_dofs] @ u_y_stat))
+        c_noz_x_raw = float(cx_rel[free_dofs] @ u_x_stat)
+        c_noz_y_raw = float(cy_rel[free_dofs] @ u_y_stat)
+        c_car_x_raw = float(cx_car_rel[free_dofs] @ u_x_stat)
+        c_car_y_raw = float(cy_car_rel[free_dofs] @ u_y_stat)
+        flip_pitch_x = noz_idx != th_idx and c_noz_x_raw < c_car_x_raw
+        flip_pitch_y = noz_idx != th_idx and c_noz_y_raw < c_car_y_raw
+        c_struct_fe_x = max(1e-12, (2.0 * c_car_x_raw - c_noz_x_raw) if flip_pitch_x else c_noz_x_raw)
+        c_struct_fe_y = max(1e-12, (2.0 * c_car_y_raw - c_noz_y_raw) if flip_pitch_y else c_noz_y_raw)
+        c_struct_fe_car_x = max(1e-12, c_car_x_raw)
+        c_struct_fe_car_y = max(1e-12, c_car_y_raw)
     except (np.linalg.LinAlgError, RuntimeError):
+        flip_pitch_x = False
+        flip_pitch_y = False
         c_struct_fe_x = 1e-6
         c_struct_fe_y = 1e-6
         c_struct_fe_car_x = 1e-6
         c_struct_fe_car_y = 1e-6
 
     candidates: list[dict] = []
+    mount_modes: list[dict] = []
+    n_nodal_dofs_all = 6 * len(assembly.nodes)
+    mount_dir_vecs: list[np.ndarray] = []
+    for d_ax in range(3):
+        e_dir = np.zeros(n_free, dtype=float)
+        if feet_blocks:
+            for fi, gdof in enumerate(free_dofs):
+                if int(gdof) < n_nodal_dofs_all and int(gdof) % 6 == d_ax:
+                    e_dir[fi] = 1.0
+        mount_dir_vecs.append(e_dir)
+    mount_total_mass_kg = (
+        max(float(mount_dir_vecs[0] @ M_ff @ mount_dir_vecs[0]), 1e-6) if feet_blocks else 1.0
+    )
+    frame_struct_idx = [
+        i for i, n in enumerate(assembly.nodes) if n.role in ("frame", "foot", "tower", "mount")
+    ]
     receptance_x: list[tuple[float, float]] = []
     receptance_y: list[tuple[float, float]] = []
     carriage_rec_x: list[tuple[float, float]] = []
@@ -2108,8 +2437,35 @@ def solve_modal_fea(
 
             comp_x_noz = (rel_x_raw * pf_x) / (m_gen * lam)
             comp_y_noz = (rel_y_raw * pf_y) / (m_gen * lam)
-            rec_x = max(0.0, comp_x_noz)
-            rec_y = max(0.0, comp_y_noz)
+            rec_x = abs(comp_x_noz)
+            rec_y = abs(comp_y_noz)
+
+            is_mount_mode = bool(feet_blocks and u_feet_share >= MOUNT_MODE_STRAIN_SHARE)
+            if is_mount_mode:
+                p_lin = [float(e_dir @ m_phi) for e_dir in mount_dir_vecs]
+                p_frac = tuple(
+                    min(1.0, (pv * pv) / (m_gen * mount_total_mass_kg)) for pv in p_lin
+                )
+                rot_mean = (
+                    np.mean(rot_raw[frame_struct_idx], axis=0)
+                    if frame_struct_idx
+                    else np.zeros(3, dtype=float)
+                )
+                r_car_x_m = (float(cx_car_rel @ full_vec) * pf_x) / (m_gen * lam)
+                r_car_y_m = (float(cy_car_rel @ full_vec) * pf_y) / (m_gen * lam)
+                mount_modes.append(
+                    {
+                        "freq_hz": freq_hz,
+                        "r_x": (2.0 * r_car_x_m - comp_x_noz) if flip_pitch_x else comp_x_noz,
+                        "r_y": (2.0 * r_car_y_m - comp_y_noz) if flip_pitch_y else comp_y_noz,
+                        "r_car_x": r_car_x_m,
+                        "r_car_y": r_car_y_m,
+                        "a_x": (pf_x * pf_x) / m_gen,
+                        "a_y": (pf_y * pf_y) / m_gen,
+                        "u_feet_share": u_feet_share,
+                        "kind": _classify_mount_mode(p_frac, rot_mean),
+                    }
+                )
 
             # Exclude local corner-paver mass bounce modes above the whole-body rock band (>35 Hz)
             # created when paver base_mass_kg is lumped at frame corner nodes.
@@ -2173,6 +2529,24 @@ def solve_modal_fea(
         "toolhead",
         "toolhead_cog",
         "nozzle_tip",
+        "y_rail_car_l",
+        "y_rail_car_r",
+        "y_car_l",
+        "y_car_r",
+        "x_beam_l",
+        "x_beam_r",
+        "g_fl",
+        "g_fr",
+        "g_rl",
+        "g_rr",
+        "pulley_fl",
+        "pulley_fr",
+        "pulley_rl",
+        "pulley_rr",
+        "col_g_fl",
+        "col_g_fr",
+        "col_g_rl",
+        "col_g_rr",
         "bed_surface",
         "bed_frame",
         "bed_t_fl",
@@ -2182,6 +2556,9 @@ def solve_modal_fea(
         "z_bed_fr",
         "z_bed_l",
         "z_bed_r",
+        "z_arm_tip_fl",
+        "z_arm_tip_fr",
+        "z_arm_tip_r",
         "z_brg_lf",
         "z_brg_lr",
         "z_brg_rf",
@@ -2335,12 +2712,18 @@ def solve_modal_fea(
             or (
                 rx_max > 1e-18
                 and ry_max > 1e-18
-                and rec_x < 0.03 * rx_max
-                and rec_y < 0.03 * ry_max
+                and rec_x < 0.05 * rx_max
+                and rec_y < 0.05 * ry_max
             )
         )
 
-        is_extra_feet_mode = len(modes) >= 1 and float(c.get("u_feet_share", 0.0)) > 0.72
+        c_feet_share = float(c.get("u_feet_share", 0.0))
+        # Sub-band rigid-body mount modes (e.g. sub-1 Hz pendulum sway on suspension lines) are
+        # reported in `mounting_dynamics`, never as the structural fundamental.
+        is_extra_feet_mode = (len(modes) >= 1 and c_feet_share > 0.72) or (
+            c_feet_share >= MOUNT_MODE_STRAIN_SHARE
+            and (mount_is_suspended or freq_hz < MOUNT_MODE_BAND_FLOOR_HZ)
+        )
         if not c["is_isolated_panel_drum"] and not is_pure_vertical_z and not is_extra_feet_mode:
             is_whip_shape = (
                 has_nozzle
@@ -2429,25 +2812,10 @@ def solve_modal_fea(
     )
     feet_dd = float(feet_cfg.get("damping_delta", 0.0)) if has_feet else 0.0
     if has_feet:
-        c_feet_x, c_feet_y = _compute_benchtop_feet_series_compliance(
-            assembly=assembly,
-            M_ff=M_ff,
-            free_dofs=free_dofs,
-            node_idx=node_idx,
-            feet_springs=feet_springs,
-            feet_cfg=feet_cfg,
-            th_idx=th_idx,
-            bed_idx=bed_idx,
-        )
         psd_zeta = min(0.14, max(0.025, assembly.frame_damping_ratio - feet_dd) + cf_insert_dd)
     else:
-        c_feet_x = 0.0
-        c_feet_y = 0.0
         psd_zeta = min(0.14, max(0.025, assembly.frame_damping_ratio + cf_insert_dd))
     modal_frame_zeta = min(0.14, max(0.025, assembly.frame_damping_ratio + cf_insert_dd))
-
-    c_struct_x = c_struct_fe_x + c_feet_x
-    c_struct_y = c_struct_fe_y + c_feet_y
 
     if nozzle_twist_freq is None:
         nozzle_twist_freq = (
@@ -2458,6 +2826,75 @@ def solve_modal_fea(
 
     k_belt_x, k_motor_x, k_bracket_x, k_drive_x, m_x_eff = _drive_axis_stiffness_n_per_m(assembly, "X")
     k_belt_y, k_motor_y, k_bracket_y, k_drive_y, m_y_eff = _drive_axis_stiffness_n_per_m(assembly, "Y")
+
+    # B-14: mount (feet / suspension) rigid-body modes couple to each drive axis through their
+    # FE modal receptance: inertia relief of the static compliance + free-frame reduced mass.
+    mount_x = solve_mount_coupled_axis(
+        mount_modes, "X", c_struct_fe_x, 1.0 / max(k_drive_x, 1.0), m_x_eff
+    )
+    mount_y = solve_mount_coupled_axis(
+        mount_modes, "Y", c_struct_fe_y, 1.0 / max(k_drive_y, 1.0), m_y_eff
+    )
+    c_struct_x = float(mount_x["c_dyn_m_per_n"])
+    c_struct_y = float(mount_y["c_dyn_m_per_n"])
+    m_x_drive = float(mount_x["m_reduced_kg"])
+    m_y_drive = float(mount_y["m_reduced_kg"])
+    # CoreXY A/B belt tension mismatch: the two loops sit at different points of the belt's
+    # low-tension stiffness toe, so k_A != k_B couples X and Y into a double peak.
+    belt_dynamics = _belt_tension_state(assembly)
+    cross_modes_x: list[tuple[float, float]] = []
+    cross_modes_y: list[tuple[float, float]] = []
+    kappa_belt = float(belt_dynamics["coupling_kappa"])
+    if abs(kappa_belt) > 1e-9:
+        c_tot_x = c_struct_x + 1.0 / max(k_drive_x, 1.0)
+        c_tot_y = c_struct_y + 1.0 / max(k_drive_y, 1.0)
+        # Only the belt's share of each axis' compliance takes part in the A/B coupling
+        s_belt_x = min(1.0, (1.0 / max(k_belt_x, 1.0)) / max(c_tot_x, 1e-18))
+        s_belt_y = min(1.0, (1.0 / max(k_belt_y, 1.0)) / max(c_tot_y, 1e-18))
+        kappa_eff = kappa_belt * math.sqrt(s_belt_x * s_belt_y)
+        cpl = solve_corexy_cross_axis_coupling(
+            1.0 / c_tot_x, 1.0 / c_tot_y, m_x_drive, m_y_drive, kappa_eff
+        )
+        # Carry the coupled-mode frequency shift into each axis through its moving mass (f ~ m^-1/2)
+        m_x_drive *= (cpl["f_x_uncoupled_hz"] / max(cpl["f_x_hz"], 1e-9)) ** 2
+        m_y_drive *= (cpl["f_y_uncoupled_hz"] / max(cpl["f_y_hz"], 1e-9)) ** 2
+        cross_modes_x.append((cpl["f_y_hz"], cpl["cross_peak_in_x"]))
+        cross_modes_y.append((cpl["f_x_hz"], cpl["cross_peak_in_y"]))
+        belt_dynamics.update(
+            {
+                "effective_coupling": round(kappa_eff, 4),
+                "coupled_x_hz": round(cpl["f_x_hz"], 2),
+                "coupled_y_hz": round(cpl["f_y_hz"], 2),
+                "cross_peak_in_x": round(cpl["cross_peak_in_x"], 3),
+                "cross_peak_in_y": round(cpl["cross_peak_in_y"], 3),
+            }
+        )
+    belt_dynamics["coupling_kappa"] = round(kappa_belt, 4)
+
+    # A toolhead accelerometer measures absolute motion, so it also reads the whole-printer mount
+    # modes. Peak height relative to the axis' main resonance (acceleration response to the same
+    # swept force): (A_k / (2 zeta_mount)) / ((1 / m) / (2 zeta_main)) = m A_k zeta_main / zeta_mount.
+    mount_zeta = max(float(feet_cfg.get("mount_damping_ratio", 0.05)), 0.005) if has_feet else 0.05
+    mount_adxl_x: list[tuple[float, float]] = []
+    mount_adxl_y: list[tuple[float, float]] = []
+    for mm in mount_modes:
+        mm["adxl_x"] = min(1.0, m_x_eff * float(mm["a_x"]) * psd_zeta / mount_zeta)
+        mm["adxl_y"] = min(1.0, m_y_eff * float(mm["a_y"]) * psd_zeta / mount_zeta)
+        if float(mm["freq_hz"]) >= MOUNT_MODE_BAND_FLOOR_HZ:
+            mount_adxl_x.append((float(mm["freq_hz"]), float(mm["adxl_x"])))
+            mount_adxl_y.append((float(mm["freq_hz"]), float(mm["adxl_y"])))
+    mounting_dynamics: dict | None = None
+    if has_feet:
+        mounting_dynamics = _build_mounting_dynamics(
+            assembly=assembly,
+            feet_cfg=feet_cfg,
+            mount_modes=mount_modes,
+            total_mass_kg=mount_total_mass_kg,
+            axis_x=mount_x,
+            axis_y=mount_y,
+            m_x_kg=m_x_eff,
+            m_y_kg=m_y_eff,
+        )
     belt_x, motor_x, bracket_x, drive_x = _drive_axis_resonances_hz(assembly, "X")
     belt_y, motor_y, bracket_y, drive_y = _drive_axis_resonances_hz(assembly, "Y")
 
@@ -2473,7 +2910,7 @@ def solve_modal_fea(
         bracket_x,
         drive_x,
         c_struct_x,
-        m_x_eff,
+        m_x_drive,
         k_belt_x,
         k_motor_x,
         k_bracket_x,
@@ -2481,7 +2918,7 @@ def solve_modal_fea(
         configured_accel,
         shaper_choice,
         scv_mm_s=scv_mm_s,
-        scanned_modes=norm_scanned_x,
+        scanned_modes=_merge_psd_modes(norm_scanned_x, cross_modes_x),
         psd_damping_ratio=psd_zeta,
         assembly=assembly,
     )
@@ -2493,7 +2930,7 @@ def solve_modal_fea(
         bracket_y,
         drive_y,
         c_struct_y,
-        m_y_eff,
+        m_y_drive,
         k_belt_y,
         k_motor_y,
         k_bracket_y,
@@ -2501,7 +2938,7 @@ def solve_modal_fea(
         configured_accel,
         shaper_choice,
         scv_mm_s=scv_mm_s,
-        scanned_modes=norm_scanned_y,
+        scanned_modes=_merge_psd_modes(norm_scanned_y, cross_modes_y),
         psd_damping_ratio=psd_zeta,
         assembly=assembly,
     )
@@ -2514,8 +2951,18 @@ def solve_modal_fea(
         struct_car_y, norm_scanned_car_y = _receptance_structural_freq_and_psd(
             carriage_rec_y, fundamental
         )
-        c_struct_carriage_x = c_struct_fe_car_x + c_feet_x
-        c_struct_carriage_y = c_struct_fe_car_y + c_feet_y
+        c_struct_carriage_x = float(
+            solve_mount_coupled_axis(
+                mount_modes, "X", c_struct_fe_car_x, 1.0 / max(k_drive_x, 1.0), m_x_eff,
+                residue_key="r_car_x",
+            )["c_dyn_m_per_n"]
+        )
+        c_struct_carriage_y = float(
+            solve_mount_coupled_axis(
+                mount_modes, "Y", c_struct_fe_car_y, 1.0 / max(k_drive_y, 1.0), m_y_eff,
+                residue_key="r_car_y",
+            )["c_dyn_m_per_n"]
+        )
 
         car_shaper_x, car_graph_x = _recommend_shaper(
             "X",
@@ -2525,7 +2972,7 @@ def solve_modal_fea(
             bracket_x,
             drive_x,
             c_struct_carriage_x,
-            m_x_eff,
+            m_x_drive,
             k_belt_x,
             k_motor_x,
             k_bracket_x,
@@ -2533,7 +2980,7 @@ def solve_modal_fea(
             configured_accel,
             shaper_choice,
             scv_mm_s=scv_mm_s,
-            scanned_modes=norm_scanned_car_x,
+            scanned_modes=_merge_psd_modes(norm_scanned_car_x, mount_adxl_x + cross_modes_x),
             psd_damping_ratio=psd_zeta,
             assembly=assembly,
             fast_diagnostic=True,
@@ -2546,7 +2993,7 @@ def solve_modal_fea(
             bracket_y,
             drive_y,
             c_struct_carriage_y,
-            m_y_eff,
+            m_y_drive,
             k_belt_y,
             k_motor_y,
             k_bracket_y,
@@ -2554,7 +3001,7 @@ def solve_modal_fea(
             configured_accel,
             shaper_choice,
             scv_mm_s=scv_mm_s,
-            scanned_modes=norm_scanned_car_y,
+            scanned_modes=_merge_psd_modes(norm_scanned_car_y, mount_adxl_y + cross_modes_y),
             psd_damping_ratio=psd_zeta,
             assembly=assembly,
             fast_diagnostic=True,
@@ -2698,10 +3145,12 @@ def solve_modal_fea(
             primary_idx
         ]
 
-    c_feet_lim = c_feet_x if limiting.axis == "X" else c_feet_y
+    # Share of the limiting axis' structural compliance still carried quasi-statically by the mount
+    mount_lim = mount_x if limiting.axis == "X" else mount_y
+    c_feet_lim = float(mount_lim["retained_mount_compliance_m_per_n"])
     c_struct_lim = c_struct_x if limiting.axis == "X" else c_struct_y
     feet_rock_frac = (
-        (c_feet_lim / max(c_struct_lim, 1e-18)) if (has_feet and c_feet_lim > 0.0) else 0.0
+        min(0.99, c_feet_lim / max(c_struct_lim, 1e-18)) if (has_feet and c_feet_lim > 0.0) else 0.0
     )
 
     limiting_modal_summary = _build_limiting_modal_summary(
@@ -2732,4 +3181,6 @@ def solve_modal_fea(
         worst_print_mode_number=worst_print_mode_number,
         limiting_modal_summary=limiting_modal_summary,
         adxl_vs_nozzle_diagnostic=adxl_vs_nozzle_diagnostic,
+        mounting_dynamics=mounting_dynamics,
+        belt_dynamics=belt_dynamics,
     )

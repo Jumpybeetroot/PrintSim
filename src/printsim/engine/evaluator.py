@@ -212,6 +212,22 @@ def _compute_scores_and_diagnostics(
                 f"Low frame natural frequency ({modal_fea.fundamental_freq_hz:.1f} Hz): "
                 "main limit is outer frame racking and bending stiffness relative to moving/frame mass."
             )
+    mount_dyn = modal_fea.mounting_dynamics or {}
+    suspension = mount_dyn.get("suspension")
+    if suspension:
+        if float(suspension["safety_factor"]) < float(suspension["design_factor"]):
+            diag.append(
+                f"Suspension line overload ({suspension['line_tension_n']:.0f} N per line on "
+                f"'{suspension['line']}', break {suspension['line_break_strength_n']:.0f} N): safety factor "
+                f"{suspension['safety_factor']:.1f} is below the {suspension['design_factor']:.0f}x design factor "
+                "for a hanging load; use a stronger line, more lines, or less ballast."
+            )
+        if float(suspension["static_stretch_mm"]) > 0.5 * float(suspension["line_length_mm"]):
+            diag.append(
+                f"Suspension line overstretched ({suspension['static_stretch_mm']:.0f} mm static stretch on a "
+                f"{suspension['line_length_mm']:.0f} mm line): elastic cord this soft bottoms out; "
+                "use a stiffer line or more strands."
+            )
     if inertial_defl_um > 35.0:
         diag.append(
             f"High inertial nozzle deflection ({inertial_defl_um:.1f} um under {eval_accel_for_static:.0f} mm/s^2 acceleration, "

@@ -73,9 +73,9 @@ kinematics:
 toolhead:
   preset_id: monolith_toolhead_cpap
   name: Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)
-  total_mass_g: 143
-  cog_offset_mm: [0, -9.5, -1.5]
-  nozzle_offset_mm: [0, -14.0, -44.0]
+  total_mass_g: 218
+  cog_offset_mm: [0, -11.5, -1.5]
+  nozzle_offset_mm: [0, -16.0, -52.0]
   mount_material: slm_aluminum
   body_construction: extruder_as_chassis
   internal_stiffness_n_per_mm: 2400.0

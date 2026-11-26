@@ -380,12 +380,26 @@ def _find_or_split_frame_node(
     from printsim.geometry import builder as _b
 
     excluded_roles = {"panel", "backbone", "toolhead", "cog", "nozzle", "bed"}
+    excluded_ids = {
+        "y_car_l",
+        "y_car_r",
+        "x_beam_l",
+        "x_beam_r",
+        "pulley_fl",
+        "pulley_fr",
+        "pulley_rl",
+        "pulley_rr",
+        "z_joint_mid_fl",
+        "z_joint_mid_fr",
+        "z_joint_mid_rl",
+        "z_joint_mid_rr",
+    }
     if not allow_gantry:
         excluded_roles.add("gantry")
     best_id: str | None = None
     best_dist = snap_tol_m
     for n in nodes:
-        if n.role in excluded_roles:
+        if n.role in excluded_roles or n.id in excluded_ids:
             continue
         if n.id == "z_col_bed_r" and not allow_rear_z:
             continue
@@ -428,7 +442,9 @@ def _find_or_split_frame_node(
     non_panel = [
         n
         for n in nodes
-        if n.role not in excluded_roles and (allow_rear_z or n.id != "z_col_bed_r")
+        if n.role not in excluded_roles
+        and n.id not in excluded_ids
+        and (allow_rear_z or n.id != "z_col_bed_r")
     ]
     return min(non_panel, key=lambda n: float(np.linalg.norm(n.position_m - p_target))).id
 
@@ -451,25 +467,37 @@ def _add_corexy_shell_panels(
     frame_prof = get_profile(spec.frame.profile)
     d_c = 0.5 * frame_prof.width_m + 0.5 * panel_t_m
 
-    is_acm = pmat.id == "acm_dibond"
-    if is_acm:
-        t_skin = min(0.0003, 0.25 * panel_t_m)
-        t_core = max(panel_t_m - 2.0 * t_skin, 0.0)
-        e_al = 70.0e9
-        nu_al = 0.33
-        g_core = 0.17e9
-        e_core = 2.0 * (1.0 + 0.42) * g_core
-        e_mem_base = e_al * (2.0 * t_skin) + e_core * t_core
-        d_bend_base: float | None = e_al * (t_skin * (panel_t_m - t_skin) ** 2) / (
-            2.0 * (1.0 - nu_al**2)
+    def _panel_material_terms(
+        mat: MaterialSpec,
+    ) -> tuple[float, float | None, float | None, MaterialSpec, float]:
+        """Return (e_mem_base, d_bend_base, g_trans_base, shell_material, clamp_eff) for one sheet."""
+        if mat.id == "acm_dibond":
+            t_skin = min(0.0003, 0.25 * panel_t_m)
+            t_core = max(panel_t_m - 2.0 * t_skin, 0.0)
+            e_al = 70.0e9
+            nu_al = 0.33
+            g_core = 0.17e9
+            e_core = 2.0 * (1.0 + 0.42) * g_core
+            return (
+                e_al * (2.0 * t_skin) + e_core * t_core,
+                e_al * (t_skin * (panel_t_m - t_skin) ** 2) / (2.0 * (1.0 - nu_al**2)),
+                max(g_core * t_core, 1e3),
+                mat.model_copy(update={"poisson_ratio": nu_al}),
+                0.22,
+            )
+        clamp = (
+            0.30
+            if mat.youngs_modulus_pa < 10.0e9
+            else (0.80 if mat.id == "carbon_fiber_plate" else 1.0)
         )
-        g_trans_base: float | None = max(g_core * t_core, 1e3)
-        panel_mat_shell = pmat.model_copy(update={"poisson_ratio": nu_al})
-    else:
-        e_mem_base = pmat.youngs_modulus_pa * panel_t_m
-        d_bend_base = None
-        g_trans_base = None
-        panel_mat_shell = pmat
+        return mat.youngs_modulus_pa * panel_t_m, None, None, mat, clamp
+
+    side_pmat = (
+        get_material(spec.frame.side_panel_material)
+        if spec.frame.side_panel_material
+        else pmat
+    )
+    mat_terms = {"main": _panel_material_terms(pmat), "side": _panel_material_terms(side_pmat)}
 
     if bolted_to_gantry:
         bay_list: list[tuple[str, str, str, str, str, tuple[float, float, float], float | None]] = [
@@ -490,15 +518,6 @@ def _add_corexy_shell_panels(
         bay_list.append(("top", "t_fl", "t_fr", "t_rl", "t_rr", (0.0, 0.0, 1.0), None))
     bays = tuple(bay_list)
 
-    clamp_eff = (
-        0.22
-        if is_acm
-        else (
-            0.30
-            if pmat.youngs_modulus_pa < 10.0e9
-            else (0.80 if pmat.id == "carbon_fiber_plate" else 1.0)
-        )
-    )
     mesh_n = max(2, int(panel_mesh_n))
 
     shell_elements: list[_b.ShellPanelElement] = []
@@ -521,12 +540,17 @@ def _add_corexy_shell_panels(
             continue
 
         is_split_wall = wall_h is not None
+        is_side_bay = bay.startswith(("left", "right"))
+        bay_pmat = side_pmat if is_side_bay else pmat
+        e_mem_base, d_bend_base, g_trans_base, panel_mat_shell, clamp_eff = mat_terms[
+            "side" if is_side_bay else "main"
+        ]
         wall_base = bay[:-4] if bay.endswith("_low") or bay.endswith("_top") else ""
         is_low_wall = bay.endswith("_low")
         is_top_wall = bay.endswith("_top")
         prop_h = wall_h if (wall_h is not None and wall_h > bh) else bh
         props = panel_mechanical_properties(
-            pmat,
+            bay_pmat,
             panel_t_m,
             bw,
             prop_h,

@@ -1,0 +1,120 @@
+name: LDO Voron 2.4r2 Rev D (300)
+description: Official-spec LDO Voron 2.4r2 Rev D 300 kit (2020 Al frame, quad belted Z, LDO 42STH48-2504AC steppers, LDO matched stainless rails, StealthBurner + CW2 + Nitehawk-SB v2.0 + E3D Revo Voron, 8mm MIC-6 650W bed)
+architecture: corexy
+frame:
+  width_mm: 460
+  depth_mm: 460
+  height_mm: 480
+  profile: extrusion_2020
+  material: aluminum_6063_t5
+  bracing: corner_gussets
+  brace_profile: brace_rod_10mm
+  brace_material: aluminum_6063_t5
+  enclosed_panels: true
+  panel_mounting: clip_enclosure
+  panel_material: acrylic_pmma
+  panel_thickness_mm: 3.0
+  gantry_top_clearance_mm: 55.0
+gantry:
+  hardware_kit: ldo_voron_kit
+  drive_mode: 2wd
+  belt_routing: stock_corexy
+  double_shear_pulleys: false
+  bracket_material: abs_printed
+  x_beam_profile: extrusion_2020
+  x_beam_material: aluminum_6063_t5
+  x_rail_profile: mgn12_rail
+  y_rail_profile: mgn9_rail
+  x_rail_mount: front
+  y_rail_mount: bottom
+  rail_material: steel_4140
+  rail_quality: midgrade_matched
+  rail_block_type: H
+  dual_x_rails: false
+  # Printed ABS XY-joints with Nitehawk-SB v2.0 umbilical (no XY drag chains):
+  # 180 g MGN12H-base - 56 g MGN9H pair delta = 124 g dressed
+  carriage_mass_g: 180
+  belt:
+    type: gt2_6mm
+    core: fiberglass
+    pulley_teeth: 20
+    pitch_mm: 2.0
+    pretension_n: 9.0  # Voron-documented 110 Hz pluck on a 150 mm span (about 2 lb)
+kinematics:
+  build_volume_mm: [300, 300, 300]
+  max_velocity_mm_s: 450
+  max_accel_mm_s2: 8000
+  max_z_velocity_mm_s: 25
+  max_z_accel_mm_s2: 300
+  square_corner_velocity_mm_s: 5.0
+  input_shaper: auto
+  xy_stepper:
+    preset_id: ldo_2504ac
+    name: LDO 42STH48-2504AC (48mm 1.8° Speedy Power)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.45
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 8.45e-6
+    motor_mass_g: 340
+  z_stepper:
+    preset_id: ldo_2504ac
+    name: LDO 42STH48-2504AC (Z-Drive)
+    holding_torque_nm: 0.55
+    rated_current_a: 2.5
+    run_current_a: 1.0
+    phase_resistance_ohm: 1.2
+    inductance_mh: 1.5
+    steps_per_rev: 200
+    supply_voltage_v: 24.0
+    rotor_inertia_kg_m2: 8.45e-6
+    motor_mass_g: 340
+toolhead:
+  preset_id: stealthburner
+  name: Voron StealthBurner + CW2 + LDO Nitehawk-SB v2.0
+  total_mass_g: 365
+  cog_offset_mm: [0, -24.0, 16.0]
+  nozzle_offset_mm: [0, -34.0, -60.0]
+  mount_material: abs_printed
+  body_construction: multi_piece_clamshell
+  internal_stiffness_n_per_mm: 350.0
+  z_probe_type: klicky_inductive
+  envelope_mm: [68, 74, 95]
+  hotend:
+    preset_id: e3d_revo_voron
+    mount_style: rigid_4bolt_m3
+    structural_stiffness_n_per_mm: 165.0
+    mass_g: 30.0
+    overall_length_mm: 52.0
+    name: E3D Revo Voron (40W RapidChange)
+    heater_power_w: 40
+    block_material: brass_c360
+    block_mass_g: 8
+    nozzle_material: brass_c360
+    nozzle_diameter_mm: 0.4
+    melt_zone_length_mm: 15.5
+    heatbreak_material: stainless_304
+    heatbreak_length_mm: 10
+    heatbreak_wall_mm: 0.15
+    heatbreak_id_mm: 2.0
+    heatsink_thermal_resistance_k_w: 3.6
+    part_cooling_cfm: 9.0
+    max_temp_c: 300
+    ambient_temp_c: 25
+  extruder:
+    type: direct_drive
+    gear_ratio: 5.0
+    max_push_force_n: 55
+    filament_diameter_mm: 1.75
+bed:
+  size_mm: [300, 300]
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 8.0
+  heater_power_w: 650
+  mass_g: 2800
+  z_drive: belted_quad_z
+  z_rail_profile: mgn9_rail
+  z_leadscrew_type: gt2_6mm_z_belt

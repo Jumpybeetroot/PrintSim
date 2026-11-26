@@ -225,15 +225,16 @@ def _effective_member_stiffness_scale(assembly: AssemblyModel) -> float:
     nmap = assembly.node_map
     base_node = nmap.get(assembly.toolhead_node_id)
     cog_node = nmap.get(assembly.toolhead_cog_node_id)
+    junc_node = nmap.get("toolhead_chassis") or cog_node
     noz_node = nmap.get(assembly.nozzle_node_id)
     l_mount = (
-        float(np.linalg.norm(cog_node.position_m - base_node.position_m))
-        if base_node is not None and cog_node is not None
+        float(np.linalg.norm(junc_node.position_m - base_node.position_m))
+        if base_node is not None and junc_node is not None
         else float(np.linalg.norm(np.array(spec.toolhead.cog_offset_mm) * 1e-3))
     )
     l_stem = (
-        float(np.linalg.norm(noz_node.position_m - cog_node.position_m))
-        if noz_node is not None and cog_node is not None
+        float(np.linalg.norm(noz_node.position_m - junc_node.position_m))
+        if noz_node is not None and junc_node is not None
         else 0.04
     )
     props = compute_toolhead_link_props(spec, l_mount_m=l_mount, l_stem_m=l_stem)
@@ -247,6 +248,13 @@ def _effective_member_stiffness_scale(assembly: AssemblyModel) -> float:
         )
         if nom_ei > 0.0 and actual_ei > 0.0:
             mount_scale = actual_ei / nom_ei
+    else:
+        mount_se = next((se for se in assembly.superelements if se.id == "toolhead_mount"), None)
+        if mount_se is not None and mount_se.K_cb is not None and mount_se.K_cb.shape[0] >= 9:
+            base_tr = float(mount_se.manifest.get("_baseline_k11_trace", 0.0))
+            curr_tr = float(np.trace(mount_se.K_cb[6:9, 6:9]))
+            if base_tr > 0.0 and curr_tr > 0.0:
+                mount_scale = curr_tr / base_tr
 
     stem_scale = 1.0
     stem_mem = next((m for m in assembly.members if m.id == "nozzle_stem"), None)

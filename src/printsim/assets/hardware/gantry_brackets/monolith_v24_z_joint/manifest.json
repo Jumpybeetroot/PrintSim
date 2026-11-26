@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "monolith_v24_z_joint",
+  "name": "LDO Monolith Milled CNC 6061 V2.4 Z-Joint",
+  "source_cad": "LDO_Milled_V2_9mm_S_FT.step",
+  "source_url": "https://github.com/Monolith3D/LDO_Monolith_Gantry_Kits",
+  "baked_at": "2026-11-26T19:06:30Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 806,
+  "num_elements": 2290,
+  "num_dofs": 2418,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.011574,
+  "mass_kg": 0.028687,
+  "com_mm": [
+    0.0,
+    29.0604,
+    35.686
+  ],
+  "port0_mm": [
+    0.0,
+    20.0,
+    37.0
+  ],
+  "port1_mm": [
+    0.0,
+    30.0,
+    20.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 526101.863,
+    "ky": 572862.328,
+    "kz": 1597017.786
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 61081.79,
+    "kry": 71811.392,
+    "krz": 60357.865
+  },
+  "fixed_interface_freqs_hz": [
+    45051.89,
+    51898.53,
+    60627.97,
+    64541.88,
+    64791.72,
+    72770.8
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 20486,
+  "visual_bytes": 616612,
+  "cad_trust_pct": 90,
+  "source_hash": "898019727c9360399f445a971f4138aafba23a1af9cc109f5170be3f9c13983b"
+}

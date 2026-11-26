@@ -13,11 +13,13 @@ import {
   CornerJointType,
   ExtrusionFillingInfo,
   ExtrusionFillingType,
+  FrameBallastLocationType,
   FrameFeetType,
   FrontBraceType,
   PrinterSpecData,
   ProfileItem,
   SimulationResponse,
+  SuspensionLineType,
   TopBraceType,
 } from "../types";
 import {
@@ -25,6 +27,7 @@ import {
   PresetAffectsStrip,
   clearModelOverrideGroup,
 } from "./ModelOverrideControl";
+import { syncZArchitectureDefaults } from "../utils/kitPresets";
 
 interface FrameSizePreset {
   id: string;
@@ -244,7 +247,22 @@ const FALLBACK_FRAME_FEET_PARAMS: Record<
   rubber_feet: { k_axial_n_per_mm: 360, k_lateral_n_per_mm: 140, damping_delta: 0.006, base_mass_kg: 0 },
   anti_vib_pads: { k_axial_n_per_mm: 85, k_lateral_n_per_mm: 32, damping_delta: 0.015, base_mass_kg: 0 },
   paver_on_foam: { k_axial_n_per_mm: 240, k_lateral_n_per_mm: 95, damping_delta: 0.022, base_mass_kg: 18 },
+  suspended_lines: { k_axial_n_per_mm: 6.67, k_lateral_n_per_mm: 0.061, damping_delta: 0, base_mass_kg: 0 },
 };
+
+const FALLBACK_SUSPENSION_LINES: Array<{ id: SuspensionLineType; name: string }> = [
+  { id: "paracord_550", name: "550 Paracord (Nylon, 4 mm)" },
+  { id: "uhmwpe_braid_200lb", name: "UHMWPE / Dyneema Braid (200 lb)" },
+  { id: "nylon_mono_100lb", name: "Nylon Monofilament (100 lb)" },
+  { id: "steel_cable_1_5mm", name: "Stainless Wire Rope (1.5 mm)" },
+  { id: "bungee_cord_6mm", name: "Bungee Shock Cord (6 mm)" },
+];
+
+const BALLAST_LOCATION_OPTIONS: Array<{ id: FrameBallastLocationType; label: string }> = [
+  { id: "base", label: "Base (bottom corners)" },
+  { id: "top", label: "Top (top corners)" },
+  { id: "distributed", label: "Distributed (all corners)" },
+];
 
 const FRAME_FEET_OPTIONS: Array<{
   id: FrameFeetType;
@@ -275,6 +293,12 @@ const FRAME_FEET_OPTIONS: Array<{
     label: "Concrete Paver on Foam (18 kg Inert Base)",
     shortLabel: "Paver on Foam",
     hint: "18 kg concrete paver over acoustic foam decouples benchtop noise while adding massive base inertia to resist frame rocking.",
+  },
+  {
+    id: "suspended_lines",
+    label: "Suspended From Overhead Lines",
+    shortLabel: "Suspended",
+    hint: "Printer hangs from four lines at the top frame corners. Pendulum sway sits below 1 Hz, far under the shaper band, so the frame recoils as a free body.",
   },
 ];
 
@@ -689,14 +713,14 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
                 const nextZ = e.target.value as PrinterSpecData["bed"]["z_drive"];
                 const prevLabel = Z_DRIVE_LABELS[spec.bed.z_drive] ?? spec.bed.z_drive;
                 const nextLabel = Z_DRIVE_LABELS[nextZ] ?? nextZ;
+                const preview: PrinterSpecData = JSON.parse(JSON.stringify(spec));
+                const synced = syncZArchitectureDefaults(preview, nextZ);
+                const suffix = synced.length > 0 ? ` (${synced.join(", ")})` : "";
                 update(
                   (d) => {
-                    d.bed.z_drive = nextZ;
-                    if (!d.bed.z_leadscrew_type || d.bed.z_leadscrew_type === "auto") {
-                      clearModelOverrideGroup(d, "z_drive_mechanism");
-                    }
+                    syncZArchitectureDefaults(d, nextZ);
                   },
-                  `Gantry Type: ${prevLabel} → ${nextLabel}`
+                  `Gantry Type: ${prevLabel} → ${nextLabel}${suffix}`
                 );
               }}
             >
@@ -1094,18 +1118,45 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         );
       })()}
 
-      {spec.architecture === "corexy" && (
+      {spec.architecture === "corexy" && !isFlyingGantry && (
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={Boolean(spec.frame.gantry_on_top_frame)}
+            onChange={(e) => {
+              const nextVal = e.target.checked;
+              update(
+                (d) => {
+                  d.frame.gantry_on_top_frame = nextVal;
+                },
+                nextVal
+                  ? "Gantry Plane: Separate Ring → Top Frame Ring"
+                  : "Gantry Plane: Top Frame Ring → Separate Ring"
+              );
+            }}
+          />
+          <span>Y rails on top frame ring (VzBot style)</span>
+        </label>
+      )}
+
+      {spec.architecture === "corexy" && !(spec.frame.gantry_on_top_frame && !isFlyingGantry) && (
         <div className="slider-row">
           <label htmlFor="df-top-to-gantry-clearance-mm-13">
             <span>Top-to-Gantry Clearance (mm)</span>
             <span className="tension-readout">
               <strong>{gantryClearanceDraft} mm</strong>
               <span className="kpi-sub">
-                {gantryClearanceDraft < 50
-                  ? "compact"
-                  : gantryClearanceDraft <= 60
-                    ? "stock"
-                    : `+${gantryClearanceDraft - 55} mm tophat`}
+                {!isFlyingGantry
+                  ? gantryClearanceDraft < 90
+                    ? "low headroom"
+                    : gantryClearanceDraft <= 120
+                      ? "Trident stock"
+                      : `+${gantryClearanceDraft - 110} mm tophat`
+                  : gantryClearanceDraft < 50
+                    ? "compact"
+                    : gantryClearanceDraft <= 60
+                      ? "V2.4 stock"
+                      : `+${gantryClearanceDraft - 55} mm tophat`}
               </span>
             </span>
           </label>
@@ -1783,6 +1834,42 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
         )}
 
         {spec.architecture === "corexy" && panelsEnabled && (
+          <div className="field-row">
+            <label htmlFor="df-side-panel-material">Side Panel Material</label>
+            <select
+              id="df-side-panel-material"
+              value={spec.frame.side_panel_material ?? ""}
+              onChange={(e) => {
+                const nextSide = e.target.value || null;
+                const prevLabel = spec.frame.side_panel_material
+                  ? materialLabel(spec.frame.side_panel_material)
+                  : "Same as panels";
+                const nextLabel = nextSide ? materialLabel(nextSide) : "Same as panels";
+                update(
+                  (d) => {
+                    d.frame.side_panel_material = nextSide;
+                  },
+                  `Side Panels: ${prevLabel} → ${nextLabel}`
+                );
+              }}
+            >
+              <option value="">Same as panels</option>
+              {spec.frame.side_panel_material &&
+                !PANEL_MATERIALS.some((pm) => pm.id === spec.frame.side_panel_material) && (
+                  <option value={spec.frame.side_panel_material}>
+                    {materialLabel(spec.frame.side_panel_material)} (Custom)
+                  </option>
+                )}
+              {PANEL_MATERIALS.map((pm) => (
+                <option key={pm.id} value={pm.id}>
+                  {pm.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {spec.architecture === "corexy" && panelsEnabled && (
           <label className="checkbox-row" style={{ marginTop: 4 }}>
             <input
               type="checkbox"
@@ -1995,7 +2082,59 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
     };
   }, []);
 
+  const [suspensionLengthDraft, setSuspensionLengthDraft] = useState<string>(
+    String(Math.round(spec.frame.suspension_length_mm ?? 600))
+  );
+  const [ballastMassDraft, setBallastMassDraft] = useState<string>(
+    String(spec.frame.ballast_mass_kg ?? 0)
+  );
+  useEffect(() => {
+    setSuspensionLengthDraft(String(Math.round(spec.frame.suspension_length_mm ?? 600)));
+  }, [spec.frame.suspension_length_mm]);
+  useEffect(() => {
+    setBallastMassDraft(String(spec.frame.ballast_mass_kg ?? 0));
+  }, [spec.frame.ballast_mass_kg]);
+
+  const commitSuspensionLength = (raw: string) => {
+    const parsed = Number(raw);
+    const prev = spec.frame.suspension_length_mm ?? 600;
+    if (!Number.isFinite(parsed)) {
+      setSuspensionLengthDraft(String(Math.round(prev)));
+      return;
+    }
+    const val = Math.max(50, Math.min(5000, Math.round(parsed)));
+    setSuspensionLengthDraft(String(val));
+    if (val === prev) return;
+    update((d) => {
+      d.frame.suspension_length_mm = val;
+    }, `Suspension Line Length: ${Math.round(prev)} mm → ${val} mm`);
+  };
+
+  const commitBallastMass = (raw: string) => {
+    const parsed = Number(raw);
+    const prev = spec.frame.ballast_mass_kg ?? 0;
+    if (!Number.isFinite(parsed)) {
+      setBallastMassDraft(String(prev));
+      return;
+    }
+    const val = Math.max(0, Math.min(200, Math.round(parsed * 10) / 10));
+    setBallastMassDraft(String(val));
+    if (val === prev) return;
+    update((d) => {
+      d.frame.ballast_mass_kg = val;
+    }, `Frame Ballast: ${prev} kg → ${val} kg`);
+  };
+
   const currentFeetType: FrameFeetType = spec.frame.feet_type ?? "rigid_bolted";
+  const suspensionLineOptions: Array<{ id: string; name: string }> =
+    catalog.suspension_lines && catalog.suspension_lines.length > 0
+      ? catalog.suspension_lines
+      : FALLBACK_SUSPENSION_LINES;
+  const suspensionLineName = (id: string) =>
+    suspensionLineOptions.find((o) => o.id === id)?.name ?? id;
+  const ballastLocationLabel = (id: string) =>
+    BALLAST_LOCATION_OPTIONS.find((o) => o.id === id)?.label ?? id;
+  const mountDyn = sim?.modal_fea?.mounting_dynamics ?? null;
   const frameFeetCatalogEntry = catalog.frame_feet?.find((f) => f.id === currentFeetType);
   const frameFeetOptionMeta =
     FRAME_FEET_OPTIONS.find((o) => o.id === currentFeetType) ?? FRAME_FEET_OPTIONS[0];
@@ -2148,6 +2287,145 @@ export const DesignAnchoringSection: React.FC<DesignAnchoringSectionProps> = ({
               );
             })()}
           </div>
+
+          {currentFeetType === "suspended_lines" && (
+            <div className="field-grid-2 stack">
+              <div className="field-row">
+                <label htmlFor="df-suspension-line-61">Suspension Line</label>
+                <select
+                  id="df-suspension-line-61"
+                  value={spec.frame.suspension_line ?? "paracord_550"}
+                  title="Line material sets vertical bounce and tilt stiffness; pendulum sway depends only on length"
+                  onChange={(e) => {
+                    const nextVal = e.target.value as SuspensionLineType;
+                    const prevVal = spec.frame.suspension_line ?? "paracord_550";
+                    update((d) => {
+                      d.frame.suspension_line = nextVal;
+                    }, `Suspension Line: ${suspensionLineName(prevVal)} → ${suspensionLineName(nextVal)}`);
+                  }}
+                >
+                  {suspensionLineOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row">
+                <label htmlFor="df-suspension-length-62">Line Length (mm)</label>
+                <input
+                  id="df-suspension-length-62"
+                  type="number"
+                  min={50}
+                  max={5000}
+                  step={50}
+                  value={suspensionLengthDraft}
+                  title="Free length from the overhead anchor to each top frame corner"
+                  onChange={(e) => setSuspensionLengthDraft(e.target.value)}
+                  onBlur={() => commitSuspensionLength(suspensionLengthDraft)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSuspensionLength(suspensionLengthDraft);
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="field-grid-2 wide-last">
+            <div className="field-row">
+              <label htmlFor="df-ballast-mass-63">Frame Ballast (kg)</label>
+              <input
+                id="df-ballast-mass-63"
+                type="number"
+                min={0}
+                max={200}
+                step={0.5}
+                value={ballastMassDraft}
+                title="Extra dead weight fastened to the frame: steel plate, spool on top, sandbags"
+                onChange={(e) => setBallastMassDraft(e.target.value)}
+                onBlur={() => commitBallastMass(ballastMassDraft)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    commitBallastMass(ballastMassDraft);
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+            </div>
+            <div className="field-row">
+              <label htmlFor="df-ballast-location-64">Ballast Location</label>
+              <select
+                id="df-ballast-location-64"
+                value={spec.frame.ballast_location ?? "base"}
+                onChange={(e) => {
+                  const nextVal = e.target.value as FrameBallastLocationType;
+                  const prevVal = spec.frame.ballast_location ?? "base";
+                  update((d) => {
+                    d.frame.ballast_location = nextVal;
+                  }, `Ballast Location: ${ballastLocationLabel(prevVal)} → ${ballastLocationLabel(nextVal)}`);
+                }}
+              >
+                {BALLAST_LOCATION_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {showHints && (spec.frame.ballast_mass_kg ?? 0) > 0 && currentFeetType === "rigid_bolted" && (
+            <div className="hint-line">
+              {(spec.frame.ballast_location ?? "base") === "base"
+                ? "Base ballast on a rigidly bolted frame does not change its dynamics."
+                : "Ballast above the base lowers the frame's racking modes."}
+            </div>
+          )}
+
+          {mountDyn && (
+            <div className="sub-block">
+              <div className="sub-block-title">
+                <span>Mount Dynamics</span>
+                <span className="sub-block-tag">{mountDyn.total_mass_kg.toFixed(1)} kg</span>
+              </div>
+              <div className="hint-line">
+                {mountDyn.rigid_body_modes
+                  .map(
+                    (m) =>
+                      `${m.label} ${
+                        m.frequency_hz < 10 ? m.frequency_hz.toFixed(2) : m.frequency_hz.toFixed(0)
+                      } Hz`
+                  )
+                  .join(" · ")}
+              </div>
+              <div className="hint-line">
+                Frame recoil per mm of travel: X {mountDyn.x.frame_recoil_um_per_mm.toFixed(0)} µm, Y{" "}
+                {mountDyn.y.frame_recoil_um_per_mm.toFixed(0)} µm
+              </div>
+              {mountDyn.suspension && (
+                <div
+                  className={
+                    mountDyn.suspension.safety_factor < mountDyn.suspension.design_factor
+                      ? "hint-line danger"
+                      : "hint-line"
+                  }
+                >
+                  Line tension {mountDyn.suspension.line_tension_n.toFixed(0)} N each, safety factor{" "}
+                  {mountDyn.suspension.safety_factor.toFixed(1)} (needs{" "}
+                  {mountDyn.suspension.design_factor.toFixed(0)}), static stretch{" "}
+                  {mountDyn.suspension.static_stretch_mm.toFixed(1)} mm
+                </div>
+              )}
+              {showHints &&
+                mountDyn.notes.map((note) => (
+                  <div key={note} className="hint-line">
+                    {note}
+                  </div>
+                ))}
+            </div>
+          )}
 
           <div className="sub-block">
             <div className="sub-block-title">

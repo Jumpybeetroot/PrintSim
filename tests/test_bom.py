@@ -57,14 +57,25 @@ class TestCoreXYBOM:
         lengths = [c.length_mm for c in bom.cut_list]
         assert all(abs(L - 445.0) > 1.0 and abs(L - 55.0) > 1.0 for L in lengths)
 
-        # X gantry merged from x_gantry_l + x_gantry_r to exact centerline span (440 mm) & net 380 mm Voron 300 beam
-        from printsim.geometry.builder import corexy_frame_centerlines_m
+        # X gantry merged from x_gantry_l + x_gantry_r to exact structural span between CAD XY-joint
+        # ports (350 mm on Voron Stock +/-45 mm ports) & net 380 mm official Voron 300 BOM cut length
+        from printsim.geometry.builder import build_assembly, corexy_frame_centerlines_m
 
+        asm_v = build_assembly(spec)
+        expected_x_span_mm = (
+            sum(
+                m.length_m(asm_v.node_map)
+                for m in asm_v.members
+                if m.id in ("x_gantry_l", "x_gantry_r")
+            )
+            * 1000.0
+        )
         w_cl_mm, d_cl_mm, _ = [v * 1000.0 for v in corexy_frame_centerlines_m(spec)]
         gantry_cuts = [c for c in bom.cut_list if c.role == "gantry"]
         assert len(gantry_cuts) == 1
         assert gantry_cuts[0].quantity == 1
-        assert gantry_cuts[0].length_mm == pytest.approx(w_cl_mm, abs=0.1)
+        assert gantry_cuts[0].length_mm == pytest.approx(expected_x_span_mm, abs=0.1)
+        assert gantry_cuts[0].length_mm < w_cl_mm
         assert gantry_cuts[0].net_length_mm == pytest.approx(380.0, abs=0.1)
 
         # Y rail support extrusions merged to centerline span (440 mm, qty=2) & net 420 mm Voron 300 cut

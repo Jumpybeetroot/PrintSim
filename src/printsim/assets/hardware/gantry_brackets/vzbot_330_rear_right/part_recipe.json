@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "vzbot_330_rear_right",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "regions": [
+    {
+      "label": "vzbot_330_rear_right",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "station": "rear_right",
+  "port1": "motor shaft bore (tensioner plate + top bearing)",
+  "origin_cad_mm": [
+    255.0,
+    285.0,
+    45.0
+  ]
+}

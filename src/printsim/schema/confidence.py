@@ -21,63 +21,72 @@ def confidence_tier(trust_pct: int) -> ConfidenceTier:
 ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
     "toolhead_presets": {
         "stealthburner": {
-            "trust_pct": 86,
+            "trust_pct": 88,
             "basis": (
-                "Voron Design official StealthBurner + CW2 CAD geometry and extensive community "
-                "scale-weighed assemblies (~415 g dressed with Dragon HF) paired with stock ADXL baselines."
+                "Official Voron Stealthburner_CW2.5_Assembly.step exact solid volume rollup (198 cm³ ABS ~158 g) "
+                "+ PrintDB datasheets (54 g MGN12H, 85 g LDO-36STH20, 27 g 5015, 15 g 4010) = 398 g on-rail excl. "
+                "hotend (444 g w/ Dragon HF, matching Voron 433-450 g on-rail weigh-ins); CAD CoG [0, -24, +16] mm, "
+                "nozzle [0, -34, -60] mm."
             ),
             "caveat": (
                 "Wiring harness/CAN toolboard mass, LED strip, and extruder motor variants shift real mass by ±12 g."
             ),
         },
         "stealthburner_tap": {
-            "trust_pct": 84,
+            "trust_pct": 85,
             "basis": (
-                "Voron StealthBurner + Printed Tap official CAD dimensions, scale weights, and Voron "
-                "community ADXL345 logs."
+                "Official StealthBurner CW2.5 STEP + Voron Tap hardware delta (+40 g net over stock 33 g printed "
+                "X-carriage for 50 mm MGN9H rail/block, PCB & magnets = 438 g on-rail excl. hotend, 484 g w/ Dragon HF)."
             ),
             "caveat": (
                 "Printed Tap rail carriage hardware, magnet stack, and optical PCB mass vary ±15 g by print infill and fasteners."
             ),
         },
         "xol_compact": {
-            "trust_pct": 82,
+            "trust_pct": 86,
             "basis": (
-                "Armchair Heavy Industries XOL repository CAD and community scale-weighed assemblies "
-                "(~250 g dressed with Sherpa Mini + Rapido)."
+                "Official Xol Toolhead Assembly Guide 20240615.step exact solid volume rollup (60.4 cm³ ASA ~51 g) "
+                "+ PrintDB datasheets (54 g MGN12H, 115 g Sherpa Mini, 30 g 2×4010, 6.4 g 2510) = 278 g on-rail excl. "
+                "hotend (328 g w/ Rapido HF; 274 g off-rail vs AHI ~260 g bare); exact CAD nozzle [0, -29, -49.5] mm, "
+                "CoG [0, -18, +10] mm."
             ),
             "caveat": (
-                "Swapping 5015 vs 4010 blowers, extruder motors, or umbilical mounts shifts mass and CoG by ±10 g / ±3 mm."
+                "Optional EBB36/SHT36 toolboard, 17 mm vs 20 mm pancake motor, and UHF hotend swap shift mass/CoG by ±15 g / ±3 mm."
             ),
         },
         "a4t_beacon": {
-            "trust_pct": 80,
+            "trust_pct": 84,
             "basis": (
-                "Armchair Heavy Industries A4T repository CAD and community scale-weighed builds "
-                "(~250 g with Wristwatch G2); CoG offset derived from CAD assembly layout."
+                "Official A4T Cowling (47.3 cm³) + Dragon HE Duct (4.9 cm³) + Xol Carriage (19.55 cm³) STEP CAD "
+                "(71.8 cm³ total, ~60 g ASA) + PrintDB datasheets (54 g MGN12H, ~134 g WW-BMG/WWG2, 30 g 2×4010, "
+                "6.4 g Delta 2510, 3.3 g Beacon) = 298 g on-rail excl. hotend (344 g w/ Dragon HF; 290 g off-rail); "
+                "CoG [0, -19, +8] mm, nozzle [0, -28, -50] mm."
             ),
             "caveat": (
-                "CoG Z/Y overhang and dressed mass vary ±12 g across extruder motors and Beacon vs Cartographer mounts."
+                "WW-BMG (~125 g) vs WWG2 (~150 g) and ASA vs PPA-CF (+7 g) shift dressed mass by ±15 g."
             ),
         },
         "dragon_burner": {
-            "trust_pct": 78,
+            "trust_pct": 83,
             "basis": (
-                "Chirpy2605 Dragon Burner community scale-weighed builds (~245 g with Orbiter 2 + Dragon) "
-                "and public CAD envelope."
+                "Official Dragon_Burner_v0.2_v8.step solid volumes (27.7 cm³ core + ~18 cm³ MGN12H carriage = 37.5 g ABS) "
+                "+ PrintDB datasheets (54 g MGN12H, 135 g Orbiter v2.0, 24 g 2×4010, 8 g 3010) = 272 g on-rail excl. "
+                "hotend (318 g w/ Dragon HF; 264 g off-rail matching community 253-272 g weigh-ins); CoG [0, -14, +4.5] mm."
             ),
             "caveat": (
-                "Modular fan shrouds and extruder swaps (Orbiter 2 vs Sherpa vs Galileo 2) shift CoG by ±4 mm."
+                "Modular carriage adapters and extruder swaps (Orbiter 2 vs Sherpa Micro -30 g) shift mass and CoG by ±25 g / ±4 mm."
             ),
         },
         "archetype_cpap": {
-            "trust_pct": 72,
+            "trust_pct": 82,
             "basis": (
-                "Armchair Heavy Industries Archetype CPAP lightweight build weights (~235 g with "
-                "remote blower ducting) and CAD nozzle-drop layout."
+                "Official Archetype Public CAD STEP.step (Breakneck v24: 81.5 cm³ printed core/duct/rear micro-Bowden "
+                "bar ~68.4 g) + PrintDB datasheets (54 g MGN12H, 105 g Sherpa Micro, 6.4 g 2510 heatsink fan, 3.3 g "
+                "Beacon) = 248 g on-rail excl. hotend (344 g w/ Goliath Air, 298 g w/ Rapido HF); exact CAD nozzle "
+                "Y=-21 mm, Z=-64 mm UHF (-74 mm Goliath), CoG [0, -15.5, +12] mm."
             ),
             "caveat": (
-                "Corrugated CPAP hose stiffness, pneumatic back-pressure drag, and dynamic hose mass coupling are not modeled."
+                "19 mm corrugated CPAP hose dynamic mass/stiffness and Sherpa Micro vs VZ-Hextrudort/Orbiter 2 swaps (+25-30 g) are lumped."
             ),
         },
         "microwaved_bowden": {
@@ -86,9 +95,9 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "Official STEP CAD (micreathonn/Microwaved-Bowden-Toolhead MBT_Tricorn_V2.STEP) exact "
                 "solid volume rollup & 75.6k-elem Tet4 FEA calibration (10,728 X / 3,563 Y N/mm, "
                 "5,340 N/mm harmonic mean in SLM Ti-6Al-4V; scaled to AlSi10Mg/6061-T6 by E ratio): "
-                "MBTCFD 16,259 mm³ (43.4 g SLM AlSi10Mg), Ti brace/shield (1.1 g), MGN12H (48.3 g), "
-                "Monolith SLM belt clamp (~16 g), Beacon H, and ECAS/screws = 130 g excl. hotend; "
-                "CoM centered between belts (-2 mm Z, -35.5 mm nozzle drop)."
+                "MBTCFD 16,259 mm³ (43.4 g SLM AlSi10Mg), Ti brace/shield (1.1 g), LDO MGN12H (48.3 g), "
+                "Monolith SLM belt clamp (6.6 g Al / 19.7 g 316L SS), Beacon H, and ECAS/screws = 130 g on-rail "
+                "excl. hotend; CoM centered between belts (-2 mm Z, -35.5 mm nozzle drop)."
             ),
             "caveat": (
                 "16 mm CPAP hose, Bowden PTFE/Kevlar sheath dynamic drag, and SLM porosity (~99% dense) "
@@ -102,12 +111,26 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "geometry & 75.3k-elem Tet4 FEA calibration (3,499 X / 2,611 Y N/mm, 2,990 N/mm "
                 "harmonic mean in SLM Al 6061-T6/AlSi10Mg; scales to Ti-6Al-4V or polymers by E ratio): "
                 "Main_Body (~56.5 g SLM Al), integrated 6× M3 Ø18 mm PCD Chube conduction mount at "
-                "Port 1 [0, -12.76, +27.50] mm, MGN12H (48.3 g), Monolith SLM belt clamp (~16 g), "
-                "Beacon RevH, and ECAS/screws = 135 g excl. hotend (-38.5 mm nozzle drop)."
+                "Port 1 [0, -12.76, +27.50] mm, LDO MGN12H (48.3 g), Monolith SLM belt clamp (6.6 g Al / "
+                "19.7 g 316L SS), Beacon RevH, and ECAS/screws = 135 g on-rail excl. hotend (-38.5 mm nozzle drop)."
             ),
             "caveat": (
                 "16 mm CPAP hose, Bowden PTFE/Kevlar sheath dynamic drag, and SLM porosity (~99% dense) "
                 "are not explicitly modeled; live CAD CMS raises trust to 86%."
+            ),
+        },
+        "vz_printhead_cnc": {
+            "trust_pct": 78,
+            "basis": (
+                "Official VzBoT3D Vz-330_v1.2 full-printer STEP (Vz-Printhead_Printed_MGN9-revised_v24 subtree, "
+                "exact solid CoMs) re-weighted with real part masses: 27 g CNC Vz-Printhead (VzBoT3D/Vz-Printhead-CNC "
+                "stated), 47 g Vz-HextrudORT Low CNC + 85 g Moons NEMA14 (PrintDB), 26 g MGN9H, printed CPAP duct / "
+                "sliding mount volumes from the official STLs, 2510 fan, Beacon = 247 g on-rail excl. hotend; "
+                "CAD nozzle Y=-22.4 / Z=-54.2 mm and assembled CoG [+1.9, -10.3, +13.4] mm about the CF tube axis."
+            ),
+            "caveat": (
+                "Not scale-weighed; the HextrudORT/motor CoM comes from the CAD mock-up envelope and the CPAP hose "
+                "drag is lumped. No official probe (Beacon assumed); printed vs CNC carriage plates differ by ~10 g."
             ),
         },
         "el_fuego": {
@@ -120,7 +143,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "(42,319 X / 127,968 Y / 21,366 Z N/mm at Port 1 [-0.32, -19.93, +2.28] mm; "
                 "1,540 X / 748 Y N/mm, 1,007 N/mm harmonic projected at 66 mm Chube/Tricorn nozzle tip; "
                 "scales across AlSi10Mg / Ti-6Al-4V / 316L / 17-4PH by E ratio). Dressed baseline 262 g "
-                "excl. hotend (94.2 g 3-part CAD + 48.3 g MGN12H + 105 g Sherpa Micro w/ pancake + "
+                "on-rail excl. hotend (94.2 g 3-part CAD + 48.3 g LDO MGN12H + 105 g Sherpa Micro w/ pancake + "
                 "Beacon RevH & fasteners; CoM on carriage front face +2 mm Z)."
             ),
             "caveat": (
@@ -132,21 +155,25 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "heavy_uhf_long": {
             "trust_pct": 56,
             "basis": (
-                "Generic long-nozzle UHF toolhead envelope estimate (440 g housing + 78 mm nozzle drop)."
+                "Synthetic worst-case heavy long-nozzle UHF toolhead benchmark (475 g on-rail incl. 54 g MGN12H "
+                "+ 78 mm nozzle drop)."
             ),
             "caveat": (
                 "Real mass, fan-duct bulk, and center-of-gravity overhang vary widely across custom multi-blower UHF shrouds."
             ),
         },
         "monolith_toolhead_cpap": {
-            "trust_pct": 78,
+            "trust_pct": 64,
             "basis": (
-                "Monolith Toolhead CAD & scale-weighed CPAP + 37:1 worm-gear assembly (~143 g excl. hotend, "
-                "belt-coplanar CoG dz=-1.5 mm matching belt_plane_z_offset_mm=-1.5 mm, -14 mm Y nozzle lever)."
+                "Back-solved from CloakedWayne's ~750 g 300 mm AWD moving Y-gantry benchmark on monolith3d.xyz "
+                "(750 g minus 210 g LDO CNC XY-joints w/ MGN9H, 121 g Carbonara 300 mm, and ~154 g hollow MGN12 "
+                "X-rail ≈ 265 ± 15 g dressed on-rail -> 218 g excl. 52 g hotend) + exact CAD Monolith_SLM_Belt_Clamp.step "
+                "(2.472 cm³ = 6.6 g SLM AlSi10Mg) + monolith3d.xyz 19 Jul 2025 SLM BOM (Al body + Ti brace + 48.3 g LDO "
+                "MGN12H + 37:1 worm w/ 17 mm LDO pancake); belt-coplanar CoG dz=-1.5 mm."
             ),
             "caveat": (
-                "15 mm HT CPAP hose dynamic whip and SLM AlSi10Mg chassis vs printed PA/PPA variant stiffness "
-                "await full Tet10 STEP superelement condensation."
+                "Isolated toolhead weight, exact CoG coordinates, and full STEP CAD are not yet published on monolith3d.xyz "
+                "(±15 g mass / ±4 mm CoG uncertainty; 20 mm integrated-worm stepper adds ~15 g); awaits public STEP CMS."
             ),
         },
     },
@@ -447,7 +474,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_6mm": {
             "trust_pct": 84,
             "basis": (
-                "Gates PowerGrip 2GT 6 mm catalog EA (18.9 kN × 2.0 dynamic factor) with width-normalized "
+                "Gates PowerGrip 2GT 6 mm datasheet EA (16.9 kN × 1.85 dynamic factor) with width-normalized "
                 "crimp, Euler–Bernoulli pulley-wrap compliance, tooth seating, & exact 2-DOF shaper coupling "
                 "validated against Voron Trident/2.4 CoreXY ADXL resonance logs."
             ),
@@ -458,7 +485,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_9mm": {
             "trust_pct": 82,
             "basis": (
-                "Gates PowerGrip 2GT 9 mm catalog EA (28.35 kN × 2.0 dynamic factor) with width-normalized "
+                "Gates PowerGrip 2GT 9 mm datasheet EA (25.5 kN × 1.85 dynamic factor) with width-normalized "
                 "crimp, pulley-wrap seating, belt inertia/damping, & exact 2-DOF AWD shaper coupling "
                 "calibrated against RatRig, Monolith, and VzBot community ADXL logs."
             ),
@@ -469,7 +496,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_10mm": {
             "trust_pct": 82,
             "basis": (
-                "Gates PowerGrip 2GT 10 mm EPDM fiberglass (31.5 kN × 2.0 dynamic EA, scale-weighed "
+                "Gates PowerGrip 2GT 10 mm EPDM fiberglass (28.3 kN × 1.85 dynamic EA, scale-weighed "
                 "12.36 g/m across Monolith 2×1658 mm belts) calibrated against Monolith Road-to-50k "
                 "matched-tension AWD ADXL logs (113.8 Hz ZV @ 89 N)."
             ),
@@ -491,7 +518,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_12mm": {
             "trust_pct": 76,
             "basis": (
-                "Gates PowerGrip 2GT 12 mm catalog EA (37.8 kN × 2.0 dynamic factor) benchmarked against "
+                "Gates PowerGrip 2GT 12 mm EA (34.0 kN narrow-belt rule × 1.85 dynamic factor) benchmarked against "
                 "high-tension AWD builds (e.g. dderg)."
             ),
             "caveat": (
@@ -501,7 +528,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_15mm": {
             "trust_pct": 58,
             "basis": (
-                "Linear per-mm width extrapolation from Gates PowerGrip 2GT (47.25 kN × 2.0 dynamic factor)."
+                "Gates 2M unit-strain modulus at 15 mm, no narrow-belt factor (47.25 kN × 1.85 dynamic factor)."
             ),
             "caveat": (
                 "Experimental custom wide-belt hardware; very sparse CoreXY ADXL data and extreme radial shaft/bearing loads."
@@ -510,7 +537,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_dual_9mm": {
             "trust_pct": 52,
             "basis": (
-                "Experimental parallel-belt concept modeled as ideal 2× Gates 2GT 9 mm (56.7 kN × 2.0)."
+                "Experimental parallel-belt concept modeled as ideal 2× Gates 2GT 9 mm (51.0 kN × 1.85)."
             ),
             "caveat": (
                 "Assumes perfect tension equalization between two stacked loops; real mismatch and tracking error lower stiffness."
@@ -519,7 +546,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "3gt_9mm": {
             "trust_pct": 44,
             "basis": (
-                "Theoretical Gates 3GT (3MGT) tensile modulus ratio extrapolation (47.25 kN × 2.0) from 2GT data."
+                "Gates Table 6 3GT (3MGT) 9 mm datasheet EA (39.6 kN) × the 2GT-calibrated 1.85 dynamic factor."
             ),
             "caveat": (
                 "Unproven on high-reversal CoreXY printers; 3 mm pitch VFA ripple, chordal action, and ≥20 mm idler fit are uncalibrated."
@@ -528,7 +555,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "3gt_12mm": {
             "trust_pct": 42,
             "basis": (
-                "Theoretical Gates 3GT 12 mm width-scaled tensile extrapolation (63.0 kN × 2.0)."
+                "Gates 3GT 12 mm static EA between the Table 6 9 mm and 15 mm rows (56.5 kN × 1.85)."
             ),
             "caveat": (
                 "No CoreXY ADXL validation; heavy bending stiffness and custom 12 mm 3GT pulley mechanics are untested."
@@ -537,7 +564,7 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "3gt_15mm": {
             "trust_pct": 40,
             "basis": (
-                "Theoretical Gates 3GT 15 mm width-scaled tensile extrapolation (78.75 kN × 2.0)."
+                "Gates Table 6 3GT 15 mm datasheet EA (73.4 kN) × the 2GT-calibrated 1.85 dynamic factor."
             ),
             "caveat": (
                 "Unproven on 3D printers; 30 g/m belt mass, bending drag, and custom CNC pulley stacks remain theoretical."
@@ -936,6 +963,19 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "Foam thickness, open-cell vs EVA compression set, and frame-to-paver coupling vary greatly across builds."
             ),
         },
+        "suspended_lines": {
+            "trust_pct": 62,
+            "basis": (
+                "Closed-form line mechanics: axial EA/L per line and pendulum geometric stiffness T/L "
+                "(sway = sqrt(g/L)/2pi, verified against the FE rigid-body modes), with the frame coupled as a "
+                "free body through its modal receptance (inertia relief + two-body reduced mass)."
+            ),
+            "caveat": (
+                "Line EA is a working-load secant estimate (paracord/nylon are nonlinear and creep); the gravity "
+                "righting moment and line-angle splay are neglected, and no suspended-printer ADXL data exists to "
+                "calibrate against."
+            ),
+        },
         "anti_vib_pads": {
             "trust_pct": 48,
             "basis": (
@@ -1041,6 +1081,18 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "caveat": (
                 "Silicone compression set, knob-preload variance, and elastomer thermal softening cause ±25–35% stiffness scatter."
+            ),
+        },
+        "silicone_4pt_clamped": {
+            "trust_pct": 54,
+            "basis": (
+                "Preloaded bolted-joint estimate for torqued M3x50 through-bolts in 16 mm 70A spacers (VzBot 330): "
+                "screw EA/L ~18 kN/mm capped at 2,000 N/mm axial by knob/frame flex; shank bending 3EI/L^3..12EI/L^3 "
+                "= 235..940 N/mm (400 N/mm lateral). XY shaper results are insensitive across that range."
+            ),
+            "caveat": (
+                "Not bench-measured; valid only while knob preload exceeds the vibration load (large shocks or "
+                "loose knobs fall back to the free-elastomer silicone_4pt behaviour)."
             ),
         },
         "springs_4pt": {

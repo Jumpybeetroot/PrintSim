@@ -16,6 +16,7 @@ export const BED_MOUNT_STANDOFF_HEIGHT_MM: Record<BedMountType, number> = {
   kinematic_3pt: 16,
   captive_belleville_kinematic: 16,
   silicone_4pt: 16,
+  silicone_4pt_clamped: 16,
   springs_4pt: 20,
 };
 
@@ -93,6 +94,7 @@ export interface BedMountsBuildParams {
   bedEmissive?: THREE.Color;
   bedEmissiveIntensity?: number;
   onTagMesh?: (mesh: THREE.Mesh) => void;
+  hideProceduralTridentGe5c?: boolean;
 }
 
 const EXTRUSION_2020_MM = 20;
@@ -426,6 +428,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
     bedEmissive,
     bedEmissiveIntensity = 0,
     onTagMesh,
+    hideProceduralTridentGe5c = false,
   } = params;
 
   const effBasePositions = basePositions ?? anchorBasePositions;
@@ -1872,7 +1875,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
 
       registerMountItem(idx, sp, topGroup, bottomGroup, flexGroup, flexTopInsetY, flexBotInsetY, yaw);
     });
-  } else if (bedMountType === "silicone_4pt") {
+  } else if (bedMountType === "silicone_4pt" || bedMountType === "silicone_4pt_clamped") {
     // 6. 4-Pt 70A Matte Orange Silicone Isolator Columns (16 mm)
     const flexTopInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.2);
     const flexBotInsetY = Math.min(1.8 * s, effectiveStandoffH * 0.2);
@@ -2080,7 +2083,7 @@ export function buildBedMountsGroup(params: BedMountsBuildParams): BedMountsBuil
   //    Locked directly to exact `z_bed_fl / fr / r` elevation (ZERO vertical drop!)
   //    and aimed collinearly along `bed_arm_fl / fr / r`.
   // ---------------------------------------------------------------------------
-  if (isTridentTriple && zArmNodes && zArmNodes.length > 0) {
+  if (isTridentTriple && !hideProceduralTridentGe5c && zArmNodes && zArmNodes.length > 0) {
     const ge5cOuterMat = makeMat({
       color: 0x9aa8ba, // machined steel outer housing
       metalness: 0.88,

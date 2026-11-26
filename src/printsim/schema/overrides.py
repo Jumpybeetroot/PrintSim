@@ -17,6 +17,10 @@ from printsim.schema.confidence import (
 if TYPE_CHECKING:
     from printsim.schema.printer import PrinterSpec
 
+_G_ACC = 9.80665  # standard gravity (m/s^2)
+# Reference suspended mass for catalog/baseline display of the pendulum geometric stiffness T / L.
+SUSPENSION_REFERENCE_MASS_KG = 15.0
+
 
 class CornerJointOverride(BaseModel):
     """Explicit overrides for frame corner joint stiffnesses and Iwan micro-slip damping."""
@@ -39,8 +43,8 @@ class ExtrusionFillingOverride(BaseModel):
 class FrameFeetOverride(BaseModel):
     """Explicit overrides for benchtop frame feet stiffness, damping, and paver base mass."""
 
-    k_axial_n_per_mm: float | None = Field(None, ge=5.0, le=1e6)
-    k_lateral_n_per_mm: float | None = Field(None, ge=2.0, le=1e6)
+    k_axial_n_per_mm: float | None = Field(None, ge=0.01, le=1e6)
+    k_lateral_n_per_mm: float | None = Field(None, ge=0.01, le=1e6)
     damping_delta: float | None = Field(None, ge=0.0, le=0.08)
     base_mass_kg: float | None = Field(None, ge=0.0, le=200.0)
 
@@ -269,7 +273,13 @@ def resolve_extrusion_filling(spec: PrinterSpec) -> dict[str, Any]:
 
 
 def resolve_frame_feet(spec: PrinterSpec) -> dict[str, Any]:
-    """Resolve benchtop feet axial/lateral stiffness (SI), damping delta, and base paver mass."""
+    """Resolve mount stiffness (SI), damping delta, and base paver mass for feet or suspension lines.
+
+    For ``feet_type = "suspended_lines"`` the per-line axial stiffness is ``EA / L`` from
+    ``SUSPENSION_LINE_CATALOG`` and the lateral stiffness is the pendulum geometric stiffness
+    ``T / L``. The value returned here uses a 15 kg reference printer on 4 lines; the assembly
+    builder replaces it with the exact ``(M_total g / n_lines) / L`` once the mass is known.
+    """
     from printsim.schema import printer as _p
 
     feet_type = spec.frame.feet_type
@@ -278,6 +288,29 @@ def resolve_frame_feet(spec: PrinterSpec) -> dict[str, Any]:
     base_k_lat_n_mm = float(base_entry["k_lateral_n_per_mm"])
     base_damping = float(base_entry["damping_delta"])
     base_mass_kg = float(base_entry.get("base_mass_kg", 0.0))
+
+    is_suspended = feet_type == "suspended_lines"
+    line_id = ""
+    line_ea_n = 0.0
+    line_length_m = 0.0
+    line_break_n = 0.0
+    line_loss_factor = 0.0
+    line_design_factor = 5.0
+    mount_damping_ratio = float(base_entry.get("mount_damping_ratio", 0.05))
+    if is_suspended:
+        line_id = str(spec.frame.suspension_line)
+        line_entry = _p.SUSPENSION_LINE_CATALOG.get(
+            line_id, _p.SUSPENSION_LINE_CATALOG["paracord_550"]
+        )
+        line_ea_n = float(line_entry["stiffness_ea_n"])
+        line_break_n = float(line_entry["break_strength_n"])
+        line_loss_factor = float(line_entry["loss_factor"])
+        line_design_factor = float(line_entry.get("design_factor", 5.0))
+        # Hysteretic loss factor eta -> equivalent viscous damping ratio eta / 2 at resonance
+        mount_damping_ratio = max(0.5 * line_loss_factor, 0.005)
+        line_length_m = max(float(spec.frame.suspension_length_mm), 50.0) * 1e-3
+        base_k_axial_n_mm = line_ea_n / line_length_m * 1e-3
+        base_k_lat_n_mm = (SUSPENSION_REFERENCE_MASS_KG * _G_ACC / 4.0) / line_length_m * 1e-3
 
     ov = spec.model_overrides.frame_feet
     k_axial_n_mm = (
@@ -301,6 +334,15 @@ def resolve_frame_feet(spec: PrinterSpec) -> dict[str, Any]:
         "damping_delta": damping_delta,
         "base_mass_kg": mass_kg,
         "is_compliant": is_compliant,
+        "is_suspended": is_suspended,
+        "lateral_from_tension": is_suspended and ov.k_lateral_n_per_mm is None,
+        "suspension_line": line_id,
+        "line_ea_n": line_ea_n,
+        "line_length_m": line_length_m,
+        "line_break_strength_n": line_break_n,
+        "line_loss_factor": line_loss_factor,
+        "line_design_factor": line_design_factor,
+        "mount_damping_ratio": mount_damping_ratio,
         "baseline_k_axial_n_per_mm": base_k_axial_n_mm,
         "baseline_k_lateral_n_per_mm": base_k_lat_n_mm,
         "baseline_damping_delta": base_damping,
@@ -361,6 +403,121 @@ def _material_bracket_stiffness_n_m(spec: PrinterSpec) -> float:
     return (k_mat * k_ceil) / max(k_mat + k_ceil, 1e-9)
 
 
+def _cad_gantry_bracket_stiffness_n_m(
+    spec: PrinterSpec, kit_id: str
+) -> tuple[float | None, dict[str, float]]:
+    """Compute series-parallel CAD gantry bracket stiffness (N/m) from baked superelement stations."""
+    from printsim.fea.components import compute_stepper_mount_temp_c
+    from printsim.schema import printer as _p
+    from printsim.schema.materials import get_material
+
+    if spec.architecture != "corexy" or kit_id == "procedural":
+        return None, {}
+
+    kit_meta = _p.GANTRY_HARDWARE_KIT_CATALOG.get(kit_id)
+    if not kit_meta:
+        return None, {}
+    stations = kit_meta.get("stations") or {}
+    if not stations:
+        return None, {}
+
+    try:
+        from printsim.cad_assets.registry import load_superelement
+    except ImportError:
+        return None, {}
+
+    bkt_mat = get_material(spec.gantry.bracket_material)
+    motor_mount_temp_c, _ = compute_stepper_mount_temp_c(spec)
+
+    loaded_k: dict[str, float] = {}
+    station_stiffs_n_mm: dict[str, float] = {}
+    for st_key in ("rear_left", "front_left", "xy_left"):
+        aid = stations.get(st_key)
+        if not aid:
+            continue
+        se = load_superelement(
+            "gantry_brackets",
+            aid,
+            material_id=spec.gantry.bracket_material,
+            chamber_temp_c=motor_mount_temp_c,
+        )
+        if se is None:
+            continue
+        ps = se.manifest.get("port_stiffness_n_per_mm")
+        if isinstance(ps, dict) and "kx" in ps and "ky" in ps:
+            scale_k = float(getattr(se, "stiffness_scale_applied", 1.0))
+            kx_n_m = max(float(ps["kx"]) * scale_k * 1e3, 1.0)
+            ky_n_m = max(float(ps["ky"]) * scale_k * 1e3, 1.0)
+        else:
+            import numpy as np
+
+            k_11 = 0.5 * (se.K_bb[6:12, 6:12] + se.K_bb[6:12, 6:12].T)
+            try:
+                c_11 = np.linalg.inv(k_11)
+            except np.linalg.LinAlgError:
+                c_11 = np.linalg.pinv(k_11, rcond=1e-10)
+            kx_n_m = 1.0 / max(float(c_11[0, 0]), 1e-12)
+            ky_n_m = 1.0 / max(float(c_11[1, 1]), 1e-12)
+        k_planar = 2.0 / (1.0 / kx_n_m + 1.0 / ky_n_m)
+        loaded_k[st_key] = k_planar
+        station_stiffs_n_mm[st_key] = round(k_planar * 1e-3, 2)
+
+    if not loaded_k:
+        return None, {}
+
+    is_awd = spec.gantry.drive_mode == "awd"
+    k_rear = loaded_k.get("rear_left")
+    k_front = loaded_k.get("front_left")
+    k_xy = loaded_k.get("xy_left")
+
+    # CoreXY symmetric L+R pairs:
+    # - In AWD with a native AWD kit (front motor mounts), all 4 corners are driven motor mounts
+    #   acting in parallel (2*k_rear + 2*k_front), in series with the L+R moving XY-joint brackets (2*k_xy).
+    # - In AWD on a 2WD-only kit (compact front idlers), do NOT plug tiny 2WD front idlers in as
+    #   front motor mounts; model 4 symmetric motor mounts (4*k_rear) in series with 2*k_xy.
+    # - In 2WD, rear motor mounts, free-spinning front idlers, and XY-joints carry the belt loop
+    #   in series (so a stiff compact front idler cannot short-circuit a flexible rear motor mount).
+    kit_has_awd_front_mounts = kit_id in ("monolith_ldo_cnc_awd", "siboor_cnc_awd", "vzbot_330_awd")
+    k_corners: float | None = None
+    if is_awd:
+        if kit_has_awd_front_mounts and k_rear is not None and k_front is not None:
+            k_corners = 2.0 * k_rear + 2.0 * k_front
+        elif k_rear is not None:
+            k_corners = 4.0 * k_rear
+        elif k_front is not None:
+            k_corners = 4.0 * k_front
+    else:
+        if k_rear is not None and k_front is not None:
+            k_corners = 1.0 / (1.0 / max(2.0 * k_rear, 1e-9) + 1.0 / max(2.0 * k_front, 1e-9))
+        elif k_rear is not None:
+            k_corners = 2.0 * k_rear
+        elif k_front is not None:
+            k_corners = 2.0 * k_front
+
+    if k_corners is not None and k_xy is not None:
+        k_cad_raw = 1.0 / (1.0 / max(k_corners, 1e-9) + 1.0 / max(2.0 * k_xy, 1e-9))
+    elif k_xy is not None:
+        k_cad_raw = 2.0 * k_xy
+    else:
+        assert k_corners is not None
+        k_cad_raw = k_corners
+
+    bolt_factor = float(bkt_mat.bolted_joint_stiffness_factor)
+    cad_is_double_shear = kit_id in (
+        "monolith_ldo_cnc_awd",
+        "monolith_ldo_cnc_2wd",
+        "siboor_cnc_awd",
+        "siboor_cnc_2wd",
+        "vzbot_330_awd",
+        "vzbot_330_2wd",
+    )
+    ds_mult = 1.45 if (spec.gantry.double_shear_pulleys and not cad_is_double_shear) else 1.0
+    k_cad_scaled = k_cad_raw * bolt_factor * ds_mult
+    k_ceil = (12.0e6 if is_awd else 8.0e6) * bolt_factor
+    k_eff = (k_cad_scaled * k_ceil) / max(k_cad_scaled + k_ceil, 1e-9)
+    return float(k_eff), station_stiffs_n_mm
+
+
 def resolve_gantry_bracket(spec: PrinterSpec) -> dict[str, Any]:
     """Resolve XY gantry bracket stiffness (N/m), carriage mass delta, creep limit, and damping."""
     from printsim.schema import printer as _p
@@ -369,11 +526,21 @@ def resolve_gantry_bracket(spec: PrinterSpec) -> dict[str, Any]:
         spec.gantry.bracket_material, _p.GANTRY_BRACKET_CATALOG["abs_printed"]
     )
     cbo = spec.gantry.custom_bracket_override
-    base_stiff_n_m = (
-        float(cbo.stiffness_n_per_mm) * 1e3
-        if cbo is not None
-        else _material_bracket_stiffness_n_m(spec)
-    )
+    ov = spec.model_overrides.gantry_bracket
+    kit_id = spec.resolve_effective_gantry_hardware_kit()
+    cad_backed = False
+    cad_station_stiffs: dict[str, float] = {}
+
+    if cbo is not None:
+        base_stiff_n_m = float(cbo.stiffness_n_per_mm) * 1e3
+    else:
+        base_stiff_n_m = _material_bracket_stiffness_n_m(spec)
+        if bool(getattr(spec, "use_cad_superelements", True)) and ov.stiffness_n_per_mm is None:
+            cad_k, cad_station_stiffs = _cad_gantry_bracket_stiffness_n_m(spec, kit_id)
+            if cad_k is not None:
+                base_stiff_n_m = cad_k
+                cad_backed = True
+
     base_mass_delta_g = float(bkt_info["carriage_mass_delta_g"])
     base_creep_n = float(bkt_info["creep_tension_limit_n"])
     if bkt_info.get("manufacturing_process") == "slm":
@@ -382,7 +549,6 @@ def resolve_gantry_bracket(spec: PrinterSpec) -> dict[str, Any]:
     else:
         base_damping = -0.003 if bool(bkt_info["cnc_machined"]) else 0.004
 
-    ov = spec.model_overrides.gantry_bracket
     stiff_n_m = (
         float(ov.stiffness_n_per_mm) * 1e3
         if ov.stiffness_n_per_mm is not None
@@ -409,6 +575,9 @@ def resolve_gantry_bracket(spec: PrinterSpec) -> dict[str, Any]:
         "baseline_carriage_mass_delta_g": base_mass_delta_g,
         "baseline_creep_tension_limit_n": base_creep_n,
         "baseline_damping_delta": base_damping,
+        "cad_backed": cad_backed,
+        "cad_kit_id": kit_id,
+        "cad_station_stiffnesses_n_per_mm": cad_station_stiffs,
     }
 
 
@@ -1547,12 +1716,37 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
     bkt_key = spec.gantry.bracket_material
     bkt_entry = _p.GANTRY_BRACKET_CATALOG.get(bkt_key, _p.GANTRY_BRACKET_CATALOG["abs_printed"])
     cbo = spec.gantry.custom_bracket_override
+    bkt_cad_active = bool(gb.get("cad_backed", False))
+    bkt_cad_kit_id = str(gb.get("cad_kit_id") or "")
+    bkt_cad_trust: int | None = None
     if cbo is not None:
         src_label = _BRACKET_SOURCE_LABELS.get(cbo.source, _humanize_label(cbo.source))
         bkt_sel = f"{_humanize_label(cbo.label)} ({src_label})"
         bkt_trust = 85
         bkt_basis = "3D continuum solid Tet10/Hex8 FEA & Craig-Bampton CMS superelement condensation."
         bkt_caveat = "Accurate for analyzed bracket geometry; bolt-boss preload and FDM layer anisotropy add ±10–15% spread."
+    elif bkt_cad_active:
+        kit_meta = _p.GANTRY_HARDWARE_KIT_CATALOG.get(bkt_cad_kit_id, {})
+        kit_name = str(kit_meta.get("name") or _humanize_label(bkt_cad_kit_id))
+        kit_short = str(kit_meta.get("short_name") or kit_name)
+        kit_stations = kit_meta.get("stations") or {}
+        trust_vals: list[float] = []
+        for st_key in ("rear_left", "front_left", "xy_left"):
+            aid = kit_stations.get(st_key)
+            man = _get_cad_asset_manifest("gantry_brackets", aid) if aid else None
+            if man is not None:
+                trust_vals.append(float(man.get("cad_trust_pct", 86)))
+        bkt_cad_trust = int(round(sum(trust_vals) / len(trust_vals))) if trust_vals else 86
+        bkt_sel = f"{bkt_entry['name']} · CAD {kit_short}"
+        bkt_conf = get_item_confidence("gantry_brackets", bkt_key)
+        bkt_trust = max(int(bkt_conf["trust_pct"]), bkt_cad_trust)
+        bkt_basis = (
+            f"3D CAD Craig-Bampton gantry bracket superelements ({kit_name}: rear, front, and XY-joint stations) "
+            f"scaled by {bkt_entry['short_name']} temperature-dependent modulus in series with bolted-joint contact compliance."
+        )
+        bkt_caveat = (
+            "Bolted-joint preload scatter, T-nut micro-slip, and polymer creep/print-orientation anisotropy add ±10–15% spread."
+        )
     else:
         bkt_sel = str(bkt_entry["name"])
         bkt_conf = get_item_confidence("gantry_brackets", bkt_key)
@@ -1602,7 +1796,8 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
     use_cad_se = bool(getattr(spec, "use_cad_superelements", True))
     th = spec.toolhead
     th_pid = (th.preset_id or "").lower().strip()
-    th_cad_manifest = _get_cad_asset_manifest("toolheads", th_pid) if use_cad_se else None
+    th_cad_id = "stealthburner" if th_pid == "stealthburner_tap" else th_pid
+    th_cad_manifest = _get_cad_asset_manifest("toolheads", th_cad_id) if use_cad_se else None
     th_cad_active = th_cad_manifest is not None
     th_cad_trust = (
         int(round(float(th_cad_manifest.get("cad_trust_pct", 90))))
@@ -1651,7 +1846,13 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
                 f"{float(tentry['cog_offset_mm'][2]):+.0f}) mm, "
                 f"Nozzle drop = {abs(float(tentry['nozzle_offset_mm'][2])):.0f} mm"
             ),
-            cad_manifest=_get_cad_asset_manifest("toolheads", tid) if use_cad_se else None,
+            cad_manifest=(
+                _get_cad_asset_manifest(
+                    "toolheads", "stealthburner" if tid == "stealthburner_tap" else tid
+                )
+                if use_cad_se
+                else None
+            ),
         )
         for tid, tentry in _p.TOOLHEAD_PRESETS.items()
     ]
@@ -2171,6 +2372,9 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
             basis=bkt_basis,
             caveat=bkt_caveat,
             options_breakdown=bkt_breakdown,
+            cad_superelement_active=bkt_cad_active,
+            cad_superelement_id=bkt_cad_kit_id if bkt_cad_active else None,
+            cad_trust_pct=bkt_cad_trust,
         ),
         _make_confidence_entry(
             spec,

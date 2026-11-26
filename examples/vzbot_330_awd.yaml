@@ -1,82 +1,113 @@
 name: VzBot 330 AWD
-description: High-speed VzBot 330 AWD CoreXY with 2020 frame, rear cross bracing, 4mm bolted 5052 aluminum panels, Monolith short-path 9mm fiberglass belts at 65N, high-Tg carbon fiber X-beam, 48V LDO 2804AH steppers, 225g ultra-light CPAP toolhead, 6mm ATP-5 bed, and belt-synced dual-TR8 Z with 4x 10mm smooth rods
+description: >-
+  Official-spec VzBoT Vz330 AWD (Mellow CNC kit) CoreXY: 530x500x570 mm frame with 2040 uprights
+  and 2020 rings on blind joints, Y rails bolted to the inner faces of the top-ring Y extrusions,
+  3 mm bolted aluminium rear panel with polycarbonate sides, CNC 6061 motor/idler/XY-joint gantry,
+  20x20x1 CF tube X beam with top-mounted MGN9H, 6 mm GT2 belts at ~171 Hz/150 mm, 4x LDO 2804AC
+  at 48 V, Vz-Printhead CNC + Vz-HextrudORT Low + Goliath Air + CPAP + Beacon, 330x330x8 mm cast
+  bed on 4 silicone spacers, and single-motor belt-synced dual TR8x8 Z on 4x 10 mm rods.
+# Sources: VzBoT3D/VzBoT-Vz330 BOM + Vz-330_v1.2 full-printer STEP (frame 530/500/570, 2040x530
+# uprights, 2020x530 X / 2020x460 Y rings, MGN12H 400 Y rails on the inner top-ring faces, 440 mm
+# 20x20x1 CF tube + MGN9H 400 on top, TR8x8-4 leadscrews 20T->40T, LMK10LUU on 4x 10 mm rods),
+# Firmware/330AWD-printer.cfg (rotation_distance 40/4, TMC5160 run_current 1.9 A @ 48 V,
+# max_z_velocity 20, square_corner_velocity 10), docs.vzbot.org belt tensioning (150-189 Hz on a
+# 150 mm span -> 22 N for Gates 6 mm at 8.3 g/m), community Klipper configs (20k accel).
 architecture: corexy
 frame:
-  width_mm: 480
-  depth_mm: 480
-  height_mm: 540
+  width_mm: 530
+  depth_mm: 500
+  height_mm: 570
   profile: extrusion_2020
+  upright_profile: extrusion_2040
   material: aluminum_6063_t5
-  bracing: rear_cross
+  bracing: none
   brace_profile: brace_rod_10mm
   brace_material: aluminum_6063_t5
   enclosed_panels: true
   panel_mounting: bolted_structural
   panel_material: aluminum_5052_sheet
-  panel_thickness_mm: 4.0
+  side_panel_material: polycarbonate
+  panel_thickness_mm: 3.0
+  top_panel: false
+  gantry_on_top_frame: true
+  corner_joint_type: blind_joint
+  feet_type: rubber_feet
 gantry:
+  hardware_kit: vzbot_330_awd
   drive_mode: awd
-  belt_routing: monolith_short
+  belt_routing: stock_corexy
   double_shear_pulleys: true
   bracket_material: aluminum_6061_t6
-  x_beam_profile: cf_tube_20x20x2
-  x_beam_material: carbon_fiber_high_tg
-  x_rail_profile: mgn12_rail
+  x_beam_profile: cf_tube_20x20x1
+  x_beam_material: carbon_fiber_tube
+  x_rail_profile: mgn9_rail
   y_rail_profile: mgn12_rail
+  x_rail_mount: top
   y_rail_mount: inner
   rail_material: steel_4140
+  rail_block_type: H
   dual_x_rails: false
-  carriage_mass_g: 185
+  carriage_mass_g: 194
+  idler_axial_preload: none
   belt:
-    type: gt2_9mm
+    type: gt2_6mm
     core: fiberglass
     pulley_teeth: 20
     pitch_mm: 2.0
-    pretension_n: 65.0
+    pretension_n: 22.0
 kinematics:
-  build_volume_mm: [330, 330, 300]
-  max_velocity_mm_s: 600
-  max_accel_mm_s2: 12000
+  build_volume_mm: [330, 320, 400]
+  max_velocity_mm_s: 1000
+  max_accel_mm_s2: 20000
   max_z_velocity_mm_s: 20
-  max_z_accel_mm_s2: 250
+  max_z_accel_mm_s2: 1500
   square_corner_velocity_mm_s: 10.0
   input_shaper: auto
   xy_stepper:
-    preset_id: ldo_2804ah
-    name: LDO 42STH48-2804AH 48V
+    preset_id: ldo_2804ac
+    name: LDO 42STH48-2804AC-R (48mm 1.8° Super Power 0.6mH, Class B)
     holding_torque_nm: 0.42
     rated_current_a: 2.8
-    run_current_a: 2.0
+    run_current_a: 1.9
     phase_resistance_ohm: 0.7
     inductance_mh: 0.6
     steps_per_rev: 200
     supply_voltage_v: 48.0
-    rotor_inertia_kg_m2: 6.2e-6
+    rotor_inertia_kg_m2: 8.45e-6
     motor_mass_g: 350
   z_stepper:
-    name: NEMA17-42mm Integrated TR8x4
-    holding_torque_nm: 0.45
-    rated_current_a: 1.5
-    inductance_mh: 3.0
+    preset_id: ldo_60_2004ah
+    name: LDO 42STH60 (60mm 1.8°) belt-synced dual-Z
+    holding_torque_nm: 0.83
+    rated_current_a: 2.0
+    run_current_a: 1.2
+    phase_resistance_ohm: 2.0
+    inductance_mh: 3.3
     supply_voltage_v: 24.0
-    rotor_inertia_kg_m2: 5.4e-6
-    motor_mass_g: 290
+    rotor_inertia_kg_m2: 1.02e-5
+    motor_mass_g: 500
+    body_length_mm: 60.0
 toolhead:
-  preset_id: archetype_cpap
-  name: VzBot / Goliath Ultra-Light CPAP
-  total_mass_g: 165
-  cog_offset_mm: [0, -11, -12]
-  nozzle_offset_mm: [0, -14, -48]
+  preset_id: vz_printhead_cnc
+  name: VzBot Vz-Printhead CNC (HextrudORT Low + CPAP + Beacon)
+  total_mass_g: 275
+  # CAD-exact (Vz-330_v1.2 STEP) about the CF tube axis, measured on the top-mounted MGN9H
+  cog_offset_mm: [1.9, -10.3, 13.4]
+  nozzle_offset_mm: [-0.1, -22.4, -54.2]
+  offset_datum_rail_mount: top
   mount_material: aluminum_6061_t6
   body_construction: plate_sandwich_cf
-  internal_stiffness_n_per_mm: 1800.0
+  internal_stiffness_n_per_mm: 1200.0
   z_probe_type: static_eddy
-  envelope_mm: [56, 60, 82]
+  cpap_blower_id: ws7040_24v
+  cpap_hose_id_mm: 15.0
+  envelope_mm: [67, 100, 171]
   hotend:
     preset_id: mellow_goliath_air
     mount_style: dragon_4bolt_m25
     structural_stiffness_n_per_mm: 750.0
     overall_length_mm: 69.2
+    mass_g: 96.0
     name: Mellow Goliath Air
     heater_power_w: 100
     block_material: copper_c110
@@ -89,21 +120,25 @@ toolhead:
     heatbreak_wall_mm: 0.30
     heatbreak_id_mm: 2.0
     heatsink_thermal_resistance_k_w: 2.8
-    part_cooling_cfm: 22.0
+    part_cooling_cfm: 12.3
     max_temp_c: 400
     ambient_temp_c: 25
   extruder:
     type: direct_drive
     gear_ratio: 6.25
-    max_push_force_n: 75
+    max_push_force_n: 70
     filament_diameter_mm: 1.75
 bed:
   size_mm: [330, 330]
-  plate_material: atp5_aluminum
-  plate_thickness_mm: 6.0
+  plate_material: mic6_aluminum
+  plate_thickness_mm: 8.0
   heater_power_w: 750
-  mass_g: 2450
+  # Plate stack on the spacers only (CAD: 8 mm 330x330 plate 870.5 cm^3 = 2.32 kg + PEI/magnet
+  # 0.45 kg + 750 W heater 0.15 kg); the 2020 bed sub-frame is modeled as frame members.
+  mass_g: 2950
   z_drive: leadscrew_dual_belt_sync
   z_rail_profile: steel_rod_10mm
-  z_leadscrew_type: tr8x4_pom
-  mount_type: kinematic_3pt
+  z_leadscrew_type: tr8x8_brass
+  # VzBot clamps each 16 mm silicone spacer with an M3x50 countersunk screw (plate -> spacer ->
+  # 2020 bed frame -> knob): a preloaded bolted joint (see BED_MOUNT_CATALOG silicone_4pt_clamped).
+  mount_type: silicone_4pt_clamped

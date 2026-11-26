@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "siboor_awd_rear_left",
+  "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
+  "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
+  "regions": [
+    {
+      "label": "siboor_awd_rear_left",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ]
+}

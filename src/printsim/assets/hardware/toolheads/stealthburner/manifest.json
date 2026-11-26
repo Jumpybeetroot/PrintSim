@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "stealthburner",
+  "name": "Voron StealthBurner + Clockwork 2.5 (ABS/ASA)",
+  "source_cad": "Stealthburner_CW2.5_Assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Stealthburner",
+  "baked_at": "2026-11-26T19:58:33Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 15321,
+  "num_elements": 45200,
+  "num_dofs": 45963,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.000794,
+  "mass_kg": 0.143403,
+  "com_mm": [
+    -0.4387,
+    -22.3156,
+    4.3439
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.2,
+    -28.9,
+    -1.9
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 2183.322,
+    "ky": 13441.192,
+    "kz": 3345.63
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 839.841,
+    "kry": 1409.402,
+    "krz": 2452.868
+  },
+  "fixed_interface_freqs_hz": [
+    473.22,
+    724.32,
+    1048.8,
+    1116.98,
+    1252.54,
+    1631.8
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 31985,
+  "visual_bytes": 1598776,
+  "cad_trust_pct": 86,
+  "source_hash": "7b8e651d3de1615b9bde6a2be201276d2e1c8644288fc690025b8c7c4dec4f75"
+}

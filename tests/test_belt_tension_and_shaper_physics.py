@@ -201,15 +201,27 @@ def test_corexy_2wd_vs_awd_dynamic_belt_tension_compatibility_split() -> None:
     det_awd = compute_drive_stiffness_details_n_per_m(asm_awd, "X")
     det_2wd = compute_drive_stiffness_details_n_per_m(asm_2wd, "X")
 
+    # Perimeter CoreXY routing: at bed centre both layouts have equal belt branches (50 / 50 split)
     assert det_awd["slack_load_share"] == pytest.approx(0.50, abs=0.02)
-    assert 0.68 <= float(det_2wd["slack_load_share"]) <= 0.78
+    assert det_2wd["slack_load_share"] == pytest.approx(0.50, abs=0.03)
+    # Toward a rear corner the branches become unequal; more so in AWD, where the toolhead gets
+    # closer to a motor
+    det_awd_c = compute_drive_stiffness_details_n_per_m(asm_awd, "X", u_rel=0.05, v_rel=0.95)
+    det_2wd_c = compute_drive_stiffness_details_n_per_m(asm_2wd, "X", u_rel=0.05, v_rel=0.95)
+    assert 0.62 <= float(det_2wd_c["slack_load_share"]) <= 0.80
+    assert float(det_awd_c["slack_load_share"]) > float(det_2wd_c["slack_load_share"])
+    # AWD halves the belt path between toolhead and motors
+    assert float(det_2wd["cord_geometry_factor_m"]) == pytest.approx(
+        2.0 * float(det_awd["cord_geometry_factor_m"]), rel=0.02
+    )
 
     kin_awd = analyze_kinematics(asm_awd)
     kin_2wd = analyze_kinematics(asm_2wd)
     swing_awd = kin_awd.belt_peak_tension_n - 60.0
     swing_2wd = kin_2wd.belt_peak_tension_n - 60.0
-    # AWD reduces peak tension swing by ~30% vs 2WD via balanced branches (not fake 50% 4-belt bug)
-    assert 0.58 <= swing_awd / swing_2wd <= 0.76
+    # With equal branches at bed centre the per-belt dynamic tension swing is about the same in
+    # AWD and 2WD (no fake 50% 4-belt reduction)
+    assert 0.85 <= swing_awd / swing_2wd <= 1.25
     # Coupled state-space remains asymptotically stable at both low and high tensions
     mod_awd = solve_modal_fea(asm_awd)
     mdl = build_coupled_state_space(asm_awd, mod_awd, 0.5, 0.5)

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "vzbot_330_2wd_front_left",
+  "name": "VzBot 330 2WD Front-Left Idler Mount",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-26T23:07:12Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 13296,
+  "num_elements": 46220,
+  "num_dofs": 39888,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.051696,
+  "mass_kg": 0.08223,
+  "com_mm": [
+    32.8751,
+    7.1892,
+    1.0339
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    37.9752,
+    10.1438,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 127482.389,
+    "ky": 106942.778,
+    "kz": 39434.169
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 33020.765,
+    "kry": 30560.01,
+    "krz": 9187.182
+  },
+  "fixed_interface_freqs_hz": [
+    4324.64,
+    6184.72,
+    8581.04,
+    9153.57,
+    9554.12,
+    11871.51
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21988,
+  "visual_bytes": 906012,
+  "cad_trust_pct": 72,
+  "source_hash": "26603c6f79b7d02c804af0a4ae5c6dd7542221f570d2f80f771c13fac5447c2a"
+}

@@ -40,16 +40,18 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 def test_d01_through_d05_datasheet_catalog_values() -> None:
     """Verify exact datasheet values for GT2 EA (D-01), CF G (D-02), MGN (D-03), 2020 (D-04), flat bar J (D-05)."""
-    # D-01: Exact Gates 2GT quasi-static EA (18.9 kN/6mm) * 2.0 dynamic small-amplitude factor, below AT3 80 kN
-    assert BeltSpec(type="gt2_6mm").static_stiffness_ea_n == pytest.approx(18900.0)
-    assert BeltSpec(type="gt2_6mm").stiffness_ea_n == pytest.approx(37800.0)
-    assert BeltSpec(type="gt2_9mm").stiffness_ea_n == pytest.approx(56700.0)
-    assert BeltSpec(type="gt2_12mm").stiffness_ea_n == pytest.approx(75600.0)
-    assert BeltSpec(type="gt2_15mm").stiffness_ea_n == pytest.approx(94500.0)
-    assert BeltSpec(type="gt2_dual_9mm").stiffness_ea_n == pytest.approx(113400.0)
+    # D-01: Gates Table 6 quasi-static EA (16.9 kN at 6 mm, 3.8 lb at 0.1 % elongation) x the 1.85
+    # dynamic small-amplitude ratio fitted to controlled same-machine measurements
+    assert BeltSpec(type="gt2_6mm").static_stiffness_ea_n == pytest.approx(16900.0)
+    assert BeltSpec(type="gt2_6mm").stiffness_ea_n == pytest.approx(16900.0 * 1.85)
+    assert BeltSpec(type="gt2_9mm").stiffness_ea_n == pytest.approx(25500.0 * 1.85)
+    assert BeltSpec(type="gt2_12mm").stiffness_ea_n == pytest.approx(34000.0 * 1.85)
+    assert BeltSpec(type="gt2_dual_9mm").stiffness_ea_n == pytest.approx(51000.0 * 1.85)
+    assert BeltSpec(type="gt2_15mm").stiffness_ea_n == pytest.approx(47250.0 * 1.85)
     assert BeltSpec(type="gt2_9mm").stiffness_ea_n < BeltSpec(type="at3_10mm").stiffness_ea_n
+    # Gates Table 6: 3GT 9 mm 8.9 lb vs 2GT 9 mm 5.7 lb at 0.1 % elongation
     assert BeltSpec(type="3gt_9mm").stiffness_ea_n / BeltSpec(type="gt2_9mm").stiffness_ea_n == pytest.approx(
-        30.0 / 18.0, rel=1e-4
+        39600.0 / 25500.0, rel=1e-6
     )
 
     # D-02: 0/90 roll-wrapped CF laminate in-plane shear modulus G_xy = 5.0 GPa
@@ -91,8 +93,10 @@ def test_b01_coupled_series_compliance_and_consistent_shares() -> None:
     K_ff = 0.5 * (K[np.ix_(free_dofs, free_dofs)] + K[np.ix_(free_dofs, free_dofs)].T)
     cog_i = nidx[asm.toolhead_cog_node_id]
     noz_i = nidx[asm.nozzle_node_id]
+    th_i = nidx[asm.toolhead_node_id]
     bed_i = nidx[asm.bed_node_id]
     dr = asm.nodes[noz_i].position_m - asm.nodes[bed_i].position_m
+    dr_car = asm.nodes[th_i].position_m - asm.nodes[bed_i].position_m
 
     m_cog = max(float(asm.nodes[cog_i].lumped_mass_kg), 0.0)
     m_noz = max(float(asm.nodes[noz_i].lumped_mass_kg), 0.0) if noz_i != cog_i else 0.0
@@ -106,8 +110,16 @@ def test_b01_coupled_series_compliance_and_consistent_shares() -> None:
     cx[6 * bed_i + 0] -= 1.0
     cx[6 * bed_i + 4] -= float(dr[2])
     cx[6 * bed_i + 5] += float(dr[1])
+    cx_car = np.zeros(K.shape[0])
+    cx_car[6 * th_i + 0] = 1.0
+    cx_car[6 * bed_i + 0] -= 1.0
+    cx_car[6 * bed_i + 4] -= float(dr_car[2])
+    cx_car[6 * bed_i + 5] += float(dr_car[1])
     u_x = np.linalg.solve(K_ff, fx[free_dofs])
-    c_struct_x = float(cx[free_dofs] @ u_x)
+    c_noz_x = float(cx[free_dofs] @ u_x)
+    c_car_x = float(cx_car[free_dofs] @ u_x)
+    # Match solve_modal_fea non-collocated pitch-sign guard (Pitfall 3C): c_car + |c_noz - c_car|
+    c_struct_x = c_car_x + abs(c_noz_x - c_car_x)
 
     k_belt_x, k_motor_x, _ = compute_drive_stiffness_n_per_m(asm, "X")
     k_bracket = compute_bracket_stiffness_n_per_m(asm)
@@ -325,11 +337,20 @@ def test_b14_feet_sprung_receptance_no_fixed_45hz_penalty() -> None:
     assert mods["paver_on_foam"].shaper_x.structural_freq_hz < mods["rigid_bolted"].shaper_x.structural_freq_hz
     assert mods["rubber_feet"].shaper_x.structural_freq_hz < mods["rigid_bolted"].shaper_x.structural_freq_hz
     assert mods["anti_vib_pads"].shaper_x.structural_freq_hz < mods["rubber_feet"].shaper_x.structural_freq_hz
+    # Mount modes couple through their FE modal receptance (inertia relief + frame recoil), so a
+    # softer mount leaves less quasi-static mount compliance in the limiting axis and the heavier
+    # paver base recoils less than bare feet.
+    for ft in ("paver_on_foam", "rubber_feet", "anti_vib_pads"):
+        md = mods[ft].mounting_dynamics
+        assert md is not None and len(md["rigid_body_modes"]) >= 5
+        assert 0.0 < md["x"]["frame_recoil_ratio"] < 0.2
+        ratio = mods[ft].shaper_x.effective_freq_hz / mods["rigid_bolted"].shaper_x.effective_freq_hz
+        assert 0.90 <= ratio <= 1.15
     assert (
-        mods["paver_on_foam"].recommended_max_accel_mm_s2
-        >= mods["rubber_feet"].recommended_max_accel_mm_s2
-        >= mods["anti_vib_pads"].recommended_max_accel_mm_s2
+        mods["paver_on_foam"].mounting_dynamics["x"]["frame_recoil_ratio"]
+        < mods["rubber_feet"].mounting_dynamics["x"]["frame_recoil_ratio"]
     )
+    assert mods["rigid_bolted"].mounting_dynamics is None
 
 
 # ---------------------------------------------------------------------------

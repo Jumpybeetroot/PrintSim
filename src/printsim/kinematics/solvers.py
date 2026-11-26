@@ -9,6 +9,7 @@ import numpy as np
 
 from printsim.geometry.builder import AssemblyModel
 from printsim.schema import (
+    BeltSpec,
     PrinterSpec,
     StepperSpec,
     get_material,
@@ -433,11 +434,20 @@ def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
 def compute_drive_stiffness_details_n_per_m(
     assembly: AssemblyModel,
     axis: str = "X",
-    u_rel: float = 0.5,
-    v_rel: float = 0.5,
+    u_rel: float | None = None,
+    v_rel: float | None = None,
+    belt_override: BeltSpec | None = None,
 ) -> dict[str, object]:
-    """Compute detailed series drive-train stiffness components using exact pulley-to-pulley free spans."""
+    """Compute detailed series drive-train stiffness components using exact pulley-to-pulley free spans.
+
+    ``belt_override`` evaluates the same drive with a different belt state (e.g. the A or B
+    loop of a CoreXY with mismatched tension); by default the belt runs at its operating
+    pretension (installed tension + chamber CTE-mismatch rise). ``u_rel`` / ``v_rel`` default to
+    the toolhead position the assembly was built at, so belt branch lengths follow the same
+    position as the structural model.
+    """
     from printsim.fea.components import (
+        operating_belt,
         belt_effective_ea_n,
         compute_bearing_cte_clearance_um,
         compute_stepper_mount_temp_c,
@@ -447,7 +457,7 @@ def compute_drive_stiffness_details_n_per_m(
     from printsim.schema import get_profile
 
     spec = assembly.spec
-    belt = spec.gantry.belt
+    belt = belt_override if belt_override is not None else operating_belt(spec)
     kin = spec.kinematics
     w = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
@@ -456,8 +466,9 @@ def compute_drive_stiffness_details_n_per_m(
     # Exact inner pulley-to-pulley free-span envelope (excludes frame extrusion width + 25 mm corner mount inset per side)
     wp = max(w - 2.0 * (b_ext + 0.025), bx + 0.04)
     dp = max(d - 2.0 * (b_ext + 0.025), by + 0.04)
-    u = float(min(max(u_rel, 0.05), 0.95))
-    v = float(min(max(v_rel, 0.05), 0.95))
+    rel_pos = getattr(assembly, "toolhead_rel_pos", (0.5, 0.5, 0.5))
+    u = float(min(max(rel_pos[0] if u_rel is None else u_rel, 0.05), 0.95))
+    v = float(min(max(rel_pos[1] if v_rel is None else v_rel, 0.05), 0.95))
     t_ch = float(spec.frame.chamber_temp_c)
     motor_mount_temp_c, _ = compute_stepper_mount_temp_c(spec)
     bkt_mat = get_material(spec.gantry.bracket_material)
@@ -516,6 +527,7 @@ def compute_drive_stiffness_details_n_per_m(
             kc_a1, kc_a2 = ea_a1 / l_a1, ea_a2 / l_a2
             kc_b1, kc_b2 = ea_b1 / l_b1, ea_b2 / l_b2
             k_belt_cord = (kc_a1 + kc_a2) + (kc_b1 + kc_b2)
+            inv_len_sum = 1.0 / l_a1 + 1.0 / l_a2 + 1.0 / l_b1 + 1.0 / l_b2
             ea_eff = 0.25 * (ea_a1 + ea_a2 + ea_b1 + ea_b2)
             drive_branches = 4.0
             k_mesh_1 = gerbert_tooth_mesh_stiffness_n_m(
@@ -537,13 +549,22 @@ def compute_drive_stiffness_details_n_per_m(
                 max(kc_b1, kc_b2) / max(kc_b1 + kc_b2, 1e-9),
             )
         else:
-            # 2WD CoreXY: exact short motor branch (~4 tangents) & long 3-corner return branch (~10 tangents)
-            n_tan_short = 4.0
-            n_tan_long = 10.0
-            l_a1 = max(((1.0 - u) * wp + (1.0 - v) * dp) * span_factor, 0.14)
-            l_a2 = max((u * wp + v * dp + wp + dp) * span_factor, 0.40)
-            l_b1 = max((u * wp + (1.0 - v) * dp) * span_factor, 0.14)
-            l_b2 = max(((1.0 - u) * wp + v * dp + wp + dp) * span_factor, 0.40)
+            # 2WD CoreXY perimeter routing (Voron / Monolith / classic CoreXY): both motors sit at the
+            # rear, and neither belt branch runs straight from the gantry to its motor. From the
+            # toolhead, one branch goes to the gantry joint on the motor's side, forward to the front
+            # idler, and back along the frame side to the motor; the other goes to the opposite joint,
+            # rearward to the far rear idler, and across the rear to the motor. The two branches are
+            # therefore about equal at bed centre (each ~ wp + dp for a square frame), half as stiff
+            # together as the four short branches of an AWD layout. Measured on one machine switched
+            # between AWD and 2WD (CloakedWayne testbed, 2025-07-10): 178.6 / 114.4 Hz vs
+            # 129.0 / 83.2 Hz, a compliance ratio of 1.9 on both axes.
+            # Each branch passes two idlers and leaves the pulley once (~5 tangent points).
+            n_tan_short = 5.0
+            n_tan_long = 5.0
+            l_a1 = max(((1.0 - u) * wp + v * dp + dp) * span_factor, 0.20)
+            l_a2 = max((u * wp + (1.0 - v) * dp + wp) * span_factor, 0.20)
+            l_b1 = max((u * wp + v * dp + dp) * span_factor, 0.20)
+            l_b2 = max(((1.0 - u) * wp + (1.0 - v) * dp + wp) * span_factor, 0.20)
             ea_a1 = belt_effective_ea_n(
                 belt, l_a1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
                 n_pulley_tangents=n_tan_short, chamber_temp_c=t_ch,
@@ -563,6 +584,7 @@ def compute_drive_stiffness_details_n_per_m(
             kc_a1, kc_a2 = ea_a1 / l_a1, ea_a2 / l_a2
             kc_b1, kc_b2 = ea_b1 / l_b1, ea_b2 / l_b2
             k_belt_cord = (kc_a1 + kc_a2) + (kc_b1 + kc_b2)
+            inv_len_sum = 1.0 / l_a1 + 1.0 / l_a2 + 1.0 / l_b1 + 1.0 / l_b2
             ea_eff = 0.25 * (ea_a1 + ea_a2 + ea_b1 + ea_b2)
             drive_branches = 2.0
             k_mesh_a = gerbert_tooth_mesh_stiffness_n_m(
@@ -599,6 +621,7 @@ def compute_drive_stiffness_details_n_per_m(
         )
         kc_s, kc_l = ea_short / span_short, ea_long / span_long
         k_belt_cord = j_norm * (kc_s + kc_l)
+        inv_len_sum = j_norm * (1.0 / span_short + 1.0 / span_long)
         ea_eff = 0.5 * (ea_short + ea_long)
         drive_branches = j_norm
         k_a_loop = 0.0
@@ -622,6 +645,7 @@ def compute_drive_stiffness_details_n_per_m(
         )
         kc1, kc2 = ea1 / l1, ea2 / l2
         k_belt_cord = kc1 + kc2
+        inv_len_sum = 1.0 / l1 + 1.0 / l2
         ea_eff = 0.5 * (ea1 + ea2)
         drive_branches = 1.0
         k_a_loop = 0.0
@@ -697,6 +721,8 @@ def compute_drive_stiffness_details_n_per_m(
         "belt_moving_mass_kg": belt_moving_mass_kg,
         "longest_free_span_m": longest_free_span_m,
         "slack_load_share": slack_load_share,
+        # Belt-path geometry factor G [m]: cord compliance on this axis is G / EA for uniform EA
+        "cord_geometry_factor_m": 1.0 / max(inv_len_sum, 1e-12),
     }
 
 
@@ -714,9 +740,11 @@ def compute_drive_stiffness_n_per_m(
 
 def analyze_kinematics(assembly: AssemblyModel) -> KinematicsReport:
     """Evaluate packaging efficiency, stepper torque margin, belt slip, and workspace."""
+    from printsim.fea.components import operating_belt
+
     spec = assembly.spec
     kin = spec.kinematics
-    belt = spec.gantry.belt
+    belt = operating_belt(spec)
 
     bx, by, bz = kin.build_volume_mm
     fw, fd, fh = spec.frame.width_mm, spec.frame.depth_mm, spec.frame.height_mm

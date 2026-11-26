@@ -24,6 +24,11 @@ Read-only community test data compiled from the **Monolith** Discord server (`#p
   - Rubber + Aramid (Kevlar) 2GT: **119.4 Hz** ZV (@ 266 Hz pluck) (~+5% higher resonance than fiberglass at matched tension)
   - TPU + Kevlar 2GT: **120.4 Hz** ZV (@ 277 Hz pluck), but **loses tension at 60–70°C** chamber temps
   - **Steel-Core Belts:** Strongly avoided on 20T pulleys/idlers due to tight bend radius and rapid fatigue fracture.
+- **Controlled Same-Machine Belt-Path & Motor Tests (`CloakedWayne`, `#updates`, 300 mm testbed: 4040/2040 frame, Carbonara, `LDO 2504 S45R` @ 36 V, `10 mm` Gates EPDM @ `~20 lbf`, Beacon, room temp):**
+  - **AWD vs 2WD, same machine and day (`2025-07-10`, `2.5 A`):** AWD X ZV **`178.6 Hz`** / MZV `178.4 Hz`, Y ZV **`114.4 Hz`** / MZV `117.4 Hz`; 2WD X ZV **`129.0 Hz`** / MZV `127.8 Hz`, Y ZV **`83.2 Hz`** / MZV `84.6 Hz`. Frequency ratio **`1.38`** on both axes ("average driven belt length is just a tad over 2x compared to AWD … 90+% scaling").
+  - **Stepper run-current sweep, AWD Y axis (`2025-08-12`):** ZV / MZV **`97.4 / 98.8 Hz`** @ `1.0 A`, **`104.0 / 105.4`** @ `1.5 A`, **`107.6 / 111.0`** @ `2.0 A`, **`110.4 / 113.8`** @ `2.5 A`, **`111.6 / 115.6`** @ `2.8 A`. `1/f²` is linear in `1/I`; the motor magnetic spring is about `19%` of Y compliance at `2.5 A`.
+  - **Notes from the same author:** catalogue belt stiffness is too low to reach measured frequencies even with everything else rigid; input-shaper performance scales about linearly with belt width for otherwise identical belts; branch stiffness varies more across the bed in AWD because the toolhead gets closer to the steppers; EPDM belts are stiffest when new.
+  - Used in PrintSim to correct the 2WD CoreXY belt routing (two about-equal perimeter branches) and to set the Gates fiberglass dynamic belt ratio to `1.85` (`docs/physics/07_mounting_and_belt_refinements.md` §5.2).
 
 ## 3. Motors, Drivers & Failure Modes
 - **48V + TMC5160 / BTT Kraken:** Standard AWD setup with **LDO 42STH48-2504AH (S45R)** (~2.5 A @ 48V) or **Kraken steppers** (~1.8–2.0 A @ 48V); long 42–45 mm shafts required for double-shear 9 mm stacks.

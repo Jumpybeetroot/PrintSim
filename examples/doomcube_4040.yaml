@@ -68,10 +68,10 @@ kinematics:
     motor_mass_g: 290
 toolhead:
   preset_id: a4t_beacon
-  name: A4T / XOL 2 + Static Beacon
-  total_mass_g: 215
-  cog_offset_mm: [0, -13, -15]
-  nozzle_offset_mm: [0, -16, -52]
+  name: A4T + WW-BMG/WWG2 + Static Beacon
+  total_mass_g: 298
+  cog_offset_mm: [0, -19.0, 8.0]
+  nozzle_offset_mm: [0, -28.0, -58.0]
   mount_material: ppa_cf_printed
   body_construction: compact_cage
   internal_stiffness_n_per_mm: 1150.0

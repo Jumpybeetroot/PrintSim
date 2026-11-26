@@ -8,7 +8,11 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .overrides import ModelOverridesSpec
+from .overrides import (
+    BeltRoutingOverride,
+    GantryBracketOverride,
+    ModelOverridesSpec,
+)
 
 Architecture = Literal["corexy", "cartesian_bedslinger", "delta"]
 BracingType = Literal[
@@ -57,6 +61,18 @@ BracketMaterialType = Literal[
     "aluminum_6061_t6",
     "aluminum_7075_t6",
 ]
+GantryHardwareKitType = Literal[
+    "auto",
+    "voron_stock_printed",
+    "ldo_voron_kit",
+    "siboor_cnc_awd",
+    "siboor_cnc_2wd",
+    "monolith_ldo_cnc_awd",
+    "monolith_ldo_cnc_2wd",
+    "vzbot_330_awd",
+    "vzbot_330_2wd",
+    "procedural",
+]
 ChamberHeaterType = Literal["none", "monolith_100w_ptc", "monolith_500w_ptc"]
 CpapBlowerType = Literal["none", "ws7040_24v", "wm9290_24v", "wm7575_220vac"]
 StepperThermalGasketType = Literal["none", "ptfe_2mm"]
@@ -104,9 +120,20 @@ BedMountType = Literal[
     "rigid_4pt",
     "floating_4pt",
     "silicone_4pt",
+    "silicone_4pt_clamped",
     "springs_4pt",
 ]
-FrameFeetType = Literal["rigid_bolted", "rubber_feet", "anti_vib_pads", "paver_on_foam"]
+FrameFeetType = Literal[
+    "rigid_bolted", "rubber_feet", "anti_vib_pads", "paver_on_foam", "suspended_lines"
+]
+SuspensionLineType = Literal[
+    "paracord_550",
+    "uhmwpe_braid_200lb",
+    "nylon_mono_100lb",
+    "steel_cable_1_5mm",
+    "bungee_cord_6mm",
+]
+FrameBallastLocationType = Literal["base", "top", "distributed"]
 BearingClearanceType = Literal["C2", "CN", "C3"]
 ZProbeType = Literal["static_eddy", "klicky_inductive", "cnc_tap", "printed_tap"]
 BeltRoutingType = Literal["stock_corexy", "monolith_short"]
@@ -140,6 +167,26 @@ BeltValidationTierType = Literal["proven", "experimental", "theoretical"]
 # NOTE: 2GT 6/9/12 mm belts are empirically calibrated against community CoreXY ADXL shaper logs;
 # 2GT 15 mm / Dual 9 mm are experimental custom-hardware builds; 3GT / AT3 / HTD3M / AT5 entries are
 # THEORETICAL datasheet-extrapolated models (unproven on real CoreXY 3D printers).
+#
+# Gates fiberglass `ea_static_n` follows PrintDB `tensile_stiffness_n_per_strain`: the Gates Light
+# Power & Precision manual Table 6 long-length belting rows (tension at 0.1 % elongation: LL2MGT06
+# 3.8 lb -> 16.9 kN, LL2MGT09 5.7 lb -> 25.4 kN, LL3MGT09 8.9 lb -> 39.6 kN) and, for widths the
+# table does not list, the SDP/Gates unit-strain modulus (2M 18,000 / 3M 30,000 lb/in per inch of
+# width) with its narrow-belt rule (-10 % for 1/4-1/2 in wide; none above 1/2 in). The earlier
+# catalog used the underated 18,000 lb/in figure at every width (18.9 kN at 6 mm).
+#
+# Small-amplitude 40-150 Hz dynamic-to-static stiffness ratio of Gates neoprene/fiberglass belting
+# as installed. Fitted 2026-11-26 to controlled same-machine measurements on the Monolith 300 mm
+# testbed (10 mm Gates EPDM at 89 N): AWD vs 2WD on one day (178.6 / 114.4 Hz vs 129.0 / 83.2 Hz)
+# and a stepper-current sweep in AWD (Y ZV 97.4 -> 111.6 Hz from 1 A to 2.8 A). The nine
+# measurements are reproduced within 3.5 % rms; values from 1.6 to 2.0 fit about equally well.
+# Earlier values (2.0 on underated statics, then 2.23) were fitted across different machines with
+# a 2WD belt routing that was one third too stiff.
+GATES_FIBERGLASS_DYNAMIC_STIFFENING = 1.85
+# GT3 (2MGT) softer base elastomer vs 2GT EPDM at matched tension (Monolith shootout: 110.6 Hz vs
+# 113.8 Hz ZV), applied on top of the family ratio above.
+GT3_2MGT_DYNAMIC_STIFFENING = round(GATES_FIBERGLASS_DYNAMIC_STIFFENING * 0.97, 4)
+
 BELT_CATALOG: dict[str, dict[str, Any]] = {
     "gt2_6mm": {
         "id": "gt2_6mm",
@@ -150,9 +197,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 6.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 18900.0,  # Exact Gates PowerGrip 2GT quasi-static catalog EA (18,000 lbf/in * 6/25.4 mm)
-        "dynamic_stiffening_factor": 2.0,  # 40-150 Hz preloaded small-amplitude EPDM/fiberglass dynamic tangent ratio
-        "ea_default_core_n": 37800.0,  # ea_static_n * dynamic_stiffening_factor
+        "ea_static_n": 16900.0,  # Gates Table 6 LL2MGT06: 3.8 lb at 0.1 % elongation (PrintDB gates-2gt-6mm-ll)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 16900.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0083,
         "max_working_tension_n": 58.0,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -161,7 +208,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "max_temp_c": 110.0,
         "cost_usd_per_m": 4.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Gates PowerGrip 2GT 6mm (18.9 kN quasi-static datasheet EA x 2.0 dynamic small-amplitude factor, exact pulley-to-pulley spans).",
+        "theoretical_summary": "Gates PowerGrip 2GT 6mm (16.9 kN quasi-static datasheet EA x 1.85 dynamic small-amplitude factor, exact pulley-to-pulley spans).",
         "practical_issues": [],
     },
     "gt2_9mm": {
@@ -173,9 +220,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 9.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 28350.0,  # Exact Gates PowerGrip 2GT 9mm quasi-static catalog EA (1.5x 6mm)
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 56700.0,  # ea_static_n * dynamic_stiffening_factor (below steel-cord AT3 80 kN)
+        "ea_static_n": 25500.0,  # Gates Table 6 LL2MGT09: 5.7 lb at 0.1 % elongation = 25.4 kN (PrintDB gates-2gt-9mm-ll)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 25500.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.01245,
         "max_working_tension_n": 92.8,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -184,7 +231,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "max_temp_c": 110.0,
         "cost_usd_per_m": 6.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Gates PowerGrip 2GT 9mm (28.35 kN quasi-static datasheet EA x 2.0 dynamic factor, exact pulley-to-pulley spans).",
+        "theoretical_summary": "Gates PowerGrip 2GT 9mm (25.5 kN quasi-static datasheet EA x 1.85 dynamic factor, exact pulley-to-pulley spans).",
         "practical_issues": [],
     },
     "gt2_10mm": {
@@ -196,9 +243,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 10.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 31500.0,  # Exact Gates PowerGrip 2GT 10mm quasi-static catalog EA (10/9 x 9mm)
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 63000.0,
+        "ea_static_n": 28300.0,  # 10/9 x the 9 mm value (PrintDB gates-2gt-10mm-ll)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 28300.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.01236,  # Scale-weighed Monolith 2x1658 mm = 41.0 g (12.36 g/m)
         "max_working_tension_n": 105.0,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -221,9 +268,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 10.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 31500.0,  # Same tension cords as 2GT, softer elastomer matrix
-        "dynamic_stiffening_factor": 1.94,
-        "ea_default_core_n": 61110.0,
+        "ea_static_n": 28300.0,  # Same tension cords as 2GT 10 mm; softer elastomer enters through the dynamic ratio
+        "dynamic_stiffening_factor": GT3_2MGT_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 28300.0 * GT3_2MGT_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.01499,  # Scale-weighed Monolith 2x1658 mm = 49.7 g (14.99 g/m)
         "max_working_tension_n": 105.0,
         "tooth_shear_k_n_per_m_mm": 4.9e4,
@@ -248,9 +295,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 12.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 37800.0,  # Exact Gates PowerGrip 2GT 12mm quasi-static catalog EA (2.0x 6mm)
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 75600.0,  # ea_static_n * dynamic_stiffening_factor
+        "ea_static_n": 34000.0,  # 2M modulus 18,000 lb/in per inch x 12/25.4 x 0.90 narrow-belt factor
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 34000.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0166,
         "max_working_tension_n": 127.6,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -259,7 +306,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "max_temp_c": 110.0,
         "cost_usd_per_m": 8.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Gates PowerGrip 2GT 12mm (37.8 kN quasi-static datasheet EA x 2.0 dynamic factor) on high-tension AWD CoreXY builds.",
+        "theoretical_summary": "Gates PowerGrip 2GT 12mm (34.0 kN quasi-static EA from the Gates narrow-belt rule x 1.85 dynamic factor) on high-tension AWD CoreXY builds.",
         "practical_issues": [
             "Requires 12 mm pulleys/idlers, double-shear motor supports, and taller XY-joint belt paths than stock 6 mm Voron kits.",
         ],
@@ -273,9 +320,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 15.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 47250.0,
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 94500.0,
+        "ea_static_n": 47250.0,  # 2M modulus 18,000 lb/in per inch x 15/25.4 (wider than 1/2 in: no narrow-belt factor)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 47250.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.02075,
         "max_working_tension_n": 162.0,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -300,9 +347,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 20.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 56700.0,
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 113400.0,
+        "ea_static_n": 51000.0,  # 2 x the 9 mm value (ideal load sharing)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 51000.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0249,
         "max_working_tension_n": 185.6,
         "tooth_shear_k_n_per_m_mm": 5.5e4,
@@ -327,9 +374,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 9.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 47250.0,  # 30/18 = 5/3x Gates 3GT/2GT fiberglass modulus ratio
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 94500.0,
+        "ea_static_n": 39600.0,  # Gates Table 6 LL3MGT09: 8.9 lb at 0.1 % elongation (PrintDB gates-3gt-9mm)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 39600.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0180,
         "max_working_tension_n": 180.0,
         "tooth_shear_k_n_per_m_mm": 7.8e4,
@@ -355,9 +402,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 12.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 63000.0,
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 126000.0,
+        "ea_static_n": 56500.0,  # Between the Table 6 9 mm and 15 mm rows; 3M modulus x 12/25.4 x 0.90 gives 56.7 kN
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 56500.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0240,
         "max_working_tension_n": 240.0,
         "tooth_shear_k_n_per_m_mm": 7.8e4,
@@ -383,9 +430,9 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "hardware_width_mm": 15.0,
         "default_core": "fiberglass",
         "body_material": "epdm",
-        "ea_static_n": 78750.0,
-        "dynamic_stiffening_factor": 2.0,
-        "ea_default_core_n": 157500.0,
+        "ea_static_n": 73400.0,  # Gates Table 6 LL3MGT15: 16.5 lb at 0.1 % elongation (PrintDB gates-3gt-15mm)
+        "dynamic_stiffening_factor": GATES_FIBERGLASS_DYNAMIC_STIFFENING,
+        "ea_default_core_n": 73400.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0300,
         "max_working_tension_n": 300.0,
         "tooth_shear_k_n_per_m_mm": 7.8e4,
@@ -1478,6 +1525,29 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
         "cost_usd": 10.0,
         "notes": "Compliant 70A silicone columns relieve thermal stress and add damping, but allow noticeable bed bounce/tilt",
     },
+    "silicone_4pt_clamped": {
+        "id": "silicone_4pt_clamped",
+        "name": "4-Point Silicone Spacers, Torqued Through-Bolt (VzBot M3x50)",
+        "short_name": "Silicone 4-Pt Clamped",
+        "mount_points": 4,
+        # Preloaded bolted joint (plate -> 16 mm 70A spacer -> bed frame -> knob): for small-amplitude
+        # vibration the M3 screw carries load in parallel with the elastomer until preload is lost.
+        # Axial: screw EA/L = 200 GPa * 4.5 mm^2 / 50 mm ~ 18 kN/mm, capped by knob/frame flex.
+        # Lateral: M3 minor-diameter shank bending over the 16 mm spacer, 3EI/L^3..12EI/L^3 = 235..940.
+        "k_axial_n_per_mm": 2000.0,
+        "k_lateral_n_per_mm": 400.0,
+        # Large slow thermal growth (~0.3 mm radial at 110 C) slips through M3 hole clearance first,
+        # so thermal restraint stays near 2x the free silicone shear rather than the shank stiffness.
+        "k_restraint_thermal_n_per_m": 64000.0,
+        "k_restraint_thermal": 64.0,  # deprecated alias
+        "damping_delta": 0.006,
+        "standoff_height_mm": 16.0,
+        "radial_dof_mode": "elastomer_shear",
+        "tap_rated": False,
+        "mount_inset_ratio": 0.38,
+        "cost_usd": 12.0,
+        "notes": "VzBot-style silicone spacers clamped by M3x50 countersunk screws into bed-frame knobs: stiff preloaded joint for vibration, still leveling-adjustable",
+    },
     "springs_4pt": {
         "id": "springs_4pt",
         "name": "4-Point Yellow Die Springs",
@@ -1497,7 +1567,9 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
     },
 }
 
-# Machine benchtop feet / anti-vibration pad catalog (per-foot vertical & lateral stiffness)
+# Machine benchtop feet / anti-vibration pad catalog (per-foot vertical & lateral stiffness).
+# `mount_damping_ratio` is the damping ratio of the whole-printer rigid-body modes on the mount
+# (Barry Controls: natural rubber / neoprene 0.05; Sorbothane 50 duro tan(delta) ~0.6 -> ~0.30).
 FRAME_FEET_CATALOG: dict[str, dict] = {
     "rigid_bolted": {
         "id": "rigid_bolted",
@@ -1515,6 +1587,7 @@ FRAME_FEET_CATALOG: dict[str, dict] = {
         "k_axial_n_per_mm": 360.0,
         "k_lateral_n_per_mm": 140.0,
         "damping_delta": 0.006,
+        "mount_damping_ratio": 0.05,
         "notes": "Typical Voron/printer rubber feet; allows whole-frame benchtop rocking",
     },
     "anti_vib_pads": {
@@ -1524,6 +1597,7 @@ FRAME_FEET_CATALOG: dict[str, dict] = {
         "k_axial_n_per_mm": 85.0,
         "k_lateral_n_per_mm": 32.0,
         "damping_delta": 0.015,
+        "mount_damping_ratio": 0.30,
         "notes": "Soft isolators lower whole-frame sway frequency while isolating table noise; frame & bed rock mostly together",
     },
     "paver_on_foam": {
@@ -1533,8 +1607,88 @@ FRAME_FEET_CATALOG: dict[str, dict] = {
         "k_axial_n_per_mm": 240.0,
         "k_lateral_n_per_mm": 95.0,
         "damping_delta": 0.022,
+        "mount_damping_ratio": 0.10,
         "base_mass_kg": 18.0,
         "notes": "Classic 18 kg concrete paver on dense foam: lowers CoG and strongly damps desk vibration while keeping frame & bed moving together",
+    },
+    "suspended_lines": {
+        "id": "suspended_lines",
+        "name": "Suspended From Overhead Lines",
+        "short_name": "Suspended",
+        # Reference values only (4x Type III paracord, 600 mm drop, 15 kg printer). The solver
+        # replaces them with k_axial = EA / L and the pendulum geometric stiffness
+        # k_lateral = T / L = (M g / n) / L from `frame.suspension_line` & `frame.suspension_length_mm`.
+        "k_axial_n_per_mm": 6.67,
+        "k_lateral_n_per_mm": 0.061,
+        "damping_delta": 0.0,
+        "mount_damping_ratio": 0.05,
+        "notes": "Whole printer hangs from 4 overhead lines at the top frame corners: sub-1 Hz pendulum sway far below the shaper band, frame reacts as a free body (reduced-mass recoil), near-total structure-borne noise isolation",
+    },
+}
+
+# Suspension line catalog for `frame.feet_type = "suspended_lines"` (per single line; SI-friendly explicit units).
+# `stiffness_ea_n` is the working-load secant axial stiffness EA [N] (force per unit strain) in the
+# 10-25% of break-strength range used by a hanging printer, NOT the fibre modulus x nominal area.
+SUSPENSION_LINE_CATALOG: dict[str, dict] = {
+    "paracord_550": {
+        "id": "paracord_550",
+        "name": "550 Paracord (Nylon, 4 mm)",
+        "short_name": "550 Paracord",
+        "stiffness_ea_n": 4000.0,
+        "break_strength_n": 2447.0,
+        "design_factor": 10.0,
+        "linear_mass_g_per_m": 6.6,
+        "loss_factor": 0.10,
+        "verification": "estimate",
+        "notes": "MIL-C-5040H Type III: >=550 lbf (2447 N) break at >=30% elongation (secant EA <= 8.2 kN at break; ~half that in the light-load toe). Nylon beds in 3-6% and creeps, so re-level after the first days",
+    },
+    "uhmwpe_braid_200lb": {
+        "id": "uhmwpe_braid_200lb",
+        "name": "UHMWPE / Dyneema Braid (200 lb)",
+        "short_name": "UHMWPE Braid",
+        "stiffness_ea_n": 26000.0,
+        "break_strength_n": 890.0,
+        "design_factor": 5.0,
+        "linear_mass_g_per_m": 0.75,
+        "loss_factor": 0.03,
+        "verification": "datasheet_scaled",
+        "notes": "12-strand HMPE braid elastic elongation 0.46/0.70/0.96% at 10/20/30% of break (Samson AmSteel-Blue) -> EA ~ 29x break strength; Hangprinter firmware uses 20-100 kN for 1.1 mm line. Knots hold only ~35%: splice or use a design factor >= 5",
+    },
+    "nylon_mono_100lb": {
+        "id": "nylon_mono_100lb",
+        "name": "Nylon Monofilament (100 lb)",
+        "short_name": "Nylon Mono",
+        "stiffness_ea_n": 1700.0,
+        "break_strength_n": 445.0,
+        "design_factor": 10.0,
+        "linear_mass_g_per_m": 0.73,
+        "loss_factor": 0.08,
+        "verification": "estimate",
+        "notes": "Monofilament fishing line stretches 20-30% at break (secant EA ~ 4x break strength) and softens when damp; soft vertical bounce with a thin working-load margin",
+    },
+    "steel_cable_1_5mm": {
+        "id": "steel_cable_1_5mm",
+        "name": "Stainless Wire Rope (1.5 mm)",
+        "short_name": "Steel Cable",
+        "stiffness_ea_n": 101000.0,
+        "break_strength_n": 1500.0,
+        "design_factor": 5.0,
+        "linear_mass_g_per_m": 9.0,
+        "loss_factor": 0.015,
+        "verification": "datasheet",
+        "notes": "7x7 AISI 316 wire rope: E = 57.3 GPa on nominal area pi*D^2/4 (S3i) -> EA ~ 101 kN at 1.5 mm; no creep, lowest damping, stiffest vertical support",
+    },
+    "bungee_cord_6mm": {
+        "id": "bungee_cord_6mm",
+        "name": "Bungee Shock Cord (6 mm)",
+        "short_name": "Bungee Cord",
+        "stiffness_ea_n": 85.0,
+        "break_strength_n": 534.0,
+        "design_factor": 5.0,
+        "linear_mass_g_per_m": 25.0,
+        "loss_factor": 0.14,
+        "verification": "datasheet_scaled",
+        "notes": "MIL-C-5651 Type I 1/4 in shock cord: 10-18 lbf at 75% elongation (secant EA 60-107 N), 120 lbf break. ~1 Hz vertical bounce, the classic free-free modal-test suspension; needs long travel and the rubber ages",
     },
 }
 
@@ -1791,6 +1945,323 @@ GANTRY_BRACKET_CATALOG: dict[str, dict] = {
         "kit_cost_usd": 285.0,
         "carriage_mass_delta_g": 46.0,
         "color_hex": "#cbd5e1",
+    },
+}
+
+_VORON_Z_STATIONS: dict[str, str] = {
+    "z_drive_left": "voron_24_z_drive_left",
+    "z_drive_right": "voron_24_z_drive_right",
+    "z_joint": "voron_24_z_joint",
+    "trident_z_mount": "voron_trident_z_mount_left",
+    "trident_z_mount_left": "voron_trident_z_mount_left",
+    "trident_z_mount_right": "voron_trident_z_mount_right",
+    "trident_z_mount_rear": "voron_trident_z_mount_rear",
+    "trident_bed_arm": "voron_trident_bed_arm_left",
+    "trident_bed_arm_left": "voron_trident_bed_arm_left",
+    "trident_bed_arm_right": "voron_trident_bed_arm_right",
+    "trident_bed_arm_rear": "voron_trident_bed_arm_rear",
+}
+
+_VORON_STOCK_STATIONS: dict[str, str] = {
+    "rear_left": "voron_stock_rear_left",
+    "rear_right": "voron_stock_rear_right",
+    "front_left": "voron_stock_front_left",
+    "front_right": "voron_stock_front_right",
+    "xy_left": "voron_stock_xy_left",
+    "xy_right": "voron_stock_xy_right",
+    **_VORON_Z_STATIONS,
+}
+
+# CAD-backed CoreXY gantry hardware kit catalog (station -> gantry_brackets asset ID)
+# Each concrete kit also defines `kit_settings` — the coordinated physical settings
+# (drive mode, belt routing, bracket material, double-shear pulleys, X/Y rail type &
+# orientation, belt width & recommended tension, carriage mass, axial bearing preload,
+# and flying-gantry Z-joint hardware) that physically ship with the kit so upgrading
+# or switching kits in Studio / Python / MCP updates everything consistently.
+GANTRY_HARDWARE_KIT_CATALOG: dict[str, dict[str, Any]] = {
+    "auto": {
+        "id": "auto",
+        "name": "Auto (Match Gantry & Material)",
+        "short_name": "Auto",
+        "description": "Legacy fallback: infers a CAD gantry kit from belt routing, drive mode, and bracket material.",
+        "default_bracket_material": "abs_printed",
+        "drive_mode": "auto",
+        "source": "Auto-resolved from printer architecture, belt routing, drive mode, and bracket material",
+        "stations": {},
+        "kit_settings": None,
+    },
+    "voron_stock_printed": {
+        "id": "voron_stock_printed",
+        "name": "Voron Stock Printed (ABS/ASA · 2WD)",
+        "short_name": "Voron Stock",
+        "description": "Official Voron 2.4r2 / Trident stock printed ABS/ASA A/B drives, front idlers, XY-joints, 6 mm stock CoreXY belts, MGN12H front X / MGN9H bottom Y rails.",
+        "default_bracket_material": "abs_printed",
+        "drive_mode": "2wd",
+        "source": "VoronDesign/Voron-2 & Voron-Trident official CAD",
+        "stations": dict(_VORON_STOCK_STATIONS),
+        "kit_settings": {
+            "drive_mode": "2wd",
+            "belt_routing": "stock_corexy",
+            "bracket_material": "abs_printed",
+            "double_shear_pulleys": False,
+            "x_rail_profile": "mgn12_rail",
+            "y_rail_profile": "mgn9_rail",
+            "x_rail_mount": "front",
+            "y_rail_mount": "bottom",
+            "rail_block_type": "H",
+            "belt_type": "gt2_6mm",
+            "belt_pretension_n": 9.0,
+            "carriage_mass_g": 196.0,
+            "idler_axial_preload": "none",
+            "z_joint_material_flying": "printed",
+        },
+    },
+    "ldo_voron_kit": {
+        "id": "ldo_voron_kit",
+        "name": "LDO Motors Voron Kit (Printed + Precision Hardware · 2WD)",
+        "short_name": "LDO Voron Kit",
+        "description": "LDO Motors Voron 2.4 / Trident Rev D kit geometry with stock printed brackets, umbilical routing (no drag chains), 6 mm Gates belts, and matched MGN12H front X / MGN9H bottom Y rails.",
+        "default_bracket_material": "abs_printed",
+        "drive_mode": "2wd",
+        "source": "LDO Motors Voron 2.4 / Trident Rev D Kit (VoronDesign CAD)",
+        "stations": dict(_VORON_STOCK_STATIONS),
+        "kit_settings": {
+            "drive_mode": "2wd",
+            "belt_routing": "stock_corexy",
+            "bracket_material": "abs_printed",
+            "double_shear_pulleys": False,
+            "x_rail_profile": "mgn12_rail",
+            "y_rail_profile": "mgn9_rail",
+            "x_rail_mount": "front",
+            "y_rail_mount": "bottom",
+            "rail_block_type": "H",
+            "belt_type": "gt2_6mm",
+            "belt_pretension_n": 9.0,
+            "carriage_mass_g": 180.0,
+            "idler_axial_preload": "none",
+            "z_joint_material_flying": "printed",
+        },
+    },
+    "siboor_cnc_awd": {
+        "id": "siboor_cnc_awd",
+        "name": "Siboor CNC Aluminum 6061 AWD (9mm)",
+        "short_name": "Siboor CNC AWD",
+        "description": "Siboor / GKD CNC billet 6061-T6 4-motor AWD gantry with double-shear pulleys, stock CoreXY 9 mm belt routing, MGN12H front X / MGN9H bottom Y rails.",
+        "default_bracket_material": "aluminum_6061_t6",
+        "drive_mode": "awd",
+        "source": "Siboor / GKD Voron CNC AWD Gantry Kit CAD",
+        "stations": {
+            "rear_left": "siboor_awd_rear_left",
+            "rear_right": "siboor_awd_rear_right",
+            "front_left": "siboor_awd_front_left",
+            "front_right": "siboor_awd_front_right",
+            "xy_left": "siboor_awd_xy_left",
+            "xy_right": "siboor_awd_xy_right",
+            **_VORON_Z_STATIONS,
+        },
+        "kit_settings": {
+            "drive_mode": "awd",
+            "belt_routing": "stock_corexy",
+            "bracket_material": "aluminum_6061_t6",
+            "double_shear_pulleys": True,
+            "x_rail_profile": "mgn12_rail",
+            "y_rail_profile": "mgn9_rail",
+            "x_rail_mount": "front",
+            "y_rail_mount": "bottom",
+            "rail_block_type": "H",
+            "belt_type": "gt2_9mm",
+            "belt_pretension_n": 55.0,
+            "carriage_mass_g": 210.0,
+            "idler_axial_preload": "none",
+            "z_joint_material_flying": "printed",
+            "sibling_2wd_kit": "siboor_cnc_2wd",
+        },
+    },
+    "siboor_cnc_2wd": {
+        "id": "siboor_cnc_2wd",
+        "name": "Siboor CNC Aluminum 6061 2WD (6mm)",
+        "short_name": "Siboor CNC 2WD",
+        "description": "Siboor / GKD CNC billet 6061-T6 2-motor rear drives, CNC front idlers & XY-joints with double-shear pulleys, stock CoreXY 6 mm belts, MGN12H front X / MGN9H bottom Y rails.",
+        "default_bracket_material": "aluminum_6061_t6",
+        "drive_mode": "2wd",
+        "source": "Siboor / GKD Voron CNC 2WD Gantry Kit CAD",
+        "stations": {
+            "rear_left": "siboor_2wd_rear_left",
+            "rear_right": "siboor_2wd_rear_right",
+            "front_left": "siboor_2wd_front_left",
+            "front_right": "siboor_2wd_front_right",
+            "xy_left": "siboor_2wd_xy_left",
+            "xy_right": "siboor_2wd_xy_right",
+            **_VORON_Z_STATIONS,
+        },
+        "kit_settings": {
+            "drive_mode": "2wd",
+            "belt_routing": "stock_corexy",
+            "bracket_material": "aluminum_6061_t6",
+            "double_shear_pulleys": True,
+            "x_rail_profile": "mgn12_rail",
+            "y_rail_profile": "mgn9_rail",
+            "x_rail_mount": "front",
+            "y_rail_mount": "bottom",
+            "rail_block_type": "H",
+            "belt_type": "gt2_6mm",
+            "belt_pretension_n": 32.0,
+            "carriage_mass_g": 210.0,
+            "idler_axial_preload": "none",
+            "z_joint_material_flying": "printed",
+            "sibling_awd_kit": "siboor_cnc_awd",
+        },
+    },
+    "monolith_ldo_cnc_awd": {
+        "id": "monolith_ldo_cnc_awd",
+        "name": "Monolith × LDO CNC 6061 AWD (9mm Short-Path)",
+        "short_name": "Monolith CNC AWD",
+        "description": "CloakedWayne Monolith × LDO billet 6061-T6 4-motor AWD gantry: Monolith Short-Path 9 mm belt routing, double-shear live-shafts w/ M5 disc springs, inner-mounted MGN12H Y rails, front MGN12H X rail, and milled V2.4 Z-joints.",
+        "default_bracket_material": "aluminum_6061_t6",
+        "drive_mode": "awd",
+        "source": "Monolith Gantry × LDO Motors Official CNC CAD",
+        "stations": {
+            "rear_left": "monolith_awd_rear_left",
+            "rear_right": "monolith_awd_rear_right",
+            "front_left": "monolith_awd_front_left",
+            "front_right": "monolith_awd_front_right",
+            "xy_left": "monolith_awd_xy_left",
+            "xy_right": "monolith_awd_xy_right",
+            **_VORON_Z_STATIONS,
+            "z_joint": "monolith_v24_z_joint",
+        },
+        "kit_settings": {
+            "drive_mode": "awd",
+            "belt_routing": "monolith_short",
+            "bracket_material": "aluminum_6061_t6",
+            "double_shear_pulleys": True,
+            "x_rail_profile": "mgn12_rail",
+            "y_rail_profile": "mgn12_rail",
+            "x_rail_mount": "front",
+            "y_rail_mount": "inner",
+            "rail_block_type": "H",
+            "belt_type": "gt2_9mm",
+            "belt_pretension_n": 65.0,
+            "carriage_mass_g": 214.0,
+            "idler_axial_preload": "disc_spring_m5",
+            "z_joint_material_flying": "milled",
+            "sibling_2wd_kit": "monolith_ldo_cnc_2wd",
+        },
+    },
+    "monolith_ldo_cnc_2wd": {
+        "id": "monolith_ldo_cnc_2wd",
+        "name": "Monolith × LDO CNC 6061 2WD (9mm Short-Path)",
+        "short_name": "Monolith CNC 2WD",
+        "description": "CloakedWayne Monolith × LDO billet 6061-T6 2-motor gantry: Monolith Short-Path 9 mm belt routing, double-shear live-shafts w/ M5 disc springs, inner-mounted MGN12H Y rails, front MGN12H X rail, and milled V2.4 Z-joints.",
+        "default_bracket_material": "aluminum_6061_t6",
+        "drive_mode": "2wd",
+        "source": "Monolith Gantry × LDO Motors Official CNC CAD",
+        "stations": {
+            "rear_left": "monolith_awd_rear_left",
+            "rear_right": "monolith_awd_rear_right",
+            "front_left": "monolith_2wd_front_left",
+            "front_right": "monolith_2wd_front_right",
+            "xy_left": "monolith_2wd_xy_left",
+            "xy_right": "monolith_2wd_xy_right",
+            **_VORON_Z_STATIONS,
+            "z_joint": "monolith_v24_z_joint",
+        },
+        "kit_settings": {
+            "drive_mode": "2wd",
+            "belt_routing": "monolith_short",
+            "bracket_material": "aluminum_6061_t6",
+            "double_shear_pulleys": True,
+            "x_rail_profile": "mgn12_rail",
+            "y_rail_profile": "mgn12_rail",
+            "x_rail_mount": "front",
+            "y_rail_mount": "inner",
+            "rail_block_type": "H",
+            "belt_type": "gt2_9mm",
+            "belt_pretension_n": 48.0,
+            "carriage_mass_g": 214.0,
+            "idler_axial_preload": "disc_spring_m5",
+            "z_joint_material_flying": "milled",
+            "sibling_awd_kit": "monolith_ldo_cnc_awd",
+        },
+    },
+    "vzbot_330_awd": {
+        "id": "vzbot_330_awd",
+        "name": "VzBot 330 AWD Gantry (Mellow CNC 6061 · 6mm)",
+        "short_name": "VzBot 330 AWD",
+        "description": "VzBoT Vz330 AWD gantry: rear motor mounts with integrated tensioners, AWD front idler/motor mounts, Y-gantry XY-joints clamping a 20x20 CF tube, top-mounted MGN9H X rail, MGN12H Y rails on the inner faces of the top-ring 2020 Y extrusions, 6 mm GT2 belts with 20T pulleys/idlers on double-shear Ti M5 shoulder bolts.",
+        "default_bracket_material": "aluminum_6061_t6",
+        "drive_mode": "awd",
+        "source": "VzBoT3D/VzBoT-Vz330 official Vz-330_v1.2 full-printer CAD (printed-gantry geometry; Mellow CNC 6061 parts share the envelope)",
+        "stations": {
+            "rear_left": "vzbot_330_rear_left",
+            "rear_right": "vzbot_330_rear_right",
+            "front_left": "vzbot_330_awd_front_left",
+            "front_right": "vzbot_330_awd_front_right",
+            "xy_left": "vzbot_330_xy_left",
+            "xy_right": "vzbot_330_xy_right",
+        },
+        "kit_settings": {
+            "drive_mode": "awd",
+            "belt_routing": "stock_corexy",
+            "bracket_material": "aluminum_6061_t6",
+            "double_shear_pulleys": True,
+            "x_rail_profile": "mgn9_rail",
+            "y_rail_profile": "mgn12_rail",
+            "x_rail_mount": "top",
+            "y_rail_mount": "inner",
+            "rail_block_type": "H",
+            "belt_type": "gt2_6mm",
+            "belt_pretension_n": 22.0,
+            "carriage_mass_g": 194.0,
+            "idler_axial_preload": "none",
+            "z_joint_material_flying": "printed",
+            "sibling_2wd_kit": "vzbot_330_2wd",
+        },
+    },
+    "vzbot_330_2wd": {
+        "id": "vzbot_330_2wd",
+        "name": "VzBot 330 2WD Gantry (Mellow CNC 6061 · 6mm)",
+        "short_name": "VzBot 330 2WD",
+        "description": "VzBoT Vz330 2WD gantry: rear motor mounts with integrated tensioners, 2WD front idler mounts, Y-gantry XY-joints clamping a 20x20 CF tube, top-mounted MGN9H X rail, inner-face MGN12H Y rails, 6 mm GT2 belts.",
+        "default_bracket_material": "aluminum_6061_t6",
+        "drive_mode": "2wd",
+        "source": "VzBoT3D/VzBoT-Vz330 official Vz-330_v1.2 full-printer CAD (printed-gantry geometry; Mellow CNC 6061 parts share the envelope)",
+        "stations": {
+            "rear_left": "vzbot_330_rear_left",
+            "rear_right": "vzbot_330_rear_right",
+            "front_left": "vzbot_330_2wd_front_left",
+            "front_right": "vzbot_330_2wd_front_right",
+            "xy_left": "vzbot_330_xy_left",
+            "xy_right": "vzbot_330_xy_right",
+        },
+        "kit_settings": {
+            "drive_mode": "2wd",
+            "belt_routing": "stock_corexy",
+            "bracket_material": "aluminum_6061_t6",
+            "double_shear_pulleys": True,
+            "x_rail_profile": "mgn9_rail",
+            "y_rail_profile": "mgn12_rail",
+            "x_rail_mount": "top",
+            "y_rail_mount": "inner",
+            "rail_block_type": "H",
+            "belt_type": "gt2_6mm",
+            "belt_pretension_n": 22.0,
+            "carriage_mass_g": 194.0,
+            "idler_axial_preload": "none",
+            "z_joint_material_flying": "printed",
+            "sibling_awd_kit": "vzbot_330_awd",
+        },
+    },
+    "procedural": {
+        "id": "procedural",
+        "name": "Custom / Procedural DIY Hardware",
+        "short_name": "Custom DIY",
+        "description": "Use lightweight procedural 3D hardware meshes and analytical bracket stiffness scaling without locking to a commercial CAD gantry kit.",
+        "default_bracket_material": "abs_printed",
+        "drive_mode": "auto",
+        "source": "PrintSim parametric geometry",
+        "stations": {},
+        "kit_settings": None,
     },
 }
 
@@ -2059,6 +2530,13 @@ class FrameSpec(BaseModel):
         description="Material ID for enclosure/structural panels (acrylic_pmma, polycarbonate, acm_dibond, aluminum_5052_sheet, carbon_fiber_plate)",
     )
     panel_thickness_mm: float = Field(3.0, ge=1.0, le=12.0, description="Panel sheet thickness (mm)")
+    side_panel_material: str | None = Field(
+        None,
+        description=(
+            "Optional left/right side-panel sheet material when it differs from panel_material "
+            "(e.g. VzBot 3 mm aluminium rear + polycarbonate sides); None = same as panel_material"
+        ),
+    )
     bolt_panels_to_gantry: bool = Field(
         True,
         description="On non-flying-gantry CoreXY machines, bolt structural panels directly to fixed Y-rail & rear gantry beams",
@@ -2068,6 +2546,14 @@ class FrameSpec(BaseModel):
         ge=25.0,
         le=300.0,
         description="Vertical distance from top frame extrusion down to the XY gantry plane (mm); 55 mm stock Voron, 80-200 mm for tall toolheads or integrated tophat",
+    )
+    gantry_on_top_frame: bool = Field(
+        False,
+        description=(
+            "Fixed-gantry CoreXY whose Y rails bolt directly to the top-perimeter Y extrusions "
+            "(VzBot 330/235 inner-face MGN12): the XY gantry plane IS the top frame ring, so no "
+            "separate gantry ring or stub columns are built and gantry_top_clearance_mm is ignored"
+        ),
     )
     trident_backbone: bool = Field(
         False,
@@ -2091,7 +2577,27 @@ class FrameSpec(BaseModel):
     )
     feet_type: FrameFeetType = Field(
         "rigid_bolted",
-        description="Benchtop foot mounting compliance: rigid_bolted, rubber_feet, anti_vib_pads, or paver_on_foam",
+        description="Benchtop foot mounting compliance: rigid_bolted, rubber_feet, anti_vib_pads, paver_on_foam, or suspended_lines (hanging from overhead rope / high-test line)",
+    )
+    suspension_line: SuspensionLineType = Field(
+        "paracord_550",
+        description="Line material when feet_type = suspended_lines: paracord_550, uhmwpe_braid_200lb (high-test line), nylon_mono_100lb, steel_cable_1_5mm, or bungee_cord_6mm",
+    )
+    suspension_length_mm: float = Field(
+        600.0,
+        ge=50.0,
+        le=5000.0,
+        description="Free line length from the overhead anchor down to each top frame corner when feet_type = suspended_lines (mm); sets the pendulum sway frequency (1/2pi)*sqrt(g/L)",
+    )
+    ballast_mass_kg: float = Field(
+        0.0,
+        ge=0.0,
+        le=200.0,
+        description="Extra dead weight rigidly fastened to the frame (kg): steel plate, spool on top, sandbags, bolted slab",
+    )
+    ballast_location: FrameBallastLocationType = Field(
+        "base",
+        description="Where frame.ballast_mass_kg is carried: base (bottom frame corners), top (top frame corners), or distributed (all frame corners)",
     )
     chamber_temp_c: float = Field(
         25.0, ge=15.0, le=120.0, description="Ambient/heated enclosure chamber air temperature (C)"
@@ -2127,6 +2633,18 @@ class BeltSpec(BaseModel):
     pulley_teeth: int = Field(20, ge=12, le=48)
     pitch_mm: float = Field(2.0, gt=0)
     pretension_n: float = Field(25.0, gt=0, le=400.0)
+    pretension_set_temp_c: float | None = Field(
+        None,
+        ge=0.0,
+        le=120.0,
+        description="Frame temperature at which pretension_n was set or plucked (C). None = pretension_n already is the operating tension at frame.chamber_temp_c; set e.g. 22 to model the tension rise of a cold-tensioned belt in a heated chamber (frame CTE > cord CTE)",
+    )
+    tension_mismatch_pct: float = Field(
+        0.0,
+        ge=0.0,
+        le=80.0,
+        description="CoreXY A/B belt tension difference as a percentage of the mean tension (belt A = mean x (1 + p/200), belt B = mean x (1 - p/200)); couples X and Y resonances into a double peak",
+    )
     wrap_angle_deg: float = Field(180.0, ge=60.0, le=240.0)
     idler_shaft_diameter_mm: float = Field(5.0, ge=3.0, le=12.0)
     back_idler_diameter_mm: float | None = Field(
@@ -2308,6 +2826,10 @@ class CustomBracketOverride(BaseModel):
 class GantrySpec(BaseModel):
     """X/Y gantry beam, rails, drive architecture (2WD/AWD), and belt parameters."""
 
+    hardware_kit: GantryHardwareKitType = Field(
+        "auto",
+        description="CAD-backed CoreXY gantry hardware kit: auto, voron_stock_printed, ldo_voron_kit, siboor_cnc_awd, siboor_cnc_2wd, monolith_ldo_cnc_awd, monolith_ldo_cnc_2wd, vzbot_330_awd, vzbot_330_2wd, or procedural",
+    )
     drive_mode: DriveModeType = Field(
         "2wd", description="XY drive layout: 2wd (2-motor CoreXY) or awd (4-motor All-Wheel Drive)"
     )
@@ -2424,6 +2946,23 @@ class GantrySpec(BaseModel):
         if self.idler_axial_preload == "auto":
             return "disc_spring_m5" if self.belt_routing == "monolith_short" else "none"
         return self.idler_axial_preload
+
+    def effective_hardware_kit(self, architecture: str = "corexy") -> str:
+        """Resolve 'auto' CAD gantry hardware kit from architecture, belt routing, drive mode, and bracket material."""
+        if self.hardware_kit != "auto":
+            return self.hardware_kit
+        if architecture != "corexy":
+            return "procedural"
+        if self.belt_routing == "monolith_short":
+            return "monolith_ldo_cnc_awd" if self.drive_mode == "awd" else "monolith_ldo_cnc_2wd"
+        if self.bracket_material in (
+            "aluminum_6061_t6",
+            "aluminum_7075_t6",
+            "slm_aluminum",
+            "slm_titanium",
+        ):
+            return "siboor_cnc_awd" if self.drive_mode == "awd" else "siboor_cnc_2wd"
+        return "voron_stock_printed"
 
 
 class StepperSpec(BaseModel):
@@ -2682,6 +3221,26 @@ STEPPER_CATALOG: dict[str, dict] = {
         "insulation_class": "H",
         "has_encoder": False,
         "unit_cost_usd": 28.0,
+    },
+    "ldo_2804ac": {
+        # VzBot 330 BOM "Stepper X/Y Option 1: LDO Super Motor 42STH48 2804AC-R" (48 V + external
+        # TMC5160). No public AC-suffix datasheet: winding (2.8 A, 0.7 ohm, 0.6 mH, 0.42 N*m) is the
+        # documented 2804AH Super Power winding; the AC suffix is the standard Class B insulation build.
+        "preset_id": "ldo_2804ac",
+        "name": "LDO 42STH48-2804AC-R (48mm 1.8° Super Power 0.6mH, Class B)",
+        "holding_torque_nm": 0.42,
+        "rated_current_a": 2.8,
+        "run_current_a": 1.9,
+        "phase_resistance_ohm": 0.7,
+        "inductance_mh": 0.6,
+        "rotor_inertia_kg_m2": 8.45e-6,
+        "motor_mass_g": 350.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 26.0,
     },
     "kraken_motor_v2": {
         "preset_id": "kraken_motor_v2",
@@ -3178,6 +3737,15 @@ class ToolheadSpec(BaseModel):
         ),
     )
     envelope_mm: tuple[float, float, float] = (68.0, 74.0, 95.0)
+    offset_datum_rail_mount: Literal["front", "top"] = Field(
+        "front",
+        description=(
+            "X-rail mounting the cog_offset_mm / nozzle_offset_mm were measured on, relative to the "
+            "X-beam axis: front (all front-carriage presets) or top (top-mounted rail, e.g. VzBot "
+            "Vz-Printhead on MGN9H). The builder only applies its top/bottom-mount datum shift when "
+            "gantry.x_rail_mount differs from this datum."
+        ),
+    )
     cpap_blower_id: CpapBlowerType = Field(
         "none",
         description="Remote CPAP part-cooling blower: none (onboard fans), ws7040_24v (5.8 dm3/s), wm9290_24v (9.2 dm3/s), or wm7575_220vac (11.6 dm3/s)",
@@ -3220,105 +3788,117 @@ class ToolheadSpec(BaseModel):
         return self.hotend_mount_material or self.mount_material
 
 
-# NOTE: total_mass_g specifies toolhead housing + extruder + cooling shroud mass EXCLUDING the hotend
-# (_effective_toolhead_mass_kg adds hotend.mass_g, matching DesignPanel.tsx and ToolheadSpec).
+# NOTE: total_mass_g specifies complete on-rail toolhead mass EXCLUDING the hotend, INCLUDING the 54 g
+# baseline HIWIN MGN12H carriage block (48.3 g LDO on Monolith/MBT/El Fuego), extruder + motor,
+# heatsink fan, part-cooling fans/CPAP duct, probe, housing & fasteners (_effective_toolhead_mass_kg
+# adds hotend.mass_g + rail-block delta vs 54 g, matching DesignToolheadSection.tsx and ToolheadSpec).
+# cog_offset_mm and nozzle_offset_mm are standardized to the MGN12H rail carriage center (+X right,
+# -Y front toward build plate, +Z up / -Z down).
 TOOLHEAD_PRESETS: dict[str, dict] = {
     "stealthburner": {
         "preset_id": "stealthburner",
         "name": "Voron StealthBurner + CW2",
-        "total_mass_g": 365.0,
-        "cog_offset_mm": [0.0, -22.0, -28.0],
-        "nozzle_offset_mm": [0.0, -26.0, -66.0],
+        "total_mass_g": 398.0,
+        "cog_offset_mm": [0.0, -24.0, 16.0],
+        "nozzle_offset_mm": [0.0, -34.0, -60.0],
         "mount_material": "abs_printed",
         "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 350.0,
         "z_probe_type": "static_eddy",
         "default_hardware_summary": (
-            "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, "
-            "5015 + 4010 fans, MGN12H carriage & static eddy probe (hotend added separately)."
+            "Official Stealthburner_CW2.5 STEP (198 cm³ ABS ~158 g) + LDO-36STH20 (85 g) + BMG (26 g) + "
+            "5015/4010 fans (42 g) + HIWIN MGN12H carriage (54 g) + PCB/LEDs/hardware (~33 g) = 398 g on-rail "
+            "excl. hotend (444 g w/ Dragon HF; CW2 motor pulls CoG to Z +16 mm)."
         ),
     },
     "stealthburner_tap": {
         "preset_id": "stealthburner_tap",
         "name": "Voron StealthBurner + Printed Tap",
-        "total_mass_g": 385.0,
-        "cog_offset_mm": [0.0, -22.0, -28.0],
-        "nozzle_offset_mm": [0.0, -26.0, -66.0],
+        "total_mass_g": 438.0,
+        "cog_offset_mm": [0.0, -24.0, 14.0],
+        "nozzle_offset_mm": [0.0, -34.0, -60.0],
         "mount_material": "abs_printed",
         "body_construction": "multi_piece_clamshell",
         "internal_stiffness_n_per_mm": 350.0,
         "z_probe_type": "printed_tap",
         "default_hardware_summary": (
-            "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, "
-            "5015 + 4010 fans & Printed Voron Tap carriage (hotend added separately)."
+            "StealthBurner + CW2 with Printed Voron Tap carriage (+40 g net over stock X-carriage for 50 mm "
+            "MGN9H rail/block, PCB & magnets; -8.5 mm additional Y shift applied by printed_tap) = 438 g on-rail "
+            "excl. hotend (484 g w/ Dragon HF)."
         ),
     },
     "xol_compact": {
         "preset_id": "xol_compact",
-        "name": "XOL / A4T Compact Dual-5015",
-        "total_mass_g": 235.0,
-        "cog_offset_mm": [0.0, -15.0, -18.0],
-        "nozzle_offset_mm": [0.0, -18.0, -54.0],
+        "name": "XOL 2 Compact Dual-4010",
+        "total_mass_g": 278.0,
+        "cog_offset_mm": [0.0, -18.0, 10.0],
+        "nozzle_offset_mm": [0.0, -29.0, -49.5],
         "mount_material": "pa12_cf_printed",
         "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 650.0,
         "z_probe_type": "static_eddy",
         "default_hardware_summary": (
-            "Sherpa Mini direct-drive extruder + NEMA14 pancake, PA12-CF cage, "
-            "dual cooling blowers, MGN12H carriage & static eddy probe (hotend added separately)."
+            "Official Xol Assembly STEP (60.4 cm³ ASA ~51 g) + Sherpa Mini w/ 36STH20 (115 g) + "
+            "2×4010 blowers & 2510 fan (36.4 g) + HIWIN MGN12H carriage (54 g) + EBB36/probe/hardware (~22 g) = "
+            "278 g on-rail excl. hotend (328 g w/ Rapido HF; ~274 g off-rail)."
         ),
     },
     "a4t_beacon": {
         "preset_id": "a4t_beacon",
-        "name": "A4T / XOL 2 + Static Beacon",
-        "total_mass_g": 215.0,
-        "cog_offset_mm": [0.0, -13.0, -15.0],
-        "nozzle_offset_mm": [0.0, -16.0, -52.0],
+        "name": "A4T + WW-BMG/WWG2 + Static Beacon",
+        "total_mass_g": 298.0,
+        "cog_offset_mm": [0.0, -19.0, 8.0],
+        "nozzle_offset_mm": [0.0, -28.0, -50.0],
         "mount_material": "ppa_cf_printed",
         "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 1150.0,
         "z_probe_type": "static_eddy",
         "default_hardware_summary": (
-            "Wristwatch G2 / compact direct-drive extruder + NEMA14 pancake, PPA-CF cage, "
-            "dual blowers, MGN12H carriage & static Beacon probe (hotend added separately)."
+            "Official A4T Cowling + HE Duct + Xol Carriage STEPs (71.8 cm³ ~60 g ASA) + WW-BMG/WWG2 (~134 g) + "
+            "2×4010 blowers & Delta 2510 (36.4 g) + HIWIN MGN12H carriage (54 g) + Beacon/LEDs/hardware (~13 g) = "
+            "298 g on-rail excl. hotend (344 g w/ Dragon HF; ~290 g off-rail)."
         ),
     },
     "dragon_burner": {
         "preset_id": "dragon_burner",
-        "name": "Dragon Burner / Rapid Burner Compact",
-        "total_mass_g": 195.0,
-        "cog_offset_mm": [0.0, -14.0, -16.0],
-        "nozzle_offset_mm": [0.0, -16.0, -50.0],
+        "name": "Dragon Burner V8 (Orbiter 2 + Dual-4010)",
+        "total_mass_g": 272.0,
+        "cog_offset_mm": [0.0, -14.0, 4.5],
+        "nozzle_offset_mm": [0.0, -20.0, -50.0],
         "mount_material": "pa12_cf_printed",
         "body_construction": "compact_cage",
         "internal_stiffness_n_per_mm": 720.0,
         "z_probe_type": "static_eddy",
         "default_hardware_summary": (
-            "Orbiter 2 / Sherpa compact direct-drive extruder, PA12-CF shroud, "
-            "dual 4010 blowers, MGN12H carriage & static eddy probe (hotend added separately)."
+            "Official Dragon_Burner_v0.2_v8 STEP (27.7 cm³ core + ~18 cm³ MGN12H carriage = 37.5 g ABS) + "
+            "Orbiter v2.0 (135 g) + 2×4010 blowers & 3010 fan (32 g) + HIWIN MGN12H carriage (54 g) + "
+            "Beacon/hardware (~13.5 g) = 272 g on-rail excl. hotend (318 g w/ Dragon HF; ~264 g off-rail)."
         ),
     },
     "archetype_cpap": {
         "preset_id": "archetype_cpap",
-        "name": "Archetype CPAP Ultra-Low CoG",
-        "total_mass_g": 175.0,
-        "cog_offset_mm": [0.0, -11.0, -12.0],
-        "nozzle_offset_mm": [0.0, -14.0, -48.0],
-        "mount_material": "aluminum_6061_t6",
-        "body_construction": "plate_sandwich_cf",
-        "internal_stiffness_n_per_mm": 1800.0,
+        "name": "Archetype Breakneck CPAP (Sherpa Micro)",
+        "total_mass_g": 248.0,
+        "cog_offset_mm": [0.0, -15.5, 12.0],
+        "nozzle_offset_mm": [0.0, -21.0, -64.0],
+        "mount_material": "ppa_cf_printed",
+        "body_construction": "compact_cage",
+        "internal_stiffness_n_per_mm": 950.0,
         "z_probe_type": "static_eddy",
+        "cpap_blower_id": "ws7040_24v",
+        "cpap_hose_id_mm": 19.0,
         "default_hardware_summary": (
-            "Lightweight direct-drive extruder (Sherpa/Orbiter-class), CF/Al plate sandwich, "
-            "remote CPAP duct (no onboard blowers), MGN12H carriage & static eddy probe (hotend added separately)."
+            "Official Archetype Public CAD STEP (Breakneck v24: 81.5 cm³ printed core/duct/rear-bar ~68.4 g) + "
+            "Sherpa Micro (105 g) + 2510 heatsink fan (6.4 g) + HIWIN MGN12H carriage (54 g) + Beacon & hardware "
+            "(~14.3 g) + remote 19 mm CPAP hose = 248 g on-rail excl. hotend (344 g w/ Goliath Air; nozzle Z -64 mm UHF / -74 mm Goliath)."
         ),
     },
     "monolith_toolhead_cpap": {
         "preset_id": "monolith_toolhead_cpap",
         "name": "Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)",
-        "total_mass_g": 143.0,
-        "cog_offset_mm": [0.0, -9.5, -1.5],
-        "nozzle_offset_mm": [0.0, -14.0, -44.0],
+        "total_mass_g": 218.0,
+        "cog_offset_mm": [0.0, -11.5, -1.5],
+        "nozzle_offset_mm": [0.0, -16.0, -52.0],
         "mount_material": "slm_aluminum",
         "body_construction": "extruder_as_chassis",
         "internal_stiffness_n_per_mm": 2400.0,
@@ -3327,8 +3907,10 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cpap_hose_id_mm": 15.0,
         "belt_plane_z_offset_mm": -1.5,
         "default_hardware_summary": (
-            "Integrated 37:1 worm-gear direct-drive extruder, SLM Al belt-coplanar CPAP chassis "
-            "(WS7040 24V, 15 mm hose), MGN12H carriage & static eddy probe (hotend added separately)."
+            "Back-solved from CloakedWayne ~750 g 300 mm build & monolith3d.xyz SLM BOM: SLM AlSi10Mg main body "
+            "w/ CPAP ducts-as-heatsink (~48 g) + exact CAD SLM Al belt clamp (6.6 g / 2.47 cm³) + SLM Ti hotend "
+            "brace (~7 g) + 37:1 worm w/ LDO-36STH17 (96 g; +15 g w/ 20 mm) + LDO MGN12H (48.3 g) + Beacon & "
+            "hardware (~12 g) = 218 g on-rail excl. hotend (270 g dressed w/ 52 g 50 mm HF hotend)."
         ),
     },
     "microwaved_bowden": {
@@ -3343,9 +3925,9 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "z_probe_type": "static_eddy",
         "extruder_type": "bowden",
         "default_hardware_summary": (
-            "Remote Bowden extruder (no onboard motor) — 130 g includes SLM Ti/Al body (43.4 g), "
-            "Ti bottom brace & shield (2.9 g), MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), "
-            "Beacon RevH & ECAS coupler (hotend added separately)."
+            "Remote Bowden extruder (no onboard motor) — 130 g on-rail includes SLM Al body (43.4 g), "
+            "Ti bottom brace & shield (2.9 g), LDO MGN12H carriage (48.3 g), Monolith SLM belt clamp (6.6 g Al / "
+            "19.7 g 316L SS), Beacon RevH & ECAS/fasteners (hotend added separately)."
         ),
     },
     "microwaved_bowden_chube": {
@@ -3360,9 +3942,9 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "z_probe_type": "static_eddy",
         "extruder_type": "bowden",
         "default_hardware_summary": (
-            "Remote Bowden extruder (no onboard motor) — 135 g includes SLM Al Chube V1 body (~56.5 g), "
-            "MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), Beacon RevH & ECAS coupler "
-            "(hotend added separately)."
+            "Remote Bowden extruder (no onboard motor) — 135 g on-rail includes SLM Al Chube V1 body (~56.5 g), "
+            "LDO MGN12H carriage (48.3 g), Monolith SLM belt clamp (6.6 g Al / 19.7 g 316L SS), Beacon RevH & "
+            "ECAS/fasteners (hotend added separately)."
         ),
     },
     "el_fuego": {
@@ -3382,14 +3964,40 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "default_hardware_summary": (
             "Sherpa Micro direct-drive extruder + NEMA14 pancake (~105 g, pulls CoG to Z +2.0 mm), "
             "3-part SLM CAD chassis (94.2 g: AlSi10Mg main body + Al belt plate + Ti extruder plate), "
-            "MGN12H carriage (48.3 g), Beacon RevH & fasteners, plus WM7575 CPAP (19 mm hose) w/ shared "
+            "LDO MGN12H carriage (48.3 g), Beacon RevH & fasteners, plus WM7575 CPAP (19 mm hose) w/ shared "
             "heatsink bleed. Hotend added separately; 3D mesh renders chassis only."
+        ),
+    },
+    "vz_printhead_cnc": {
+        "preset_id": "vz_printhead_cnc",
+        "name": "VzBot Vz-Printhead CNC (HextrudORT Low + CPAP + Beacon)",
+        "total_mass_g": 275.0,
+        # CAD-exact datums about the X-beam (CF tube) axis, measured on the top-mounted MGN9H
+        # (offset_datum_rail_mount="top": no builder top-mount shift is applied on a VzBot gantry).
+        "cog_offset_mm": [1.9, -10.3, 13.4],
+        "nozzle_offset_mm": [-0.1, -22.4, -54.2],
+        "offset_datum_rail_mount": "top",
+        "mount_material": "aluminum_6061_t6",
+        "body_construction": "plate_sandwich_cf",
+        "internal_stiffness_n_per_mm": 1200.0,
+        "z_probe_type": "static_eddy",
+        "cpap_blower_id": "ws7040_24v",
+        "cpap_hose_id_mm": 15.0,
+        "envelope_mm": [67.0, 100.0, 171.0],
+        "default_hardware_summary": (
+            "Official Vz-330_v1.2 CAD printhead stack (Vz-Printhead MGN9 cage around the 20x20 CF tube) with "
+            "real part masses: CNC 6061 Vz-Printhead plates (27 g stated) + Vz-HextrudORT Low CNC (47 g) w/ "
+            "Moons CSE14HRA1L410A NEMA14 (85 g) + CPAP lower duct & 15 mm rear sliding mount (~26 g) + Goliath "
+            "2510 shroud & fan (9 g) + Beacon (7 g) + X endstop, cable holder, belt clips & fasteners (~20 g) = "
+            "247 g on-rail with the 26 g MGN9H block (275 g in the 54 g MGN12H-baseline convention) excl. "
+            "hotend; 343 g dressed w/ 96 g Goliath Air. Extruder sits above the top-mounted MGN9H, so the "
+            "assembled CoG is +13.4 mm above / -10.3 mm in front of the tube axis; nozzle -54.2 mm below."
         ),
     },
     "heavy_uhf_long": {
         "preset_id": "heavy_uhf_long",
         "name": "Heavy Long-Nozzle UHF Toolhead",
-        "total_mass_g": 440.0,
+        "total_mass_g": 475.0,
         "cog_offset_mm": [0.0, -26.0, -34.0],
         "nozzle_offset_mm": [0.0, -28.0, -78.0],
         "mount_material": "abs_printed",
@@ -3397,8 +4005,8 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "internal_stiffness_n_per_mm": 250.0,
         "z_probe_type": "static_eddy",
         "default_hardware_summary": (
-            "Heavy direct-drive extruder, multi-blower UHF ABS shroud, long-nozzle drop spacer, "
-            "MGN12H carriage & static eddy probe (hotend added separately)."
+            "Worst-case heavy direct-drive extruder, multi-blower UHF ABS shroud, long-nozzle drop spacer, "
+            "MGN12H carriage (54 g) & static eddy probe = 475 g on-rail excl. hotend (hotend added separately)."
         ),
     },
 }
@@ -3591,6 +4199,17 @@ class PrinterSpec(BaseModel):
             and not self.is_flying_gantry
         )
 
+    def resolve_effective_gantry_hardware_kit(self) -> str:
+        """Resolve effective CAD gantry hardware kit ID from spec settings."""
+        return self.gantry.effective_hardware_kit(self.architecture)
+
+    def apply_gantry_hardware_kit(self, kit_id: GantryHardwareKitType) -> list[str]:
+        """Apply a gantry hardware kit and all coupled mechanical settings in place.
+
+        Returns a list of human-readable change tags describing every coupled field updated.
+        """
+        return apply_gantry_hardware_kit(self, kit_id)
+
     @model_validator(mode="after")
     def _validate_build_fits_frame(self) -> "PrinterSpec":
         # Warn/enforce only absurd negative clearances; collision engine handles fine clearances
@@ -3615,3 +4234,100 @@ class PrinterSpec(BaseModel):
 
     def save_yaml(self, path: str | Path) -> None:
         Path(path).write_text(self.to_yaml(), encoding="utf-8")
+
+
+def apply_gantry_hardware_kit(
+    spec: PrinterSpec,
+    kit_id: GantryHardwareKitType,
+) -> list[str]:
+    """Switch ``spec.gantry.hardware_kit`` to ``kit_id`` and sync all coupled kit settings.
+
+    Upgrading or swapping a gantry kit (e.g. from ``siboor_cnc_awd`` or ``ldo_voron_kit``
+    to ``monolith_ldo_cnc_awd``) automatically updates every physical setting that ships
+    with that gantry package: drive mode (2WD/AWD), belt routing, bracket material,
+    double-shear pulleys, X/Y rail type & mount orientation, rail block class, belt width &
+    recommended tension, XY-joint carriage mass, axial bearing preload, and (on flying
+    gantries) V2.4 Z-joint hardware. Stale bracket/belt-routing model overrides are cleared.
+    """
+    spec.gantry.hardware_kit = kit_id
+    kit_meta = GANTRY_HARDWARE_KIT_CATALOG.get(kit_id)
+    if not kit_meta:
+        return []
+    settings = kit_meta.get("kit_settings")
+    if not isinstance(settings, dict):
+        return []
+
+    changes: list[str] = []
+    g = spec.gantry
+
+    if "drive_mode" in settings and g.drive_mode != settings["drive_mode"]:
+        g.drive_mode = settings["drive_mode"]
+        changes.append("AWD (4-Motor)" if g.drive_mode == "awd" else "2WD (2-Motor)")
+
+    if "belt_routing" in settings and g.belt_routing != settings["belt_routing"]:
+        g.belt_routing = settings["belt_routing"]
+        changes.append(
+            "Monolith Short Path" if g.belt_routing == "monolith_short" else "Stock CoreXY Path"
+        )
+        spec.model_overrides.belt_routing = BeltRoutingOverride()
+
+    if "bracket_material" in settings and g.bracket_material != settings["bracket_material"]:
+        g.bracket_material = settings["bracket_material"]
+        bkt = GANTRY_BRACKET_CATALOG.get(g.bracket_material, {})
+        changes.append(str(bkt.get("short_name") or g.bracket_material))
+        spec.model_overrides.gantry_bracket = GantryBracketOverride()
+
+    if "double_shear_pulleys" in settings:
+        ds = bool(settings["double_shear_pulleys"])
+        if g.double_shear_pulleys != ds:
+            g.double_shear_pulleys = ds
+            changes.append("Double-Shear" if ds else "Single-Shear")
+
+    rail_changed = False
+    if "x_rail_profile" in settings and g.x_rail_profile != settings["x_rail_profile"]:
+        g.x_rail_profile = settings["x_rail_profile"]
+        rail_changed = True
+    if "y_rail_profile" in settings and g.y_rail_profile != settings["y_rail_profile"]:
+        g.y_rail_profile = settings["y_rail_profile"]
+        rail_changed = True
+    if "x_rail_mount" in settings and g.x_rail_mount != settings["x_rail_mount"]:
+        g.x_rail_mount = settings["x_rail_mount"]
+        if g.x_rail_mount != "dual_top_bottom":
+            g.dual_x_rails = False
+        rail_changed = True
+    if "y_rail_mount" in settings and g.y_rail_mount != settings["y_rail_mount"]:
+        g.y_rail_mount = settings["y_rail_mount"]
+        rail_changed = True
+    if "rail_block_type" in settings and g.rail_block_type != settings["rail_block_type"]:
+        g.rail_block_type = settings["rail_block_type"]
+        rail_changed = True
+    if rail_changed:
+        y_short = g.y_rail_profile.replace("_rail", "").upper()
+        changes.append(f"{g.y_rail_mount.title()} {y_short}{g.rail_block_type} Y-Rails")
+
+    belt_changed = False
+    if "belt_type" in settings and g.belt.type != settings["belt_type"]:
+        g.belt.type = settings["belt_type"]
+        belt_changed = True
+    if "belt_pretension_n" in settings and abs(g.belt.pretension_n - float(settings["belt_pretension_n"])) > 0.1:
+        g.belt.pretension_n = float(settings["belt_pretension_n"])
+        belt_changed = True
+    if belt_changed:
+        width_lbl = g.belt.type.replace("gt2_", "").replace("_", " ").upper()
+        changes.append(f"{width_lbl} @ {int(round(g.belt.pretension_n))} N")
+
+    if "carriage_mass_g" in settings and abs(g.carriage_mass_g - float(settings["carriage_mass_g"])) > 0.1:
+        g.carriage_mass_g = float(settings["carriage_mass_g"])
+
+    if "idler_axial_preload" in settings and g.idler_axial_preload != settings["idler_axial_preload"]:
+        g.idler_axial_preload = settings["idler_axial_preload"]
+        if g.idler_axial_preload == "disc_spring_m5":
+            changes.append("M5 Disc Springs")
+
+    if spec.is_flying_gantry and "z_joint_material_flying" in settings:
+        zm = settings["z_joint_material_flying"]
+        if g.z_joint_material != zm:
+            g.z_joint_material = zm
+            changes.append("Milled V2 Z-Joints" if zm == "milled" else f"{zm.title()} Z-Joints")
+
+    return changes

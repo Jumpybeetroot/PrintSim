@@ -304,7 +304,7 @@ def test_toolhead_belt_plane_cog_warning_stealthburner_vs_monolith() -> None:
     spec_mono = _load_preset("monolith_zero_m0.yaml")
     ev_mono = evaluate_printer(spec_mono)
     assert ev_mono.thermal_structural.toolhead_belt_cog_z_offset_mm == pytest.approx(0.0, abs=1e-6)
-    assert ev_mono.thermal_structural.toolhead_nozzle_y_lever_mm == pytest.approx(14.0, abs=1e-6)
+    assert ev_mono.thermal_structural.toolhead_nozzle_y_lever_mm == pytest.approx(16.0, abs=1e-6)
     assert ev_mono.thermal_structural.toolhead_x_roll_warning is False
 
 

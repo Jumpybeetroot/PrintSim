@@ -14,7 +14,12 @@ from printsim.schema import get_material
 
 ASSETS_ROOT: Path = Path(__file__).resolve().parent.parent / "assets" / "hardware"
 
-_DEFAULT_CATEGORIES: tuple[str, ...] = ("hotends", "toolheads", "assemblies", "gantry_brackets")
+_DEFAULT_CATEGORIES: tuple[str, ...] = (
+    "hotends",
+    "toolheads",
+    "assemblies",
+    "gantry_brackets",
+)
 
 
 @dataclass
@@ -52,11 +57,13 @@ class _RawCachedAsset:
 
 
 _ASSET_CACHE: dict[tuple[str, str], _RawCachedAsset] = {}
+_VISUAL_MANIFEST_CACHE: dict[tuple[str, str], tuple[dict[str, Any], Path]] = {}
 
 
 def clear_asset_cache() -> None:
-    """Clear the in-memory hardware superelement cache (useful after re-baking assets)."""
+    """Clear the in-memory hardware superelement & visual manifest caches (useful after re-baking)."""
     _ASSET_CACHE.clear()
+    _VISUAL_MANIFEST_CACHE.clear()
 
 
 def _asset_dir(category: str, asset_id: str | None) -> Path | None:
@@ -75,10 +82,41 @@ def _manifest_with_visual_url(
     manifest: dict[str, Any],
     category: str,
     asset_id: str,
+    *,
+    has_superelement: bool | None = None,
 ) -> dict[str, Any]:
     out = dict(manifest)
     out["visual_url"] = f"/api/assets/hardware/{category}/{asset_id}/visual.glb"
+    if has_superelement is not None:
+        out["has_superelement"] = bool(has_superelement)
     return out
+
+
+def _read_visual_only_manifest(
+    category: str, asset_id: str
+) -> tuple[dict[str, Any], Path] | None:
+    """Read a lightweight visual-only bundle (``manifest.json`` + ``visual.glb`` without ``superelement.npz``)."""
+    key = (category, asset_id)
+    cached = _VISUAL_MANIFEST_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    adir = _asset_dir(category, asset_id)
+    if adir is None:
+        return None
+    manifest_path = adir / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    glb_name = str(manifest.get("visual_glb") or "visual.glb")
+    glb_path = adir / glb_name
+    if not glb_path.is_file():
+        return None
+
+    entry = (manifest, glb_path)
+    _VISUAL_MANIFEST_CACHE[key] = entry
+    return entry
 
 
 def _read_raw_bundle(category: str, asset_id: str) -> _RawCachedAsset | None:
@@ -139,28 +177,50 @@ def has_hardware_asset(category: str, asset_id: str | None) -> bool:
     return (adir / "manifest.json").is_file() and (adir / "superelement.npz").is_file()
 
 
+def has_visual_asset(category: str, asset_id: str | None) -> bool:
+    """Return True if a baked ``visual.glb`` exists for ``(category, asset_id)``."""
+    adir = _asset_dir(category, asset_id)
+    if adir is None:
+        return False
+    if (adir / "visual.glb").is_file():
+        return True
+    return get_visual_glb_path(category, asset_id) is not None
+
+
 def get_hardware_asset_manifest(category: str, asset_id: str | None) -> dict[str, Any] | None:
-    """Return a copy of the baked ``manifest.json`` (with ``visual_url``) or ``None``."""
+    """Return a copy of the baked ``manifest.json`` (with ``visual_url`` and ``has_superelement``) or ``None``."""
     if not asset_id:
         return None
-    raw = _read_raw_bundle(category, str(asset_id))
-    if raw is None:
-        return None
-    return _manifest_with_visual_url(raw.manifest, category, str(asset_id))
+    aid = str(asset_id)
+    raw = _read_raw_bundle(category, aid)
+    if raw is not None:
+        return _manifest_with_visual_url(raw.manifest, category, aid, has_superelement=True)
+    vis = _read_visual_only_manifest(category, aid)
+    if vis is not None:
+        return _manifest_with_visual_url(vis[0], category, aid, has_superelement=False)
+    return None
 
 
 def get_visual_glb_path(category: str, asset_id: str | None) -> Path | None:
-    """Return the path to ``visual.glb`` for ``(category, asset_id)`` if present."""
+    """Return the path to ``visual.glb`` for ``(category, asset_id)`` if present (supports visual-only bundles)."""
     if not asset_id:
         return None
-    raw = _read_raw_bundle(category, str(asset_id))
-    if raw is None:
+    aid = str(asset_id)
+    adir = _asset_dir(category, aid)
+    if adir is None:
         return None
-    return raw.visual_glb_path
+    cached_raw = _ASSET_CACHE.get((category, aid))
+    if cached_raw is not None:
+        return cached_raw.visual_glb_path
+    vis = _read_visual_only_manifest(category, aid)
+    if vis is not None:
+        return vis[1]
+    default_glb = adir / "visual.glb"
+    return default_glb if default_glb.is_file() else None
 
 
 def list_hardware_assets() -> dict[str, dict[str, dict[str, Any]]]:
-    """Discover all baked CAD hardware assets grouped by category (always includes hotends, toolheads, assemblies, gantry_brackets)."""
+    """Discover all baked CAD hardware assets (superelements and visual-only bundles) grouped by category."""
     catalog: dict[str, dict[str, dict[str, Any]]] = {cat: {} for cat in _DEFAULT_CATEGORIES}
     if not ASSETS_ROOT.is_dir():
         return catalog
@@ -172,7 +232,15 @@ def list_hardware_assets() -> dict[str, dict[str, dict[str, Any]]]:
             aid = asset_dir.name
             raw = _read_raw_bundle(cat_name, aid)
             if raw is not None:
-                bucket[aid] = _manifest_with_visual_url(raw.manifest, cat_name, aid)
+                bucket[aid] = _manifest_with_visual_url(
+                    raw.manifest, cat_name, aid, has_superelement=True
+                )
+            else:
+                vis = _read_visual_only_manifest(cat_name, aid)
+                if vis is not None:
+                    bucket[aid] = _manifest_with_visual_url(
+                        vis[0], cat_name, aid, has_superelement=False
+                    )
     return catalog
 
 

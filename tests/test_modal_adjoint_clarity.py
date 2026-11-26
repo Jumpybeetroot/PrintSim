@@ -119,11 +119,12 @@ def test_corexy_voron_style_modal_and_four_lens_sensitivity_clarity() -> None:
 def test_soft_heavy_toolhead_whip_vs_stiff_cnc_compact_toolhead() -> None:
     """Soft/heavy UHF ABS toolhead vs stiff CNC Al compact toolhead shows unmistakable modal & ROI shift."""
     base = PrinterSpec.from_yaml("examples/corexy_voron_style.yaml")
-    # Use bolted structural panels so outer-frame racking doesn't mask the soft-vs-stiff toolhead comparison
+    # Use bolted structural panels & CNC gantry brackets so outer-frame/XY-joint compliance doesn't mask toolhead whip
     base.frame.enclosed_panels = True
     base.frame.panel_mounting = "bolted_structural"
     base.frame.panel_material = "acm_dibond"
     base.frame.panel_thickness_mm = 4.0
+    base.gantry.bracket_material = "aluminum_6061_t6"
 
     soft = base.model_copy(deep=True)
     heavy = TOOLHEAD_PRESETS["heavy_uhf_long"]

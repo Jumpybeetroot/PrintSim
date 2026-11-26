@@ -738,6 +738,11 @@ brackets, and what the composite score and Pareto objectives actually measure.
   Only active when `feet_type != rigid_bolted`; no example uses it.
 - **Fix:** take frequencies from the feet-sprung FE model, weighting modes by nozzle-to-bed
   receptance.
+- **Status (2026-11-26):** resolved. The series rocking-compliance term is gone; mount rigid-body
+  modes now couple to each drive axis through their FE modal receptance (inertia relief of the
+  static compliance plus two-body reduced mass, `solve_mount_coupled_axis` in `fea/modal.py`).
+  Compliant mounts move the effective frequency by a few percent, upward when the frame recoils
+  as a free body. See `docs/physics/07_mounting_and_belt_refinements.md`.
 
 ### B-15 — Stepper ballbar "radial lag" is ~90% a hard-coded 11 ms
 - **Where:** `src/printsim/gcode/ballbar.py:388-390`
@@ -1010,7 +1015,7 @@ D-01 through D-06 were verified against manufacturer datasheets / DSC / laminate
 
 | ID | Where | Current | Verified reference | Status | Notes |
 |---|---|---|---|---|---|
-| D-01 | `schema/printer.py:134` & `kinematics/solvers.py:431` | **Fixed:** decomposed into `ea_static_n` (`18.9 / 28.35 / 37.8 kN` Gates 2GT; `80 kN` AT3 steel) × `dynamic_stiffening_factor` (`2.0` EPDM/fiberglass; `1.0` steel) + exact pulley-to-pulley free spans `(u_rel, v_rel)` | Gates 2M GT2: ~80 kN/in → **18.9 kN** linear static; Elatech AT3 10 mm `C_spez` = **80 kN** | **FIXED / DATASHEET-VERIFIED** | `gt2_9mm` dynamic EA (`56.7 kN`) sits strictly below steel-cord `at3_10mm` (`80 kN`); exact inner pulley-to-pulley spans `(W_p, D_p)` + Rayleigh rotor inertia on `k_motor` match Voron 2.4/Trident/Monolith/VzBot/Delta ADXL touchstones without inflating `EA`. |
+| D-01 | `schema/printer.py:134` & `kinematics/solvers.py:431` | **Fixed:** decomposed into `ea_static_n` (`18.9 / 28.35 / 37.8 kN` Gates 2GT, later corrected to the Gates Table 6 values `16.9 / 25.5 / 34.0 kN` with the dynamic ratio fitted to controlled measurements, `2.0 → 1.85`; `80 kN` AT3 steel) × `dynamic_stiffening_factor` (`2.0` EPDM/fiberglass; `1.0` steel) + exact pulley-to-pulley free spans `(u_rel, v_rel)` | Gates 2M GT2: ~80 kN/in → **18.9 kN** linear static; Elatech AT3 10 mm `C_spez` = **80 kN** | **FIXED / DATASHEET-VERIFIED** | `gt2_9mm` dynamic EA (`56.7 kN`) sits strictly below steel-cord `at3_10mm` (`80 kN`); exact inner pulley-to-pulley spans `(W_p, D_p)` + Rayleigh rotor inertia on `k_motor` match Voron 2.4/Trident/Monolith/VzBot/Delta ADXL touchstones without inflating `EA`. |
 | D-02 | `schema/materials.py:151-165` (`carbon_fiber_tube`, also `carbon_fiber_high_tg`) | "0/90 Roll-Wrapped", E = 115 GPa, G = 18 GPa | 0/90 CF/epoxy laminate effective `G_xy` ≈ **3.5–6.0 GPa** (4.0–5.5 GPa ply level); 18 GPa requires substantial ±45 content, pulling E to ~60–70 GPa | **DATASHEET-VERIFIED** | GJ of CF gantry beams over-stated about 3–4×; affects toolhead-offset twist modes. |
 | D-03 | `schema/profiles.py:191-199` | MGN9 0.32, MGN15 0.92 kg/m | HIWIN MGN catalog: **MGN7 0.22, MGN9 0.38, MGN12 0.65, MGN15 1.06 kg/m** | **DATASHEET-VERIFIED** | MGN9 ~16% low, MGN15 ~13% low, MGN12 right. **Pinned by `tests/test_calibration_touchstones.py:33-44`.** Iy, Iz, J are still those of the full solid rectangle. |
 | D-04 | `schema/profiles.py:107-110` | "Misumi HFS5-2020", A = 162 mm² (0.437 kg/m), I = 0.68 cm⁴ | Misumi HFS5-2020 datasheet: **0.50 kg/m, A = 183 mm², I = 0.742 cm⁴** | **DATASHEET-VERIFIED** | Area 11.5% low, mass 12.6% low, I 8.4% low. 2040/3030/4040 within ~10%. |

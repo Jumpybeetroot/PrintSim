@@ -73,6 +73,14 @@ def _has_confident_preset_match(build: dict[str, Any], preset_path: Path) -> boo
     if _UNMAPPED_OUTLIER_RE.search(identity) and not _CONFIDENT_VORON_COREXY_RE.search(identity):
         return False
 
+    if preset_path.stem == "vzbot_330_awd":
+        # Only VzBot 330 AWD measurements calibrate the 330 AWD preset (235-size and 2WD builds
+        # share the name but not the frame span / drive count).
+        if re.search(r"\b235\b|vz235|\b2wd\b", full_text, flags=re.IGNORECASE):
+            return False
+        if str(build.get("drive_mode") or "").strip().lower() == "2wd":
+            return False
+
     if preset_path.stem == "corexy_voron_style":
         if _UNMAPPED_OUTLIER_RE.search(full_text) and not _CONFIDENT_VORON_COREXY_RE.search(full_text):
             return False

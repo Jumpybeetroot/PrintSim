@@ -49,9 +49,9 @@ kinematics:
 toolhead:
   preset_id: custom
   name: Ultra-Light CNC/PA12-CF Toolhead
-  total_mass_g: 163
-  cog_offset_mm: [0, -12, -18]
-  nozzle_offset_mm: [0, -15, -50]
+  total_mass_g: 225
+  cog_offset_mm: [0, -14.0, 6.0]
+  nozzle_offset_mm: [0, -20.0, -48.0]
   mount_material: pa12_cf_printed
   body_construction: compact_cage
   internal_stiffness_n_per_mm: 800.0

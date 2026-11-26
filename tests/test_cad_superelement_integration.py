@@ -488,8 +488,9 @@ def test_full_pipeline_with_mock_cad_superelements_and_internal_cb_dofs(
     asm_heur = build_assembly(s_heur)
 
     # Heuristic members omitted, CAD superelements injected, exact mass conserved
-    assert len(asm_cad.superelements) == 2
-    assert {se.id for se in asm_cad.superelements} == {"toolhead_mount", "nozzle_stem"}
+    th_he_ses = [se for se in asm_cad.superelements if se.category in ("toolheads", "hotends")]
+    assert len(th_he_ses) == 2
+    assert {se.id for se in th_he_ses} == {"toolhead_mount", "nozzle_stem"}
     assert not any(m.id in ("toolhead_mount", "nozzle_stem") for m in asm_cad.members)
     assert len(asm_heur.superelements) == 0
     assert any(m.id == "toolhead_mount" for m in asm_heur.members)
@@ -508,7 +509,7 @@ def test_full_pipeline_with_mock_cad_superelements_and_internal_cb_dofs(
     assert gdict_cad["cad_toolhead_self_contained"] is True
     assert gdict_cad["cad_hotend_self_contained"] is True
     assert gdict_cad["cad_includes_backplate"] is True
-    assert len(gdict_cad["cad_superelements_active"]) == 2
+    assert len([s for s in gdict_cad["cad_superelements_active"] if s["category"] in ("toolheads", "hotends")]) == 2
     assert gdict_cad["hotend_visual_glb_url"] == "/api/assets/hardware/hotends/chube_conduction/visual.glb"
     assert gdict_cad["toolhead_visual_glb_url"] == "/api/assets/hardware/toolheads/stealthburner/visual.glb"
 
@@ -542,7 +543,7 @@ def test_full_pipeline_with_mock_cad_superelements_and_internal_cb_dofs(
     assert any(t["id"] == "toolhead_mount" for t in sen_cad.top_stiffen_targets)
 
     # Analytical adjoint & Fox-Kapoor derivatives on toolhead_mount SE match central finite difference!
-    eps = 0.005
+    eps = 0.001
     dln = math.log(1.0 + eps) - math.log(1.0 - eps)
 
     def _eval_se_scale(scale: float) -> tuple[float, float, float]:
@@ -780,7 +781,7 @@ def test_body_construction_wall_thickness_and_no_double_counting_with_cad_se(
     rep = evaluate_printer(base, include_advanced_analysis=False)
     assert rep.static_fea.combined_max_deflection_um > 0.0
     assert rep.modal_fea.fundamental_freq_hz > 10.0
-    assert len(rep.assembly.superelements) == 2
+    assert len([se for se in rep.assembly.superelements if se.category in ("toolheads", "hotends")]) == 2
 
 
 def test_solid_hex8_vpt_superelement_integration(tmp_path: Path) -> None:
@@ -871,15 +872,24 @@ def test_real_cad_assets_registry_if_present() -> None:
 
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
     for cat, aid, manifest in all_items:
+        r_glb = client.get(f"/api/assets/hardware/{cat}/{aid}/visual.glb")
+        assert r_glb.status_code == 200
+        assert r_glb.headers["content-type"].startswith("model/gltf-binary")
+
+        # Skip any visual-only bundles that intentionally omit superelement.npz
+        if manifest.get("has_superelement") is False:
+            assert load_superelement(cat, aid) is None
+            continue
+
         asset = load_superelement(cat, aid)
         assert asset is not None
         assert asset.K_bb.shape == (12, 12)
         eigs_11 = np.linalg.eigvalsh(0.5 * (asset.K_bb[6:12, 6:12] + asset.K_bb[6:12, 6:12].T))
         assert np.all(eigs_11 > 0.0), f"{cat}/{aid} K_11 not strictly SPD"
+        assert manifest.get("cad_trust_pct", 0) > 0
 
-        r_glb = client.get(f"/api/assets/hardware/{cat}/{aid}/visual.glb")
-        assert r_glb.status_code == 200
-        assert r_glb.headers["content-type"].startswith("model/gltf-binary")
+        if cat == "gantry_brackets":
+            continue
 
         s = base.model_copy(deep=True)
         if cat == "hotends":
@@ -901,7 +911,6 @@ def test_real_cad_assets_registry_if_present() -> None:
             v["compliance_share_pct"] for v in sen.panel_bay_sensitivities.values()
         )
         assert comp_sum == pytest.approx(100.0, abs=0.5)
-        assert manifest.get("cad_trust_pct", 0) > 0
 
     # Real 75k-elem microwaved_bowden CAD toolhead is self-contained (immune to generic wall/plate/construction,
     # no double-counted Stage 1 backplate, scales cleanly with titanium_grade5 <-> aluminum_6061_t6 <-> ppa_cf_printed)

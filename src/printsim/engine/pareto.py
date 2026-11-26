@@ -548,6 +548,7 @@ def _decode_candidate(
         spec.toolhead.total_mass_g = float(th_preset["total_mass_g"])
         spec.toolhead.cog_offset_mm = tuple(float(v) for v in th_preset["cog_offset_mm"])  # type: ignore[assignment]
         spec.toolhead.nozzle_offset_mm = tuple(float(v) for v in th_preset["nozzle_offset_mm"])  # type: ignore[assignment]
+        spec.toolhead.offset_datum_rail_mount = th_preset.get("offset_datum_rail_mount", "front")  # type: ignore[assignment]
         if "body_construction" in th_preset:
             spec.toolhead.body_construction = th_preset["body_construction"]  # type: ignore[assignment]
         if "z_probe_type" in th_preset:

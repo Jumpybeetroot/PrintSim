@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "monolith_2wd_front_right",
+  "name": "LDO Monolith CNC 6061 Front-Right Idler (2WD 9mm)",
+  "source_cad": "LDO_2WD_VT_9mm.step",
+  "source_url": "https://github.com/Monolith3D/LDO_Monolith_Gantry_Kits",
+  "baked_at": "2026-11-26T19:06:12Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1552,
+  "num_elements": 3775,
+  "num_dofs": 4656,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.007061,
+  "mass_kg": 0.047289,
+  "com_mm": [
+    -10.9113,
+    22.8975,
+    0.5761
+  ],
+  "port0_mm": [
+    0.0,
+    18.0,
+    0.0
+  ],
+  "port1_mm": [
+    -23.5,
+    4.5,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 59053.999,
+    "ky": 107456.599,
+    "kz": 6800.55
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1690.587,
+    "kry": 3431.541,
+    "krz": 11427.446
+  },
+  "fixed_interface_freqs_hz": [
+    1616.07,
+    2960.05,
+    5209.2,
+    7679.51,
+    10935.12,
+    11539.98
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21984,
+  "visual_bytes": 851892,
+  "cad_trust_pct": 90,
+  "source_hash": "3da9fbad93a053c76be89f4282c5d8719a46e1dad81e7cf2bace7016cce3db35"
+}

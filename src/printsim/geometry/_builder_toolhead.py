@@ -11,6 +11,7 @@ from printsim.schema import (
     HOTEND_CATALOG,
     PROFILE_CATALOG,
     TOOLHEAD_CONSTRUCTION_CATALOG,
+    TOOLHEAD_PRESETS,
     PrinterSpec,
     ProfileSpec,
     get_material,
@@ -545,6 +546,17 @@ _LEGACY_PRE_FEA_HOTEND_STIFFNESS: dict[str, tuple[float, ...]] = {
 }
 
 
+_TOOLHEAD_CAD_ASSET_ALIASES: dict[str, str] = {
+    "stealthburner_tap": "stealthburner",
+}
+
+
+def resolve_toolhead_cad_asset_id(preset_id: str | None) -> str:
+    """Resolve toolhead preset ID to its baked CAD asset ID (e.g., stealthburner_tap -> stealthburner)."""
+    pid = (preset_id or "").lower().strip()
+    return _TOOLHEAD_CAD_ASSET_ALIASES.get(pid, pid)
+
+
 def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
     """Replace heuristic toolhead/hotend links with baked CAD superelements when enabled & available."""
     from printsim.geometry import builder as _b
@@ -560,11 +572,15 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
     if base_id not in nmap or cog_id not in nmap or noz_id not in nmap:
         return
 
+    # For top-heavy direct-drive toolheads (cog_z > 0, noz_z < 0), _attach_toolhead_cog_and_nozzle
+    # introduces a rail-height T-branch junction node ("toolhead_chassis") so the hotend hangs
+    # from the lower chassis rather than from the elevated extruder CoG.
+    junction_id = "toolhead_chassis" if "toolhead_chassis" in nmap else cog_id
     p_base = nmap[base_id].position_m
-    p_cog = nmap[cog_id].position_m
+    p_junc = nmap[junction_id].position_m
     p_noz = nmap[noz_id].position_m
-    l_mount_m = 0.0 if cog_id == base_id else float(np.linalg.norm(p_cog - p_base))
-    l_stem_m = 0.0 if noz_id == cog_id else float(np.linalg.norm(p_noz - p_cog))
+    l_mount_m = 0.0 if junction_id == base_id else float(np.linalg.norm(p_junc - p_base))
+    l_stem_m = 0.0 if noz_id == junction_id else float(np.linalg.norm(p_noz - p_junc))
     props = compute_toolhead_link_props(spec, l_mount_m=l_mount_m, l_stem_m=l_stem_m)
     chamber_c = float(spec.frame.chamber_temp_c)
     updated_stage = False
@@ -573,21 +589,30 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
     # 1. Self-contained Toolhead CAD Superelement (includes backplate + body + hotend mount;
     #    replaces heuristic toolhead_mount beam and places ONLY Hertzian MGN rail carriage contact in series)
     th_pid = (spec.toolhead.preset_id or "").lower().strip()
+    th_asset_id = resolve_toolhead_cad_asset_id(th_pid)
     he_pid = (spec.toolhead.hotend.preset_id or "").lower().strip()
-    combo_id = f"{th_pid}__{he_pid}" if (th_pid and he_pid) else ""
+    combo_id = f"{th_asset_id}__{he_pid}" if (th_asset_id and he_pid) else ""
     use_bottom_brace = bool(getattr(spec.toolhead, "use_hotend_bottom_brace", True))
     will_use_braced_combo = bool(
         combo_id
         and use_bottom_brace
-        and noz_id != cog_id
+        and noz_id != junction_id
         and any(m.id == "nozzle_stem" for m in model.members)
         and _has_cad_asset("assemblies", combo_id)
     )
     if (
-        th_pid
-        and cog_id != base_id
+        th_asset_id
+        and junction_id != base_id
         and any(m.id == "toolhead_mount" for m in model.members)
     ):
+        # Guard: ToolheadSpec() defaults preset_id="stealthburner" even for legacy/synthetic
+        # configs with cog_z <= 0 (e.g. generic -25 mm CoG or heavy UHF overrides). Real
+        # StealthBurner + Clockwork 2 direct-drive assemblies have their extruder CoG above
+        # the X-rail (cog_z > 0), so only attach the StealthBurner CAD SE when cog_z > 0.
+        th_geom_matches_preset = not (
+            th_asset_id == "stealthburner" and float(spec.toolhead.cog_offset_mm[2]) <= 0.0
+        )
+
         probe_comp = float(props.get("probe_comp", 1.0))
         tc_ov = spec.model_overrides.toolhead_construction
         bc_mult = 1.0
@@ -604,15 +629,32 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                 )
 
         th_stiff_mult = max(bc_mult * probe_comp, 1e-4)
-        asset_th = _load_cad_superelement(
-            "toolheads",
-            th_pid,
-            material_id=spec.toolhead.effective_body_material,
-            chamber_temp_c=chamber_c,
-            stiffness_mult=th_stiff_mult,
-        )
+        if th_geom_matches_preset:
+            asset_th = _load_cad_superelement(
+                "toolheads",
+                th_asset_id,
+                material_id=spec.toolhead.effective_body_material,
+                chamber_temp_c=chamber_c,
+                stiffness_mult=th_stiff_mult,
+            )
         if asset_th is not None:
-            dp_asm_th = p_cog - p_base
+            # Multi-piece FDM-printed toolhead assemblies (e.g. Voron StealthBurner + CW2.5)
+            # are voxel-bonded from separate bolted STEP halves:
+            # - Printed polymers (< 25 GPa): 0.55x (40%-gyroid infill + layer-line anisotropy)
+            #   * 0.58x (multi-piece M3 heat-set clamshell seam compliance) = 0.32x.
+            # - CNC/SLM metals (>= 25 GPa): drop the FDM infill penalty but retain the 0.58x
+            #   multi-piece bolted clamshell seam compliance (not a welded one-piece monoblock).
+            eff_body_mat = get_material(spec.toolhead.effective_body_material)
+            if bool(asset_th.manifest.get("is_fdm_anisotropic", False)):
+                clamshell_mult = (
+                    0.32 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 0.58
+                )
+                asset_th.K_bb = asset_th.K_bb * clamshell_mult
+                asset_th.K_cb = asset_th.K_cb * clamshell_mult
+                asset_th.stiffness_scale_applied = (
+                    float(getattr(asset_th, "stiffness_scale_applied", 1.0)) * clamshell_mult
+                )
+            dp_asm_th = p_junc - p_base
             # Only Hertzian MGN linear rail carriage ball-raceway compliance in series
             # (do NOT double-count generic Stage 1 backplate compliance on self-contained CAD toolheads).
             C_rail_0 = np.diag(
@@ -662,7 +704,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                 c_cad_pre_scale_diag=c_pre_scale,
             )
             C_body_only = 0.5 * ((C_eff_th - C_rail_1) + (C_eff_th - C_rail_1).T)
-            dr_cog_noz = p_noz - p_cog
+            dr_cog_noz = p_noz - p_junc
             P_noz = np.hstack([np.eye(3, dtype=float), -_skew_3x3(dr_cog_noz)])
             C_body_noz = P_noz @ C_body_only @ P_noz.T
             k_body_x = 1.0 / max(float(C_body_noz[0, 0]), 1e-12)
@@ -691,12 +733,13 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                     }
                 if abs(th_mass_scale - 1.0) > 1e-6:
                     th_manifest["mass_kg"] = round(th_mass_ref, 6)
+            th_manifest["_baseline_k11_trace"] = float(np.trace(K_12_eff_th[6:9, 6:9]))
             model.superelements.append(
                 _b.AttachedSuperelement(
                     id="toolhead_mount",
                     category="toolheads",
-                    asset_id=th_pid,
-                    port_node_ids=(base_id, cog_id),
+                    asset_id=th_asset_id,
+                    port_node_ids=(base_id, junction_id),
                     K_cb=K_12_eff_th,
                     M_cb=None,
                     port_coords_cad_m=None,
@@ -707,7 +750,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                     mass_kg=th_mass_ref,
                     fixed_interface_freqs_hz=list(asset_th.fixed_interface_freqs_hz),
                     manifest=th_manifest,
-                    visual_glb_url=f"/api/assets/hardware/toolheads/{th_pid}/visual.glb",
+                    visual_glb_url=f"/api/assets/hardware/toolheads/{th_asset_id}/visual.glb",
                     cad_trust_pct=int(asset_th.manifest.get("cad_trust_pct", 90)),
                 )
             )
@@ -716,7 +759,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
     #    prefers a coupled toolhead+hotend assembly superelement when available for braced toolheads)
     if (
         he_pid
-        and noz_id != cog_id
+        and noz_id != junction_id
         and any(m.id == "nozzle_stem" for m in model.members)
     ):
         he = spec.toolhead.hotend
@@ -758,7 +801,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             )
 
         if asset_he is not None:
-            dp_asm_he = p_noz - p_cog
+            dp_asm_he = p_noz - p_junc
             dp_cad_he = asset_he.port_coords_m[1] - asset_he.port_coords_m[0]
             l_eff_he = max(
                 float(np.linalg.norm(dp_cad_he)),
@@ -855,7 +898,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                     id="nozzle_stem",
                     category=se_category,
                     asset_id=se_asset_id,
-                    port_node_ids=(cog_id, noz_id),
+                    port_node_ids=(junction_id, noz_id),
                     K_cb=K_12_eff_he,
                     M_cb=None,
                     port_coords_cad_m=None,
@@ -916,6 +959,19 @@ def _attach_toolhead_cog_and_nozzle(
 
     if spec.architecture != "delta":
         x_mount = spec.gantry.effective_x_rail_mount
+        datum = getattr(spec.toolhead, "offset_datum_rail_mount", "front")
+        if datum == "top":
+            if x_mount == "top":
+                x_mount = "datum"  # offsets already measured on a top-mounted rail: no shift
+            else:
+                # Undo the top-mount datum shift first, then apply the actual mount's shift
+                for off in (cog_offset, nozzle_offset):
+                    if off[1] < 0.0:
+                        off[1] -= 0.006
+                    elif off[1] > 0.0:
+                        off[1] += 0.006
+                    if abs(off[2]) > 1e-12:
+                        off[2] += 0.006
         if x_mount == "top":
             for off in (cog_offset, nozzle_offset):
                 if off[1] < 0.0:
@@ -944,11 +1000,43 @@ def _attach_toolhead_cog_and_nozzle(
     cog_pos = base_pos.copy() if is_zero_cog else (base_pos + cog_offset)
 
     nozzle_pos = base_pos + nozzle_offset
-    stem_vec = nozzle_pos - cog_pos
+
+    # For top-heavy direct-drive toolheads (CoG ABOVE rail Z while nozzle hangs BELOW rail Z),
+    # a 2-beam series chain (base -> +Z cog -> -Z nozzle) forms an unphysical C-shaped hairpin
+    # that stretches nozzle_stem by +cog_z and levers upper-extruder flex backwards onto the nozzle.
+    # Insert a rail-height T-branch junction ("toolhead_chassis") so toolhead_mount carries rail->chassis,
+    # nozzle_stem hangs from rail-level chassis->nozzle, and toolhead_mount_upper carries chassis->cog.
+    use_t_branch = (
+        not is_zero_cog
+        and float(cog_pos[2] - base_pos[2]) > 1e-4
+        and float(nozzle_pos[2] - base_pos[2]) < -1e-4
+    )
+    if use_t_branch:
+        chassis_pos = np.array([cog_pos[0], cog_pos[1], base_pos[2]], dtype=float)
+        chassis_xy_norm = float(np.linalg.norm(chassis_pos - base_pos))
+        is_zero_mount = chassis_xy_norm < 1e-4
+        if is_zero_mount:
+            chassis_pos = base_pos.copy()
+        junc_id = "toolhead_chassis"
+        junc_pos = chassis_pos
+        nodes.append(
+            _b.StructuralNode(
+                id=junc_id,
+                position_m=chassis_pos,
+                lumped_mass_kg=0.0,
+                role="toolhead",
+            )
+        )
+    else:
+        is_zero_mount = is_zero_cog
+        junc_id = "toolhead_cog"
+        junc_pos = cog_pos
+
+    stem_vec = nozzle_pos - junc_pos
     stem_len = float(np.linalg.norm(stem_vec))
     is_zero_stem = stem_len < 1e-4
     if is_zero_stem:
-        nozzle_pos = cog_pos.copy()
+        nozzle_pos = junc_pos.copy()
 
     nodes.append(
         _b.StructuralNode(
@@ -967,7 +1055,7 @@ def _attach_toolhead_cog_and_nozzle(
         )
     )
 
-    l_mount_m = 0.0 if is_zero_cog else float(np.linalg.norm(cog_pos - base_pos))
+    l_mount_m = 0.0 if is_zero_mount else float(np.linalg.norm(junc_pos - base_pos))
     l_stem_m = 0.0 if is_zero_stem else stem_len
     props = compute_toolhead_link_props(spec, l_mount_m=l_mount_m, l_stem_m=l_stem_m)
 
@@ -981,13 +1069,13 @@ def _attach_toolhead_cog_and_nozzle(
         }
     )
 
-    if is_zero_cog and fastener_springs is not None:
+    if is_zero_mount and fastener_springs is not None:
         fastener_springs.append(
             _b.FastenerSpring(
                 id="toolhead_cog_spring",
                 bay="toolhead",
                 shell_node_id=base_node_id,
-                frame_node_id="toolhead_cog",
+                frame_node_id=junc_id,
                 k_shear_n_m=props["k_t_spring"],
                 k_normal_n_m=props["k_t_spring"],
                 k_rot_nm_rad=props["k_r_spring"],
@@ -1014,8 +1102,34 @@ def _attach_toolhead_cog_and_nozzle(
             _b.StructuralMember(
                 id="toolhead_mount",
                 start_id=base_node_id,
-                end_id="toolhead_cog",
+                end_id=junc_id,
                 profile=mount_prof,
+                material=mount_mat,
+                role="toolhead",
+            )
+        )
+
+    if use_t_branch:
+        upper_stiff_mult = 4.0
+        upper_prof = ProfileSpec.model_construct(
+            id="toolhead_mount_profile",
+            name=(
+                f"Toolhead Upper Extruder Arm ({spec.toolhead.effective_body_material})"
+            ),
+            shape="solid_bar",
+            width_m=0.026,
+            height_m=0.018,
+            area_m2=props["area_mount"],
+            iy_m4=props["iy_mount"] * upper_stiff_mult,
+            iz_m4=props["iz_mount"] * upper_stiff_mult,
+            j_m4=props["j_mount"] * upper_stiff_mult,
+        )
+        members.append(
+            _b.StructuralMember(
+                id="toolhead_mount_upper",
+                start_id=junc_id,
+                end_id="toolhead_cog",
+                profile=upper_prof,
                 material=mount_mat,
                 role="toolhead",
             )
@@ -1026,7 +1140,7 @@ def _attach_toolhead_cog_and_nozzle(
             _b.FastenerSpring(
                 id="nozzle_stem_spring",
                 bay="toolhead",
-                shell_node_id="toolhead_cog",
+                shell_node_id=junc_id,
                 frame_node_id="nozzle_tip",
                 k_shear_n_m=props["k_stem_eff"],
                 k_normal_n_m=props["k_stem_eff"],
@@ -1058,7 +1172,7 @@ def _attach_toolhead_cog_and_nozzle(
         members.append(
             _b.StructuralMember(
                 id="nozzle_stem",
-                start_id="toolhead_cog",
+                start_id=junc_id,
                 end_id="nozzle_tip",
                 profile=stem_prof,
                 material=stem_mat,

@@ -97,9 +97,16 @@ def test_structural_calibration_bugfixes_preserved() -> None:
     # 3. Toolhead moving mass adds both toolhead.total_mass_g and hotend.mass_g cleanly
     vz_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "vzbot_330_awd.yaml")
     vz_asm = build_assembly(vz_spec)
-    expected_vz_th_g = vz_spec.toolhead.total_mass_g + vz_spec.toolhead.hotend.mass_g
+    from printsim.geometry._builder_gantry import x_carriage_block_mass_delta_g
+
+    _, vz_block_delta_g = x_carriage_block_mass_delta_g(vz_spec)
+    expected_vz_th_g = (
+        vz_spec.toolhead.total_mass_g + vz_spec.toolhead.hotend.mass_g + vz_block_delta_g
+    )
     assert vz_asm.toolhead_moving_mass_kg * 1000.0 == pytest.approx(expected_vz_th_g, rel=1e-6)
-    assert expected_vz_th_g == pytest.approx(261.0, abs=1.0)
+    # Vz-Printhead CNC: 275 g (54 g MGN12H convention) - 28 g MGN9H delta + 96 g Goliath = 343 g
+    assert vz_block_delta_g == pytest.approx(-28.0, abs=1.0)
+    assert expected_vz_th_g == pytest.approx(343.0, abs=1.0)
 
     # 4. Bedslinger Y moving mass uses carriage_mass_g directly rather than hardcoded 350 g
     bs_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "cartesian_bedslinger.yaml")
@@ -131,11 +138,12 @@ def test_real_world_preset_touchstone_bands_and_catalog_parity() -> None:
             assert spec.toolhead.hotend.max_temp_c == pytest.approx(cat["max_temp_c"])
         results[yaml_path.stem] = (spec, rep)
 
-    # VzBot 330 AWD: leadscrew_dual with MGN12 rails has zero fake 63 Hz bed shaker; lands in [80, 160] / [65, 130]
+    # VzBot 330 AWD (official spec): cited community Klipper configs X 75-118 / Y 47-80 Hz; the
+    # global fundamental is the ~20 Hz rocking mode on its rubber-insert feet (no fake bed shaker).
     _, vz = results["vzbot_330_awd"]
-    assert vz.modal_fea.fundamental_freq_hz > 95.0
-    assert 80.0 <= vz.modal_fea.shaper_x.effective_freq_hz <= 160.0
-    assert 65.0 <= vz.modal_fea.shaper_y.effective_freq_hz <= 130.0
+    assert vz.modal_fea.fundamental_freq_hz > 12.0
+    assert 75.0 <= vz.modal_fea.shaper_x.effective_freq_hz <= 125.0
+    assert 47.0 <= vz.modal_fea.shaper_y.effective_freq_hz <= 85.0
     assert vz.modal_fea.shaper_x.effective_freq_hz > vz.modal_fea.shaper_y.effective_freq_hz
 
     # Voron Monolith AWD & DoomCube 4040 AWD: empirical Monolith AWD Discord bands [95, 185] / [70, 145]
@@ -166,23 +174,29 @@ def test_real_world_preset_touchstone_bands_and_catalog_parity() -> None:
     assert dx > 60.0 and dy > 60.0
     assert abs(dx - dy) / max(dx, dy) < 0.03
 
-    # Stock 2WD 2020 Vorons calibrated with B-01/B-02 coupled receptance & dynamic GT2 secant EA (45 kN/6mm):
-    # - Voron Trident 300: Y ~49 Hz (touchstone 46-48.2 Hz), ~7,900 mm/s^2
-    # - Voron 2.4 300: Y ~47.8 Hz (touchstone 48.2 Hz), ~7,400 mm/s^2
-    # while preserving exact Trident > V2.4, X > Y, and AWD >> 2WD physics rankings.
+    # Stock 2WD 2020 Vorons with the perimeter belt routing and the dynamic belt ratio fitted to
+    # controlled same-machine AWD / 2WD and motor-current measurements (1.85 x datasheet static):
+    # - Voron Trident 300: X ~60.6 / Y ~42.6 Hz, MZV recommendation ~62.8 / ~44.2 Hz
+    # - Voron 2.4 300: X ~59.1 / Y ~41.6 Hz, MZV recommendation ~61.7 / ~43.2 Hz
+    # The presets ship the Voron-documented belt tension (9 N, 110 Hz pluck on a 150 mm span).
+    # Reference is an individually measured stock Trident 300 at 2.2 lb (about 9.8 N), hot
+    # chamber: X MZV 61.4-64.0 Hz, Y MZV 40.8-42.2 Hz (docs/community_touchstones.md). The
+    # curated "stock" touchstone rows (Y 46-48 Hz) are typical values, not measurements.
     _, tri = results["voron_trident_300"]
     _, v24 = results["corexy_voron_style"]
-    assert 48.0 <= tri.modal_fea.shaper_x.effective_freq_hz <= 80.0
-    assert 44.0 <= tri.modal_fea.shaper_y.effective_freq_hz <= 52.0
+    assert 52.0 <= tri.modal_fea.shaper_x.effective_freq_hz <= 70.0
+    assert 37.0 <= tri.modal_fea.shaper_y.effective_freq_hz <= 47.0
     assert 5000.0 <= tri.modal_fea.recommended_max_accel_mm_s2 <= 9000.0
-    assert 48.0 <= v24.modal_fea.shaper_x.effective_freq_hz <= 76.0
-    assert 44.0 <= v24.modal_fea.shaper_y.effective_freq_hz <= 52.0
+    assert 52.0 <= v24.modal_fea.shaper_x.effective_freq_hz <= 70.0
+    assert 37.0 <= v24.modal_fea.shaper_y.effective_freq_hz <= 47.0
     assert 5000.0 <= v24.modal_fea.recommended_max_accel_mm_s2 <= 9000.0
     assert tri.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_y.effective_freq_hz
     assert v24.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz
     assert tri.modal_fea.fundamental_freq_hz > v24.modal_fea.fundamental_freq_hz
     assert tri.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_x.effective_freq_hz
     assert tri.modal_fea.shaper_y.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz
-    assert vz.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_x.effective_freq_hz * 1.90
-    # Calibrated stock Trident (~6,800 mm/s^2) vs VzBot 330 AWD (~25,300 mm/s^2 -> ~3.72x accel)
-    assert vz.modal_fea.recommended_max_accel_mm_s2 > tri.modal_fea.recommended_max_accel_mm_s2 * 3.5
+    # Measured: stock Trident X MZV 61-64 Hz vs VzBot 330 AWD X ~100 Hz community mean (~1.6x),
+    # Y 41-42 vs ~67 Hz (~1.6x -> ~2.5x shaper accel since a_max ~ f^2)
+    assert vz.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_x.effective_freq_hz * 1.5
+    assert vz.modal_fea.shaper_y.effective_freq_hz > tri.modal_fea.shaper_y.effective_freq_hz * 1.4
+    assert vz.modal_fea.recommended_max_accel_mm_s2 > tri.modal_fea.recommended_max_accel_mm_s2 * 1.8

@@ -214,12 +214,15 @@ def test_trident_height_dependent_co_sway_and_plate_thickness() -> None:
     st_mid = solve_static_fea(asm_mid)
     st_tall = solve_static_fea(asm_tall)
 
-    # First layer (w_rel=0.05): bed & gantry sway together -> relative deflection << absolute nozzle deflection
+    # First layer (w_rel=0.05): bed & gantry sway together -> relative horizontal deflection << absolute nozzle sway
     assert st_low.bed_deflection_um > 10.0
-    assert st_low.combined_max_deflection_um < st_low.nozzle_absolute_deflection_um * 0.65
+    assert st_low.combined_max_deflection_um < st_low.nozzle_absolute_deflection_um
+    low_noz_x_abs_um = float(np.linalg.norm(st_low.nodal_displacements_x_mm["nozzle_tip"])) * 1e3
+    assert st_low.accel_deflection_x_um < low_noz_x_abs_um * 0.65
 
-    # Tall print (w_rel=0.95): bed near base -> larger relative deflection & lower loop stiffness
-    assert st_low.combined_max_deflection_um < st_mid.combined_max_deflection_um < st_tall.combined_max_deflection_um
+    # Tall print (w_rel=0.95): bed near base -> larger relative X-sway, larger beam-center deflection & lower loop stiffness
+    assert st_low.accel_deflection_x_um < st_mid.accel_deflection_x_um < st_tall.accel_deflection_x_um
+    assert st_low.beam_center_deflection_um < st_mid.beam_center_deflection_um < st_tall.beam_center_deflection_um
     assert st_low.toolhead_stiffness_x_n_per_mm > st_mid.toolhead_stiffness_x_n_per_mm > st_tall.toolhead_stiffness_x_n_per_mm
     assert st_low.toolhead_stiffness_y_n_per_mm > st_mid.toolhead_stiffness_y_n_per_mm > st_tall.toolhead_stiffness_y_n_per_mm
 

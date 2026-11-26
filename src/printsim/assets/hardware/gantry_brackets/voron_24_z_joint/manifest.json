@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_24_z_joint",
+  "name": "Voron 2.4r2 Flying Gantry Z-Joint (ABS/ASA)",
+  "source_cad": "Voron_2.4r2_Assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-2",
+  "baked_at": "2026-11-26T19:15:44Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 1745,
+  "num_elements": 5745,
+  "num_dofs": 5235,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002519,
+  "mass_kg": 0.02426,
+  "com_mm": [
+    -0.0178,
+    32.0718,
+    -41.5299
+  ],
+  "port0_mm": [
+    0.0,
+    20.0,
+    -52.0
+  ],
+  "port1_mm": [
+    0.0,
+    32.0,
+    -18.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 1304.926,
+    "ky": 1119.328,
+    "kz": 15969.283
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 517.493,
+    "kry": 560.289,
+    "krz": 513.996
+  },
+  "fixed_interface_freqs_hz": [
+    7259.61,
+    9091.97,
+    10551.19,
+    11110.07,
+    12022.92,
+    14151.99
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 19990,
+  "visual_bytes": 678344,
+  "cad_trust_pct": 88,
+  "source_hash": "c1b147d4d88f344d0f477665e432e430f9c1c06b490910ecb3dae4de33e3f7c6"
+}

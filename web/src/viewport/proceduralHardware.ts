@@ -1,8 +1,693 @@
 import * as THREE from "three";
-import { AdjointLens, SimulationResponse, XRailMountType, YRailMountType } from "../types";
-import { SCALE } from "./cadGlbCache";
+import {
+  AdjointLens,
+  CadGantryStationAsset,
+  SimulationResponse,
+  XRailMountType,
+  YRailMountType,
+} from "../types";
+import {
+  CAD_M_TO_THREE,
+  SCALE,
+  cadGlbBoundsCache,
+  cadGlbResolvedCache,
+  cloneCachedCadGlb,
+} from "./cadGlbCache";
+import { sensitivityColorInto, stressColorInto } from "./colormaps";
 import { InspectedPartInfo, orientBeamMesh, toThree } from "./geometryHelpers";
 import { classifyPartGroup, getLensScore } from "./partClassifier";
+
+export interface ModalCadGantryElasticMesh {
+  geometry: THREE.BufferGeometry;
+  restPos: Float32Array;
+  blendS: Float32Array;
+  /** Upper-left 3x3 mapping wrapper-local Three.js displacement -> mesh-local vertex delta */
+  wrapperToMesh3: THREE.Matrix3;
+}
+
+export interface ModalCadGantryItem {
+  wrapper: THREE.Group;
+  anchorNodeId: string;
+  baseRotY: number;
+  port1NodeId?: string;
+  /** Rest port0->port1 vector expressed in wrapper-local Three.js space */
+  baseSpanWrapper?: THREE.Vector3;
+  elasticMeshes?: ModalCadGantryElasticMesh[];
+}
+
+export interface BuildCadGantryStationsParams {
+  group: THREE.Group;
+  sim: SimulationResponse;
+  basePos: Record<string, THREE.Vector3>;
+  deformedPos?: Record<string, THREE.Vector3>;
+  viewMode: "assembly" | "fea_stress" | "modal" | "sensitivity";
+  toolheadPunchIn: boolean;
+  adjointLens: AdjointLens;
+  stiffenById: Record<
+    string,
+    NonNullable<SimulationResponse["sensitivity"]>["top_stiffen_targets"][number]
+  >;
+  tagInspectable: (mesh: THREE.Mesh, info: InspectedPartInfo) => void;
+  getModalNodeScalar?: (nodeId: string) => number;
+  globalNodalStress?: Record<string, number>;
+  memberSensMap?: Record<
+    string,
+    NonNullable<SimulationResponse["sensitivity"]>["member_sensitivities"][string]
+  >;
+}
+
+export interface BuildCadGantryStationsResult {
+  replacedMountNodeIds: Set<string>;
+  replacedXyNodeIds: Set<string>;
+  replacedZDriveIds: Set<string>;
+  modalItems: ModalCadGantryItem[];
+}
+
+const _tmpV = new THREE.Vector3();
+const _tmpInvWrapper = new THREE.Matrix4();
+const _tmpToWrapper = new THREE.Matrix4();
+const _tmpToMesh = new THREE.Matrix4();
+
+/**
+ * Place baked 3D CAD gantry hardware stations (CoreXY corner A/B drives & front idlers,
+ * XY-joints, Voron 2.4 quad Z-drives/Z-joints, and Trident Z-mounts/bed arms) in
+ * Assembly, FEA Stress, Modal, or Sensitivity modes — with mode-aware heatmap coloring,
+ * static FEA deformed placement + 2-port elastic XY-joint blending, and 60 fps modal handles.
+ */
+export function buildCadGantryStationMeshes({
+  group,
+  sim,
+  basePos,
+  deformedPos,
+  viewMode,
+  toolheadPunchIn,
+  adjointLens,
+  stiffenById,
+  tagInspectable,
+  getModalNodeScalar,
+  globalNodalStress,
+  memberSensMap,
+}: BuildCadGantryStationsParams): BuildCadGantryStationsResult {
+  const replacedMountNodeIds = new Set<string>();
+  const replacedXyNodeIds = new Set<string>();
+  const replacedZDriveIds = new Set<string>();
+  const modalItems: ModalCadGantryItem[] = [];
+
+  const geom = sim.geometry;
+  const bracketInfo = geom.gantry_brackets;
+  const cadGantryAssets =
+    bracketInfo?.hardware_kit !== "procedural" ? (bracketInfo?.cad_assets ?? null) : null;
+  if (!cadGantryAssets) {
+    return { replacedMountNodeIds, replacedXyNodeIds, replacedZDriveIds, modalItems };
+  }
+
+  const isHeatMode = viewMode !== "assembly";
+  const bracketColor = new THREE.Color(bracketInfo?.color_hex ?? "#94a3b8");
+  const zeroEmissive = new THREE.Color(0x000000);
+  const gantryKitLabel = bracketInfo?.hardware_kit_label ?? bracketInfo?.name ?? "Gantry Kit";
+
+  const getCachedGantryStation = (
+    stationKey: string
+  ): { root: THREE.Group; asset: CadGantryStationAsset } | null => {
+    const asset = cadGantryAssets[stationKey];
+    if (!asset?.visual_glb_url) return null;
+    const root = cadGlbResolvedCache.get(asset.visual_glb_url) ?? null;
+    if (!root) return null;
+    return { root, asset };
+  };
+
+  const resolveStationHeat = (
+    stationKey: string,
+    anchorNodeId: string,
+    port1NodeId?: string,
+    sensMemberId?: string
+  ): { color: THREE.Color; emissive: THREE.Color; emissiveIntensity: number } => {
+    if (!isHeatMode) {
+      return { color: bracketColor, emissive: zeroEmissive, emissiveIntensity: 0 };
+    }
+    const color = new THREE.Color(0x475569);
+    const emissive = new THREE.Color(0x000000);
+    let emissiveIntensity = 0;
+
+    if (viewMode === "modal" && getModalNodeScalar) {
+      const s0 = getModalNodeScalar(anchorNodeId);
+      const s1 = port1NodeId ? getModalNodeScalar(port1NodeId) : s0;
+      const s = Math.max(s0, s1);
+      stressColorInto(s, color);
+      if (s > 0.35) {
+        emissive.copy(color);
+        emissiveIntensity = (s - 0.25) * 0.28;
+      }
+    } else if (viewMode === "fea_stress") {
+      const s0 = globalNodalStress?.[anchorNodeId] ?? 0;
+      const s1 = port1NodeId ? (globalNodalStress?.[port1NodeId] ?? s0) : s0;
+      const s = Math.max(s0, s1);
+      stressColorInto(s, color);
+      if (s > 0.55) {
+        emissive.copy(color);
+        emissiveIntensity = (s - 0.5) * 0.24;
+      }
+    } else if (viewMode === "sensitivity") {
+      const sensEntry = sensMemberId ? memberSensMap?.[sensMemberId] : undefined;
+      if (sensEntry) {
+        const sc = getLensScore(sensEntry, adjointLens);
+        sensitivityColorInto(sc, color);
+        const absSc = Math.min(1, Math.abs(sc));
+        if (absSc > 0.15) {
+          emissive.copy(color);
+          emissiveIntensity = absSc * 0.32;
+        }
+      } else {
+        // Subtle neutral slate for stations without a separate FEA superelement entry
+        const fallbackGroup = stationKey.startsWith("xy_") ? "xy_joints" : "gantry_brackets";
+        const gTarget = stiffenById[fallbackGroup];
+        if (gTarget && gTarget.compliance_share_pct > 1.0) {
+          const approxSc = Math.min(1, gTarget.compliance_share_pct / 25.0);
+          sensitivityColorInto(approxSc, color);
+          emissive.copy(color);
+          emissiveIntensity = approxSc * 0.22;
+        }
+      }
+    }
+    return { color, emissive, emissiveIntensity };
+  };
+
+  const placeGantryCadStation = (
+    stationKey: string,
+    anchorNodeId: string,
+    displayName: string,
+    inspectKey: string,
+    rotY = 0,
+    port1NodeId?: string,
+    sensMemberId?: string
+  ): boolean => {
+    const baseAnchor = basePos[anchorNodeId];
+    if (!baseAnchor) return false;
+    const hit = getCachedGantryStation(stationKey);
+    if (!hit) return false;
+
+    const stiffness = hit.asset.stiffness_n_per_mm ?? bracketInfo?.cad_stiffness_n_per_mm ?? null;
+    const massText =
+      hit.asset.mass_g != null && Number.isFinite(hit.asset.mass_g)
+        ? `${Math.round(hit.asset.mass_g)} g`
+        : undefined;
+    const stiffText =
+      stiffness != null && Number.isFinite(stiffness) && stiffness > 0
+        ? `${Math.round(stiffness)} N/mm CAD`
+        : undefined;
+    const profileDesc = [gantryKitLabel, massText, stiffText].filter(Boolean).join(" · ");
+    const isXyStation = stationKey === "xy_left" || stationKey === "xy_right";
+    const partGroupId = isXyStation ? "xy_joints" : "gantry_brackets";
+    const bktStiff = stiffenById[partGroupId] ?? stiffenById["gantry_brackets"];
+    const inspectInfo: InspectedPartInfo = {
+      key: inspectKey,
+      name: displayName,
+      subsystem: "gantry",
+      partGroupId,
+      role: "gantry",
+      material: bracketInfo?.name ?? gantryKitLabel,
+      profile: profileDesc || gantryKitLabel,
+      complianceSharePct: bktStiff?.compliance_share_pct,
+      estHzGain: bktStiff?.est_hz_gain,
+      whyItHurts: bktStiff?.why_it_hurts,
+      actionHint: bktStiff?.action_hint,
+    };
+
+    const heat = resolveStationHeat(stationKey, anchorNodeId, port1NodeId, sensMemberId);
+    const cadObj = cloneCachedCadGlb(hit.root, {
+      isHeatMode,
+      heatColor: heat.color,
+      heatEmissive: heat.emissive,
+      heatEmissiveIntensity: heat.emissiveIntensity,
+      inspectInfo,
+      tagInspectable,
+    });
+    cadObj.scale.setScalar(CAD_M_TO_THREE);
+    cadObj.rotation.x = -Math.PI * 0.5;
+
+    const wrapper = new THREE.Group();
+    const placedPos =
+      viewMode === "fea_stress" && deformedPos?.[anchorNodeId]
+        ? deformedPos[anchorNodeId]
+        : baseAnchor;
+    wrapper.position.copy(placedPos);
+    if (rotY !== 0) wrapper.rotation.y = rotY;
+    wrapper.add(cadObj);
+
+    // 2-port elastic bracket deformation (seam-locks port0/anchor at s=0 and port1 at s=1).
+    // Supports general 3D spans (XY-joints, corner motor/idler mounts, Trident bed arms) as well
+    // as zero-length FEA node pairs (Voron 2.4 col_g_* -> g_* Z-joints) using CAD port0->port1 axis.
+    const hasTwoPortSpan = Boolean(
+      port1NodeId &&
+        port1NodeId !== anchorNodeId &&
+        basePos[port1NodeId] &&
+        (viewMode === "fea_stress" || viewMode === "modal")
+    );
+    let elasticMeshes: ModalCadGantryElasticMesh[] | undefined;
+    let baseSpanWrapper: THREE.Vector3 | undefined;
+
+    if (hasTwoPortSpan && port1NodeId) {
+      const invBaseRotQ = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        -rotY
+      );
+      baseSpanWrapper = basePos[port1NodeId].clone().sub(baseAnchor).applyQuaternion(invBaseRotQ);
+
+      // Determine wrapper-local blend origin (p0) and axis (p1 - p0) for s in [0, 1]
+      const p0Blend = new THREE.Vector3(0, 0, 0);
+      const axisBlend = baseSpanWrapper.clone();
+      if (axisBlend.lengthSq() < 1e-8 && hit.asset.port0_mm && hit.asset.port1_mm) {
+        const p0m = hit.asset.port0_mm;
+        const p1m = hit.asset.port1_mm;
+        // cadObj.rotation.x = -PI/2 maps CAD (x, y, z) -> Three wrapper (x, z, -y) * SCALE
+        p0Blend.set(p0m[0] * SCALE, p0m[2] * SCALE, -p0m[1] * SCALE);
+        axisBlend.set(
+          (p1m[0] - p0m[0]) * SCALE,
+          (p1m[2] - p0m[2]) * SCALE,
+          -(p1m[1] - p0m[1]) * SCALE
+        );
+      }
+      const axisLenSq = axisBlend.lengthSq();
+      if (axisLenSq > 1e-8) {
+        wrapper.updateMatrixWorld(true);
+        _tmpInvWrapper.copy(wrapper.matrixWorld).invert();
+        elasticMeshes = [];
+
+        cadObj.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh) || !obj.geometry) return;
+          const posAttr = obj.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
+          if (!posAttr || posAttr.count === 0) return;
+
+          _tmpToWrapper.multiplyMatrices(_tmpInvWrapper, obj.matrixWorld);
+          _tmpToMesh.copy(_tmpToWrapper).invert();
+          const wrapperToMesh3 = new THREE.Matrix3().setFromMatrix4(_tmpToMesh);
+
+          const count = posAttr.count;
+          const restPos = new Float32Array(posAttr.array as Float32Array);
+          const blendS = new Float32Array(count);
+          for (let i = 0; i < count; i++) {
+            _tmpV.set(restPos[i * 3], restPos[i * 3 + 1], restPos[i * 3 + 2]);
+            _tmpV.applyMatrix4(_tmpToWrapper);
+            const rawS =
+              ((_tmpV.x - p0Blend.x) * axisBlend.x +
+                (_tmpV.y - p0Blend.y) * axisBlend.y +
+                (_tmpV.z - p0Blend.z) * axisBlend.z) /
+              axisLenSq;
+            blendS[i] = rawS <= 0 ? 0 : rawS >= 1 ? 1 : rawS;
+          }
+
+          if (viewMode === "fea_stress" && deformedPos?.[port1NodeId]) {
+            const curSpanWrapper = _tmpV
+              .copy(deformedPos[port1NodeId])
+              .sub(placedPos)
+              .applyQuaternion(invBaseRotQ);
+            const deltaWrapper = curSpanWrapper.sub(baseSpanWrapper!);
+            const deltaMesh = deltaWrapper.clone().applyMatrix3(wrapperToMesh3);
+            const arr = posAttr.array as Float32Array;
+            for (let i = 0; i < count; i++) {
+              const s = blendS[i];
+              if (s === 0) continue;
+              const o = i * 3;
+              arr[o] = restPos[o] + s * deltaMesh.x;
+              arr[o + 1] = restPos[o + 1] + s * deltaMesh.y;
+              arr[o + 2] = restPos[o + 2] + s * deltaMesh.z;
+            }
+            posAttr.needsUpdate = true;
+            obj.geometry.computeVertexNormals();
+          } else if (viewMode === "modal") {
+            obj.frustumCulled = false;
+            elasticMeshes!.push({
+              geometry: obj.geometry,
+              restPos,
+              blendS,
+              wrapperToMesh3,
+            });
+          }
+        });
+      }
+    }
+
+    // Subtle transparency on non-XY frame stations in Punch-In mode or skip far outer stations
+    if (toolheadPunchIn && !isXyStation && isHeatMode) {
+      return false;
+    }
+
+    group.add(wrapper);
+
+    if (viewMode === "modal") {
+      modalItems.push({
+        wrapper,
+        anchorNodeId,
+        baseRotY: rotY,
+        port1NodeId: hasTwoPortSpan ? port1NodeId : undefined,
+        baseSpanWrapper,
+        elasticMeshes,
+      });
+    }
+    return true;
+  };
+
+  // 1. CoreXY CAD gantry corner stations (A/B rear motor mounts & front idlers/AWD motors)
+  if (geom.architecture === "corexy") {
+    const corexyCornerSpecs: Array<{
+      stationKey: string;
+      nodeIds: string[];
+      port1Id: string;
+      name: string;
+      sensId: string;
+    }> = [
+      {
+        stationKey: "rear_left",
+        nodeIds: ["g_rl", "gantry_rl"],
+        port1Id: "pulley_rl",
+        name: `${gantryKitLabel} — Rear-Left B-Drive Mount`,
+        sensId: "corner_mount_rl",
+      },
+      {
+        stationKey: "rear_right",
+        nodeIds: ["g_rr", "gantry_rr"],
+        port1Id: "pulley_rr",
+        name: `${gantryKitLabel} — Rear-Right A-Drive Mount`,
+        sensId: "corner_mount_rr",
+      },
+      {
+        stationKey: "front_left",
+        nodeIds: ["g_fl", "gantry_fl"],
+        port1Id: "pulley_fl",
+        name: `${gantryKitLabel} — Front-Left Corner Mount`,
+        sensId: "corner_mount_fl",
+      },
+      {
+        stationKey: "front_right",
+        nodeIds: ["g_fr", "gantry_fr"],
+        port1Id: "pulley_fr",
+        name: `${gantryKitLabel} — Front-Right Corner Mount`,
+        sensId: "corner_mount_fr",
+      },
+    ];
+    for (const corner of corexyCornerSpecs) {
+      const matchedId = corner.nodeIds.find((nid) => Boolean(basePos[nid]));
+      if (!matchedId) continue;
+      const placed = placeGantryCadStation(
+        corner.stationKey,
+        matchedId,
+        corner.name,
+        `gantry_cad:${corner.stationKey}`,
+        0,
+        basePos[corner.port1Id] ? corner.port1Id : undefined,
+        corner.sensId
+      );
+      if (placed) {
+        replacedMountNodeIds.add(matchedId);
+        replacedMountNodeIds.add(corner.port1Id);
+      }
+    }
+
+    // Fallback: any extra role==="mount" nodes not matching canonical g_* IDs
+    // (exclude pulley_* port-1 superelement endpoints, which belong to their parent g_* corner mount)
+    const mountNodes = geom.nodes.filter(
+      (n) => n.role === "mount" && !n.id.startsWith("pulley_") && basePos[n.id]
+    );
+    for (const n of mountNodes) {
+      if (replacedMountNodeIds.has(n.id)) continue;
+      const p = basePos[n.id];
+      const stationKey =
+        p.x < 0 && p.z < 0
+          ? "rear_left"
+          : p.x > 0 && p.z < 0
+            ? "rear_right"
+            : p.x < 0 && p.z > 0
+              ? "front_left"
+              : p.x > 0 && p.z > 0
+                ? "front_right"
+                : null;
+      if (stationKey) {
+        const placed = placeGantryCadStation(
+          stationKey,
+          n.id,
+          `${gantryKitLabel} — ${stationKey.replace("_", " ")}`,
+          `gantry_cad:${n.id}`
+        );
+        if (placed) {
+          replacedMountNodeIds.add(n.id);
+        }
+      }
+    }
+  }
+
+  // 2. XY-joint carriage brackets (y_car_l -> x_beam_l, y_car_r -> x_beam_r)
+  const xyJointNodes = geom.nodes.filter(
+    (n) => (n.id === "y_car_l" || n.id === "y_car_r") && basePos[n.id]
+  );
+  for (const n of xyJointNodes) {
+    const isLeft = n.id === "y_car_l";
+    const stationKey = isLeft ? "xy_left" : "xy_right";
+    const port1Id = isLeft ? "x_beam_l" : "x_beam_r";
+    const sensId = isLeft ? "xy_joint_l" : "xy_joint_r";
+    const label = isLeft
+      ? `${gantryKitLabel} — Left XY-Joint`
+      : `${gantryKitLabel} — Right XY-Joint`;
+    const placed = placeGantryCadStation(
+      stationKey,
+      n.id,
+      label,
+      `gantry_cad:${stationKey}`,
+      0,
+      basePos[port1Id] ? port1Id : undefined,
+      sensId
+    );
+    if (placed) {
+      replacedXyNodeIds.add(n.id);
+    }
+  }
+
+  // 3. Voron 2.4 Belted Quad-Z CAD hardware (bottom Z-drive units & flying gantry Z-joints)
+  const activeBedZDrive = geom.bed_z_drive ?? sim.spec.bed.z_drive;
+  if (geom.architecture === "corexy" && activeBedZDrive === "belted_quad_z") {
+    const zDriveCorners: Array<{
+      ids: string[];
+      primaryStation: string;
+      fallbackStation: string;
+      rotY: number;
+      label: string;
+      tag: string;
+    }> = [
+      {
+        ids: ["b_fl", "bot_fl"],
+        primaryStation: "z_drive_left",
+        fallbackStation: "z_drive_right",
+        rotY: 0,
+        label: `${gantryKitLabel} — Front-Left Z-Drive`,
+        tag: "z_drive_fl",
+      },
+      {
+        ids: ["b_fr", "bot_fr"],
+        primaryStation: "z_drive_right",
+        fallbackStation: "z_drive_left",
+        rotY: 0,
+        label: `${gantryKitLabel} — Front-Right Z-Drive`,
+        tag: "z_drive_fr",
+      },
+      {
+        ids: ["b_rl", "bot_rl"],
+        primaryStation: "z_drive_right",
+        fallbackStation: "z_drive_left",
+        rotY: Math.PI,
+        label: `${gantryKitLabel} — Rear-Left Z-Drive`,
+        tag: "z_drive_rl",
+      },
+      {
+        ids: ["b_rr", "bot_rr"],
+        primaryStation: "z_drive_left",
+        fallbackStation: "z_drive_right",
+        rotY: Math.PI,
+        label: `${gantryKitLabel} — Rear-Right Z-Drive`,
+        tag: "z_drive_rr",
+      },
+    ];
+    for (const zc of zDriveCorners) {
+      const nid = zc.ids.find((id) => Boolean(basePos[id]));
+      if (!nid) continue;
+      const placed =
+        placeGantryCadStation(zc.primaryStation, nid, zc.label, `gantry_cad:${zc.tag}`, zc.rotY) ||
+        placeGantryCadStation(zc.fallbackStation, nid, zc.label, `gantry_cad:${zc.tag}`, zc.rotY);
+      if (placed) {
+        replacedZDriveIds.add(zc.tag);
+      }
+    }
+
+    const zJointCorners: Array<{
+      ids: string[];
+      port1Id: string;
+      rotY: number;
+      label: string;
+      tag: string;
+    }> = [
+      {
+        ids: ["col_g_fl", "g_fl", "gantry_fl"],
+        port1Id: "g_fl",
+        rotY: 0,
+        label: `${gantryKitLabel} — Front-Left Z-Joint`,
+        tag: "z_joint_fl",
+      },
+      {
+        ids: ["col_g_fr", "g_fr", "gantry_fr"],
+        port1Id: "g_fr",
+        rotY: 0,
+        label: `${gantryKitLabel} — Front-Right Z-Joint`,
+        tag: "z_joint_fr",
+      },
+      {
+        ids: ["col_g_rl", "g_rl", "gantry_rl"],
+        port1Id: "g_rl",
+        rotY: Math.PI,
+        label: `${gantryKitLabel} — Rear-Left Z-Joint`,
+        tag: "z_joint_rl",
+      },
+      {
+        ids: ["col_g_rr", "g_rr", "gantry_rr"],
+        port1Id: "g_rr",
+        rotY: Math.PI,
+        label: `${gantryKitLabel} — Rear-Right Z-Joint`,
+        tag: "z_joint_rr",
+      },
+    ];
+    for (const zj of zJointCorners) {
+      const nid = zj.ids.find((id) => Boolean(basePos[id]));
+      if (!nid) continue;
+      const p1Id = basePos[zj.port1Id] && zj.port1Id !== nid ? zj.port1Id : undefined;
+      placeGantryCadStation(
+        "z_joint",
+        nid,
+        zj.label,
+        `gantry_cad:${zj.tag}`,
+        zj.rotY,
+        p1Id,
+        zj.tag
+      );
+    }
+  }
+
+  // 4. Voron Trident Leadscrew Triple-Z CAD hardware (bottom Z motor mounts & bed support arms)
+  if (geom.architecture === "corexy" && activeBedZDrive === "leadscrew_triple") {
+    const tridentMotorMounts: Array<{
+      stationKey: string;
+      nodeIds: string[];
+      driveId: string;
+      fallbackRotY: number;
+      label: string;
+      tag: string;
+    }> = [
+      {
+        stationKey: "trident_z_mount_left",
+        nodeIds: ["b_fl", "bot_fl"],
+        driveId: "z_drive_fl",
+        fallbackRotY: 0,
+        label: `${gantryKitLabel} — Front-Left Trident Z-Motor Mount`,
+        tag: "trident_z_mount_left",
+      },
+      {
+        stationKey: "trident_z_mount_right",
+        nodeIds: ["b_fr", "bot_fr"],
+        driveId: "z_drive_fr",
+        fallbackRotY: Math.PI,
+        label: `${gantryKitLabel} — Front-Right Trident Z-Motor Mount`,
+        tag: "trident_z_mount_right",
+      },
+      {
+        stationKey: "trident_z_mount_rear",
+        nodeIds: ["b_rear_mid"],
+        driveId: "z_drive_rear",
+        fallbackRotY: Math.PI * 0.5,
+        label: `${gantryKitLabel} — Rear Trident Z-Motor Mount`,
+        tag: "trident_z_mount_rear",
+      },
+    ];
+    for (const tm of tridentMotorMounts) {
+      const nid = tm.nodeIds.find((id) => Boolean(basePos[id]));
+      if (!nid) continue;
+      const hasPerSideStation = Boolean(cadGantryAssets[tm.stationKey]);
+      const placed = hasPerSideStation
+        ? placeGantryCadStation(tm.stationKey, nid, tm.label, `gantry_cad:${tm.tag}`, 0)
+        : placeGantryCadStation(
+            "trident_z_mount",
+            nid,
+            tm.label,
+            `gantry_cad:${tm.tag}`,
+            tm.fallbackRotY
+          );
+      if (placed) {
+        replacedZDriveIds.add(tm.driveId);
+      }
+    }
+
+    const tridentBedArms: Array<{
+      stationKey: string;
+      nodeId: string;
+      port1Id: string;
+      fallbackRotY: number;
+      label: string;
+      tag: string;
+      sensId: string;
+    }> = [
+      {
+        stationKey: "trident_bed_arm_left",
+        nodeId: "z_bed_fl",
+        port1Id: "z_arm_tip_fl",
+        fallbackRotY: 0,
+        label: `${gantryKitLabel} — Front-Left Trident Bed Support Arm`,
+        tag: "trident_bed_arm_left",
+        sensId: "trident_bed_arm_fl",
+      },
+      {
+        stationKey: "trident_bed_arm_right",
+        nodeId: "z_bed_fr",
+        port1Id: "z_arm_tip_fr",
+        fallbackRotY: Math.PI,
+        label: `${gantryKitLabel} — Front-Right Trident Bed Support Arm`,
+        tag: "trident_bed_arm_right",
+        sensId: "trident_bed_arm_fr",
+      },
+      {
+        stationKey: "trident_bed_arm_rear",
+        nodeId: "z_bed_r",
+        port1Id: "z_arm_tip_r",
+        fallbackRotY: Math.PI * 0.5,
+        label: `${gantryKitLabel} — Rear Trident Bed Support Arm`,
+        tag: "trident_bed_arm_rear",
+        sensId: "trident_bed_arm_r",
+      },
+    ];
+    for (const ba of tridentBedArms) {
+      if (!basePos[ba.nodeId]) continue;
+      const p1Id = basePos[ba.port1Id] ? ba.port1Id : undefined;
+      const hasPerSideStation = Boolean(cadGantryAssets[ba.stationKey]);
+      if (hasPerSideStation) {
+        placeGantryCadStation(
+          ba.stationKey,
+          ba.nodeId,
+          ba.label,
+          `gantry_cad:${ba.tag}`,
+          0,
+          p1Id,
+          ba.sensId
+        );
+      } else {
+        placeGantryCadStation(
+          "trident_bed_arm",
+          ba.nodeId,
+          ba.label,
+          `gantry_cad:${ba.tag}`,
+          ba.fallbackRotY,
+          p1Id,
+          ba.sensId
+        );
+      }
+    }
+  }
+
+  return { replacedMountNodeIds, replacedXyNodeIds, replacedZDriveIds, modalItems };
+}
 
 export interface BuildAssemblyHardwareParams {
   group: THREE.Group;
@@ -44,10 +729,31 @@ export function buildAssemblyHardwareMeshes({
         metalness: bracketIsCnc ? 0.78 : 0.22,
         roughness: bracketIsCnc ? 0.24 : 0.48,
       });
+      let bracketMatUsed = false;
+
+      const cadResult = buildCadGantryStationMeshes({
+        group,
+        sim,
+        basePos,
+        viewMode: "assembly",
+        toolheadPunchIn,
+        adjointLens,
+        stiffenById,
+        tagInspectable,
+      });
+      const cadReplacedMountNodeIds = cadResult.replacedMountNodeIds;
+      const cadReplacedXyNodeIds = cadResult.replacedXyNodeIds;
+      const cadReplacedZDriveIds = cadResult.replacedZDriveIds;
 
       // NEMA17 stepper motor blocks & tinted motor-mount brackets at every node with role === "mount"
-      const mountNodes = geom.nodes.filter((n) => n.role === "mount" && basePos[n.id]);
-      if (mountNodes.length > 0) {
+      // (skipping CoreXY corner stations already rendered by real CAD GLB assemblies and pulley_* port-1 nodes)
+      const mountNodes = geom.nodes.filter(
+        (n) => n.role === "mount" && !n.id.startsWith("pulley_") && basePos[n.id]
+      );
+      const proceduralMountNodes = mountNodes.filter((n) => !cadReplacedMountNodeIds.has(n.id));
+
+      if (proceduralMountNodes.length > 0) {
+        bracketMatUsed = true;
         const motorBodyGeo = new THREE.BoxGeometry(0.42, 0.38, 0.42);
         const motorBodyMat = new THREE.MeshStandardMaterial({
           color: 0x1e2532,
@@ -77,7 +783,7 @@ export function buildAssemblyHardwareMeshes({
             })
           : null;
 
-        for (const n of mountNodes) {
+        for (const n of proceduralMountNodes) {
           const p = basePos[n.id];
           const inwardX = Math.abs(p.x) > 0.2 ? -Math.sign(p.x) * 0.16 : 0;
           const inwardZ = Math.abs(p.z) > 0.2 ? -Math.sign(p.z) * 0.16 : 0;
@@ -112,11 +818,12 @@ export function buildAssemblyHardwareMeshes({
         }
       }
 
-      // XY-joint carriage bracket blocks (y_car_l / y_car_r) tinted with gantry_brackets.color_hex
+      // Procedural fallback XY-joint carriage bracket blocks when CAD GLB is not loaded
       const xyJointNodes = geom.nodes.filter(
-        (n) => (n.id === "y_car_l" || n.id === "y_car_r") && basePos[n.id]
+        (n) => (n.id === "y_car_l" || n.id === "y_car_r") && basePos[n.id] && !cadReplacedXyNodeIds.has(n.id)
       );
       if (xyJointNodes.length > 0) {
+        bracketMatUsed = true;
         const xyJointGeo = new THREE.BoxGeometry(0.32, 0.24, 0.34);
         for (const n of xyJointNodes) {
           const jointMesh = new THREE.Mesh(xyJointGeo, bracketMat);
@@ -125,7 +832,7 @@ export function buildAssemblyHardwareMeshes({
         }
       }
 
-      if (mountNodes.length === 0 && xyJointNodes.length === 0) {
+      if (!bracketMatUsed) {
         bracketMat.dispose();
       }
 
@@ -477,13 +1184,38 @@ export function buildAssemblyHardwareMeshes({
             const basisMat = new THREE.Matrix4().makeBasis(widthVec, axisDir, normVec);
             const railQuat = new THREE.Quaternion().setFromRotationMatrix(basisMat);
 
+            // Match the vertical column member sharing this Z-rail's (x, z) axis so the rail bolts flush onto its outer face
+            const colMember =
+              geom.members.find((m) => {
+                const ms = basePos[m.start_id];
+                const me = basePos[m.end_id];
+                if (!ms || !me) return false;
+                if (Math.abs(me.y - ms.y) < 0.1) return false;
+                const mx = 0.5 * (ms.x + me.x);
+                const mz = 0.5 * (ms.z + me.z);
+                return Math.abs(mx - zMidX) < 0.025 && Math.abs(mz - zMidZ) < 0.025;
+              }) ??
+              geom.members.find(
+                (m) =>
+                  m.id.startsWith("col_fl") ||
+                  m.id === "bed_rear_z_bot" ||
+                  m.id === "z_col_l_low" ||
+                  m.id === "tower_0_low"
+              );
+            const colHalfX = colMember ? Math.max(colMember.width_mm, 10) * 0.5 * SCALE : 10 * SCALE;
+            const colHalfZ = colMember ? Math.max(colMember.height_mm, 10) * 0.5 * SCALE : 10 * SCALE;
+            const colHalfW =
+              Math.abs(normVec.x) * colHalfX + Math.abs(normVec.z) * colHalfZ > 0
+                ? Math.hypot(normVec.x * colHalfX, normVec.z * colHalfZ)
+                : colHalfX;
+
             const barGeo = new THREE.BoxGeometry(rW, railLen, rH);
             const barMesh = new THREE.Mesh(barGeo, zRailSteelMat);
             barMesh.position
               .copy(p0)
               .add(p1)
               .multiplyScalar(0.5)
-              .addScaledVector(normVec, rH * 0.5);
+              .addScaledVector(normVec, colHalfW + rH * 0.5);
             barMesh.quaternion.copy(railQuat);
             tagInspectable(barMesh, zRailInspect);
             group.add(barMesh);
@@ -515,7 +1247,7 @@ export function buildAssemblyHardwareMeshes({
 
             carGroup.position
               .set(zMidX, carY, zMidZ)
-              .addScaledVector(normVec, rH * 0.5 + carH * 0.42);
+              .addScaledVector(normVec, colHalfW + rH * 0.5 + carH * 0.42);
             carGroup.quaternion.copy(railQuat);
             group.add(carGroup);
           }
@@ -683,70 +1415,73 @@ export function buildAssemblyHardwareMeshes({
             profile: mechId,
           };
 
-          // NEMA17 Z-stepper motor at motor_pos_mm
-          zMotorUsed = true;
-          const zMotGrp = new THREE.Group();
-          const zMotBody = new THREE.Mesh(zMotorBodyGeo, zMotorBodyMat);
-          zMotBody.position.y = -0.19;
-          tagInspectable(zMotBody, zMotorInspect);
-          zMotGrp.add(zMotBody);
-          const zMotCap = new THREE.Mesh(zMotorCapGeo, zMotorCapMat);
-          zMotCap.position.y = 0.02;
-          zMotGrp.add(zMotCap);
+          // Skip procedural NEMA17 Z-stepper motor when a real CAD Z-drive / Z-mount GLB already renders it
+          const hasCadZDrive = cadReplacedZDriveIds.has(zl.id);
+          if (!hasCadZDrive) {
+            zMotorUsed = true;
+            const zMotGrp = new THREE.Group();
+            const zMotBody = new THREE.Mesh(zMotorBodyGeo, zMotorBodyMat);
+            zMotBody.position.y = -0.19;
+            tagInspectable(zMotBody, zMotorInspect);
+            zMotGrp.add(zMotBody);
+            const zMotCap = new THREE.Mesh(zMotorCapGeo, zMotorCapMat);
+            zMotCap.position.y = 0.02;
+            zMotGrp.add(zMotCap);
 
-          // Metallic gearbox collar on Z motor for Planetary / Worm belted-Z mods
-          if (isPlanetary) {
-            gearboxUsed = true;
-            const gCollar = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.185, 0.195, 0.22, 20),
-              gearboxMetalMat
-            );
-            gCollar.position.y = 0.15;
-            tagInspectable(gCollar, zMotorInspect);
-            zMotGrp.add(gCollar);
+            // Metallic gearbox collar on Z motor for Planetary / Worm belted-Z mods
+            if (isPlanetary) {
+              gearboxUsed = true;
+              const gCollar = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.185, 0.195, 0.22, 20),
+                gearboxMetalMat
+              );
+              gCollar.position.y = 0.15;
+              tagInspectable(gCollar, zMotorInspect);
+              zMotGrp.add(gCollar);
 
-            const gBaseFlange = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.215, 0.215, 0.04, 20),
-              gearboxHousingMat
-            );
-            gBaseFlange.position.y = 0.055;
-            zMotGrp.add(gBaseFlange);
+              const gBaseFlange = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.215, 0.215, 0.04, 20),
+                gearboxHousingMat
+              );
+              gBaseFlange.position.y = 0.055;
+              zMotGrp.add(gBaseFlange);
 
-            const gTopBoss = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.145, 0.165, 0.055, 20),
-              gearboxHousingMat
-            );
-            gTopBoss.position.y = 0.285;
-            zMotGrp.add(gTopBoss);
-          } else if (isWorm) {
-            gearboxUsed = true;
-            const wormBlock = new THREE.Mesh(
-              new THREE.BoxGeometry(0.36, 0.26, 0.34),
-              gearboxHousingMat
-            );
-            wormBlock.position.y = 0.17;
-            tagInspectable(wormBlock, zMotorInspect);
-            zMotGrp.add(wormBlock);
+              const gTopBoss = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.145, 0.165, 0.055, 20),
+                gearboxHousingMat
+              );
+              gTopBoss.position.y = 0.285;
+              zMotGrp.add(gTopBoss);
+            } else if (isWorm) {
+              gearboxUsed = true;
+              const wormBlock = new THREE.Mesh(
+                new THREE.BoxGeometry(0.36, 0.26, 0.34),
+                gearboxHousingMat
+              );
+              wormBlock.position.y = 0.17;
+              tagInspectable(wormBlock, zMotorInspect);
+              zMotGrp.add(wormBlock);
 
-            const wormDrum = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.14, 0.14, 0.38, 18),
-              gearboxMetalMat
-            );
-            wormDrum.rotation.z = Math.PI * 0.5;
-            wormDrum.position.y = 0.18;
-            tagInspectable(wormDrum, zMotorInspect);
-            zMotGrp.add(wormDrum);
+              const wormDrum = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.14, 0.14, 0.38, 18),
+                gearboxMetalMat
+              );
+              wormDrum.rotation.z = Math.PI * 0.5;
+              wormDrum.position.y = 0.18;
+              tagInspectable(wormDrum, zMotorInspect);
+              zMotGrp.add(wormDrum);
 
-            const wormCollar = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.115, 0.125, 0.06, 16),
-              gearboxMetalMat
-            );
-            wormCollar.position.y = 0.33;
-            zMotGrp.add(wormCollar);
+              const wormCollar = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.115, 0.125, 0.06, 16),
+                gearboxMetalMat
+              );
+              wormCollar.position.y = 0.33;
+              zMotGrp.add(wormCollar);
+            }
+
+            zMotGrp.position.copy(mPos);
+            group.add(zMotGrp);
           }
-
-          zMotGrp.position.copy(mPos);
-          group.add(zMotGrp);
 
           if (zl.kind === "belt") {
             beltUsed = true;
@@ -769,15 +1504,17 @@ export function buildAssemblyHardwareMeshes({
             tagInspectable(strandB, zDriveInspect);
             group.add(strandB);
 
-            // Bottom 80T drive pulley + top idler pulley
-            const drive80t = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.18, 0.18, beltW * 1.15, 20),
-              zPulleyMat
-            );
-            drive80t.rotation.z = Math.PI * 0.5;
-            drive80t.position.set(p0.x, Math.max(p0.y + 0.08, mPos.y + 0.12), p0.z);
-            tagInspectable(drive80t, zDriveInspect);
-            group.add(drive80t);
+            // Bottom 80T drive pulley (skip when CAD Z-drive GLB already includes 80T/20T/16T pulleys & belt)
+            if (!hasCadZDrive) {
+              const drive80t = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.18, 0.18, beltW * 1.15, 20),
+                zPulleyMat
+              );
+              drive80t.rotation.z = Math.PI * 0.5;
+              drive80t.position.set(p0.x, Math.max(p0.y + 0.08, mPos.y + 0.12), p0.z);
+              tagInspectable(drive80t, zDriveInspect);
+              group.add(drive80t);
+            }
 
             const topIdler = new THREE.Mesh(
               new THREE.CylinderGeometry(pulleyR * 1.15, pulleyR * 1.15, beltW * 1.2, 16),

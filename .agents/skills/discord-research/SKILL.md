@@ -34,12 +34,19 @@ When the local KB does not yet contain the answer, invoke the `browser` subagent
      - **ADXL / Shaper data**: `in:<channel> has:image shaper`, `in:<channel> has:file csv`, `in:<channel> MZV`, `in:<channel> shaper_freq`
      - **Toolhead & Hardware weights**: `in:<channel> weight`, `in:<channel> grams`, `in:<channel> has:image scale`
      - **Forum channels** (`#monolith-builds`, `#user-projects`, `#build-log`, `#mods`, `#print-support`): Use the forum's built-in search/filter input (`Search posts`) to jump straight to matching threads.
-4. **Batch DOM Extraction (1 script call per search page)**:
-   - Do **not** scroll message-by-message taking screenshots. Run a single DOM script over the search results pane (`[id^="search-results"]` / `[class*="searchResult"]` / `li[id^="chat-messages-"]`) to collect `{author, timestamp, content, attachment_urls, message_id}` for the top 15–25 hits at once.
+4. **Batch DOM Extraction (`<= 10 KB` inline JSON — NEVER dump raw DOMs to `step_*.json`)**:
+   - Do **not** scroll message-by-message taking screenshots, and do **not** return unbounded raw message dumps that spill to `browser_sandbox/outputs/step_*.json` (re-reading huge `step_*.json` files triggers repeated 500k context compactions and massive token burn).
+   - Filter, deduplicate by `message_id`, and truncate inside the page JS script before returning: keep only high-signal fields (`{id, author, ts, text: text.slice(0, 400), attachments}`), filter long threads in JS for specs/numbers/units/links/files, and cap each script return to **<= 10 KB** so it returns inline.
+   - If an output ever spills to `outputs/step_*.json`, tighten the JS filter immediately — **never** chain `read_file` across multiple `step_*.json` dumps.
    - Click **Jump** (or open the thread) **only** on the top 2–5 highest-signal hits to read surrounding reply context (usually ±10 messages around the jumped message).
-5. **Download Raw ADXL CSVs & Key Spec Images**:
+5. **Hard Browser Subagent Budget (`<= 25 turns`, `<= 8 scrolls`, `<= 5 images`)**:
+   - For long threads (hundreds/thousands of messages), NEVER scroll the entire thread end-to-end: inspect **Pins + opening post + latest ~25 messages + targeted Discord search queries** (`weight`, `grams`, `mass`, `CAD`, `STEP`, `github`, `onshape`, `shaper`, `flow`, `temp`, `has:file`), then stop and return structured findings.
+   - Read at most **5 key spec/scale/shaper images** per browser run (skip casual build photos).
+   - Once you reach ~20–25 turns or have all core specs, **stop immediately** and send your structured summary back to the parent.
+   - **Parent cleanup**: If the parent changes direction or stops waiting on a running Discord browser subagent, kill it with `manage_subagents(action="kill", ...)` so it cannot keep burning quota in the background.
+6. **Download Raw ADXL CSVs & Key Spec Images**:
    - When a message attaches a Klipper/Shake&Tune `.csv` (`resonances_x_*.csv`, `resonances_y_*.csv`, `calibration_data_*.csv`) or a clear shaper plot / scale photo, download it so the parent agent can inspect it or run `calibrate_adxl_csv`.
-6. **Strict Read-Only & Safety Guardrails**:
+7. **Strict Read-Only & Safety Guardrails**:
    - Never send messages, never add reactions, never click join/accept prompts unprompted, never read or exfiltrate user auth tokens, and never attempt to bypass login/CAPTCHA gates (pause and ask the user if signed out).
    - If searching 2+ completely separate servers in one request, prefer sequential visits in one browser subagent (Discord shares one authenticated browser tab cleanly without session collisions).
 

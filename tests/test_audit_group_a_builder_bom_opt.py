@@ -33,6 +33,21 @@ def test_a11_belt_sync_side_rails_scale_j_m4_from_j_m4() -> None:
 
     asm = build_assembly(spec)
     base_sides = [m for m in asm.members if m.id.startswith(("base_left_", "base_right_"))]
+    assert len(base_sides) > 0
+    for m in base_sides:
+        assert m.profile.j_m4 == pytest.approx(base_prof.j_m4 * 2.5, rel=1e-6)
+        assert m.profile.iz_m4 == pytest.approx(base_prof.iz_m4 * 4.0, rel=1e-6)
+
+    # The real VzBot has its Y rails on the top-ring Y extrusions (gantry_on_top_frame): those
+    # extrusions are the y_rail_* chains (rail composite), so no separate top_left/right members.
+    assert spec.frame.gantry_on_top_frame
+    assert not any(m.id.startswith(("top_left_", "top_right_")) for m in asm.members)
+
+    # Classic separate-gantry-ring topology keeps the top side-rail rod-holder scaling
+    spec = spec.model_copy(deep=True)
+    spec.frame.gantry_on_top_frame = False
+    asm = build_assembly(spec)
+    base_sides = [m for m in asm.members if m.id.startswith(("base_left_", "base_right_"))]
     top_sides = [m for m in asm.members if m.id.startswith(("top_left_", "top_right_"))]
     assert len(base_sides) > 0
     assert len(top_sides) > 0
@@ -206,7 +221,7 @@ def test_a10_pareto_safe_accel_respects_1x_motor_and_belt_limits() -> None:
     # Belt-limited build: low wrap angle + modest pretension triggers tooth-cam-out belt slip below shaper limit
     belt_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
     belt_spec.gantry.belt.wrap_angle_deg = 90.0
-    belt_spec.gantry.belt.pretension_n = 14.0
+    belt_spec.gantry.belt.pretension_n = 12.0
     rep_belt = evaluate_printer(belt_spec, panel_mesh_n=2, include_advanced_analysis=False)
     assert rep_belt.kinematics.belt_max_accel_mm_s2 > 0.0
     assert rep_belt.kinematics.belt_max_accel_mm_s2 < rep_belt.kinematics.motor_max_accel_mm_s2

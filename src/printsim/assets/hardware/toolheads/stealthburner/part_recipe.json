@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "stealthburner",
+  "source_cad": "Stealthburner_CW2.5_Assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Stealthburner",
+  "regions": [
+    {
+      "label": "stealthburner_body",
+      "material_id": "abs_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "origin": "MGN12H front carriage face (0,0,0)",
+  "hotend_port_mm": [
+    0.2,
+    -28.9,
+    -1.9
+  ],
+  "cw2_bottom_z_mm": 10.6,
+  "shroud_bottom_z_mm": -48.53,
+  "target_nozzle_tip_z_mm": -51.0
+}

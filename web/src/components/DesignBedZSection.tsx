@@ -205,6 +205,7 @@ const FALLBACK_BED_MOUNT_PARAMS: Record<
   rigid_4pt: { k_axial_n_per_mm: 65000, k_lateral_n_per_mm: 40000, k_restraint_thermal_n_per_mm: 80000, damping_delta: -0.002, standoff_height_mm: 12 },
   floating_4pt: { k_axial_n_per_mm: 12000, k_lateral_n_per_mm: 6000, k_restraint_thermal_n_per_mm: 2800, damping_delta: 0.002, standoff_height_mm: 12 },
   silicone_4pt: { k_axial_n_per_mm: 48, k_lateral_n_per_mm: 16, k_restraint_thermal_n_per_mm: 32, damping_delta: 0.008, standoff_height_mm: 16 },
+  silicone_4pt_clamped: { k_axial_n_per_mm: 2000, k_lateral_n_per_mm: 400, k_restraint_thermal_n_per_mm: 64, damping_delta: 0.006, standoff_height_mm: 16 },
   springs_4pt: { k_axial_n_per_mm: 16, k_lateral_n_per_mm: 4.5, k_restraint_thermal_n_per_mm: 9, damping_delta: 0.004, standoff_height_mm: 20 },
 };
 
@@ -379,6 +380,20 @@ const BED_MOUNT_OPTIONS: Array<{
     tacoLabel: "Low Compliant Relief",
     tacoTone: "info",
     tacoTitle: "Compliant silicone columns shear laterally to relieve thermal expansion",
+  },
+  {
+    id: "silicone_4pt_clamped",
+    group: "standard",
+    label: "4-Pt Silicone Spacers, Torqued Through-Bolt (VzBot)",
+    shortLabel: "4-Pt Silicone Clamped",
+    hint: "Silicone spacers clamped by M3x50 through-bolts: a preloaded joint that stays stiff for vibration while remaining leveling-adjustable.",
+    points: 4,
+    tapRated: false,
+    tapLabel: "Compliant — Not Tap-Rated",
+    tapTitle: "Large probing loads can exceed the knob preload and fall back to elastomer compliance",
+    tacoLabel: "Low Compliant Relief",
+    tacoTone: "info",
+    tacoTitle: "Thermal growth slips through the M3 hole clearance and shears the silicone",
   },
   {
     id: "springs_4pt",

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "vzbot_330_awd_front_right",
+  "name": "VzBot 330 AWD Front-Right Idler/Motor Mount",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-26T23:02:32Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 18219,
+  "num_elements": 65105,
+  "num_dofs": 54657,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.030891,
+  "mass_kg": 0.147266,
+  "com_mm": [
+    -39.3433,
+    12.971,
+    -0.6061
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -44.7999,
+    9.1503,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 25162.369,
+    "ky": 22389.371,
+    "kz": 10608.511
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 3889.184,
+    "kry": 5676.337,
+    "krz": 30478.316
+  },
+  "fixed_interface_freqs_hz": [
+    2018.48,
+    4094.73,
+    5578.37,
+    6080.53,
+    6676.32,
+    7058.07
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21989,
+  "visual_bytes": 962648,
+  "cad_trust_pct": 72,
+  "source_hash": "137bafcb3fdf221afa60899e56b68227bb4139059078d6d9cf6df4b0c8a53a8f"
+}

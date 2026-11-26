@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "vzbot_330_rear_left",
+  "name": "VzBot 330 Rear-Left Motor Mount + Tensioner",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-26T22:40:00Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 12586,
+  "num_elements": 42900,
+  "num_dofs": 37758,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.060501,
+  "mass_kg": 0.097039,
+  "com_mm": [
+    27.611,
+    -11.4044,
+    0.6483
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    31.1503,
+    -16.15,
+    -2.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 25536.714,
+    "ky": 31339.312,
+    "kz": 18015.22
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 7183.598,
+    "kry": 6284.851,
+    "krz": 19521.177
+  },
+  "fixed_interface_freqs_hz": [
+    3187.32,
+    4740.82,
+    6581.66,
+    6920.46,
+    8194.67,
+    9296.12
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21975,
+  "visual_bytes": 941700,
+  "cad_trust_pct": 72,
+  "source_hash": "4dc386c0ce4e4f39da372a838b096b5b62329d5f9a81f5c73e5800b8b7f4b212"
+}

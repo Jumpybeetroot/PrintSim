@@ -279,5 +279,12 @@ def test_new_community_presets_load_build_and_evaluate_cleanly(
     report = evaluate_printer(spec)
     assert not report.collision.has_collision
     assert report.scores.composite > min_composite
-    assert report.modal_fea.fundamental_freq_hz > 40.0
-    assert report.kinematics.belt_routing == "monolith_short"
+    if preset_file == "vzbot_330_awd.yaml":
+        # Real VzBot: stock CoreXY belt path on printed rubber-insert feet, so the global
+        # fundamental is the ~20 Hz whole-printer rocking mode on the feet, not a frame mode.
+        assert report.kinematics.belt_routing == "stock_corexy"
+        assert 12.0 < report.modal_fea.fundamental_freq_hz < 30.0
+        assert report.modal_fea.shaper_y.effective_freq_hz > 47.0
+    else:
+        assert report.modal_fea.fundamental_freq_hz > 40.0
+        assert report.kinematics.belt_routing == "monolith_short"

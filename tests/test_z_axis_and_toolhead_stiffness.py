@@ -103,6 +103,7 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
     for hid in sweep_ids:
         s = base.model_copy(deep=True)
         s.use_cad_superelements = False
+        s.toolhead.hotend_mount_material = "aluminum_6061_t6"
         s.toolhead.hotend = HotendSpec(preset_id=hid)
         asm = build_assembly(s)
         statics.append(solve_static_fea(asm))
@@ -174,9 +175,11 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
     )
     s_chube_tor = base.model_copy(deep=True)
     s_chube_tor.gantry.x_beam_material = "carbon_fiber_torsional_45"
-    s_chube_tor.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
+    s_chube_tor.toolhead.body_material = "aluminum_6061_t6"
+    s_chube_tor.toolhead.hotend = HotendSpec(preset_id="chube_compact")
     s_v6_tor = base.model_copy(deep=True)
     s_v6_tor.gantry.x_beam_material = "carbon_fiber_torsional_45"
+    s_v6_tor.toolhead.body_material = "aluminum_6061_t6"
     s_v6_tor.toolhead.hotend = HotendSpec(preset_id="e3d_v6_groove")
     assert (
         solve_modal_fea(build_assembly(s_chube_tor)).nozzle_pitch_twist_freq_hz
@@ -220,6 +223,7 @@ def test_custom_non_preset_hotend_scales_with_heatbreak_wall_and_material() -> N
 def test_independent_3stage_toolhead_material_upgrades() -> None:
     """Carriage backplate, body shroud, and hotend clamp materials each independently stiffen toolhead."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    base.use_cad_superelements = False
     base.frame.enclosed_panels = True
     base.frame.panel_mounting = "bolted_structural"
     base.frame.panel_material = "aluminum_5052_sheet"
@@ -522,6 +526,7 @@ def test_toolhead_default_thicknesses_produce_zero_mass_delta() -> None:
 def test_carriage_plate_thickness_monotonic_stiffness_and_invariant_mass() -> None:
     """Thicker carriage plate increases carriage_mount_n_per_mm while keeping user-entered mass strictly invariant."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    base.use_cad_superelements = False
     base.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
 
     thicknesses = [2.5, 5.0, 8.0, 12.0]
@@ -577,6 +582,7 @@ def test_carriage_plate_thickness_monotonic_stiffness_and_invariant_mass() -> No
 def test_body_wall_thickness_monotonic_stiffness_and_invariant_mass() -> None:
     """Increasing body_wall_thickness_mm monotonically increases body_n_per_mm while keeping mass invariant."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    base.use_cad_superelements = False
     base.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
 
     thicknesses = [2.0, 4.0, 7.0, 11.0]
@@ -732,7 +738,7 @@ def test_toolhead_construction_catalog_and_api_exposure() -> None:
     assert TOOLHEAD_PRESETS["xol_compact"]["body_construction"] == "compact_cage"
     assert TOOLHEAD_PRESETS["a4t_beacon"]["body_construction"] == "compact_cage"
     assert TOOLHEAD_PRESETS["dragon_burner"]["body_construction"] == "compact_cage"
-    assert TOOLHEAD_PRESETS["archetype_cpap"]["body_construction"] == "plate_sandwich_cf"
+    assert TOOLHEAD_PRESETS["archetype_cpap"]["body_construction"] == "compact_cage"
     assert TOOLHEAD_PRESETS["heavy_uhf_long"]["body_construction"] == "multi_piece_clamshell"
 
 
@@ -848,6 +854,7 @@ def test_body_construction_mass_deltas_and_geometry_export() -> None:
 def test_legacy_spec_without_body_construction_backward_compatible() -> None:
     """Legacy specs with body_construction=None preserve exact zero mass delta & internal_stiffness behavior."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    base.use_cad_superelements = False
     assert base.toolhead.body_construction is None
 
     asm_base = build_assembly(base)
@@ -876,6 +883,7 @@ def test_legacy_spec_without_body_construction_backward_compatible() -> None:
 def test_decoupled_rail_carriage_vs_backplate_stiffness_and_abs_calibration() -> None:
     """Verify exact series split of rail_carriage vs backplate_only stiffness and 2.1 GPa ABS calibration."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    base.use_cad_superelements = False
     base.frame.chamber_temp_c = 25.0
     base.toolhead.z_probe_type = "static_eddy"
 

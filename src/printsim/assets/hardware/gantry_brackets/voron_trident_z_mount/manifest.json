@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_trident_z_mount",
+  "name": "Voron Trident Z Leadscrew Motor Mount Left (ABS/ASA)",
+  "source_cad": "trident_assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Trident",
+  "baked_at": "2026-11-26T19:21:27Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 3007,
+  "num_elements": 8485,
+  "num_dofs": 9021,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002986,
+  "mass_kg": 0.046517,
+  "com_mm": [
+    34.0336,
+    32.9463,
+    2.321
+  ],
+  "port0_mm": [
+    15.0,
+    15.0,
+    0.0
+  ],
+  "port1_mm": [
+    32.0,
+    36.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 5784.225,
+    "ky": 9323.855,
+    "kz": 3923.978
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 875.719,
+    "kry": 864.231,
+    "krz": 5113.47
+  },
+  "fixed_interface_freqs_hz": [
+    2385.91,
+    2866.29,
+    3201.23,
+    3932.89,
+    3985.45,
+    4426.8
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 19992,
+  "visual_bytes": 742976,
+  "cad_trust_pct": 88,
+  "source_hash": "d921b0ca7e3556d0b3290a1428c03c4ab3d3d4af6f053ca01797c06668f40afb"
+}

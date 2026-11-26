@@ -680,9 +680,10 @@ def test_kb_calibration_against_seeded_builds(tmp_path: Path) -> None:
         )
         rep = run_kb_calibration(kb)
 
-    # 5 Monolith builds + 13 community touchstone builds have valid numeric X/Y Hz
-    assert rep["builds_evaluated"] == 18
-    assert rep["builds_skipped_unmapped"] == 1
+    # 5 Monolith builds + 14 mapped community touchstone builds have valid numeric X/Y Hz
+    # (VzBot 330 2WD and both VzBot 235 rows are excluded from the 330 AWD preset + Ender 7 outlier)
+    assert rep["builds_evaluated"] == 19
+    assert rep["builds_skipped_unmapped"] == 4
     assert rep["builds_skipped_invalid_hz"] == 1
     assert rep["presets_evaluated"] >= 6
     assert rep["x_mape_pct"] is not None and rep["x_mape_pct"] >= 0.0
@@ -886,12 +887,12 @@ def test_cli_kb_end_to_end_smoke(tmp_path: Path) -> None:
     r_seed = runner.invoke(app, ["kb", "seed", "--db", str(db_path), "--json"])
     assert r_seed.exit_code == 0, r_seed.output
     seed_data = json.loads(r_seed.output)
-    assert seed_data["builds_added"] == 19  # 6 monolith + 13 community touchstones
-    assert seed_data["weights_added"] == 20
+    assert seed_data["builds_added"] == 23  # 6 monolith + 17 community touchstones
+    assert seed_data["weights_added"] == 21
 
     r_stats = runner.invoke(app, ["kb", "stats", "--db", str(db_path), "--json"])
     assert r_stats.exit_code == 0, r_stats.output
-    assert json.loads(r_stats.output)["builds"] == 19
+    assert json.loads(r_stats.output)["builds"] == 23
 
     r_search = runner.invoke(app, ["kb", "search", "Hanarius", "--db", str(db_path), "--json"])
     assert r_search.exit_code == 0, r_search.output
@@ -922,7 +923,7 @@ def test_cli_kb_end_to_end_smoke(tmp_path: Path) -> None:
     r_cal = runner.invoke(app, ["kb", "calibrate", "--db", str(db_path), "--json"])
     assert r_cal.exit_code == 0, r_cal.output
     cal_data = json.loads(r_cal.output)
-    assert cal_data["builds_evaluated"] == 19  # 18 seeded with Hz + 1 newly approved
+    assert cal_data["builds_evaluated"] == 20  # 19 mapped seeded builds with Hz + 1 newly approved
 
     r_gaps = runner.invoke(app, ["kb", "gaps", "--db", str(db_path), "--json"])
     assert r_gaps.exit_code == 0, r_gaps.output

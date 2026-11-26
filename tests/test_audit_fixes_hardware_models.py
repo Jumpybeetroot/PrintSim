@@ -81,7 +81,12 @@ def test_h1_voron_v24_flying_gantry_joints_z_variation_and_trident_comparison() 
 
             zj = next(s for s in asm.fastener_springs if s.id == f"z_joint_{tag}")
             assert zj.bay == "z_joint"
-            assert zj.shell_node_id == f"col_g_{tag}"
+            if f"z_joint_mid_{tag}" in nmap:
+                assert zj.shell_node_id == f"z_joint_mid_{tag}"
+                cad_zj = next(se for se in asm.superelements if se.id == f"cad_z_joint_{tag}")
+                assert cad_zj.port_node_ids == (f"col_g_{tag}", f"z_joint_mid_{tag}")
+            else:
+                assert zj.shell_node_id == f"col_g_{tag}"
             assert zj.frame_node_id == f"g_{tag}"
             assert zj.k_normal_n_m == pytest.approx(1.8e5, rel=1e-6)
             assert zj.k_shear_n_m == pytest.approx(1.2e6, rel=1e-6)

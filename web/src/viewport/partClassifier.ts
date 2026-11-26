@@ -33,6 +33,18 @@ export function classifyPartGroup(memberId: string, role = ""): PartGroupClassif
   if (mid.startsWith("arm_")) {
     return { id: "delta_arms", label: "Delta Diagonal Arms", subsystem: "gantry" };
   }
+  if (mid.startsWith("xy_joint")) {
+    return { id: "xy_joints", label: "XY-Joint Brackets (CAD)", subsystem: "gantry" };
+  }
+  if (mid.startsWith("corner_mount_")) {
+    return { id: "gantry_brackets", label: "Gantry Motor & Idler Mounts (CAD)", subsystem: "gantry" };
+  }
+  if (mid.startsWith("y_car_bearing_")) {
+    return { id: "y_rail_carriages", label: "Y-Rail Carriage Bearings (Hertzian)", subsystem: "gantry" };
+  }
+  if (mid.startsWith("cad_z_joint_") || mid.startsWith("z_joint_")) {
+    return { id: "z_gantry_joints", label: "Flying-Gantry Z-Joints", subsystem: "gantry" };
+  }
   if (mid.startsWith("x_gantry") || mid.startsWith("x_beam")) {
     return { id: "x_gantry_beam", label: "Moving X-Gantry Beam", subsystem: "gantry" };
   }
@@ -48,7 +60,7 @@ export function classifyPartGroup(memberId: string, role = ""): PartGroupClassif
   if (mid === "bed_plate") {
     return { id: "bed_plate", label: "Heated Bed Plate", subsystem: "bed" };
   }
-  if (mid.startsWith("bed_") || mid.startsWith("z_bed")) {
+  if (mid.startsWith("bed_") || mid.startsWith("z_bed") || mid.startsWith("trident_bed_arm_")) {
     return { id: "bed_support", label: "Bed Support & Z Arms", subsystem: "bed" };
   }
   if (mid.includes("backbone") || mid === "bay_backbone" || mid === "trident_backbone") {

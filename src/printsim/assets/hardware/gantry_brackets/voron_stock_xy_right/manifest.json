@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_stock_xy_right",
+  "name": "Voron Stock Printed XY-Joint Right MGN12 (ABS/ASA)",
+  "source_cad": "trident_assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Trident",
+  "baked_at": "2026-11-26T19:19:11Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 4245,
+  "num_elements": 14170,
+  "num_dofs": 12735,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002148,
+  "mass_kg": 0.06401,
+  "com_mm": [
+    -25.1011,
+    -13.934,
+    -9.8048
+  ],
+  "port0_mm": [
+    0.0,
+    -14.0,
+    -20.0
+  ],
+  "port1_mm": [
+    -45.0,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 993.773,
+    "ky": 1322.263,
+    "kz": 460.132
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 784.009,
+    "kry": 349.275,
+    "krz": 793.701
+  },
+  "fixed_interface_freqs_hz": [
+    2558.47,
+    3959.65,
+    4701.24,
+    4773.53,
+    5183.45,
+    6169.31
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21980,
+  "visual_bytes": 870508,
+  "cad_trust_pct": 88,
+  "source_hash": "d0bd504e5435a64c1ed6ccb7542c35903a657ee4e9aac695bcf4dece9d08a501"
+}

@@ -414,11 +414,12 @@ def test_z_drive_mechanism_coupling_and_belt_sync_layout() -> None:
         assert res[i + 1].gravity_sag_um < res[i].gravity_sag_um
         assert res[i + 1].plate_first_mode_hz > res[i].plate_first_mode_hz
 
-    # VzBot 330 AWD (leadscrew_dual_belt_sync: 4x smooth rods + 2x synced leadscrews)
+    # VzBot 330 AWD (leadscrew_dual_belt_sync: 4x smooth rods + 2x synced leadscrews) on its
+    # official 4 corner silicone spacers clamped by M3x50 through-bolts (silicone_4pt_clamped)
     vz = PrinterSpec.from_yaml(EXAMPLES_DIR / "vzbot_330_awd.yaml")
     res_vz = solve_bed_plate_fem(vz)
-    assert res_vz.mount_points_rel == [[-0.375, -0.375], [0.375, -0.375], [0.0, 0.375]]
-    assert res_vz.plate_first_mode_type == "elastic_drum"
+    assert res_vz.mount_points_rel == [[-0.375, -0.375], [0.375, -0.375], [-0.375, 0.375], [0.375, 0.375]]
+    assert res_vz.plate_first_mode_type in ("elastic_drum", "mount_bounce")
     assert res_vz.plate_first_mode_hz > 80.0
 
 

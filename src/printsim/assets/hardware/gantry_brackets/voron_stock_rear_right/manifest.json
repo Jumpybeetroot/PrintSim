@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_stock_rear_right",
+  "name": "Voron Stock Printed A-Drive Mount (ABS/ASA)",
+  "source_cad": "trident_assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Trident",
+  "baked_at": "2026-11-26T19:09:00Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 5253,
+  "num_elements": 16040,
+  "num_dofs": 15759,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002153,
+  "mass_kg": 0.077396,
+  "com_mm": [
+    -44.7599,
+    -12.97,
+    1.0722
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -49.0,
+    -14.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 15816.509,
+    "ky": 1304.771,
+    "kz": 1879.638
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 776.692,
+    "kry": 1102.89,
+    "krz": 1250.885
+  },
+  "fixed_interface_freqs_hz": [
+    1156.05,
+    1219.04,
+    1762.0,
+    2068.59,
+    2746.2,
+    3023.25
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23386,
+  "visual_bytes": 1032068,
+  "cad_trust_pct": 88,
+  "source_hash": "0f7c4c0cace94e680776d08c3170ac88818e299fca44f4f496f1699d8934db6e"
+}

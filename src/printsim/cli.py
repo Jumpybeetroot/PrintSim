@@ -1356,7 +1356,9 @@ def cad_verify_cmd(
         for cat, items in cat_map.items():
             if category and cat != category:
                 continue
-            for aid in items:
+            for aid, meta in items.items():
+                if not meta.get("has_superelement", True):
+                    continue
                 targets.append((cat, aid))
 
     reports = []
@@ -1441,6 +1443,96 @@ def diagnose_cmd(
         print(json.dumps(diag.to_dict(), indent=2))
         return
     print(diag.to_markdown())
+
+
+@app.command("belt-identify")
+def belt_identify_cmd(
+    spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
+    axis: str = typer.Option("X", "--axis", "-a", help="Axis the resonance was measured on: X or Y"),
+    point: Optional[list[str]] = typer.Option(
+        None,
+        "--point",
+        "-p",
+        help="Measured point 'u,v,freq_hz' (u, v = fraction of X / Y travel, 0-1); repeat for 3+ positions",
+    ),
+    mass_g: Optional[float] = typer.Option(None, "--mass-g", help="Weighed moving mass of this axis (g); defaults to the spec"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+) -> None:
+    """Separate in-place belt stiffness from the rest of the drive using resonance at several positions.
+
+    Without --point it prints the measurement plan: where to measure and what the current model predicts.
+    """
+    from printsim.fea import solve_modal_fea
+    from printsim.fea.belt_identification import cord_geometry_factor_m, identify_belt_from_position_sweep
+
+    spec = PrinterSpec.from_yaml(spec_path)
+    ax = axis.strip().upper()
+    if ax not in ("X", "Y"):
+        raise typer.BadParameter("axis must be X or Y")
+    mass_kg = None if mass_g is None else mass_g * 1e-3
+
+    if not point:
+        plan = []
+        for u, v in ((0.5, 0.5), (0.15, 0.15), (0.85, 0.85), (0.15, 0.85), (0.85, 0.15)):
+            asm = build_assembly(spec, toolhead_rel_pos=(u, v, 0.5))
+            modal = solve_modal_fea(asm, include_adxl_diagnostic=False)
+            sh = modal.shaper_x if ax == "X" else modal.shaper_y
+            plan.append(
+                {
+                    "u_rel": u,
+                    "v_rel": v,
+                    "geometry_factor_mm": round(cord_geometry_factor_m(asm, ax) * 1e3, 2),
+                    "predicted_freq_hz": round(float(sh.effective_freq_hz), 2),
+                }
+            )
+        if json_out:
+            print(json.dumps({"axis": ax, "plan": plan}, indent=2))
+            return
+        tbl = Table(title=f"Belt identification plan ({ax} axis): measure the main resonance at each position")
+        tbl.add_column("X travel", justify="right")
+        tbl.add_column("Y travel", justify="right")
+        tbl.add_column("Belt geometry factor (mm)", justify="right")
+        tbl.add_column("Model predicts (Hz)", justify="right")
+        for row in plan:
+            tbl.add_row(
+                f"{100 * row['u_rel']:.0f}%",
+                f"{100 * row['v_rel']:.0f}%",
+                f"{row['geometry_factor_mm']:.1f}",
+                f"{row['predicted_freq_hz']:.1f}",
+            )
+        console.print(tbl)
+        console.print("Re-run with --point u,v,freq_hz for each measured position (3 or more).")
+        return
+
+    points: list[tuple[float, float, float]] = []
+    for raw in point:
+        parts = [x.strip() for x in raw.split(",")]
+        if len(parts) != 3:
+            raise typer.BadParameter(f"--point must be 'u,v,freq_hz', got {raw!r}")
+        points.append((float(parts[0]), float(parts[1]), float(parts[2])))
+    asm = build_assembly(spec)
+    try:
+        res = identify_belt_from_position_sweep(asm, ax, points, moving_mass_kg=mass_kg)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if json_out:
+        print(json.dumps(res.to_dict(), indent=2))
+        return
+    tbl = Table(title=f"In-place belt stiffness ({ax} axis, {res.n_points} positions)")
+    tbl.add_column("Quantity")
+    tbl.add_column("Value", justify="right")
+    tbl.add_row("Belt stiffness EA as installed (N)", f"{res.ea_in_place_n:,.0f}")
+    if res.ea_stderr_n is not None:
+        tbl.add_row("Standard error (N)", f"{res.ea_stderr_n:,.0f}")
+    if res.ea_over_datasheet_static is not None:
+        tbl.add_row("Ratio to datasheet static EA", f"{res.ea_over_datasheet_static:.2f}")
+    tbl.add_row("Belt share of axis compliance (%)", f"{res.belt_share_pct:.1f}")
+    tbl.add_row("Everything else in series (um/N)", f"{res.other_compliance_um_per_n:.2f}")
+    if res.r_squared is not None:
+        tbl.add_row("Fit R^2", f"{res.r_squared:.3f}")
+    console.print(tbl)
+    for note in res.notes:
+        console.print(f"[yellow]{note}[/yellow]")
 
 
 @app.command("compare")

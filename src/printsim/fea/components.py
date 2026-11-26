@@ -225,6 +225,210 @@ def hertzian_rail_carriage_stiffness(
     }
 
 
+# HIWIN MG/HG carriage bolt patterns (B_transverse_m, C_axial_C_m, C_axial_H_m, raceway_to_bolt_face_m)
+# Sources: HIWIN MG Series Catalog (MGN9: 10/16x20, H=10, raceway~4.5 -> arm 5.5 mm;
+# MGN12: 15/20x20, H=13, raceway~5.5 -> arm 7.5 mm; MGN15: 20/25x20, H=16, raceway~7.0 -> arm 9.0 mm;
+# HGH15: 26x26, H=24, raceway~10.5 -> arm 13.5 mm).
+_RAIL_BOLT_PATTERN_M: dict[str, tuple[float, float, float, float]] = {
+    "mgn9_rail": (0.020, 0.010, 0.016, 0.0055),
+    "mgn12_rail": (0.020, 0.015, 0.020, 0.0075),
+    "mgn12_hollow_rail": (0.020, 0.015, 0.020, 0.0075),
+    "mgn15_rail": (0.025, 0.020, 0.020, 0.0090),
+    "hgh15_rail": (0.026, 0.026, 0.026, 0.0135),
+    "steel_rod_8mm": (0.018, 0.016, 0.024, 0.0070),
+    "steel_rod_10mm": (0.021, 0.018, 0.028, 0.0085),
+    "steel_rod_12mm": (0.024, 0.020, 0.032, 0.0100),
+}
+
+
+def y_carriage_lever_arm_m(
+    rail_profile_id: str,
+    y_mount: str,
+    side: str,
+) -> tuple[float, float, float]:
+    """Return physical raceway-to-bolt-face lever-arm vector (m) for a Y-axis linear rail carriage."""
+    key = rail_profile_id.lower().strip()
+    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+        key = f"{key}_rail"
+    _, _, _, arm_m = _RAIL_BOLT_PATTERN_M.get(key, _RAIL_BOLT_PATTERN_M["mgn12_rail"])
+    if y_mount == "inner":
+        return (arm_m if side == "l" else -arm_m, 0.0, 0.0)
+    if y_mount == "bottom":
+        return (0.0, 0.0, -arm_m)
+    return (0.0, 0.0, arm_m)
+
+
+def _huth_vdi_bolted_pad_stiffness(
+    bolt_coords_2d_m: list[tuple[float, float]],
+    bolt_d_m: float,
+    t_flange_m: float,
+    e_flange_pa: float,
+    t_base_m: float,
+    e_base_pa: float,
+    is_polymer_flange: bool,
+    surface_factor: float = 1.0,
+) -> tuple[float, float, float, float, float, float]:
+    """Compute local 6-DOF preloaded bolted-interface stiffness ``(k_u, k_v, k_n, k_ru, k_rv, k_rn)``
+    via Huth (1986) fastener shear + VDI 2230 preloaded contact-pad compression/rocking.
+
+    Local frame: ``(u, v)`` span the bolted mating plane, ``n`` is the bolt-axis normal.
+    """
+    e_bolt = 200.0e9
+    e1 = max(float(e_flange_pa), 1.0e8)
+    e2 = max(float(e_base_pa), 1.0e8)
+    t1 = max(float(t_flange_m), 1.5e-3)
+    t2 = max(float(t_base_m), 2.0e-3)
+    d = max(float(bolt_d_m), 2.0e-3)
+    sf = max(float(surface_factor), 0.25)
+
+    # 1. Huth (1986) single-shear bolted lap-joint flexibility (a=2/3, b=3.0 for bolted joints),
+    # with modest friction-assisted micro-slip stiffening on preloaded metal-on-metal faces.
+    c_huth = ((t1 + t2) / (2.0 * d)) ** (2.0 / 3.0) * 3.0 * (
+        1.0 / (t1 * e1)
+        + 1.0 / (t2 * e2)
+        + 1.0 / (2.0 * t1 * e_bolt)
+        + 1.0 / (2.0 * t2 * e_bolt)
+    )
+    friction_mult = 1.0 if is_polymer_flange else 1.35
+    k_shear_1 = (1.0 / max(c_huth, 1e-15)) * sf * friction_mult
+
+    # 2. VDI 2230 preloaded flat contact pad: under bolt preload, the full clamped pad footprint
+    # stays in compression across the effective interface resilience layer t_seam = 0.35 * t_flange,
+    # acting in parallel with the bolt shanks (rather than pivoting on isolated washer cones).
+    us = [u for u, _ in bolt_coords_2d_m]
+    vs = [v for _, v in bolt_coords_2d_m]
+    span_u = max(us) - min(us) if len(us) > 1 else 0.0
+    span_v = max(vs) - min(vs) if len(vs) > 1 else 0.0
+    w_pad = max(span_u + 2.5 * d, 3.0 * d)
+    l_pad = max(span_v + 2.5 * d, 3.0 * d)
+    a_pad = w_pad * l_pad
+    i_u = w_pad * (l_pad**3) / 12.0  # bending about u-axis (v lever arm)
+    i_v = l_pad * (w_pad**3) / 12.0  # bending about v-axis (u lever arm)
+
+    e_eff_contact = (2.0 * e1 * e2) / max(e1 + e2, 1.0)
+    g_eff_contact = e_eff_contact / (2.0 * (1.0 + 0.33))
+    t_seam = max(0.35 * t1, 1.0e-3)
+    prying_mult = 0.55 if is_polymer_flange else 0.85
+    # Mindlin (1949) / VDI 2230 preloaded tangential micro-slip shear across the clamped pad
+    # (lower on FDM polymer faces due to surface roughness & lower M3 bolt clamp force).
+    slip_mult = 0.25 if is_polymer_flange else 0.45
+
+    a_shank = 0.25 * math.pi * (d**2) * 0.78
+    k_bolt_ax = (e_bolt * a_shank) / max(t1 + 0.4 * d, 1.5e-3)
+
+    n_bolts = max(len(bolt_coords_2d_m), 1)
+    k_shear_pad = (g_eff_contact * a_pad / t_seam) * sf * slip_mult
+    k_u = n_bolts * k_shear_1 + k_shear_pad
+    k_v = n_bolts * k_shear_1 + k_shear_pad
+    k_n = (e_eff_contact * a_pad / t_seam) * sf + n_bolts * k_bolt_ax
+    sum_v2 = sum(v * v for _, v in bolt_coords_2d_m)
+    sum_u2 = sum(u * u for u, _ in bolt_coords_2d_m)
+    j_pad = i_u + i_v
+    k_ru = max((e_eff_contact * i_u / t_seam) * sf * prying_mult + k_bolt_ax * sum_v2, 1.0)
+    k_rv = max((e_eff_contact * i_v / t_seam) * sf * prying_mult + k_bolt_ax * sum_u2, 1.0)
+    k_rn = max((g_eff_contact * j_pad / t_seam) * sf * slip_mult + k_shear_1 * (sum_u2 + sum_v2), 1.0)
+    return k_u, k_v, k_n, k_ru, k_rv, k_rn
+
+
+def xy_joint_bolted_seam_compliances(
+    rail_profile_id: str,
+    block_type: str,
+    y_mount: str,
+    bracket_material_id: str,
+    x_beam_profile_id: str,
+    x_beam_material_id: str,
+    chamber_temp_c: float = 25.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute explicit 6x6 bolted-seam compliances ``(C_pad0, C_pad1)`` in global XYZ for an XY-joint.
+
+    - ``C_pad0``: 4x M3 bolted pad between the Y-axis MGN carriage block and the XY-joint body,
+      oriented to match ``y_mount`` (``top``/``bottom`` vs ``inner``).
+    - ``C_pad1``: X-gantry beam clamp bolted interface (2x M5 end/blind bolts for aluminum extrusions,
+      or 4x M3 clamp screws for hollow CF tubes / bare linear rails).
+    """
+    bkt_mat = get_material(bracket_material_id)
+    xb_mat = get_material(x_beam_material_id)
+    e_bkt = bkt_mat.effective_modulus_pa(chamber_temp_c)
+    e_xb = xb_mat.effective_modulus_pa(chamber_temp_c)
+    sf_bkt = float(bkt_mat.bolted_joint_stiffness_factor)
+    is_poly_bkt = e_bkt < 15.0e9
+
+    # 1. Port 0: 4x M3 Y-carriage bolted pad
+    key = rail_profile_id.lower().strip()
+    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+        key = f"{key}_rail"
+    b_trans, c_c, c_h, _ = _RAIL_BOLT_PATTERN_M.get(key, _RAIL_BOLT_PATTERN_M["mgn12_rail"])
+    c_ax = c_h if block_type.upper() == "H" else c_c
+    bolts_pad0 = [
+        (-0.5 * b_trans, -0.5 * c_ax),
+        (+0.5 * b_trans, -0.5 * c_ax),
+        (-0.5 * b_trans, +0.5 * c_ax),
+        (+0.5 * b_trans, +0.5 * c_ax),
+    ]
+    k_u0, k_v0, k_n0, k_ru0, k_rv0, k_rn0 = _huth_vdi_bolted_pad_stiffness(
+        bolts_pad0,
+        bolt_d_m=0.003,
+        t_flange_m=0.0055 if is_poly_bkt else 0.0045,
+        e_flange_pa=e_bkt,
+        t_base_m=0.006,
+        e_base_pa=207.0e9,
+        is_polymer_flange=is_poly_bkt,
+        surface_factor=sf_bkt,
+    )
+    if y_mount == "inner":
+        # Normal along X; u along Z (width b_trans), v along Y (length c_ax)
+        k_pad0_diag = np.array([k_n0, k_v0, k_u0, k_rn0, k_rv0, k_ru0], dtype=float)
+    else:
+        # Top/bottom mount: normal along Z; u along X (b_trans), v along Y (c_ax)
+        k_pad0_diag = np.array([k_u0, k_v0, k_n0, k_ru0, k_rv0, k_rn0], dtype=float)
+    c_pad0 = np.diag(1.0 / np.maximum(k_pad0_diag, 1.0))
+
+    # 2. Port 1: X-beam clamp bolted interface (normal along X for end-bolted extrusions;
+    # 4-bolt wrap/end clamp for CF tubes or bare linear rails)
+    xb_prof = get_profile(x_beam_profile_id)
+    bw = max(float(xb_prof.width_m), 0.012)
+    bh = max(float(xb_prof.height_m), 0.012)
+    is_cf_tube = "carbon" in x_beam_material_id.lower() or "cf" in x_beam_profile_id.lower()
+    if x_beam_profile_id == "unsupported_rail":
+        # 2x M3 end-clamp bolts directly on steel linear rail
+        bolts_pad1 = [(-0.004, -0.006), (+0.004, +0.006)]
+        bolt_d1 = 0.003
+        e_base1 = 207.0e9
+        t_base1 = 0.008
+    elif is_cf_tube:
+        # 4x M3 clamp screws across CF tube walls (transverse epoxy-matrix bearing ~12% of axial E)
+        bolts_pad1 = [
+            (-0.40 * bw, -0.35 * bh),
+            (+0.40 * bw, -0.35 * bh),
+            (-0.40 * bw, +0.35 * bh),
+            (+0.40 * bw, +0.35 * bh),
+        ]
+        bolt_d1 = 0.003
+        e_base1 = max(e_xb * 0.12, 6.0e9)
+        t_base1 = 0.0025
+    else:
+        # 2x M5 end/blind-joint bolts into 2020/3030 extrusion core + slot flanges
+        bolts_pad1 = [(0.0, -0.32 * bh), (0.0, +0.32 * bh), (-0.32 * bw, 0.0), (+0.32 * bw, 0.0)]
+        bolt_d1 = 0.004
+        e_base1 = e_xb
+        t_base1 = 0.006
+    k_u1, k_v1, k_n1, k_ru1, k_rv1, k_rn1 = _huth_vdi_bolted_pad_stiffness(
+        bolts_pad1,
+        bolt_d_m=bolt_d1,
+        t_flange_m=0.006 if is_poly_bkt else 0.005,
+        e_flange_pa=e_bkt,
+        t_base_m=t_base1,
+        e_base_pa=e_base1,
+        is_polymer_flange=is_poly_bkt,
+        surface_factor=sf_bkt,
+    )
+    # Clamp face normal along X; u along Y (width bw), v along Z (height bh)
+    k_pad1_diag = np.array([k_n1, k_u1, k_v1, k_rn1, k_ru1, k_rv1], dtype=float)
+    c_pad1 = np.diag(1.0 / np.maximum(k_pad1_diag, 1.0))
+
+    return c_pad0, c_pad1
+
+
 def newmark_rail_composite_gamma(
     e_rail_pa: float,
     a_rail_m2: float,
@@ -427,6 +631,68 @@ def belt_damping_ratio(
     return float(min(0.18, z_base + z_temp + z_low_t + z_slack))
 
 
+def belt_crimp_factor(belt: BeltSpec, tension_n: float) -> float:
+    """Low-tension cord-crimp / elastomer toe factor on tensile stiffness at line tension T / width.
+
+    Wang et al. 2018 (GT2 rubber-fiberglass pulled to rupture) found no constant-stiffness
+    region: the tangent modulus roughly doubles between zero strain and 0.5%, and printer
+    pretensions (strain ~0.06-0.13%) sit inside that toe.
+    """
+    q0 = max(float(tension_n), 0.25) / max(float(belt.width_mm), 1.0)
+    if belt.core == "steel":
+        a_crimp, q_crimp = 0.30, 1.5
+    elif belt.core == "aramid":
+        a_crimp, q_crimp = 0.52, 2.2
+    else:
+        a_crimp, q_crimp = 0.52, 2.3
+    return 1.0 - a_crimp * math.exp(-q0 / q_crimp)
+
+
+# Axial thermal expansion of the belt tension member (1/K): E-glass cord, para-aramid (negative
+# along the fibre), and carbon-steel cord.
+BELT_CORD_CTE_1_K: dict[str, float] = {"fiberglass": 5.0e-6, "aramid": -2.0e-6, "steel": 11.5e-6}
+
+
+def belt_thermal_tension_delta_n(spec: PrinterSpec) -> float:
+    """Belt tension change (N) between the tension-setting temperature and the hot chamber.
+
+    A belt loop tensioned on a cold frame is stretched further when the frame grows more than
+    the cord: ``dT = EA_static * crimp(T0) * (alpha_frame - alpha_cord) * (T_chamber - T_set)``,
+    with the whole belt path assumed to ride on the frame material at chamber temperature.
+    Voron 2.4 owners measure ~100 Hz -> ~145 Hz pluck (7.6 N -> 15.9 N on a 150 mm span of 6 mm
+    2GT) from 21 C to a >50 C chamber; this expression gives +8 N for the same case.
+    Returns 0 when ``belt.pretension_set_temp_c`` is None.
+    """
+    belt = spec.gantry.belt
+    t_set = belt.pretension_set_temp_c
+    if t_set is None:
+        return 0.0
+    d_temp = float(spec.frame.chamber_temp_c) - float(t_set)
+    if abs(d_temp) < 1e-9:
+        return 0.0
+    alpha_frame = float(get_material(spec.frame.material).thermal_expansion_1_k)
+    alpha_cord = BELT_CORD_CTE_1_K.get(belt.core, 5.0e-6)
+    t0 = max(float(belt.pretension_n), 0.25)
+    ea_static = float(belt.static_stiffness_ea_n) * belt_crimp_factor(belt, t0)
+    return ea_static * (alpha_frame - alpha_cord) * d_temp
+
+
+def belt_operating_pretension_n(spec: PrinterSpec) -> float:
+    """Belt pretension (N) at chamber temperature: installed tension + CTE-mismatch rise."""
+    belt = spec.gantry.belt
+    return float(min(400.0, max(0.25, float(belt.pretension_n) + belt_thermal_tension_delta_n(spec))))
+
+
+def operating_belt(spec: PrinterSpec, pretension_scale: float = 1.0) -> BeltSpec:
+    """`spec.gantry.belt` at its operating pretension (same object when nothing changes)."""
+    belt = spec.gantry.belt
+    t_op = belt_operating_pretension_n(spec) * float(pretension_scale)
+    t_op = float(min(400.0, max(0.25, t_op)))
+    if abs(t_op - float(belt.pretension_n)) < 1e-12:
+        return belt
+    return belt.model_copy(update={"pretension_n": t_op})
+
+
 def belt_effective_ea_n(
     belt: BeltSpec,
     span_m: float,
@@ -462,13 +728,7 @@ def belt_effective_ea_n(
     # Single unified preload-engagement curve keyed to line tension q0 = T0 / width_mm so belts are
     # compliant in the low-tension toe regime (q0 < 2 N/mm) while reaching >92% of rated dynamic EA
     # at normal working tensions (q0 ~ 3.5-5 N/mm).
-    if belt.core == "steel":
-        a_crimp, q_crimp = 0.30, 1.5
-    elif belt.core == "aramid":
-        a_crimp, q_crimp = 0.52, 2.2
-    else:
-        a_crimp, q_crimp = 0.52, 2.3
-    crimp_factor = 1.0 - a_crimp * math.exp(-q0 / q_crimp)
+    crimp_factor = belt_crimp_factor(belt, t0)
     elastomer_seating = max(float(belt.elastomer_seating_factor), 0.1)
 
     ea_raw = float(ea_override_n) if ea_override_n is not None else belt.stiffness_ea_n
@@ -792,11 +1052,16 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     x_beam_mat = rail_mat if is_unsupported_rail else get_material(spec.gantry.x_beam_material)
 
     x_gantry_members = [m for m in assembly.members if m.id in ("x_gantry_l", "x_gantry_r")]
-    l_x = (
-        max(sum(m.length_m(assembly.node_map) for m in x_gantry_members), 0.15)
-        if x_gantry_members
-        else max(spec.frame.width_mm * 1e-3, 0.15)
-    )
+    if spec.architecture == "corexy":
+        from printsim.geometry.builder import corexy_frame_centerlines_m
+
+        l_x = max(float(corexy_frame_centerlines_m(spec)[0]), 0.15)
+    else:
+        l_x = (
+            max(sum(m.length_m(assembly.node_map) for m in x_gantry_members), 0.15)
+            if x_gantry_members
+            else max(spec.frame.width_mm * 1e-3, 0.15)
+        )
     bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
     if is_unsupported_rail:
         sub_kind = "solid_bar"

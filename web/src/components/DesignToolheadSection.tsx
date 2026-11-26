@@ -247,87 +247,89 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
   {
     preset_id: "stealthburner",
     name: "Voron StealthBurner + CW2",
-    total_mass_g: 365,
-    cog_offset_mm: [0, -22, -28],
-    nozzle_offset_mm: [0, -26, -66],
+    total_mass_g: 398,
+    cog_offset_mm: [0, -24, 16],
+    nozzle_offset_mm: [0, -34, -60],
     mount_material: "abs_printed",
     body_construction: "multi_piece_clamshell",
     internal_stiffness_n_per_mm: 350,
     z_probe_type: "static_eddy",
     default_hardware_summary:
-      "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, 5015 + 4010 fans, MGN12H carriage & static eddy probe (hotend added separately).",
+      "Official Stealthburner_CW2.5 STEP (198 cm³ ABS ~158 g) + LDO-36STH20 (85 g) + BMG (26 g) + 5015/4010 fans (42 g) + HIWIN MGN12H carriage (54 g) + PCB/LEDs/hardware (~33 g) = 398 g on-rail excl. hotend (444 g w/ Dragon HF; CW2 motor pulls CoG to Z +16 mm).",
   },
   {
     preset_id: "stealthburner_tap",
     name: "Voron StealthBurner + Printed Tap",
-    total_mass_g: 385,
-    cog_offset_mm: [0, -22, -28],
-    nozzle_offset_mm: [0, -26, -66],
+    total_mass_g: 438,
+    cog_offset_mm: [0, -24, 14],
+    nozzle_offset_mm: [0, -34, -60],
     mount_material: "abs_printed",
     body_construction: "multi_piece_clamshell",
     internal_stiffness_n_per_mm: 350,
     z_probe_type: "printed_tap",
     default_hardware_summary:
-      "Clockwork 2 (CW2) direct-drive extruder + NEMA14 pancake, ABS shroud, 5015 + 4010 fans & Printed Voron Tap carriage (hotend added separately).",
+      "StealthBurner + CW2 with Printed Voron Tap carriage (+40 g net over stock X-carriage for 50 mm MGN9H rail/block, PCB & magnets; -8.5 mm additional Y shift applied by printed_tap) = 438 g on-rail excl. hotend (484 g w/ Dragon HF).",
   },
   {
     preset_id: "xol_compact",
-    name: "XOL / A4T Compact Dual-5015",
-    total_mass_g: 235,
-    cog_offset_mm: [0, -15, -18],
-    nozzle_offset_mm: [0, -18, -54],
+    name: "XOL 2 Compact Dual-4010",
+    total_mass_g: 278,
+    cog_offset_mm: [0, -18, 10],
+    nozzle_offset_mm: [0, -29, -49.5],
     mount_material: "pa12_cf_printed",
     body_construction: "compact_cage",
     internal_stiffness_n_per_mm: 650,
     z_probe_type: "static_eddy",
     default_hardware_summary:
-      "Sherpa Mini direct-drive extruder + NEMA14 pancake, PA12-CF cage, dual cooling blowers, MGN12H carriage & static eddy probe (hotend added separately).",
+      "Official Xol Assembly STEP (60.4 cm³ ASA ~51 g) + Sherpa Mini w/ 36STH20 (115 g) + 2×4010 blowers & 2510 fan (36.4 g) + HIWIN MGN12H carriage (54 g) + EBB36/probe/hardware (~22 g) = 278 g on-rail excl. hotend (328 g w/ Rapido HF; ~274 g off-rail).",
   },
   {
     preset_id: "a4t_beacon",
-    name: "A4T / XOL 2 + Static Beacon",
-    total_mass_g: 215,
-    cog_offset_mm: [0, -13, -15],
-    nozzle_offset_mm: [0, -16, -52],
+    name: "A4T + WW-BMG/WWG2 + Static Beacon",
+    total_mass_g: 298,
+    cog_offset_mm: [0, -19, 8],
+    nozzle_offset_mm: [0, -28, -50],
     mount_material: "ppa_cf_printed",
     body_construction: "compact_cage",
     internal_stiffness_n_per_mm: 1150,
     z_probe_type: "static_eddy",
     default_hardware_summary:
-      "Wristwatch G2 / compact direct-drive extruder + NEMA14 pancake, PPA-CF cage, dual blowers, MGN12H carriage & static Beacon probe (hotend added separately).",
+      "Official A4T Cowling + HE Duct + Xol Carriage STEPs (71.8 cm³ ~60 g ASA) + WW-BMG/WWG2 (~134 g) + 2×4010 blowers & Delta 2510 (36.4 g) + HIWIN MGN12H carriage (54 g) + Beacon/LEDs/hardware (~13 g) = 298 g on-rail excl. hotend (344 g w/ Dragon HF; ~290 g off-rail).",
   },
   {
     preset_id: "dragon_burner",
-    name: "Dragon Burner / Rapid Burner Compact",
-    total_mass_g: 195,
-    cog_offset_mm: [0, -14, -16],
-    nozzle_offset_mm: [0, -16, -50],
+    name: "Dragon Burner V8 (Orbiter 2 + Dual-4010)",
+    total_mass_g: 272,
+    cog_offset_mm: [0, -14, 4.5],
+    nozzle_offset_mm: [0, -20, -50],
     mount_material: "pa12_cf_printed",
     body_construction: "compact_cage",
     internal_stiffness_n_per_mm: 720,
     z_probe_type: "static_eddy",
     default_hardware_summary:
-      "Orbiter 2 / Sherpa compact direct-drive extruder, PA12-CF shroud, dual 4010 blowers, MGN12H carriage & static eddy probe (hotend added separately).",
+      "Official Dragon_Burner_v0.2_v8 STEP (27.7 cm³ core + ~18 cm³ MGN12H carriage = 37.5 g ABS) + Orbiter v2.0 (135 g) + 2×4010 blowers & 3010 fan (32 g) + HIWIN MGN12H carriage (54 g) + Beacon/hardware (~13.5 g) = 272 g on-rail excl. hotend (318 g w/ Dragon HF; ~264 g off-rail).",
   },
   {
     preset_id: "archetype_cpap",
-    name: "Archetype CPAP Ultra-Low CoG",
-    total_mass_g: 175,
-    cog_offset_mm: [0, -11, -12],
-    nozzle_offset_mm: [0, -14, -48],
-    mount_material: "aluminum_6061_t6",
-    body_construction: "plate_sandwich_cf",
-    internal_stiffness_n_per_mm: 1800,
+    name: "Archetype Breakneck CPAP (Sherpa Micro)",
+    total_mass_g: 248,
+    cog_offset_mm: [0, -15.5, 12],
+    nozzle_offset_mm: [0, -21, -64],
+    mount_material: "ppa_cf_printed",
+    body_construction: "compact_cage",
+    internal_stiffness_n_per_mm: 950,
     z_probe_type: "static_eddy",
+    cpap_blower_id: "ws7040_24v",
+    cpap_hose_id_mm: 19,
     default_hardware_summary:
-      "Lightweight direct-drive extruder (Sherpa/Orbiter-class), CF/Al plate sandwich, remote CPAP duct (no onboard blowers), MGN12H carriage & static eddy probe (hotend added separately).",
+      "Official Archetype Public CAD STEP (Breakneck v24: 81.5 cm³ printed core/duct/rear-bar ~68.4 g) + Sherpa Micro (105 g) + 2510 heatsink fan (6.4 g) + HIWIN MGN12H carriage (54 g) + Beacon & hardware (~14.3 g) + remote 19 mm CPAP hose = 248 g on-rail excl. hotend (344 g w/ Goliath Air; nozzle Z -64 mm UHF / -74 mm Goliath).",
   },
   {
     preset_id: "monolith_toolhead_cpap",
     name: "Monolith Toolhead (Belt-Coplanar CPAP + 37:1 Worm)",
-    total_mass_g: 143,
-    cog_offset_mm: [0, -9.5, -1.5],
-    nozzle_offset_mm: [0, -14, -44],
+    total_mass_g: 218,
+    cog_offset_mm: [0, -11.5, -1.5],
+    nozzle_offset_mm: [0, -16, -52],
     mount_material: "slm_aluminum",
     body_construction: "extruder_as_chassis",
     internal_stiffness_n_per_mm: 2400,
@@ -336,7 +338,7 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     cpap_hose_id_mm: 15,
     belt_plane_z_offset_mm: -1.5,
     default_hardware_summary:
-      "Integrated 37:1 worm-gear direct-drive extruder, SLM Al belt-coplanar CPAP chassis (WS7040 24V, 15 mm hose), MGN12H carriage & static eddy probe (hotend added separately).",
+      "Back-solved from CloakedWayne ~750 g 300 mm build & monolith3d.xyz SLM BOM: SLM AlSi10Mg main body w/ CPAP ducts-as-heatsink (~48 g) + exact CAD SLM Al belt clamp (6.6 g / 2.47 cm³) + SLM Ti hotend brace (~7 g) + 37:1 worm w/ LDO-36STH17 (96 g; +15 g w/ 20 mm) + LDO MGN12H (48.3 g) + Beacon & hardware (~12 g) = 218 g on-rail excl. hotend (270 g dressed w/ 52 g 50 mm HF hotend).",
   },
   {
     preset_id: "microwaved_bowden",
@@ -351,7 +353,7 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     z_probe_type: "static_eddy",
     extruder_type: "bowden",
     default_hardware_summary:
-      "Remote Bowden extruder (no onboard motor) — 130 g includes SLM Ti/Al body (43.4 g), Ti bottom brace & shield (2.9 g), MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), Beacon RevH & ECAS coupler (hotend added separately).",
+      "Remote Bowden extruder (no onboard motor) — 130 g on-rail includes SLM Al body (43.4 g), Ti bottom brace & shield (2.9 g), LDO MGN12H carriage (48.3 g), Monolith SLM belt clamp (6.6 g Al / 19.7 g 316L SS), Beacon RevH & ECAS/fasteners (hotend added separately).",
   },
   {
     preset_id: "microwaved_bowden_chube",
@@ -366,7 +368,7 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     z_probe_type: "static_eddy",
     extruder_type: "bowden",
     default_hardware_summary:
-      "Remote Bowden extruder (no onboard motor) — 135 g includes SLM Al Chube V1 body (~56.5 g), MGN12H carriage (48.3 g), Monolith SLM belt clamp (~16 g), Beacon RevH & ECAS coupler (hotend added separately).",
+      "Remote Bowden extruder (no onboard motor) — 135 g on-rail includes SLM Al Chube V1 body (~56.5 g), LDO MGN12H carriage (48.3 g), Monolith SLM belt clamp (6.6 g Al / 19.7 g 316L SS), Beacon RevH & ECAS/fasteners (hotend added separately).",
   },
   {
     preset_id: "el_fuego",
@@ -384,12 +386,29 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     shared_heatsink_cpap_duct: true,
     extruder_type: "direct_drive",
     default_hardware_summary:
-      "Sherpa Micro direct-drive extruder + NEMA14 pancake (~105 g, pulls CoG to Z +2.0 mm), 3-part SLM CAD chassis (94.2 g: AlSi10Mg main body + Al belt plate + Ti extruder plate), MGN12H carriage (48.3 g), Beacon RevH & fasteners, plus WM7575 CPAP (19 mm hose) w/ shared heatsink bleed. Hotend added separately; 3D mesh renders chassis only.",
+      "Sherpa Micro direct-drive extruder + NEMA14 pancake (~105 g, pulls CoG to Z +2.0 mm), 3-part SLM CAD chassis (94.2 g: AlSi10Mg main body + Al belt plate + Ti extruder plate), LDO MGN12H carriage (48.3 g), Beacon RevH & fasteners, plus WM7575 CPAP (19 mm hose) w/ shared heatsink bleed. Hotend added separately; 3D mesh renders chassis only.",
+  },
+  {
+    preset_id: "vz_printhead_cnc",
+    name: "VzBot Vz-Printhead CNC (HextrudORT Low + CPAP + Beacon)",
+    total_mass_g: 275,
+    cog_offset_mm: [1.9, -10.3, 13.4],
+    nozzle_offset_mm: [-0.1, -22.4, -54.2],
+    offset_datum_rail_mount: "top",
+    mount_material: "aluminum_6061_t6",
+    body_construction: "plate_sandwich_cf",
+    internal_stiffness_n_per_mm: 1200,
+    z_probe_type: "static_eddy",
+    cpap_blower_id: "ws7040_24v",
+    cpap_hose_id_mm: 15,
+    extruder_type: "direct_drive",
+    default_hardware_summary:
+      "Official Vz-330_v1.2 CAD printhead (CNC Vz-Printhead cage around the CF tube, top-mounted MGN9H) + Vz-HextrudORT Low + Moons NEMA14 + CPAP duct + Beacon = 247 g on-rail with the real MGN9H (275 g in the MGN12H-baseline convention) excl. hotend; nozzle 54.2 mm below the tube axis.",
   },
   {
     preset_id: "heavy_uhf_long",
     name: "Heavy Long-Nozzle UHF Toolhead",
-    total_mass_g: 440,
+    total_mass_g: 475,
     cog_offset_mm: [0, -26, -34],
     nozzle_offset_mm: [0, -28, -78],
     mount_material: "abs_printed",
@@ -397,7 +416,7 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     internal_stiffness_n_per_mm: 250,
     z_probe_type: "static_eddy",
     default_hardware_summary:
-      "Heavy direct-drive extruder, multi-blower UHF ABS shroud, long-nozzle drop spacer, MGN12H carriage & static eddy probe (hotend added separately).",
+      "Worst-case heavy direct-drive extruder, multi-blower UHF ABS shroud, long-nozzle drop spacer, MGN12H carriage (54 g) & static eddy probe = 475 g on-rail excl. hotend (hotend added separately).",
   },
 ];
 
@@ -854,6 +873,7 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                         d.toolhead.total_mass_g = chosen.total_mass_g;
                         d.toolhead.cog_offset_mm = [...chosen.cog_offset_mm];
                         d.toolhead.nozzle_offset_mm = [...chosen.nozzle_offset_mm];
+                        d.toolhead.offset_datum_rail_mount = chosen.offset_datum_rail_mount ?? "front";
                         const chosenBodyMat = chosen.body_material ?? chosen.mount_material;
                         d.toolhead.mount_material = chosen.mount_material;
                         d.toolhead.carriage_mount_material = chosenBodyMat;
@@ -1154,19 +1174,30 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                   </div>
 
                   <div className="cad-driven-grid">
-                    <div className="cad-driven-stat">
-                      <span className="cad-driven-stat-label">CAD Stiffness (Kx / Ky)</span>
-                      <span className="cad-driven-stat-value">
-                        {Number.isFinite(activeToolheadCadCms.port_stiffness_n_per_mm?.kx)
-                          ? Math.round(activeToolheadCadCms.port_stiffness_n_per_mm.kx).toLocaleString()
-                          : "—"}{" "}
-                        /{" "}
-                        {Number.isFinite(activeToolheadCadCms.port_stiffness_n_per_mm?.ky)
-                          ? Math.round(activeToolheadCadCms.port_stiffness_n_per_mm.ky).toLocaleString()
-                          : "—"}{" "}
-                        N/mm
-                      </span>
-                    </div>
+                    {(() => {
+                      const nozzleBodyK =
+                        sim?.static_fea?.toolhead_flex_breakdown?.body_stiffness_n_per_mm ??
+                        sim?.geometry?.toolhead_structure?.stage_stiffnesses_n_per_mm?.body_n_per_mm;
+                      const portKx = activeToolheadCadCms.port_stiffness_n_per_mm?.kx;
+                      const portKy = activeToolheadCadCms.port_stiffness_n_per_mm?.ky;
+                      const portKz = activeToolheadCadCms.port_stiffness_n_per_mm?.kz;
+                      const portDetail =
+                        Number.isFinite(portKx) && Number.isFinite(portKy)
+                          ? `Nozzle-tip projected CAD chassis stiffness (harmonic XY bending). Raw Port-0→Port-1 flange stiffness: Kx ${Math.round(portKx!).toLocaleString()} / Ky ${Math.round(portKy!).toLocaleString()}${Number.isFinite(portKz) ? ` / Kz ${Math.round(portKz!).toLocaleString()}` : ""} N/mm.`
+                          : formatCadCmsTooltip(activeToolheadCadCms);
+                      return (
+                        <div className="cad-driven-stat" title={portDetail}>
+                          <span className="cad-driven-stat-label">Chassis @ Nozzle</span>
+                          <span className="cad-driven-stat-value tabular-nums">
+                            {nozzleBodyK != null && Number.isFinite(nozzleBodyK) && nozzleBodyK > 0
+                              ? `${Math.round(nozzleBodyK).toLocaleString()} N/mm`
+                              : Number.isFinite(portKx) && Number.isFinite(portKy)
+                                ? `${Math.round(portKx!).toLocaleString()} / ${Math.round(portKy!).toLocaleString()} N/mm`
+                                : "—"}
+                          </span>
+                        </div>
+                      );
+                    })()}
                     <div className="cad-driven-stat">
                       <span className="cad-driven-stat-label">CoG Offset</span>
                       <span className="cad-driven-stat-value">

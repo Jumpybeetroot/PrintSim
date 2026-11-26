@@ -36,6 +36,7 @@ from printsim.schema import (
     BED_MOUNT_CATALOG,
     EXTRUSION_FILLINGS,
     FRAME_FEET_CATALOG,
+    SUSPENSION_LINE_CATALOG,
     GANTRY_BRACKET_CATALOG,
     HOTEND_CATALOG,
     MATERIAL_CATALOG,
@@ -83,6 +84,7 @@ def _apply_dot_overrides(base_data: dict[str, Any], overrides: dict[str, Any]) -
             if value not in TOOLHEAD_PRESETS:
                 raise ValueError(f"Unknown toolhead preset '{value}'.")
             cur_th = dict(out.get("toolhead", {}))
+            cur_th["offset_datum_rail_mount"] = "front"  # reset; preset overrides when it carries one
             cur_th.update(TOOLHEAD_PRESETS[value])
             out["toolhead"] = cur_th
             continue
@@ -746,6 +748,7 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             ],
             "bed_mounts": list(BED_MOUNT_CATALOG.values()),
             "frame_feet": list(FRAME_FEET_CATALOG.values()),
+            "suspension_lines": list(SUSPENSION_LINE_CATALOG.values()),
             "hotend_presets": list(HOTEND_CATALOG.values()),
             "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
             "z_rail_profiles": list(Z_RAIL_PROFILES.values()),

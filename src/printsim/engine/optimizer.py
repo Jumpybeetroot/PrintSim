@@ -218,6 +218,7 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
             child.toolhead.total_mass_g = float(preset["total_mass_g"])
             child.toolhead.cog_offset_mm = tuple(float(v) for v in preset["cog_offset_mm"])  # type: ignore[assignment]
             child.toolhead.nozzle_offset_mm = tuple(float(v) for v in preset["nozzle_offset_mm"])  # type: ignore[assignment]
+            child.toolhead.offset_datum_rail_mount = preset.get("offset_datum_rail_mount", "front")  # type: ignore[assignment]
             if "body_construction" in preset:
                 child.toolhead.body_construction = preset["body_construction"]  # type: ignore[assignment]
             if "z_probe_type" in preset:

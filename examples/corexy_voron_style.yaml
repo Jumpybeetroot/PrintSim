@@ -14,12 +14,19 @@ frame:
   panel_mounting: clip_enclosure
   panel_material: acrylic_pmma
   panel_thickness_mm: 3.0
+  gantry_top_clearance_mm: 55.0
 gantry:
+  hardware_kit: voron_stock_printed
+  drive_mode: 2wd
+  belt_routing: stock_corexy
   x_beam_profile: extrusion_2020
   x_beam_material: aluminum_6063_t5
   x_rail_profile: mgn12_rail
   y_rail_profile: mgn9_rail
+  x_rail_mount: front
+  y_rail_mount: bottom
   rail_material: steel_4140
+  rail_block_type: H
   dual_x_rails: false
   carriage_mass_g: 201  # 201 g MGN12H-base - 56 g MGN9H pair delta = 145 g dressed
   belt:
@@ -27,7 +34,7 @@ gantry:
     core: fiberglass
     pulley_teeth: 20
     pitch_mm: 2.0
-    pretension_n: 28.0
+    pretension_n: 9.0  # Voron-documented 110 Hz pluck on a 150 mm span (about 2 lb)
 kinematics:
   build_volume_mm: [300, 300, 300]
   max_velocity_mm_s: 450
@@ -62,10 +69,10 @@ kinematics:
     motor_mass_g: 340
 toolhead:
   preset_id: stealthburner
-  name: Stealth-Style Direct Drive
-  total_mass_g: 365
-  cog_offset_mm: [0, -22, -28]
-  nozzle_offset_mm: [0, -26, -66]
+  name: Voron StealthBurner + Clockwork 2
+  total_mass_g: 398
+  cog_offset_mm: [0, -24, 16]
+  nozzle_offset_mm: [0, -34, -60]
   mount_material: abs_printed
   internal_stiffness_n_per_mm: 350.0
   envelope_mm: [68, 74, 95]

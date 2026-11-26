@@ -73,51 +73,41 @@ def test_fastapi_endpoints() -> None:
     assert r_opt.json()["best_objective"] >= r_opt.json()["baseline_objective"]
 
 
-def test_studio_catalog_presets_are_generic_and_grouped_by_type() -> None:
-    """Studio /api/catalog exposes only generic printer-type presets; specific builds stay test-only."""
+def test_studio_catalog_presets_are_grouped_by_base_kit() -> None:
+    """Studio /api/catalog groups base machines by Siboor Kit, LDO Kit, and DIY Build."""
     client = TestClient(create_app())
     r_cat = client.get("/api/catalog")
     assert r_cat.status_code == 200
     presets = r_cat.json()["presets"]
-    assert len(presets) >= 6
+    assert len(presets) >= 10
 
     categories = {p["category"] for p in presets}
-    assert categories == {"corexy", "cartesian_bedslinger", "delta"}
+    assert categories == {"siboor_kit", "ldo_kit", "diy_build"}
 
-    forbidden_tokens = (
-        "voron",
-        "trident",
-        "monolith",
-        "vzbot",
-        "doomcube",
-        "ratrig",
-        "v-core",
-        "flsun",
-        "v400",
-        "cw_fixed",
-        "cloakedwayne",
-        "i3-style",
-    )
+    by_id = {p["id"]: p for p in presets}
+    assert by_id["siboor_voron_trident_awd_300"]["category"] == "siboor_kit"
+    assert by_id["siboor_voron_trident_awd_300"]["base_kit"] == "siboor"
+    assert by_id["siboor_voron_trident_awd_300"]["hardware_kit"] == "siboor_cnc_awd"
+    assert by_id["ldo_voron_trident_revd_300"]["category"] == "ldo_kit"
+    assert by_id["ldo_voron_trident_revd_300"]["base_kit"] == "ldo"
+    assert by_id["ldo_voron_trident_revd_300"]["hardware_kit"] == "ldo_voron_kit"
+    assert by_id["voron_trident_300"]["category"] == "diy_build"
+    assert by_id["voron_monolith_awd"]["category"] == "diy_build"
+    assert by_id["vzbot_330_awd"]["category"] == "diy_build"
+    assert by_id["vzbot_330_awd"]["hardware_kit"] == "vzbot_330_awd"
+
     for p in presets:
         assert p.get("short_name")
         assert p.get("category_label")
         assert p.get("summary")
-        haystack = f"{p['id']} {p['name']} {p['short_name']} {p['description']}".lower()
-        for tok in forbidden_tokens:
-            assert tok not in haystack, f"Specific build reference {tok!r} leaked into Studio preset {p['id']}"
-
-        # Every Studio default preset must also be fetchable via /api/presets/{id}
+        assert p.get("highlights")
         r_get = client.get(f"/api/presets/{p['id']}")
         assert r_get.status_code == 200
         assert r_get.json()["id"] == p["id"]
 
-    # Specific printer builds remain accessible for testing via /api/presets/{id}, not in /api/catalog
-    catalog_ids = {p["id"] for p in presets}
+    # Benchmark-only builds remain accessible via /api/presets/{id}, not in /api/catalog
+    catalog_ids = set(by_id)
     for test_build_id in (
-        "voron_trident_300",
-        "corexy_voron_style",
-        "voron_monolith_awd",
-        "vzbot_330_awd",
         "doomcube_4040",
         "ratrig_vcore31_300",
         "flsun_v400_delta",

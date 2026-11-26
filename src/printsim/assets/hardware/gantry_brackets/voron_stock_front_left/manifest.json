@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_stock_front_left",
+  "name": "Voron Stock Printed Front-Left Idler (ABS/ASA)",
+  "source_cad": "trident_assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Trident",
+  "baked_at": "2026-11-26T19:09:11Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 3283,
+  "num_elements": 10145,
+  "num_dofs": 9849,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.001488,
+  "mass_kg": 0.04284,
+  "com_mm": [
+    14.1691,
+    18.7993,
+    1.4581
+  ],
+  "port0_mm": [
+    0.0,
+    18.0,
+    0.0
+  ],
+  "port1_mm": [
+    19.0,
+    24.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 19029.964,
+    "ky": 13455.873,
+    "kz": 3326.604
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 945.57,
+    "kry": 2935.525,
+    "krz": 1328.235
+  },
+  "fixed_interface_freqs_hz": [
+    1517.17,
+    2098.96,
+    2753.75,
+    3594.95,
+    3905.36,
+    4362.46
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 19990,
+  "visual_bytes": 739520,
+  "cad_trust_pct": 88,
+  "source_hash": "37737f68dd215942c5b2570b607e3f724d36294ce612975550a63523d1f3fa33"
+}

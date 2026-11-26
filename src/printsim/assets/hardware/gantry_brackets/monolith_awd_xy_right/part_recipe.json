@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "monolith_awd_xy_right",
+  "source_cad": "xy_right.step",
+  "source_url": "https://cad.onshape.com/documents/739b76283701789caa9999c7/w/434ca8ef5e541eb4a503de27",
+  "regions": [
+    {
+      "label": "monolith_awd_xy_right",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "datum": "corner_or_carriage_centerline_0_0_0",
+  "shift_mm": [
+    -220.0,
+    -23.5,
+    0.0
+  ]
+}

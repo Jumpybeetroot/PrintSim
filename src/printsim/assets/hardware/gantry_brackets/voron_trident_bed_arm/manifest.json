@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_trident_bed_arm",
+  "name": "Voron Trident Z Bed Carriage & GE5C Arm Left (ABS/ASA)",
+  "source_cad": "trident_assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-Trident",
+  "baked_at": "2026-11-26T19:14:11Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 2719,
+  "num_elements": 8315,
+  "num_dofs": 8157,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.001687,
+  "mass_kg": 0.045585,
+  "com_mm": [
+    16.4485,
+    38.179,
+    13.2933
+  ],
+  "port0_mm": [
+    0.0,
+    20.0,
+    18.0
+  ],
+  "port1_mm": [
+    26.0,
+    68.0,
+    16.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 158.854,
+    "ky": 407.221,
+    "kz": 21.352
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 16.567,
+    "kry": 34.28,
+    "krz": 140.54
+  },
+  "fixed_interface_freqs_hz": [
+    1791.18,
+    2541.34,
+    3115.65,
+    4363.25,
+    5055.24,
+    6009.55
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21994,
+  "visual_bytes": 727212,
+  "cad_trust_pct": 88,
+  "source_hash": "d344bb300c336b619c191bcffc964cd779ea1269da0f22e8597a46548ad372dc"
+}

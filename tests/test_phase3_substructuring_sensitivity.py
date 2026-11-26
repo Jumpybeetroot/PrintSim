@@ -421,13 +421,16 @@ def test_rcsa_timoshenko_beam_and_toolhead_whip_physics() -> None:
     rcsa_1x = analyze_toolhead_rcsa(asm, mod, mount_stiffness_scale=1.0)
     rcsa_2x = analyze_toolhead_rcsa(asm, mod, mount_stiffness_scale=2.0)
 
-    # Also test doubling toolhead_mount member stiffness directly on assembly.members
+    # Also test doubling toolhead_mount stiffness directly on assembly members or CAD superelements
     asm_doubled = build_assembly(spec)
     for m in asm_doubled.members:
         if m.id == "toolhead_mount":
             m.material = m.material.model_copy(
                 update={"youngs_modulus_pa": m.material.youngs_modulus_pa * 2.0}
             )
+    for se in asm_doubled.superelements:
+        if se.id == "toolhead_mount":
+            se.K_cb = se.K_cb * 2.0
     rcsa_mem_2x = analyze_toolhead_rcsa(asm_doubled, mod)
 
     assert rcsa_1x.nozzle_to_sensor_amp_ratio >= 1.0

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "voron_24_z_drive_right",
+  "source_cad": "Voron_2.4r2_Assembly.step",
+  "source_url": "https://github.com/VoronDesign/Voron-2",
+  "regions": [
+    {
+      "label": "voron_24_z_drive_right",
+      "material_id": "abs_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "datum": "exact_official_step_assembled_coords",
+  "step_subassembly": "Z_Assembly/Z_Belt_Drive_B__1_",
+  "shift_mm": [
+    -322.0,
+    28.0,
+    48.1
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "siboor_awd_rear_right",
+  "name": "Siboor CNC 6061 Rear-Right Drive (AWD)",
+  "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
+  "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
+  "baked_at": "2026-11-26T19:06:16Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 4190,
+  "num_elements": 11455,
+  "num_dofs": 12570,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.007689,
+  "mass_kg": 0.184278,
+  "com_mm": [
+    -49.3625,
+    -13.9297,
+    -3.0628
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -55.0,
+    -16.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 70979.257,
+    "ky": 10424.31,
+    "kz": 12106.87
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 9328.348,
+    "kry": 29635.875,
+    "krz": 23765.595
+  },
+  "fixed_interface_freqs_hz": [
+    3499.48,
+    3967.26,
+    4170.44,
+    4279.58,
+    6649.92,
+    7471.55
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23983,
+  "visual_bytes": 991720,
+  "cad_trust_pct": 88,
+  "source_hash": "b4aff1953198515fd6b74a704517c81054c24315fd72e7a22f29cc5af4ab44e5"
+}

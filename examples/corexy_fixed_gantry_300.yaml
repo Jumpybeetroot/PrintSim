@@ -14,14 +14,20 @@ frame:
   panel_mounting: clip_enclosure
   panel_material: acrylic_pmma
   panel_thickness_mm: 3.0
+  gantry_top_clearance_mm: 110.0
 gantry:
+  hardware_kit: voron_stock_printed
   drive_mode: 2wd
+  belt_routing: stock_corexy
   double_shear_pulleys: false
   x_beam_profile: extrusion_2020
   x_beam_material: aluminum_6063_t5
   x_rail_profile: mgn12_rail
   y_rail_profile: mgn9_rail
+  x_rail_mount: front
+  y_rail_mount: bottom
   rail_material: steel_4140
+  rail_block_type: H
   dual_x_rails: false
   carriage_mass_g: 196
   belt:
@@ -29,7 +35,7 @@ gantry:
     core: fiberglass
     pulley_teeth: 20
     pitch_mm: 2.0
-    pretension_n: 28.0
+    pretension_n: 9.0  # 110 Hz pluck on a 150 mm span (Voron-documented 6 mm belt tension)
 kinematics:
   build_volume_mm: [300, 300, 250]
   max_velocity_mm_s: 450

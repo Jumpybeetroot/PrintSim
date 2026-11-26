@@ -345,9 +345,10 @@ def test_panel_fastener_series_compliance_and_vertical_mass_distribution() -> No
     assert mo_clip.fundamental_freq_hz < mo_open.fundamental_freq_hz * 1.15
 
     # Bolted 4mm ACM (+gantry) cuts deflection dramatically and outperforms Bolted 3mm Acrylic
-    # Bolted 4mm ACM (+gantry) cuts combined deflection ~19% and Y-accel deflection >45% vs Castigliano w_end=0.49 Z-railed open columns
-    assert st_bolt_4acm.combined_max_deflection_um < st_open.combined_max_deflection_um * 0.85
-    assert st_bolt_4acm.accel_deflection_y_um < st_open.accel_deflection_y_um * 0.63
+    # Bolted 4mm ACM (+gantry) cuts combined deflection >10% (gravity sag through ABS XY-joints stays constant)
+    # and cuts Y-accel deflection >31% vs Castigliano w_end=0.49 Z-railed open columns
+    assert st_bolt_4acm.combined_max_deflection_um < st_open.combined_max_deflection_um * 0.91
+    assert st_bolt_4acm.accel_deflection_y_um < st_open.accel_deflection_y_um * 0.69
     assert st_bolt_4acm.toolhead_stiffness_x_n_per_mm > st_bolt_acr.toolhead_stiffness_x_n_per_mm
     assert st_bolt_4acm.toolhead_stiffness_y_n_per_mm > st_bolt_acr.toolhead_stiffness_y_n_per_mm
     assert mo_bolt_4acm.fundamental_freq_hz > mo_bolt_acr.fundamental_freq_hz

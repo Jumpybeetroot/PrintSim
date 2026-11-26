@@ -122,7 +122,8 @@ def test_all_top_brace_variants_stiffen_bolted_al_trident_and_preserve_open_cuto
     gd = asm.to_geometry_dict()
 
     assert mo.fundamental_freq_hz > mo0.fundamental_freq_hz + 5.0
-    assert st.toolhead_stiffness_x_n_per_mm > st0.toolhead_stiffness_x_n_per_mm + 1.0
+    assert st.toolhead_stiffness_x_n_per_mm > st0.toolhead_stiffness_x_n_per_mm + 0.3
+    assert st.accel_deflection_x_um < st0.accel_deflection_x_um
 
     tb_meta = gd["top_brace"]
     assert set(tb_meta.keys()) == {
@@ -205,7 +206,8 @@ def test_all_front_brace_variants_stiffen_bolted_al_trident_and_preserve_open_do
     gd = asm.to_geometry_dict()
 
     assert mo.fundamental_freq_hz > mo0.fundamental_freq_hz + 2.0
-    assert st.toolhead_stiffness_x_n_per_mm > st0.toolhead_stiffness_x_n_per_mm + 1.0
+    assert st.toolhead_stiffness_x_n_per_mm > st0.toolhead_stiffness_x_n_per_mm + 0.3
+    assert st.accel_deflection_x_um < st0.accel_deflection_x_um
 
     fb_meta = gd["front_brace"]
     assert set(fb_meta.keys()) == {

@@ -26,9 +26,12 @@ import {
   TopoOptRequestParams,
 } from "../types";
 
-const PRINTER_TYPE_ORDER = ["corexy", "cartesian_bedslinger", "delta"] as const;
+const PRINTER_TYPE_ORDER = ["siboor_kit", "ldo_kit", "diy_build", "corexy", "cartesian_bedslinger", "delta"] as const;
 
 const PRINTER_TYPE_FALLBACK_LABELS: Record<string, string> = {
+  siboor_kit: "Siboor Kit",
+  ldo_kit: "LDO Kit",
+  diy_build: "DIY / Self-Sourced Build",
   corexy: "CoreXY",
   cartesian_bedslinger: "Cartesian Bedslinger",
   delta: "Delta",
@@ -49,6 +52,7 @@ interface Props {
   sim: SimulationResponse | null;
   selectedPreset: string;
   onSelectPreset: (id: string) => void;
+  onOpenBaseMachineChooser?: () => void;
   filamentId: string;
   onFilamentChange: (id: string) => void;
   spec: PrinterSpecData | null;
@@ -120,6 +124,7 @@ export const DesignPanel: React.FC<Props> = ({
   sim,
   selectedPreset,
   onSelectPreset,
+  onOpenBaseMachineChooser,
   filamentId,
   onFilamentChange,
   spec,
@@ -363,7 +368,7 @@ export const DesignPanel: React.FC<Props> = ({
       <div className="design-header">
         <div className="printer-picker" ref={printerPickerRef}>
           <div className="design-header-row">
-            <label htmlFor="design-preset-trigger">Printer</label>
+            <label htmlFor="design-preset-trigger">Base Machine</label>
             <button
               ref={printerTriggerRef}
               type="button"
@@ -373,13 +378,15 @@ export const DesignPanel: React.FC<Props> = ({
               aria-controls="design-preset-panel"
               title={
                 activePreset
-                  ? `${activePreset.name} — click to browse default printers by type`
-                  : "Custom or saved configuration — click to browse default printers by type"
+                  ? `${activePreset.name} — click to switch base kit (Siboor, LDO, or DIY)`
+                  : "Custom or saved configuration — click to pick a base machine kit"
               }
               onClick={() => {
                 if (printerPickerOpen) {
                   closePrinterPicker();
                 } else {
+                  const activeCat = activePreset?.category;
+                  setExpandedPrinterTypes(activeCat ? { [activeCat]: true } : { siboor_kit: true });
                   setPrinterPickerOpen(true);
                 }
               }}
@@ -399,7 +406,7 @@ export const DesignPanel: React.FC<Props> = ({
               id="design-preset-panel"
               className="printer-picker-panel"
               role="region"
-              aria-label="Default printers by type"
+              aria-label="Base machine kits and DIY builds"
             >
               {presetGroups.map((group) => {
                 const isExpanded = Boolean(expandedPrinterTypes[group.category]);
@@ -433,7 +440,7 @@ export const DesignPanel: React.FC<Props> = ({
                         id={listId}
                         className="printer-type-list"
                         role="group"
-                        aria-label={`${group.label} default printers`}
+                        aria-label={`${group.label} base builds`}
                       >
                         {group.items.map((p) => {
                           const isActive = p.id === selectedPreset;
@@ -463,6 +470,20 @@ export const DesignPanel: React.FC<Props> = ({
                   </div>
                 );
               })}
+              {onOpenBaseMachineChooser && (
+                <div className="printer-picker-footer">
+                  <button
+                    type="button"
+                    className="btn printer-picker-chooser-btn"
+                    onClick={() => {
+                      closePrinterPicker();
+                      onOpenBaseMachineChooser();
+                    }}
+                  >
+                    Browse All Kits &amp; Specs…
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

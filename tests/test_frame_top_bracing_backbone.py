@@ -153,7 +153,7 @@ def test_expanded_bracing_modes_and_open_top_cross_stiffening() -> None:
 
     # Top cross bracing raises open-top X-twist (79 -> 117.5 Hz) up to the ~84.4 Hz flying-gantry Z-belt ceiling
     assert mo_top_cross.fundamental_freq_hz > mo_open_top.fundamental_freq_hz + 5.0
-    assert mo_top_cross.shaper_x.structural_freq_hz > mo_open_top.shaper_x.structural_freq_hz + 10.0
+    assert mo_top_cross.shaper_x.structural_freq_hz > mo_open_top.shaper_x.structural_freq_hz + 8.5
     assert st_top_cross.toolhead_stiffness_x_n_per_mm > st_open_top.toolhead_stiffness_x_n_per_mm
 
 

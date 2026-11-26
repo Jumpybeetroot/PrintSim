@@ -682,7 +682,7 @@ def _mesh_solid_voxel_tet4(
 
     tm = _shape_to_trimesh_mm(shape, tolerance_mm=0.06, angular_tol=0.18)
     bmin, bmax = tm.bounds
-    h = float(np.clip(mesh_size_mm * 0.62, 0.75, 1.80))
+    h = float(np.clip(mesh_size_mm * 0.62, 0.75, 3.20))
 
     # Align X, Y, Z grids cleanly: snap Y to Port 0 plane (e.g. MGN carriage face Y=0) and Z to Port 1 plane (e.g. Z=27.5)
     axes_grids: list[np.ndarray] = []
@@ -835,7 +835,10 @@ def _mesh_regions_tet4(
                 tm = regions[0].solid.copy()
                 # Multi-shell STL assemblies (e.g., 3-part bolted toolhead STLs) fuse cleanly via
                 # snapped conforming 5-tet-per-voxel rasterization; single watertight STLs try Gmsh first.
-                comps = tm.split(only_watertight=False)
+                try:
+                    comps = tm.split(only_watertight=False, repair=False)
+                except Exception:
+                    comps = [tm, tm]  # Fall through to voxel Tet4 when trimesh split fails
                 if len(comps) == 1 and tm.is_watertight:
                     if len(tm.faces) > fea_surface_max_triangles:
                         tm = decimate_trimesh_qem(tm, target_triangles=fea_surface_max_triangles)
@@ -1591,7 +1594,14 @@ def bake_solid_superelement(
     p0_mask = np.asarray(spec.port0.selector(bnd_coords_mm), dtype=bool)
     p1_mask = np.asarray(spec.port1.selector(bnd_coords_mm), dtype=bool)
     p0_nodes = bnd_nodes[p0_mask]
-    p1_nodes = np.setdiff1d(bnd_nodes[p1_mask], p0_nodes)
+    p1_raw_nodes = bnd_nodes[p1_mask]
+    overlap_nodes = np.intersect1d(p0_nodes, p1_raw_nodes)
+    if len(overlap_nodes) > 0:
+        raise ValueError(
+            f"Port 0 and Port 1 for '{spec.asset_id}' overlap on {len(overlap_nodes)} boundary nodes; "
+            "tighten port selectors so the two bolted interfaces stay strictly disjoint"
+        )
+    p1_nodes = p1_raw_nodes
 
     if len(p0_nodes) < 4:
         raise ValueError(

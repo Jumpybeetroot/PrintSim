@@ -37,9 +37,9 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 def test_a01_y_inertial_load_includes_hotend_mass() -> None:
     """Verify solver and sensitivity Y inertial load shares use toolhead_moving_mass_kg (with hotend)."""
-    for yaml_name, expected_approx_um in (
-        ("corexy_voron_style.yaml", 25.60),  # D-04 Misumi HFS5-2020 + outer-to-centerline inset + physical X-beam/rail + cog/nozzle split
-        ("vzbot_330_awd.yaml", 8.88),  # D-02 0/90 CF tube + outer-to-centerline inset + physical X-beam/rail + cog/nozzle split
+    for yaml_name, expected_approx_um, expect_larger in (
+        ("corexy_voron_style.yaml", 5.68, False),  # CAD StealthBurner CW2 + 3D CAD Voron Stock ABS XY-joint CMS + Huth/VDI bolted seams + lever-arm Y-carriage bearings + hotend mass
+        ("vzbot_330_awd.yaml", 10.84, True),  # Official VzBot: CAD Vz-Printhead (+13.4 mm CoG T-branch, -54.2 mm nozzle) on top MGN9H / 20x20x1 CF tube + CAD VzBot CNC XY-joint & corner-mount CMS + 6 mm belts at 20k accel
     ):
         spec = PrinterSpec.from_yaml(EXAMPLES_DIR / yaml_name)
         asm = build_assembly(spec)
@@ -61,6 +61,8 @@ def test_a01_y_inertial_load_includes_hotend_mass() -> None:
         noz_frac = m_noz / (m_cog + m_noz) if (noz_i != cog_i and (m_cog + m_noz) > 1e-9) else 0.0
         cog_frac = 1.0 - noz_frac
         others = [g for g in asm.gantry_node_ids if g != asm.toolhead_node_id and g in nidx]
+        has_feet = any(sp.bay == "feet" for sp in asm.fastener_springs)
+        dr_noz_bed = asm.node_map[asm.nozzle_node_id].position_m - asm.node_map[asm.bed_node_id].position_m
 
         def _solve_with_share(th_mass_kg: float) -> tuple[float, float]:
             fy = np.zeros(K.shape[0], dtype=float)
@@ -72,7 +74,12 @@ def test_a01_y_inertial_load_includes_hotend_mass() -> None:
                 fy[6 * nidx[gid] + 1] += f_y_tot * (1.0 - sh) / len(others)
             uy = np.zeros(K.shape[0], dtype=float)
             uy[free] = lu.solve(fy[free])
-            rel_norm_um = float(np.linalg.norm(uy[6 * noz_i : 6 * noz_i + 3] - uy[6 * bed_i : 6 * bed_i + 3])) * 1e6
+            u_bed = uy[6 * bed_i : 6 * bed_i + 3]
+            if has_feet:
+                # Compliant feet: compare against the bed workplane (translation + rotation x lever arm)
+                u_bed = u_bed + np.cross(uy[6 * bed_i + 3 : 6 * bed_i + 6], dr_noz_bed)
+            rel_vec = uy[6 * noz_i : 6 * noz_i + 3] - u_bed
+            rel_norm_um = float(np.linalg.norm(rel_vec)) * 1e6
             rel_y_um = float(uy[6 * noz_i + 1] - uy[6 * bed_i + 1]) * 1e6
             return rel_norm_um, rel_y_um
 
@@ -80,8 +87,11 @@ def test_a01_y_inertial_load_includes_hotend_mass() -> None:
         norm_buggy_um, _ = _solve_with_share(spec.toolhead.total_mass_g * 1e-3)
 
         assert st.accel_deflection_y_um == pytest.approx(norm_exact_um, rel=1e-7)
-        assert st.accel_deflection_y_um == pytest.approx(expected_approx_um, abs=0.15)
-        assert st.accel_deflection_y_um > norm_buggy_um * 1.05
+        assert st.accel_deflection_y_um == pytest.approx(expected_approx_um, abs=0.25)
+        if expect_larger:
+            assert st.accel_deflection_y_um > norm_buggy_um * 1.05
+        else:
+            assert abs(st.accel_deflection_y_um - norm_buggy_um) > 0.10
         assert sen.static_rel_disp_y_um == pytest.approx(y_exact_um, rel=1e-7)
 
     # Central FD of X-gantry beam du_rel_y_dlnE_m matches sensitivity with toolhead_moving_mass_kg

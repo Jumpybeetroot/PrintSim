@@ -83,6 +83,8 @@ def _classify_sensitivity_group(
         return "frame_feet", "Machine Feet & Benchtop Pads"
     if bay == "z_joint" or mid.startswith("z_joint"):
         return "z_gantry_joints", "Z-Axis Gantry Joints"
+    if bay == "y_carriage" or mid.startswith("y_car_bearing_"):
+        return "y_rail_carriages", "Y-Rail Carriage Bearings (Hertzian)"
     if bay in ("bed_z_drive", "z_guide") or mid.startswith(("z_bed_drive_", "z_rod_brg_")):
         return "bed_support", "Bed Support & Z Arms"
     if bay == "top_brace" or mid.startswith(("bay_top_brace", "top_brace")):
@@ -113,7 +115,7 @@ def _solve_eigen_modes(
     """
     n_free = K_ff.shape[0]
     k_scan = min(target_scan, n_free)
-    want_sparse = n_free > 500 and 1 <= k_scan < n_free - 1
+    want_sparse = n_free > 600 and 1 <= k_scan < n_free - 1
     if system is not None:
         shared = system.peek(("eigen", "sparse" if want_sparse else "dense", int(k_scan)))
         if shared is not None:
@@ -224,8 +226,8 @@ def _member_mass_and_cost(
         eff_cost_kg = cost / max(m_exact, 1e-6) if cost > 0.0 else member.material.cost_per_kg_usd
         return m_exact, max(m_exact, 1e-4), cost, max(eff_cost_kg, 0.5)
 
-    # Virtual massless link (toolhead_mount, nozzle_stem, bed_arm_*, panel_shear_*)
-    if member.id == "toolhead_mount":
+    # Virtual massless link (toolhead_mount, toolhead_mount_upper, nozzle_stem, bed_arm_*, panel_shear_*)
+    if member.id in ("toolhead_mount", "toolhead_mount_upper"):
         ref_mat = get_material(spec.toolhead.mount_material)
         m_ref = 0.06
     elif member.id == "nozzle_stem":
@@ -339,6 +341,24 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
             return "Main limit: Y-rail beam lateral/torsional stiffness (Y-rails are not shear-coupled to side panels)."
         return "Main limit: Y-rail beam & carriage lateral/torsional stiffness and XY-joint bracket compliance."
 
+    if group_id == "xy_joints":
+        return (
+            f"Main limit: 3D CAD XY-joint bracket stiffness ('{spec.gantry.bracket_material}') "
+            "coupling the X-gantry beam to the Y linear rails."
+        )
+
+    if group_id == "y_rail_carriages":
+        return (
+            f"Main limit: Y-axis linear-rail carriage Hertzian contact & roll compliance "
+            f"('{spec.gantry.y_rail_profile}', preload '{spec.gantry.rail_preload}')."
+        )
+
+    if group_id == "gantry_brackets":
+        return (
+            f"Main limit: 3D CAD A/B motor-mount & front-idler bracket stiffness "
+            f"('{spec.gantry.bracket_material}') under belt tension and drive inertia."
+        )
+
     if group_id == "x_gantry_beam" or role == "gantry":
         return "Main limit: X-gantry beam & X-rail bending/torsional stiffness under toolhead acceleration."
 
@@ -384,6 +404,12 @@ def _stiffen_why(group_id: str, comp_pct: float, est_hz_gain: float) -> str:
             return f"Carries {comp_pct:.0f}% of effector-to-frame flex & drives primary resonance (+{est_hz_gain:.1f} Hz potential)"
         if group_id == "y_axis_rail_beams":
             return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex along Y & supports gantry inertia (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "xy_joints":
+            return f"3D CAD XY-joint bracket flex carries {comp_pct:.0f}% of nozzle-to-bed flex (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "y_rail_carriages":
+            return f"Y-rail carriage Hertzian roll/contact carries {comp_pct:.0f}% of nozzle-to-bed flex (+{est_hz_gain:.1f} Hz potential)"
+        if group_id == "gantry_brackets":
+            return f"3D CAD corner motor/idler bracket flex carries {comp_pct:.0f}% of loop flex (+{est_hz_gain:.1f} Hz potential)"
         if group_id == "x_gantry_beam":
             return f"Carries {comp_pct:.0f}% of nozzle-to-bed flex under X/Y acceleration (+{est_hz_gain:.1f} Hz potential)"
         if group_id == "toolhead_mount":
@@ -858,7 +884,7 @@ def compute_structural_sensitivities(
         stiff_x = float(px @ k_sp @ px) * inv_8pi2_x
         stiff_y = float(py @ k_sp @ py) * inv_8pi2_y
 
-        if bay_raw not in ("bed_mount", "bed_z_drive", "z_guide", "toolhead", "feet", "z_joint") and bay_prefix in bay_acc:
+        if bay_raw not in ("bed_mount", "bed_z_drive", "z_guide", "toolhead", "feet", "z_joint", "y_carriage") and bay_prefix in bay_acc:
             b = bay_acc[bay_prefix]
             b["du_rel_x_dlnE_m"] += dux
             b["du_rel_y_dlnE_m"] += duy
@@ -877,6 +903,8 @@ def compute_structural_sensitivities(
             sp_role, sp_cost, sp_ref_mass = "toolhead", 25.0, 0.06
         elif bay_raw == "z_joint":
             sp_role, sp_cost, sp_ref_mass = "gantry", 25.0, 0.15
+        elif bay_raw == "y_carriage":
+            sp_role, sp_cost, sp_ref_mass = "rail", 25.0, 0.05
         else:
             sp_role, sp_cost, sp_ref_mass = "frame", 15.0, 0.10
 
@@ -939,6 +967,12 @@ def compute_structural_sensitivities(
         elif se.id == "nozzle_stem":
             ref_mat = get_material("aluminum_6061_t6")
             m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.025)
+        elif getattr(se, "category", "") == "gantry_brackets":
+            ref_mat = get_material(assembly.spec.gantry.bracket_material)
+            m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.03)
+        elif getattr(se, "category", "") == "linear_rails":
+            ref_mat = get_material(assembly.spec.gantry.rail_material)
+            m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.04)
         else:
             ref_mat = get_material(assembly.spec.toolhead.mount_material)
             m_ref = max(float(getattr(se, "mass_kg", 0.0)), 0.05)

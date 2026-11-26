@@ -1946,9 +1946,19 @@ def generate_bom(
                 ("ENC-DOOR", "Front Door Enclosure Panel (w/ Hinges & Latch)", w, h, 1.0),
             ]
 
+        side_mat = (
+            get_material(spec.frame.side_panel_material)
+            if spec.frame.side_panel_material
+            else pmat
+        )
         for sku, pname, dim_a, dim_b, area_factor in panel_defs:
             is_door = sku == "ENC-DOOR"
-            active_mat = door_mat if is_door else pmat
+            if is_door:
+                active_mat = door_mat
+            elif sku in ("ENC-LEFT", "ENC-RIGHT"):
+                active_mat = side_mat
+            else:
+                active_mat = pmat
             area_m2 = (dim_a * 1e-3) * (dim_b * 1e-3) * area_factor
             panel_props = panel_mechanical_properties(
                 active_mat,

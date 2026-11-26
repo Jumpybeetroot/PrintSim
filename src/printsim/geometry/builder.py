@@ -14,6 +14,7 @@ from printsim.schema import (
     FRAME_FEET_CATALOG,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
+    GANTRY_HARDWARE_KIT_CATALOG,
     HOTEND_CATALOG,
     PROFILE_CATALOG,
     TOOLHEAD_CONSTRUCTION_CATALOG,
@@ -107,6 +108,7 @@ class FastenerSpring:
     k_rot_nm_rad: float
     normal_vec: tuple[float, float, float] = (0.0, 0.0, 1.0)
     offset_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    k_diag_6dof: tuple[float, float, float, float, float, float] | None = None
 
 
 @dataclass
@@ -213,6 +215,11 @@ class AssemblyModel:
     total_rail_mass_kg: float = 0.0
     frame_damping_ratio: float = 0.042
     total_mass_kg: float = 0.0
+    ballast_mass_kg: float = 0.0
+    ballast_node_ids: list[str] = field(default_factory=list)
+    # Toolhead position in the build volume as fractions of X / Y / Z travel (belt branch lengths)
+    toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
+    suspension_line_tension_n: float = 0.0
     estimated_material_cost_usd: float = 0.0
     panel_rep_props: dict[str, float] | None = None
     toolhead_stage_stiffnesses_n_per_mm: dict[str, float] = field(default_factory=dict)
@@ -255,17 +262,20 @@ class AssemblyModel:
         specs: list[tuple[str, str, str, str, tuple[float, float, float]]] = []
         if arch == "corexy":
             if z_drive == "belted_quad_z":
+                # Official Voron 2.4r2: Z-rails bolt onto inner ±Y faces of the 4 vertical columns
                 specs = [
-                    ("z_rail_fl", "b_fl", "t_fl", "col_g_fl", (1.0, 0.0, 0.0)),
-                    ("z_rail_fr", "b_fr", "t_fr", "col_g_fr", (-1.0, 0.0, 0.0)),
-                    ("z_rail_rl", "b_rl", "t_rl", "col_g_rl", (1.0, 0.0, 0.0)),
-                    ("z_rail_rr", "b_rr", "t_rr", "col_g_rr", (-1.0, 0.0, 0.0)),
+                    ("z_rail_fl", "b_fl", "t_fl", "col_g_fl", (0.0, 1.0, 0.0)),
+                    ("z_rail_fr", "b_fr", "t_fr", "col_g_fr", (0.0, 1.0, 0.0)),
+                    ("z_rail_rl", "b_rl", "t_rl", "col_g_rl", (0.0, -1.0, 0.0)),
+                    ("z_rail_rr", "b_rr", "t_rr", "col_g_rr", (0.0, -1.0, 0.0)),
                 ]
             elif z_drive == "leadscrew_triple":
+                # Official Voron Trident: front Z-rails on +Y inner face of front columns,
+                # rear Z-rail on -X side face of rear vertical extrusion (clears rear leadscrew at Y=-32mm)
                 specs = [
                     ("z_rail_fl", "b_fl", "t_fl", "z_bed_fl", (0.0, 1.0, 0.0)),
                     ("z_rail_fr", "b_fr", "t_fr", "z_bed_fr", (0.0, 1.0, 0.0)),
-                    ("z_rail_rear", "b_rear_mid", "g_rear_mid", "z_bed_r", (0.0, -1.0, 0.0)),
+                    ("z_rail_rear", "b_rear_mid", "g_rear_mid", "z_bed_r", (-1.0, 0.0, 0.0)),
                 ]
             elif z_drive == "leadscrew_dual":
                 specs = [
@@ -337,17 +347,19 @@ class AssemblyModel:
         specs: list[tuple[str, str, str, str, tuple[float, float, float]]] = []
         if arch == "corexy":
             if z_drive == "belted_quad_z":
+                # Official Voron 2.4r2: 20T Z-belt pulley axis in Z_Belt_Drive_A/B is at (±16.8, ±38.0) mm
                 specs = [
-                    ("z_drive_fl", "b_fl", "t_fl", "col_g_fl", (18.0, 12.0, 0.0)),
-                    ("z_drive_fr", "b_fr", "t_fr", "col_g_fr", (-18.0, 12.0, 0.0)),
-                    ("z_drive_rl", "b_rl", "t_rl", "col_g_rl", (18.0, -12.0, 0.0)),
-                    ("z_drive_rr", "b_rr", "t_rr", "col_g_rr", (-18.0, -12.0, 0.0)),
+                    ("z_drive_fl", "b_fl", "t_fl", "col_g_fl", (16.8, 38.0, 0.0)),
+                    ("z_drive_fr", "b_fr", "t_fr", "col_g_fr", (-16.8, 38.0, 0.0)),
+                    ("z_drive_rl", "b_rl", "t_rl", "col_g_rl", (16.8, -38.0, 0.0)),
+                    ("z_drive_rr", "b_rr", "t_rr", "col_g_rr", (-16.8, -38.0, 0.0)),
                 ]
             elif z_drive == "leadscrew_triple":
+                # Official Voron Trident: Z leadscrew axes in Z_Motors & Z_Left/Right/Rear are at (±32, +36) & (0, -32) mm
                 specs = [
-                    ("z_drive_fl", "b_fl", "g_fl", "z_bed_fl", (20.0, 0.0, 0.0)),
-                    ("z_drive_fr", "b_fr", "g_fr", "z_bed_fr", (-20.0, 0.0, 0.0)),
-                    ("z_drive_rear", "b_rear_mid", "g_rear_mid", "z_bed_r", (0.0, -20.0, 0.0)),
+                    ("z_drive_fl", "b_fl", "g_fl", "z_bed_fl", (32.0, 36.0, 0.0)),
+                    ("z_drive_fr", "b_fr", "g_fr", "z_bed_fr", (-32.0, 36.0, 0.0)),
+                    ("z_drive_rear", "b_rear_mid", "g_rear_mid", "z_bed_r", (0.0, -32.0, 0.0)),
                 ]
             elif z_drive in ("leadscrew_dual", "leadscrew_dual_belt_sync"):
                 specs = [
@@ -543,8 +555,75 @@ class AssemblyModel:
             else (["bed_frame"] * len(mount_pts) if "bed_frame" in nmap else [])
         )
         hid_vis = (self.spec.toolhead.hotend.preset_id or "").lower().strip() or None
-        tid_vis = (self.spec.toolhead.preset_id or "").lower().strip() or None
+        tid_vis = resolve_toolhead_cad_asset_id(self.spec.toolhead.preset_id) or None
         th_acc = resolve_toolhead_hardware_accessories(self.spec)
+
+        # CAD gantry hardware kit visual & stiffness metadata
+        hw_kit_id = self.spec.resolve_effective_gantry_hardware_kit()
+        hw_kit_meta = GANTRY_HARDWARE_KIT_CATALOG.get(hw_kit_id, {})
+        hw_kit_stations: dict[str, str] = dict(hw_kit_meta.get("stations") or {})
+        gantry_cad_assets: dict[str, dict[str, Any]] = {}
+
+        if hw_kit_stations and hw_kit_id != "procedural":
+            try:
+                from printsim.cad_assets.registry import (
+                    get_hardware_asset_manifest,
+                    get_visual_glb_path,
+                )
+            except ImportError:
+                get_hardware_asset_manifest = None  # type: ignore[assignment]
+                get_visual_glb_path = None  # type: ignore[assignment]
+
+            if get_visual_glb_path is not None:
+                bkt_mat_obj = get_material(bkt_id)
+                station_stiffs = bkt_resolved.get("cad_station_stiffnesses_n_per_mm") or {}
+                for st_key, aid in hw_kit_stations.items():
+                    if not aid:
+                        continue
+                    if get_visual_glb_path("gantry_brackets", aid) is None:
+                        continue
+                    man = (
+                        get_hardware_asset_manifest("gantry_brackets", aid)
+                        if get_hardware_asset_manifest is not None
+                        else None
+                    ) or {}
+                    raw_mass_kg = float(man.get("mass_kg", 0.0))
+                    if (
+                        raw_mass_kg > 0.0
+                        and not bool(man.get("is_multi_material", False))
+                        and float(man.get("reference_density_kg_m3", 0.0)) > 0.0
+                    ):
+                        raw_mass_kg *= float(bkt_mat_obj.density_kg_m3) / float(
+                            man["reference_density_kg_m3"]
+                        )
+                    st_k = station_stiffs.get(st_key)
+                    if st_k is None:
+                        ps = man.get("port_stiffness_n_per_mm")
+                        if isinstance(ps, dict) and "kx" in ps and "ky" in ps:
+                            kx_v = max(float(ps["kx"]), 1e-6)
+                            ky_v = max(float(ps["ky"]), 1e-6)
+                            k_planar = 2.0 / (1.0 / kx_v + 1.0 / ky_v)
+                            if (
+                                not bool(man.get("is_multi_material", False))
+                                and float(man.get("reference_youngs_modulus_pa", 0.0)) > 0.0
+                            ):
+                                k_planar *= float(
+                                    bkt_mat_obj.effective_modulus_pa(
+                                        float(self.spec.frame.chamber_temp_c)
+                                    )
+                                ) / float(man["reference_youngs_modulus_pa"])
+                            st_k = round(k_planar, 2)
+                    p0_raw = man.get("port0_mm", [0.0, 0.0, 0.0])
+                    p1_raw = man.get("port1_mm", [0.0, 0.0, 0.0])
+                    gantry_cad_assets[st_key] = {
+                        "asset_id": aid,
+                        "visual_glb_url": f"/api/assets/hardware/gantry_brackets/{aid}/visual.glb",
+                        "mass_g": round(raw_mass_kg * 1000.0, 2),
+                        "stiffness_n_per_mm": st_k,
+                        "port0_mm": [float(v) for v in p0_raw[:3]],
+                        "port1_mm": [float(v) for v in p1_raw[:3]],
+                    }
+
         return {
             "architecture": self.spec.architecture,
             "drive_mode": self.spec.gantry.drive_mode,
@@ -571,6 +650,35 @@ class AssemblyModel:
                 "kit_cost_usd": bkt_info["kit_cost_usd"],
                 "carriage_mass_delta_g": round(float(bkt_resolved["carriage_mass_delta_g"]), 2),
                 "color_hex": bkt_info["color_hex"],
+                "hardware_kit": hw_kit_id,
+                "hardware_kit_requested": self.spec.gantry.hardware_kit,
+                "hardware_kit_label": str(hw_kit_meta.get("name") or hw_kit_id),
+                "cad_backed": bool(bkt_resolved.get("cad_backed", False)),
+                "cad_xy_fea_active": bool(
+                    any(
+                        se.id in ("xy_joint_l", "xy_joint_r")
+                        and se.asset_id != "procedural_xy_joint"
+                        for se in self.superelements
+                    )
+                ),
+                "xy_joint_fea_active": bool(
+                    any(se.id in ("xy_joint_l", "xy_joint_r") for se in self.superelements)
+                ),
+                "xy_joint_model": (
+                    "cad_tet4"
+                    if any(
+                        se.id in ("xy_joint_l", "xy_joint_r")
+                        and se.asset_id != "procedural_xy_joint"
+                        for se in self.superelements
+                    )
+                    else (
+                        "analytical_bolted"
+                        if any(se.id in ("xy_joint_l", "xy_joint_r") for se in self.superelements)
+                        else "rigid"
+                    )
+                ),
+                "cad_stiffness_n_per_mm": round(float(bkt_resolved["stiffness_n_m"]) * 1e-3, 2),
+                "cad_assets": gantry_cad_assets,
             },
             "linear_rails": {
                 "x_rail_profile": self.spec.gantry.x_rail_profile,
@@ -608,6 +716,12 @@ class AssemblyModel:
                 "mounting": self.spec.frame.panel_mounting if panels_active else "none",
                 "material_id": self.spec.frame.panel_material,
                 "material_name": pmat.name,
+                "side_material_id": self.spec.frame.side_panel_material or self.spec.frame.panel_material,
+                "side_material_name": (
+                    get_material(self.spec.frame.side_panel_material).name
+                    if self.spec.frame.side_panel_material
+                    else pmat.name
+                ),
                 "thickness_mm": self.spec.frame.panel_thickness_mm,
                 "color_hex": pmat.color_hex,
                 "bolted_to_gantry": self.spec.panels_bolted_to_gantry_effective,
@@ -659,6 +773,29 @@ class AssemblyModel:
             "z_leadscrew_type": self.spec.bed.z_leadscrew_type,
             "effective_z_leadscrew_type": self.spec.bed.effective_z_leadscrew_type,
             "feet_type": self.spec.frame.feet_type,
+            "suspension": (
+                {
+                    "line": self.spec.frame.suspension_line,
+                    "length_mm": round(float(self.spec.frame.suspension_length_mm), 1),
+                    "line_tension_n": round(self.suspension_line_tension_n, 2),
+                    "lines": [
+                        {
+                            "anchor_mm": (nmap[sp.shell_node_id].position_m * 1000.0).tolist(),
+                            "attach_mm": (nmap[sp.frame_node_id].position_m * 1000.0).tolist(),
+                            "attach_node_id": sp.frame_node_id,
+                            "anchor_node_id": sp.shell_node_id,
+                        }
+                        for sp in self.fastener_springs
+                        if sp.bay == "feet"
+                        and sp.shell_node_id in nmap
+                        and sp.frame_node_id in nmap
+                    ],
+                }
+                if self.spec.frame.feet_type == "suspended_lines"
+                else None
+            ),
+            "ballast_mass_kg": round(self.ballast_mass_kg, 3),
+            "ballast_location": self.spec.frame.ballast_location,
             "bed_frame_node_id": "bed_frame" if "bed_frame" in nmap else "",
             "bed_subframe_z_mm": (
                 round(float(nmap["bed_frame"].position_m[2] * 1000.0), 2)
@@ -868,11 +1005,21 @@ from printsim.geometry._builder_gantry import (  # noqa: E402
     _apply_bolted_rail_with_opposite_backer,
     _apply_cf_two_wall_clamped_inserts,
     _apply_corexy_gantry_rails,
+    _build_cad_corner_mount_superelement,
+    _build_cad_trident_bed_arm_superelement,
+    _build_cad_xy_joint_superelement,
+    _build_procedural_xy_joint_superelement,
+    _build_cad_z_joint_superelement,
+    _build_y_carriage_bearing_superelement,
     _compute_newmark_rail_gamma,
     _make_x_backer_profile,
     _member_local_axes,
     _oriented_bare_rail_profile,
     _populate_linear_rail_telemetry,
+    _resolve_cad_corner_mount_assets,
+    _resolve_cad_trident_bed_arm_assets,
+    _resolve_cad_xy_joint_assets,
+    _resolve_cad_z_joint_asset,
     _x_rail_mount_normals,
     _y_rail_mount_normals,
     corexy_x_beam_span_m,
@@ -916,6 +1063,7 @@ from printsim.geometry._builder_toolhead import (  # noqa: E402
     _series_combine_superelement_kbb,
     _skew_3x3,
     compute_toolhead_link_props,
+    resolve_toolhead_cad_asset_id,
     resolve_toolhead_hardware_accessories,
 )
 
@@ -1078,46 +1226,114 @@ def _apply_extrusion_filling(model: AssemblyModel) -> None:
     )
 
 
+_MOUNT_BASE_ROLES = ("foot", "frame", "tower")
+_FRAME_STRUCTURE_ROLES = ("foot", "frame", "tower", "mount")
+_G_ACC = 9.80665  # standard gravity (m/s^2)
+
+
+def _mount_base_nodes(model: AssemblyModel) -> list[StructuralNode]:
+    """Ground-contact nodes of the frame (the fixed feet before any compliant mount is applied)."""
+    return [n for n in model.nodes if n.fixed and n.role in _MOUNT_BASE_ROLES]
+
+
+def _node_above(model: AssemblyModel, base: StructuralNode) -> StructuralNode:
+    """Highest frame-structure node directly above ``base`` (same XY within 1 mm), else ``base``."""
+    best = base
+    for n in model.nodes:
+        if n.role not in _FRAME_STRUCTURE_ROLES or n.fixed and n is not base:
+            continue
+        dxy = float(np.hypot(*(n.position_m[:2] - base.position_m[:2])))
+        if dxy <= 1e-3 and float(n.position_m[2]) > float(best.position_m[2]) + 1e-6:
+            best = n
+    return best
+
+
+def _frame_top_nodes(model: AssemblyModel) -> list[StructuralNode]:
+    """Frame-structure nodes within 1 mm of the highest frame-structure elevation."""
+    cand = [n for n in model.nodes if n.role in _FRAME_STRUCTURE_ROLES]
+    if not cand:
+        return []
+    z_max = max(float(n.position_m[2]) for n in cand)
+    return [n for n in cand if float(n.position_m[2]) >= z_max - 1e-3]
+
+
+def _apply_frame_ballast(model: AssemblyModel) -> None:
+    """Lump ``frame.ballast_mass_kg`` of dead weight onto base, top, or all frame corner nodes.
+
+    Must run before `_apply_feet_grounding` so base ballast lands on the foot nodes: on a
+    rigidly bolted frame those stay fixed (the ballast is then dynamically inert, exactly as
+    weight bolted to the bench would be), while on compliant feet or suspension lines it rides
+    above the mount springs and lowers the rigid-body mount modes.
+    """
+    m_ballast = max(float(model.spec.frame.ballast_mass_kg), 0.0)
+    if m_ballast <= 0.0:
+        return
+    loc = model.spec.frame.ballast_location
+    base_nodes = _mount_base_nodes(model)
+    top_nodes = _frame_top_nodes(model)
+    if loc == "top":
+        targets = top_nodes or base_nodes
+    elif loc == "distributed":
+        seen: set[str] = set()
+        targets = []
+        for n in base_nodes + top_nodes:
+            if n.id not in seen:
+                seen.add(n.id)
+                targets.append(n)
+    else:
+        targets = base_nodes or top_nodes
+    if not targets:
+        return
+    per_node_kg = m_ballast / len(targets)
+    for n in targets:
+        n.lumped_mass_kg += per_node_kg
+    model.ballast_mass_kg = m_ballast
+    model.ballast_node_ids = [n.id for n in targets]
+
+
 def _apply_feet_grounding(model: AssemblyModel) -> None:
-    """Replace rigid fixed feet with compliant benchtop isolator springs when configured."""
+    """Replace rigid fixed feet with compliant benchtop isolator springs or overhead suspension lines."""
     f_cfg = resolve_frame_feet(model.spec)
     if not f_cfg["is_compliant"]:
         return
 
+    is_suspended = bool(f_cfg.get("is_suspended", False))
     k_normal_n_m = float(f_cfg["k_axial_n_m"])
     k_shear_n_m = float(f_cfg["k_lateral_n_m"])
     if k_normal_n_m <= 0.0:
         k_normal_n_m = 1.0e8
     if k_shear_n_m <= 0.0:
         k_shear_n_m = 1.0e8
-    k_rot_nm_rad = max(k_normal_n_m * (0.020**2), 40.0)
+    # A rope or line carries no moment; elastomer feet resist tilt over their ~40 mm contact patch.
+    k_rot_nm_rad = 0.0 if is_suspended else max(k_normal_n_m * (0.020**2), 40.0)
+    line_length_m = float(f_cfg.get("line_length_m", 0.0))
 
     grounded_any = False
     foot_nodes: list[StructuralNode] = []
-    for node in list(model.nodes):
-        if node.fixed and node.role in ("foot", "frame", "tower"):
-            node.fixed = False
-            foot_nodes.append(node)
-            gnd_pos = node.position_m.copy()
-            gnd_pos[2] -= 0.015
-            gnd_id = f"gnd_{node.id}"
-            model.nodes.append(
-                StructuralNode(gnd_id, gnd_pos, fixed=True, role="ground")
+    for node in _mount_base_nodes(model):
+        node.fixed = False
+        foot_nodes.append(node)
+        # Suspension lines pick the frame up at the corner directly above each foot (top frame
+        # corners on a CoreXY cube / delta towers); frames with no upright there hang by the base.
+        attach = _node_above(model, node) if is_suspended else node
+        gnd_pos = attach.position_m.copy()
+        gnd_pos[2] += line_length_m if is_suspended else -0.015
+        gnd_id = f"gnd_{node.id}"
+        model.nodes.append(StructuralNode(gnd_id, gnd_pos, fixed=True, role="ground"))
+        model.fastener_springs.append(
+            FastenerSpring(
+                id=f"feet_spring_{node.id}",
+                bay="feet",
+                shell_node_id=gnd_id,
+                frame_node_id=attach.id,
+                k_shear_n_m=k_shear_n_m,
+                k_normal_n_m=k_normal_n_m,
+                k_rot_nm_rad=k_rot_nm_rad,
+                normal_vec=(0.0, 0.0, 1.0),
+                offset_m=(0.0, 0.0, 0.0),
             )
-            model.fastener_springs.append(
-                FastenerSpring(
-                    id=f"feet_spring_{node.id}",
-                    bay="feet",
-                    shell_node_id=gnd_id,
-                    frame_node_id=node.id,
-                    k_shear_n_m=k_shear_n_m,
-                    k_normal_n_m=k_normal_n_m,
-                    k_rot_nm_rad=k_rot_nm_rad,
-                    normal_vec=(0.0, 0.0, 1.0),
-                    offset_m=(0.0, 0.0, 0.0),
-                )
-            )
-            grounded_any = True
+        )
+        grounded_any = True
 
     base_mass_kg = float(f_cfg.get("base_mass_kg", 0.0))
     if base_mass_kg > 0.0 and foot_nodes:
@@ -1129,6 +1345,29 @@ def _apply_feet_grounding(model: AssemblyModel) -> None:
         for node in model.nodes:
             if node.fixed and node.role == "mount":
                 node.fixed = False
+
+
+def _finalize_suspension_tension(model: AssemblyModel) -> None:
+    """Set each suspension line's lateral stiffness to the pendulum geometric stiffness ``T / L``.
+
+    With the printer's weight shared equally by ``n`` near-vertical lines, ``T = M g / n`` and
+    the summed lateral stiffness ``M g / L`` reproduces the simple-pendulum sway frequency
+    ``(1 / 2 pi) sqrt(g / L)`` independent of mass. Runs after `_finalize_mass_and_cost` because
+    it needs the total suspended mass (frame, hardware, ballast).
+    """
+    f_cfg = resolve_frame_feet(model.spec)
+    if not f_cfg.get("is_suspended", False):
+        return
+    lines = [sp for sp in model.fastener_springs if sp.bay == "feet"]
+    if not lines:
+        return
+    tension_n = max(float(model.total_mass_kg), 0.1) * _G_ACC / len(lines)
+    model.suspension_line_tension_n = tension_n
+    if not f_cfg.get("lateral_from_tension", False):
+        return
+    k_lat_n_m = tension_n / max(float(f_cfg["line_length_m"]), 0.05)
+    for sp in lines:
+        sp.k_shear_n_m = k_lat_n_m
 
 
 def _apply_mount_and_feet_damping(model: AssemblyModel) -> None:
@@ -1173,6 +1412,11 @@ def build_assembly(
         raise ValueError(f"Unsupported architecture: {spec.architecture}")
 
     model.panel_mesh_n = mesh_n
+    model.toolhead_rel_pos = (
+        float(toolhead_rel_pos[0]),
+        float(toolhead_rel_pos[1]),
+        float(toolhead_rel_pos[2]),
+    )
 
     # Append any supplemental custom nodes/members defined alongside a preset frame
     nmap = model.node_map
@@ -1203,10 +1447,12 @@ def build_assembly(
     _apply_bedslinger_x_rail_backer_sandwich(model)
     _populate_linear_rail_telemetry(model)
     _inject_cad_toolhead_superelements(model)
+    _apply_frame_ballast(model)
     _apply_feet_grounding(model)
     _apply_extrusion_filling(model)
     _apply_mount_and_feet_damping(model)
     _finalize_mass_and_cost(model)
+    _finalize_suspension_tension(model)
     return model
 
 
@@ -1253,10 +1499,12 @@ def _build_custom_assembly(spec: PrinterSpec) -> AssemblyModel:
     _apply_bedslinger_x_rail_backer_sandwich(model)
     _populate_linear_rail_telemetry(model)
     _inject_cad_toolhead_superelements(model)
+    _apply_frame_ballast(model)
     _apply_feet_grounding(model)
     _apply_extrusion_filling(model)
     _apply_mount_and_feet_damping(model)
     _finalize_mass_and_cost(model)
+    _finalize_suspension_tension(model)
     return model
 
 
@@ -1275,6 +1523,97 @@ def corexy_frame_centerlines_m(spec: PrinterSpec) -> tuple[float, float, float]:
     d_cl = max(spec.frame.depth_mm * 1e-3 - up_prof.height_m, 0.08)
     h_cl = max(spec.frame.height_mm * 1e-3 - fr_prof.height_m, 0.08)
     return w_cl, d_cl, h_cl
+
+
+# Penalty stiffness tying coincident top-ring / gantry-plane corner nodes into one rigid joint
+# (same order as the CORNER_JOINT_BASE_2020 "rigid" reference: 1e10 N/m, 1e9 N*m/rad).
+_RIGID_TIE_K_DIAG_6DOF = (1.0e10, 1.0e10, 1.0e10, 1.0e9, 1.0e9, 1.0e9)
+
+
+def _add_on_top_frame_y_rail_chains(
+    members: list[StructuralMember],
+    nodes: list[StructuralNode],
+    fastener_springs: list[FastenerSpring],
+    fp: str,
+    fm: str,
+    h: float,
+) -> None:
+    """Build gantry-on-top-frame Y-rail beams as the single top-ring Y extrusion per side.
+
+    With ``frame.gantry_on_top_frame`` the gantry plane coincides with the top ring, so each side
+    is one continuous 2020 + bolted-rail member chain from the front corner through any top Z-rod /
+    Z-guide anchor nodes and the stationary rail-carriage station to the rear corner. The coincident
+    ``t_*`` top corners are rigidly tied to the ``g_*`` gantry corners (one physical corner joint).
+    """
+    nmap = {n.id: n for n in nodes}
+    for side, x_tag in (("l", "l"), ("r", "r")):
+        corner_f = f"g_f{x_tag}"
+        corner_r = f"g_r{x_tag}"
+        x_line = float(nmap[corner_f].position_m[0])
+        y_f = float(nmap[corner_f].position_m[1])
+        y_r = float(nmap[corner_r].position_m[1])
+        mid_ids = [
+            n.id
+            for n in nodes
+            if n.id.startswith("t_")
+            and n.id not in ("t_fl", "t_fr", "t_rl", "t_rr")
+            and abs(float(n.position_m[0]) - x_line) < 1e-6
+            and abs(float(n.position_m[2]) - h) < 1e-6
+            and y_f + 1e-6 < float(n.position_m[1]) < y_r - 1e-6
+        ]
+        car_id = f"y_rail_car_{side}"
+        y_car = float(nmap[car_id].position_m[1])
+        # Merge a frame anchor that coincides with the carriage station (avoid zero-length beams)
+        chain_mid: list[str] = []
+        for nid in sorted(mid_ids, key=lambda i: float(nmap[i].position_m[1])):
+            if abs(float(nmap[nid].position_m[1]) - y_car) < 1e-3:
+                fastener_springs.append(
+                    FastenerSpring(
+                        id=f"rigid_tie_{nid}",
+                        bay="rigid_tie",
+                        shell_node_id=nid,
+                        frame_node_id=car_id,
+                        k_shear_n_m=_RIGID_TIE_K_DIAG_6DOF[0],
+                        k_normal_n_m=_RIGID_TIE_K_DIAG_6DOF[2],
+                        k_rot_nm_rad=_RIGID_TIE_K_DIAG_6DOF[3],
+                        k_diag_6dof=_RIGID_TIE_K_DIAG_6DOF,
+                    )
+                )
+                continue
+            chain_mid.append(nid)
+        chain = [corner_f]
+        inserted = False
+        for nid in chain_mid:
+            if not inserted and float(nmap[nid].position_m[1]) > y_car:
+                chain.append(car_id)
+                inserted = True
+            chain.append(nid)
+        if not inserted:
+            chain.append(car_id)
+        chain.append(corner_r)
+        i_car = chain.index(car_id)
+        n_seg = len(chain) - 1
+        for i in range(n_seg):
+            # Front of the carriage: y_rail_{s}_f, _f1, _f2 ...; behind it: ..., _r1, y_rail_{s}_r
+            if i < i_car:
+                mid = f"y_rail_{side}_f{i}" if i else f"y_rail_{side}_f"
+            else:
+                k_back = n_seg - 1 - i
+                mid = f"y_rail_{side}_r{k_back}" if k_back else f"y_rail_{side}_r"
+            _add_member(members, mid, chain[i], chain[i + 1], fp, fm, role="rail")
+    for tag in ("fl", "fr", "rl", "rr"):
+        fastener_springs.append(
+            FastenerSpring(
+                id=f"rigid_tie_t_{tag}",
+                bay="rigid_tie",
+                shell_node_id=f"t_{tag}",
+                frame_node_id=f"g_{tag}",
+                k_shear_n_m=_RIGID_TIE_K_DIAG_6DOF[0],
+                k_normal_n_m=_RIGID_TIE_K_DIAG_6DOF[2],
+                k_rot_nm_rad=_RIGID_TIE_K_DIAG_6DOF[3],
+                k_diag_6dof=_RIGID_TIE_K_DIAG_6DOF,
+            )
+        )
 
 
 def _build_corexy(
@@ -1312,6 +1651,7 @@ def _build_corexy(
     x_tool = orig_x + u * bx
 
     is_flying = spec.is_flying_gantry
+    on_top_frame = bool(spec.frame.gantry_on_top_frame) and not is_flying
     trident_backbone_active = bool(spec.frame.trident_backbone and not is_flying)
     z_drive = spec.bed.z_drive
     bed_cfg = resolve_bed_mount(spec)
@@ -1331,8 +1671,9 @@ def _build_corexy(
             )
         )
     else:
-        # Gantry plane near top of CoreXY frame
-        z_gantry = h - top_clear_m
+        # Gantry plane near top of CoreXY frame (or exactly on the top ring when the Y rails
+        # bolt straight onto the top-perimeter Y extrusions, e.g. VzBot inner-face MGN12)
+        z_gantry = h if on_top_frame else h - top_clear_m
         z_min_req = max(0.08, 0.030 + t_bed_m + h_standoff_m + half_subframe_m)
         z_min = min(z_min_req, 0.5 * z_gantry)
         z_max = max(z_min + 0.01, z_gantry - 0.045)
@@ -1368,9 +1709,18 @@ def _build_corexy(
         StructuralNode("b_rl", np.array([0.0, d, 0.0]), fixed=True, lumped_mass_kg=corner_z_kg, role="foot"),
         StructuralNode("b_rr", np.array([w, d, 0.0]), fixed=True, lumped_mass_kg=corner_z_kg, role="foot"),
     ]
+    gantry_superelements: list[AttachedSuperelement] = []
+    corner_mount_assets = _resolve_cad_corner_mount_assets(spec)
+    cad_z_joint_asset = _resolve_cad_z_joint_asset(spec) if is_flying else None
+    g_rear_l_mass = 0.0 if "rl" in corner_mount_assets else rear_motor_kg
+    g_rear_r_mass = 0.0 if "rr" in corner_mount_assets else rear_motor_kg
+    g_front_l_mass = 0.0 if "fl" in corner_mount_assets else front_motor_kg
+    g_front_r_mass = 0.0 if "fr" in corner_mount_assets else front_motor_kg
+
     if is_flying:
         # Voron 2.4 flying gantry: split vertical columns at col_g_* and couple separate
-        # floating gantry corners g_* via 6-DOF Z-belt + MGN rail carriage + GE5C Z-joint springs.
+        # floating gantry corners g_* via 6-DOF Z-belt + MGN rail carriage + GE5C Z-joint springs
+        # (in series with the baked 3D CAD Z-joint superelement when a CAD kit provides one).
         y_bed_f = d * 0.14
         y_bed_r = d * 0.86
         nodes.extend(
@@ -1379,10 +1729,10 @@ def _build_corexy(
                 StructuralNode("col_g_fr", np.array([w, 0.0, z_gantry]), role="frame"),
                 StructuralNode("col_g_rl", np.array([0.0, d, z_gantry]), role="frame"),
                 StructuralNode("col_g_rr", np.array([w, d, z_gantry]), role="frame"),
-                StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role if is_awd else "gantry"),
-                StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role if is_awd else "gantry"),
-                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="gantry"),
-                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="gantry"),
+                StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=g_front_l_mass, role=front_role if is_awd else "gantry"),
+                StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=g_front_r_mass, role=front_role if is_awd else "gantry"),
+                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=g_rear_l_mass, role="gantry"),
+                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=g_rear_r_mass, role="gantry"),
                 StructuralNode("b_bed_fl", np.array([0.0, y_bed_f, 0.0]), role="frame"),
                 StructuralNode("b_bed_rl", np.array([0.0, y_bed_r, 0.0]), role="frame"),
                 StructuralNode("b_bed_fr", np.array([w, y_bed_f, 0.0]), role="frame"),
@@ -1392,30 +1742,102 @@ def _build_corexy(
         k_zj_n, k_zj_s, k_zj_r = _compute_flying_z_joint_spring_stiffness(
             spec, k_z_drive_col_n_m
         )
+        zj_corner_coords = {
+            "fl": (np.array([0.0, 0.0, z_gantry]), 0.0),
+            "fr": (np.array([w, 0.0, z_gantry]), 0.0),
+            "rl": (np.array([0.0, d, z_gantry]), math.pi),
+            "rr": (np.array([w, d, z_gantry]), math.pi),
+        }
         for tag in ("fl", "fr", "rl", "rr"):
-            fastener_springs.append(
-                FastenerSpring(
-                    id=f"z_joint_{tag}",
-                    bay="z_joint",
-                    shell_node_id=f"col_g_{tag}",
-                    frame_node_id=f"g_{tag}",
-                    k_shear_n_m=k_zj_s,
-                    k_normal_n_m=k_zj_n,
-                    k_rot_nm_rad=k_zj_r,
-                    normal_vec=(0.0, 0.0, 1.0),
-                    offset_m=(0.0, 0.0, 0.0),
+            if cad_z_joint_asset is not None:
+                c_pos, rot_z = zj_corner_coords[tag]
+                mid_id = f"z_joint_mid_{tag}"
+                nodes.append(StructuralNode(mid_id, c_pos.copy(), lumped_mass_kg=1e-7, role="gantry"))
+                gantry_superelements.append(
+                    _build_cad_z_joint_superelement(
+                        f"cad_z_joint_{tag}",
+                        cad_z_joint_asset,
+                        (f"col_g_{tag}", mid_id),
+                        rot_z,
+                        spec,
+                    )
                 )
-            )
+                fastener_springs.append(
+                    FastenerSpring(
+                        id=f"z_joint_{tag}",
+                        bay="z_joint",
+                        shell_node_id=mid_id,
+                        frame_node_id=f"g_{tag}",
+                        k_shear_n_m=k_zj_s,
+                        k_normal_n_m=k_zj_n,
+                        k_rot_nm_rad=k_zj_r,
+                        normal_vec=(0.0, 0.0, 1.0),
+                        offset_m=(0.0, 0.0, 0.0),
+                    )
+                )
+            else:
+                fastener_springs.append(
+                    FastenerSpring(
+                        id=f"z_joint_{tag}",
+                        bay="z_joint",
+                        shell_node_id=f"col_g_{tag}",
+                        frame_node_id=f"g_{tag}",
+                        k_shear_n_m=k_zj_s,
+                        k_normal_n_m=k_zj_n,
+                        k_rot_nm_rad=k_zj_r,
+                        normal_vec=(0.0, 0.0, 1.0),
+                        offset_m=(0.0, 0.0, 0.0),
+                    )
+                )
     else:
         nodes.extend(
             [
                 # Fixed-gantry elevation nodes directly on the 4 vertical columns
-                StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
-                StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=front_motor_kg, role=front_role),
-                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="mount"),
-                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=rear_motor_kg, role="mount"),
+                StructuralNode("g_fl", np.array([0.0, 0.0, z_gantry]), lumped_mass_kg=g_front_l_mass, role=front_role),
+                StructuralNode("g_fr", np.array([w, 0.0, z_gantry]), lumped_mass_kg=g_front_r_mass, role=front_role),
+                StructuralNode("g_rl", np.array([0.0, d, z_gantry]), lumped_mass_kg=g_rear_l_mass, role="mount"),
+                StructuralNode("g_rr", np.array([w, d, z_gantry]), lumped_mass_kg=g_rear_r_mass, role="mount"),
             ]
         )
+
+    # Wire baked 3D CAD corner motor-mount & front-idler superelements (g_* -> pulley_*)
+    if corner_mount_assets:
+        corner_base_pos = {
+            "fl": (np.array([0.0, 0.0, z_gantry]), front_motor_kg),
+            "fr": (np.array([w, 0.0, z_gantry]), front_motor_kg),
+            "rl": (np.array([0.0, d, z_gantry]), rear_motor_kg),
+            "rr": (np.array([w, d, z_gantry]), rear_motor_kg),
+        }
+        for tag in ("fl", "fr", "rl", "rr"):
+            asset = corner_mount_assets.get(tag)
+            if asset is None:
+                continue
+            p_corner, m_pulley = corner_base_pos[tag]
+            p1_cad_m = np.asarray(asset.port_coords_m[1], dtype=float)  # type: ignore[attr-defined]
+            p_pulley = p_corner + p1_cad_m
+            # Keep pulley shaft cleanly inside the CoreXY envelope for tiny custom frames
+            p_pulley[0] = float(np.clip(p_pulley[0], -0.02, w + 0.02))
+            p_pulley[1] = float(np.clip(p_pulley[1], -0.02, d + 0.02))
+            pulley_id = f"pulley_{tag}"
+            nodes.append(
+                StructuralNode(
+                    pulley_id,
+                    p_pulley,
+                    lumped_mass_kg=m_pulley if m_pulley > 0.0 else 1e-7,
+                    role="mount" if m_pulley > 0.0 else "gantry",
+                )
+            )
+            gantry_superelements.append(
+                _build_cad_corner_mount_superelement(
+                    f"corner_mount_{tag}",
+                    asset,
+                    (f"g_{tag}", pulley_id),
+                    p_corner,
+                    p_pulley,
+                    spec,
+                )
+            )
+
     nodes.extend(
         [
             # Top 4 corners
@@ -1423,7 +1845,10 @@ def _build_corexy(
             StructuralNode("t_fr", np.array([w, 0.0, h]), role="frame"),
             StructuralNode("t_rl", np.array([0.0, d, h]), role="frame"),
             StructuralNode("t_rr", np.array([w, d, h]), role="frame"),
-            # Moving Y carriages along left/right Y rails
+            # Stationary Y-rail beam nodes at the current Y-gantry station (bolted Y-rail + panel attach)
+            StructuralNode("y_rail_car_l", np.array([0.0, y_gantry, z_gantry]), role="rail"),
+            StructuralNode("y_rail_car_r", np.array([w, y_gantry, z_gantry]), role="rail"),
+            # Moving Y carriages coupled to y_rail_car_{l,r} through 6-DOF Hertzian linear-rail bearings
             StructuralNode("y_car_l", np.array([0.0, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
             StructuralNode("y_car_r", np.array([w, y_gantry, z_gantry]), lumped_mass_kg=carriage_side_kg, role="gantry"),
             # Toolhead node on the X gantry beam
@@ -1496,12 +1921,18 @@ def _build_corexy(
             _add_member(members, f"col_{tag}_mid", f"z_col_bed_{tag}", col_mid, up, fm)
         else:
             _add_member(members, f"col_{tag}_low", f"b_{tag}", col_mid, up, fm)
-        _add_member(members, f"col_{tag}_top", col_mid, f"t_{tag}", up, fm)
+        if not on_top_frame:
+            _add_member(members, f"col_{tag}_top", col_mid, f"t_{tag}", up, fm)
 
     # Top perimeter (split along left/right rails where dual-Z guides / 4x smooth rods anchor)
     _add_member(members, "top_front", "t_fl", "t_fr", fp, fm)
-    _add_member(members, "top_rear", "t_rl", "t_rr", fp, fm)
-    if z_drive == "leadscrew_dual":
+    if not on_top_frame:
+        _add_member(members, "top_rear", "t_rl", "t_rr", fp, fm)
+    if on_top_frame:
+        # The top-ring Y extrusions ARE the Y-rail beams (built as y_rail_* chains below) and the
+        # rear top extrusion IS gantry_rear_bar: no duplicate collinear top-ring members.
+        pass
+    elif z_drive == "leadscrew_dual":
         _add_member(members, "top_left_f", "t_fl", "t_left_mid", fp, fm)
         _add_member(members, "top_left_r", "t_left_mid", "t_rl", fp, fm)
         _add_member(members, "top_right_f", "t_fr", "t_right_mid", fp, fm)
@@ -1520,10 +1951,13 @@ def _build_corexy(
         _add_member(members, "top_right", "t_fr", "t_rr", fp, fm)
 
     # Mid gantry frame rails (left/right Y rails + rear motor bar, open front door)
-    _add_member(members, "y_rail_l_f", "g_fl", "y_car_l", fp, fm, role="rail")
-    _add_member(members, "y_rail_l_r", "y_car_l", "g_rl", fp, fm, role="rail")
-    _add_member(members, "y_rail_r_f", "g_fr", "y_car_r", fp, fm, role="rail")
-    _add_member(members, "y_rail_r_r", "y_car_r", "g_rr", fp, fm, role="rail")
+    if on_top_frame:
+        _add_on_top_frame_y_rail_chains(members, nodes, fastener_springs, fp, fm, h)
+    else:
+        _add_member(members, "y_rail_l_f", "g_fl", "y_rail_car_l", fp, fm, role="rail")
+        _add_member(members, "y_rail_l_r", "y_rail_car_l", "g_rl", fp, fm, role="rail")
+        _add_member(members, "y_rail_r_f", "g_fr", "y_rail_car_r", fp, fm, role="rail")
+        _add_member(members, "y_rail_r_r", "y_rail_car_r", "g_rr", fp, fm, role="rail")
 
     if z_drive in ("leadscrew_triple", "leadscrew_single"):
         _add_member(members, "gantry_rear_bar_l", "g_rl", "g_rear_mid", fp, fm)
@@ -1531,6 +1965,49 @@ def _build_corexy(
     else:
         _add_member(members, "gantry_rear_bar", "g_rl", "g_rr", fp, fm)
 
+    # Wire baked 3D CAD Trident bed-arm superelements (z_bed_* -> z_arm_tip_*) in series with 2020 bed_arm_*
+    trident_arm_tips: dict[str, str] = {}
+    if z_drive == "leadscrew_triple":
+        trident_arm_assets = _resolve_cad_trident_bed_arm_assets(spec)
+        if trident_arm_assets:
+            nmap_pre = {n.id: n for n in nodes}
+            arm_targets = {
+                "fl": ("z_bed_fl", "bed_t_fl"),
+                "fr": ("z_bed_fr", "bed_t_fr"),
+                "r": ("z_bed_r", "bed_t_rear_mount"),
+            }
+            for tag, (start_id, target_id) in arm_targets.items():
+                asset = trident_arm_assets.get(tag)
+                if asset is None or start_id not in nmap_pre or target_id not in nmap_pre:
+                    continue
+                p_start = nmap_pre[start_id].position_m
+                p_target = nmap_pre[target_id].position_m
+                p1_cad_m = np.asarray(asset.port_coords_m[1], dtype=float)  # type: ignore[attr-defined]
+                dp_xy = np.array([float(p1_cad_m[0]), float(p1_cad_m[1]), 0.0], dtype=float)
+                span_vec = p_target - p_start
+                span_len = float(np.linalg.norm(span_vec[:2]))
+                dp_len = float(np.linalg.norm(dp_xy[:2]))
+                if span_len > 0.025 and dp_len > 1e-4:
+                    # Keep z_arm_tip_* strictly horizontal at z_subframe and <= 80% of span to bed_t_*
+                    if dp_len > 0.80 * span_len:
+                        dp_xy *= (0.80 * span_len) / dp_len
+                    p_tip = p_start + dp_xy
+                    tip_id = f"z_arm_tip_{tag}"
+                    nodes.append(StructuralNode(tip_id, p_tip, role="bed"))
+                    # Keep z_bed_* strictly positive-definite in M when decoupled from bed_arm_*
+                    if nmap_pre[start_id].lumped_mass_kg <= 0.0:
+                        nmap_pre[start_id].lumped_mass_kg = 1e-7
+                    trident_arm_tips[tag] = tip_id
+                    gantry_superelements.append(
+                        _build_cad_trident_bed_arm_superelement(
+                            f"trident_bed_arm_{tag}",
+                            asset,
+                            (start_id, tip_id),
+                            p_start,
+                            p_tip,
+                            spec,
+                        )
+                    )
 
     _add_corexy_bed_subframe_members(
         spec=spec,
@@ -1543,12 +2020,98 @@ def _build_corexy(
         h=h,
         bz=bz,
         trident_bed_anchors=trident_bed_anchors,
+        trident_arm_tips=trident_arm_tips or None,
     )
-    # Moving X gantry beam (split at toolhead node)
+    # Moving X gantry beam (split at toolhead node).
+    # When a CAD gantry hardware kit provides baked 3D XY-joint superelements (xy_left / xy_right),
+    # terminate the X-beam at the exact CAD inner clamp ports (x_beam_l / x_beam_r) and connect
+    # y_car_* -> x_beam_* with the full 12x12 Craig-Bampton XY-joint stiffness matrices.
     xp = spec.gantry.x_beam_profile
     xm = spec.gantry.x_beam_material
-    _add_member(members, "x_gantry_l", "y_car_l", "toolhead", xp, xm, role="gantry")
-    _add_member(members, "x_gantry_r", "toolhead", "y_car_r", xp, xm, role="gantry")
+    xy_assets = _resolve_cad_xy_joint_assets(spec)
+    if xy_assets is not None:
+        xy_l_asset, xy_r_asset = xy_assets
+        raw_in_l = abs(float(xy_l_asset.port_coords_m[1][0]))  # type: ignore[attr-defined]
+        raw_in_r = abs(float(xy_r_asset.port_coords_m[1][0]))  # type: ignore[attr-defined]
+        max_in_l = max(0.015, min(0.25 * w, x_tool - 0.015))
+        max_in_r = max(0.015, min(0.25 * w, (w - x_tool) - 0.015))
+        x_in_l = float(np.clip(raw_in_l, 0.015, max_in_l))
+        x_in_r = float(np.clip(raw_in_r, 0.015, max_in_r))
+        p_ycar_l = np.array([0.0, y_gantry, z_gantry], dtype=float)
+        p_ycar_r = np.array([w, y_gantry, z_gantry], dtype=float)
+        p_xbeam_l = np.array([x_in_l, y_gantry, z_gantry], dtype=float)
+        p_xbeam_r = np.array([w - x_in_r, y_gantry, z_gantry], dtype=float)
+        nodes.extend(
+            [
+                StructuralNode("x_beam_l", p_xbeam_l, role="gantry"),
+                StructuralNode("x_beam_r", p_xbeam_r, role="gantry"),
+            ]
+        )
+        _add_member(members, "x_gantry_l", "x_beam_l", "toolhead", xp, xm, role="gantry")
+        _add_member(members, "x_gantry_r", "toolhead", "x_beam_r", xp, xm, role="gantry")
+        gantry_superelements.append(
+            _build_cad_xy_joint_superelement(
+                "xy_joint_l",
+                xy_l_asset,
+                ("y_car_l", "x_beam_l"),
+                p_ycar_l,
+                p_xbeam_l,
+                spec,
+            )
+        )
+        gantry_superelements.append(
+            _build_cad_xy_joint_superelement(
+                "xy_joint_r",
+                xy_r_asset,
+                ("y_car_r", "x_beam_r"),
+                p_ycar_r,
+                p_xbeam_r,
+                spec,
+            )
+        )
+    elif bool(getattr(spec, "use_cad_superelements", True)):
+        # Procedural CoreXY builds (with superelements enabled, the default) still wire analytical
+        # Timoshenko + Huth/VDI bolted-seam XY-joint superelements so y_car_* -> x_beam_* flex is
+        # captured even without a CAD gantry kit. Explicit use_cad_superelements=False retains the
+        # pure-beam baseline for isolated beam-only verification.
+        default_in = get_profile(fp).width_m + 0.012
+        max_in_l = max(0.015, min(0.25 * w, x_tool - 0.015))
+        max_in_r = max(0.015, min(0.25 * w, (w - x_tool) - 0.015))
+        x_in_l = float(np.clip(default_in, 0.015, max_in_l))
+        x_in_r = float(np.clip(default_in, 0.015, max_in_r))
+        p_ycar_l = np.array([0.0, y_gantry, z_gantry], dtype=float)
+        p_ycar_r = np.array([w, y_gantry, z_gantry], dtype=float)
+        p_xbeam_l = np.array([x_in_l, y_gantry, z_gantry], dtype=float)
+        p_xbeam_r = np.array([w - x_in_r, y_gantry, z_gantry], dtype=float)
+        nodes.extend(
+            [
+                StructuralNode("x_beam_l", p_xbeam_l, role="gantry"),
+                StructuralNode("x_beam_r", p_xbeam_r, role="gantry"),
+            ]
+        )
+        _add_member(members, "x_gantry_l", "x_beam_l", "toolhead", xp, xm, role="gantry")
+        _add_member(members, "x_gantry_r", "toolhead", "x_beam_r", xp, xm, role="gantry")
+        gantry_superelements.append(
+            _build_procedural_xy_joint_superelement(
+                "xy_joint_l",
+                ("y_car_l", "x_beam_l"),
+                p_ycar_l,
+                p_xbeam_l,
+                spec,
+            )
+        )
+        gantry_superelements.append(
+            _build_procedural_xy_joint_superelement(
+                "xy_joint_r",
+                ("y_car_r", "x_beam_r"),
+                p_ycar_r,
+                p_xbeam_r,
+                spec,
+            )
+        )
+    else:
+        _add_member(members, "x_gantry_l", "y_car_l", "toolhead", xp, xm, role="gantry")
+        _add_member(members, "x_gantry_r", "toolhead", "y_car_r", xp, xm, role="gantry")
 
     # Bracing strategies (corner_gussets stiffens corner joints via _apply_corner_joint_compliance,
     # reserving full-face diagonal rods for explicit truss/cross modes)
@@ -1607,6 +2170,24 @@ def _build_corexy(
         fp=fp,
         xp=xp,
         xm=xm,
+    )
+
+    # Wire explicit 6-DOF Hertzian linear-rail carriage contact bearings (y_rail_car_* -> y_car_*)
+    fastener_springs.append(
+        _build_y_carriage_bearing_superelement(
+            "y_car_bearing_l",
+            ("y_rail_car_l", "y_car_l"),
+            y_car,
+            spec,
+        )
+    )
+    fastener_springs.append(
+        _build_y_carriage_bearing_superelement(
+            "y_car_bearing_r",
+            ("y_rail_car_r", "y_car_r"),
+            y_car,
+            spec,
+        )
     )
 
     _apply_corexy_z_guideways(
@@ -1712,6 +2293,7 @@ def _build_corexy(
         members=members,
         shell_elements=shell_elements,
         fastener_springs=fastener_springs,
+        superelements=gantry_superelements,
         panel_mesh_n=max(2, int(panel_mesh_n)),
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",

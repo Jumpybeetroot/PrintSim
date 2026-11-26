@@ -562,6 +562,7 @@ def _add_corexy_bed_subframe_members(
     h: float,
     bz: float,
     trident_bed_anchors: tuple[tuple[str, str], ...] | None,
+    trident_arm_tips: dict[str, str] | None = None,
 ) -> None:
     """Add CoreXY bed structural arms, T-subframe, dual-Z columns, belt-synced smooth rods, or cantilever arm."""
     from printsim.geometry import builder as _b
@@ -654,10 +655,13 @@ def _add_corexy_bed_subframe_members(
                 iz_m4=5.0e-7,
                 j_m4=6.25e-7,
             )
+            tip_fl = (trident_arm_tips or {}).get("fl", "z_bed_fl")
+            tip_fr = (trident_arm_tips or {}).get("fr", "z_bed_fr")
+            tip_r = (trident_arm_tips or {}).get("r", "z_bed_r")
             for tag, start_nid, end_nid in (
-                ("fl", "z_bed_fl", "bed_t_fl"),
-                ("fr", "z_bed_fr", "bed_t_fr"),
-                ("r", "bed_t_rear_mount", "z_bed_r"),
+                ("fl", tip_fl, "bed_t_fl"),
+                ("fr", tip_fr, "bed_t_fr"),
+                ("r", "bed_t_rear_mount", tip_r),
             ):
                 members.append(
                     _b.StructuralMember(

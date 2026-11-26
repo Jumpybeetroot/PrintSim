@@ -352,8 +352,10 @@ def test_belt_and_routing_and_bearing_clearance_overrides() -> None:
     spec_lo.model_overrides.belt_routing.span_factor = 1.4
     spec_lo.model_overrides.belt_routing.idler_stiffness_factor = 0.5
     spec_lo.model_overrides.bearing_clearance.radial_play_um = 24.5
+    spec_lo.gantry.belt.pretension_n = 28.0  # above the 25 N override limit, whatever the preset ships
 
     spec_hi = _load_preset("corexy_voron_style.yaml")
+    spec_hi.gantry.belt.pretension_n = 28.0
     spec_hi.model_overrides.belt.stiffness_ea_n = 180000.0
     spec_hi.model_overrides.belt.tooth_shear_k_n_per_m_mm = 150000.0
     spec_hi.model_overrides.belt.linear_mass_g_per_m = 6.0
@@ -458,9 +460,10 @@ def test_toolhead_zprobe_and_hotend_clamp_overrides() -> None:
     )
     assert rep_probe.static_fea.accel_deflection_y_um > rep_base.static_fea.accel_deflection_y_um
 
-    # 2. toolhead_construction with body_construction set and with body_construction=None
+    # 2. toolhead_construction with body_construction set and with body_construction=None (lumped mode)
     for bc in (spec_base.toolhead.body_construction, None):
         spec_tc_lo = spec_base.model_copy(deep=True)
+        spec_tc_lo.use_cad_superelements = False
         spec_tc_lo.toolhead.body_construction = bc
         spec_tc_lo.model_overrides.toolhead_construction.body_stiffness_base_n_per_mm = 60.0
         spec_tc_lo.model_overrides.toolhead_construction.torsion_mult = 0.4
@@ -475,7 +478,10 @@ def test_toolhead_zprobe_and_hotend_clamp_overrides() -> None:
             rep_tc_hi.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"]
             > rep_tc_lo.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"]
         )
-        assert rep_tc_hi.static_fea.accel_deflection_x_um < rep_tc_lo.static_fea.accel_deflection_x_um
+        assert (
+            rep_tc_hi.static_fea.toolhead_stiffness_x_n_per_mm
+            > rep_tc_lo.static_fea.toolhead_stiffness_x_n_per_mm
+        )
 
     # 3. hotend_clamp.clamp_stiffness_base_n_per_mm
     spec_hc_lo = spec_base.model_copy(deep=True)
@@ -774,7 +780,7 @@ def test_item_confidence_registry_completeness_all_14_catalogs() -> None:
             assert isinstance(meta["basis"], str) and len(meta["basis"].strip()) > 10
             assert isinstance(meta["caveat"], str) and len(meta["caveat"].strip()) > 10
             total_options += 1
-    assert total_options == 112
+    assert total_options == 115
 
 
 def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
@@ -783,32 +789,33 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
     def _by_id(s: PrinterSpec) -> dict[str, dict]:
         return {e["id"]: e for e in build_model_confidence_audit(s)["entries"]}
 
-    # Every catalog-backed entry on catalog-complete specs has exactly 1 active item matching trust_pct
+    # Every catalog-backed entry on catalog-complete specs (heuristic mode) has exactly 1 active item matching trust_pct
     catalog_complete_specs = [
-        _load_preset("doomcube_4040.yaml"),
-        _load_preset("voron_monolith_awd.yaml"),
-        _load_preset("vzbot_330_awd.yaml"),
+        _load_preset("doomcube_4040.yaml").model_copy(update={"use_cad_superelements": False}),
+        _load_preset("voron_monolith_awd.yaml").model_copy(update={"use_cad_superelements": False}),
+        _load_preset("vzbot_330_awd.yaml").model_copy(update={"use_cad_superelements": False}),
         _load_preset("corexy_voron_style.yaml").model_copy(
             update={
+                "use_cad_superelements": False,
                 "toolhead": _load_preset("corexy_voron_style.yaml").toolhead.model_copy(
                     update={"body_construction": "multi_piece_clamshell"}
-                )
+                ),
             }
         ),
     ]
     expected_breakdown_counts = {
         "corner_joint": 5,
         "extrusion_filling": 6,
-        "frame_feet": 4,
+        "frame_feet": 5,
         "rail_quality": 4,
         "belt": 15,
         "belt_routing": 2,
         "gantry_bracket": 14,
-        "toolhead_preset": 11,
+        "toolhead_preset": 12,
         "toolhead_construction": 6,
         "z_probe": 4,
         "hotend_clamp": 13,
-        "bed_mount": 12,
+        "bed_mount": 13,
         "z_drive_mechanism": 12,
     }
     for spec_cat in catalog_complete_specs:
@@ -821,9 +828,9 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
             assert len(active_items) == 1, f"{spec_cat.name}:{eid} active count={len(active_items)}"
             assert active_items[0]["trust_pct"] == entry["trust_pct"], f"{spec_cat.name}:{eid}"
 
-    # Legacy specs with body_construction=None report 0 active construction items and fallback 45%
+    # Legacy specs with body_construction=None report 0 active construction items and fallback 45% (when CAD SEs off)
     for legacy_yaml in ("corexy_voron_style.yaml", "voron_trident_300.yaml"):
-        s_leg = _load_preset(legacy_yaml)
+        s_leg = _load_preset(legacy_yaml).model_copy(update={"use_cad_superelements": False})
         assert s_leg.toolhead.body_construction is None
         leg_entries = _by_id(s_leg)
         tc_leg = leg_entries["toolhead_construction"]
@@ -856,12 +863,12 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         assert len(e["options_breakdown"]) == len(TOOLHEAD_PRESETS)
         assert [x["id"] for x in e["options_breakdown"] if x["active"]] == [pid]
     assert th_scores == {
-        "stealthburner": 86,
+        "stealthburner": 88,
         "microwaved_bowden": 85,  # elevated from 84 -> 85 by baked 75k-elem Tet4 CAD CMS superelement
         "microwaved_bowden_chube": 86,  # elevated from 84 -> 86 by baked 75.3k-elem Tet4 CAD CMS superelement
         "el_fuego": 85,  # elevated from 83 -> 85 by baked 241.9k-elem Tet4 CAD CMS superelement
-        "xol_compact": 82,
-        "archetype_cpap": 72,
+        "xol_compact": 86,
+        "archetype_cpap": 82,
         "heavy_uhf_long": 56,
     }
     # Disabling CAD superelements reverts microwaved_bowden to its catalog baseline (84%)
@@ -877,10 +884,11 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
     assert "User-entered custom mass/CoG" in e_custom_th["basis"]
     assert [x for x in e_custom_th["options_breakdown"] if x["active"]] == []
 
-    # 2. toolhead_constructions differentiation
+    # 2. toolhead_constructions differentiation (lumped heuristic mode)
     tc_scores = {}
     for bc in ("multi_piece_clamshell", "compact_cage", "plate_sandwich_cf", "cnc_monoblock", "extruder_as_chassis"):
         s = base.model_copy(deep=True)
+        s.use_cad_superelements = False
         s.toolhead.body_construction = bc
         tc_scores[bc] = _by_id(s)["toolhead_construction"]["trust_pct"]
     assert tc_scores == {
@@ -1077,10 +1085,14 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     s_mono.gantry.belt_routing = "monolith_short"
     assert _by_id(s_mono)["belt_routing"]["trust_pct"] == 62
 
-    # Gantry bracket: abs_printed -> 58%, aluminum_6061_t6 -> 66%, custom_bracket_override -> 85% + overridden=True
-    assert _by_id(spec)["gantry_bracket"]["trust_pct"] == 58
-    assert _by_id(spec)["gantry_bracket"]["overridden"] is False
-    s_al_bkt = spec.model_copy(deep=True)
+    # Gantry bracket: CAD-backed default >= 85%, heuristic fallback abs_printed -> 58%, aluminum_6061_t6 -> 66%, custom -> 85%
+    assert _by_id(spec)["gantry_bracket"]["trust_pct"] >= 85
+    assert _by_id(spec)["gantry_bracket"]["cad_superelement_active"] is True
+    s_heur_bkt = spec.model_copy(deep=True)
+    s_heur_bkt.use_cad_superelements = False
+    assert _by_id(s_heur_bkt)["gantry_bracket"]["trust_pct"] == 58
+    assert _by_id(s_heur_bkt)["gantry_bracket"]["overridden"] is False
+    s_al_bkt = s_heur_bkt.model_copy(deep=True)
     s_al_bkt.gantry.bracket_material = "aluminum_6061_t6"
     assert _by_id(s_al_bkt)["gantry_bracket"]["trust_pct"] == 66
     s_cbo = spec.model_copy(deep=True)

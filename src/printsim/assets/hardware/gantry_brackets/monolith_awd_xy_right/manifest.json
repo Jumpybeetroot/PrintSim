@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "monolith_awd_xy_right",
+  "name": "LDO Monolith CNC 6061 XY-Joint Right (AWD 9mm)",
+  "source_cad": "xy_right.step",
+  "source_url": "https://cad.onshape.com/documents/739b76283701789caa9999c7/w/434ca8ef5e541eb4a503de27",
+  "baked_at": "2026-11-26T19:06:00Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1214,
+  "num_elements": 2640,
+  "num_dofs": 3642,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.007753,
+  "mass_kg": 0.033071,
+  "com_mm": [
+    -31.4012,
+    -12.5097,
+    1.5988
+  ],
+  "port0_mm": [
+    -18.0,
+    -18.5,
+    0.0
+  ],
+  "port1_mm": [
+    -45.0,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 33268.576,
+    "ky": 15636.765,
+    "kz": 2907.705
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 3267.121,
+    "kry": 2622.009,
+    "krz": 4731.868
+  },
+  "fixed_interface_freqs_hz": [
+    5486.85,
+    7574.57,
+    10722.39,
+    13984.28,
+    14884.7,
+    16701.17
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 21982,
+  "visual_bytes": 850596,
+  "cad_trust_pct": 90,
+  "source_hash": "8a1c45f5d05343fc2b6a0e95bdf51944b80f6f4ceeefaf07538207e883b01ae2"
+}

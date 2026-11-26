@@ -15,6 +15,8 @@ import {
   CatalogResponse,
   DriveType,
   GantryBracketInfo,
+  GantryHardwareKitItem,
+  GantryHardwareKitType,
   GantryWeightClassItem,
   IdlerAxialPreloadType,
   PrinterSpecData,
@@ -35,6 +37,11 @@ import {
   PresetAffectsStrip,
   clearModelOverrideGroup,
 } from "./ModelOverrideControl";
+import {
+  applyGantryHardwareKit,
+  getGantryKitAffectsItems,
+  syncDriveModeWithHardwareKit,
+} from "../utils/kitPresets";
 
 const DRIVE_TYPE_OPTIONS: Array<{ id: DriveType; label: string; shortLabel: string }> = [
   { id: "open_loop_stepper", label: "Open-Loop Stepper", shortLabel: "Open-Loop Stepper" },
@@ -94,6 +101,75 @@ const X_BEAM_MATERIAL_IDS = new Set([
   "titanium_grade5",
   "steel_4140",
 ]);
+
+export const FALLBACK_GANTRY_HARDWARE_KITS: GantryHardwareKitItem[] = [
+  {
+    id: "auto",
+    name: "Auto (Match Preset & Drive Mode)",
+    short_name: "Auto",
+  },
+  {
+    id: "voron_stock_printed",
+    name: "Voron Stock Printed Gantry (2WD)",
+    short_name: "Voron Stock",
+    default_bracket_material: "abs_printed",
+    drive_mode: "2wd",
+  },
+  {
+    id: "ldo_voron_kit",
+    name: "LDO Voron Kit (Printed + CNC Upgrades)",
+    short_name: "LDO Kit",
+    default_bracket_material: "abs_printed",
+    drive_mode: "2wd",
+  },
+  {
+    id: "siboor_cnc_awd",
+    name: "Siboor CNC Gantry Kit (AWD)",
+    short_name: "Siboor CNC AWD",
+    default_bracket_material: "aluminum_6061_t6",
+    drive_mode: "awd",
+  },
+  {
+    id: "siboor_cnc_2wd",
+    name: "Siboor CNC Gantry Kit (2WD)",
+    short_name: "Siboor CNC 2WD",
+    default_bracket_material: "aluminum_6061_t6",
+    drive_mode: "2wd",
+  },
+  {
+    id: "monolith_ldo_cnc_awd",
+    name: "Monolith / LDO CNC Gantry (AWD)",
+    short_name: "Monolith CNC AWD",
+    default_bracket_material: "aluminum_6061_t6",
+    drive_mode: "awd",
+  },
+  {
+    id: "monolith_ldo_cnc_2wd",
+    name: "Monolith / LDO CNC Gantry (2WD)",
+    short_name: "Monolith CNC 2WD",
+    default_bracket_material: "aluminum_6061_t6",
+    drive_mode: "2wd",
+  },
+  {
+    id: "vzbot_330_awd",
+    name: "VzBot 330 Gantry (AWD · 6mm · MGN9 CF)",
+    short_name: "VzBot 330 AWD",
+    default_bracket_material: "aluminum_6061_t6",
+    drive_mode: "awd",
+  },
+  {
+    id: "vzbot_330_2wd",
+    name: "VzBot 330 Gantry (2WD · 6mm · MGN9 CF)",
+    short_name: "VzBot 330 2WD",
+    default_bracket_material: "aluminum_6061_t6",
+    drive_mode: "2wd",
+  },
+  {
+    id: "procedural",
+    name: "Procedural Simplified Geometry",
+    short_name: "Procedural",
+  },
+];
 
 export const FALLBACK_GANTRY_BRACKETS: GantryBracketInfo[] = [
   {
@@ -634,6 +710,7 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
 }) => {
   // Smooth local drafts for gantry sliders (avoid API spam while dragging)
   const [tensionDraft, setTensionDraft] = useState<number>(spec.gantry.belt.pretension_n ?? 28);
+  const beltDyn = sim?.modal_fea?.belt_dynamics ?? null;
   const tensionTimerRef = useRef<number | null>(null);
 
   const [carriageMassDraft, setCarriageMassDraft] = useState<number>(
@@ -988,6 +1065,17 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
     catalog.gantry_brackets && catalog.gantry_brackets.length > 0
       ? catalog.gantry_brackets
       : FALLBACK_GANTRY_BRACKETS;
+  const gantryHardwareKits: GantryHardwareKitItem[] =
+    catalog.gantry_hardware_kits && catalog.gantry_hardware_kits.length > 0
+      ? catalog.gantry_hardware_kits
+      : FALLBACK_GANTRY_HARDWARE_KITS;
+  const currentHardwareKit: GantryHardwareKitType = spec.gantry.hardware_kit ?? "auto";
+  const simGantryBrackets = sim?.geometry?.gantry_brackets;
+  const isCadGantryKitActive = Boolean(simGantryBrackets?.cad_backed);
+  const resolvedHardwareKitLabel =
+    simGantryBrackets?.hardware_kit_label ??
+    gantryHardwareKits.find((k) => k.id === simGantryBrackets?.hardware_kit)?.short_name ??
+    null;
   const currentBracketId: BracketMaterialType = spec.gantry.bracket_material ?? "abs_printed";
   const selectedBracket =
     gantryBrackets.find((b) => b.id === currentBracketId) ?? gantryBrackets[0];
@@ -1123,6 +1211,78 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                 </div>
               )}
 
+              {spec.architecture === "corexy" && (() => {
+                const kitAffectsItems = getGantryKitAffectsItems(
+                  currentHardwareKit,
+                  gantryHardwareKits
+                );
+                return (
+                  <div className="field-row">
+                    <label htmlFor="dp-gantry-hardware-kit">
+                      <span>Gantry Kit / Upgrade</span>
+                      {isCadGantryKitActive && (
+                        <span
+                          className="sub-block-tag ok"
+                          title={
+                            simGantryBrackets?.cad_stiffness_n_per_mm
+                              ? `CAD-backed gantry hardware (${Math.round(simGantryBrackets.cad_stiffness_n_per_mm)} N/mm)`
+                              : "Real 3D CAD gantry hardware meshes & stiffness active"
+                          }
+                        >
+                          CAD{resolvedHardwareKitLabel ? ` · ${resolvedHardwareKitLabel}` : ""}
+                        </span>
+                      )}
+                    </label>
+                    <select
+                      id="dp-gantry-hardware-kit"
+                      value={currentHardwareKit}
+                      onChange={(e) => {
+                        const nextKit = e.target.value as GantryHardwareKitType;
+                        const prevLabel =
+                          gantryHardwareKits.find((k) => k.id === currentHardwareKit)?.short_name ??
+                          currentHardwareKit;
+                        const nextLabel =
+                          gantryHardwareKits.find((k) => k.id === nextKit)?.short_name ?? nextKit;
+                        const draftPreview: PrinterSpecData = JSON.parse(JSON.stringify(spec));
+                        const syncedChanges = applyGantryHardwareKit(
+                          draftPreview,
+                          nextKit,
+                          gantryHardwareKits
+                        );
+                        const suffix =
+                          syncedChanges.length > 0 ? ` (${syncedChanges.join(", ")})` : "";
+                        update(
+                          (d) => {
+                            applyGantryHardwareKit(d, nextKit, gantryHardwareKits);
+                          },
+                          `Gantry Upgrade: ${prevLabel} → ${nextLabel}${suffix}`
+                        );
+                      }}
+                    >
+                      {gantryHardwareKits
+                        .filter((kit) => kit.id !== "auto" || currentHardwareKit === "auto")
+                        .map((kit) => (
+                          <option key={kit.id} value={kit.id}>
+                            {kit.name}
+                          </option>
+                        ))}
+                    </select>
+                    <PresetAffectsStrip
+                      visible={kitAffectsItems.length > 0}
+                      items={kitAffectsItems}
+                      suffix="· customize any field below"
+                    />
+                    {showHints && (
+                      <div className="hint-line">
+                        Upgrading your gantry kit automatically applies its drive mode, belt
+                        routing, bracket material, double-shear pulleys, rail size &amp;
+                        orientation, belt width/tension, and V2.4 Z-joint hardware.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {spec.architecture === "corexy" && (
                 <div className="field-row">
                   <label id="dp-xy-drive-mode-1">
@@ -1138,11 +1298,22 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
  aria-pressed={driveMode === "2wd"}
                       onClick={() => {
                         if (driveMode === "2wd") return;
+                        const preview: PrinterSpecData = JSON.parse(JSON.stringify(spec));
+                        const { switchedKitId, changes } = syncDriveModeWithHardwareKit(
+                          preview,
+                          "2wd",
+                          gantryHardwareKits
+                        );
+                        const kitNote = switchedKitId
+                          ? ` + ${gantryHardwareKits.find((k) => k.id === switchedKitId)?.short_name ?? switchedKitId}`
+                          : "";
+                        const detailNote =
+                          changes.length > 1 ? ` (${changes.slice(1).join(", ")})` : "";
                         update(
                           (d) => {
-                            d.gantry.drive_mode = "2wd";
+                            syncDriveModeWithHardwareKit(d, "2wd", gantryHardwareKits);
                           },
-                          "Drive Mode: AWD (4-Motor) → 2WD (2-Motor)"
+                          `Drive Mode: AWD → 2WD${kitNote}${detailNote}`
                         );
                       }}
                     >
@@ -1155,11 +1326,22 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
  aria-pressed={driveMode === "awd"}
                       onClick={() => {
                         if (driveMode === "awd") return;
+                        const preview: PrinterSpecData = JSON.parse(JSON.stringify(spec));
+                        const { switchedKitId, changes } = syncDriveModeWithHardwareKit(
+                          preview,
+                          "awd",
+                          gantryHardwareKits
+                        );
+                        const kitNote = switchedKitId
+                          ? ` + ${gantryHardwareKits.find((k) => k.id === switchedKitId)?.short_name ?? switchedKitId}`
+                          : "";
+                        const detailNote =
+                          changes.length > 1 ? ` (${changes.slice(1).join(", ")})` : "";
                         update(
                           (d) => {
-                            d.gantry.drive_mode = "awd";
+                            syncDriveModeWithHardwareKit(d, "awd", gantryHardwareKits);
                           },
-                          "Drive Mode: 2WD → AWD (4-Motor)"
+                          `Drive Mode: 2WD → AWD${kitNote}${detailNote}`
                         );
                       }}
                     >
@@ -1169,8 +1351,8 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                   </div>
                   {showHints && (
                     <div className="hint-line">
-                      AWD adds 2 front XY motors for 2× torque &amp; half belt span; double-shear
-                      bearings prevent pulley shaft bending under high tension.
+                      AWD adds 2 front XY motors for 2× torque &amp; half belt span; switching on
+                      Siboor CNC or Monolith CNC also switches to the matching 2WD/AWD CAD kit.
                     </div>
                   )}
                 </div>
@@ -1520,6 +1702,79 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                   </div>
                 )}
               </div>
+
+              <div className="field-grid-2">
+                {spec.architecture === "corexy" && (
+                  <div className="field-row">
+                    <label htmlFor="dp-belt-mismatch-71">A/B Tension Mismatch (%)</label>
+                    <input
+                      id="dp-belt-mismatch-71"
+                      type="number"
+                      min={0}
+                      max={80}
+                      step={5}
+                      value={spec.gantry.belt.tension_mismatch_pct ?? 0}
+                      title="Tension difference between the two CoreXY belts as a percentage of their mean; couples X and Y resonances into a double peak"
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v) || v < 0 || v > 80) return;
+                        const prev = spec.gantry.belt.tension_mismatch_pct ?? 0;
+                        if (v === prev) return;
+                        update((d) => {
+                          d.gantry.belt.tension_mismatch_pct = v;
+                        }, `Belt A/B Tension Mismatch: ${prev}% → ${v}%`);
+                      }}
+                    />
+                  </div>
+                )}
+                <div className="field-row">
+                  <label htmlFor="dp-belt-set-temp-72">Tension Set At (°C)</label>
+                  <input
+                    id="dp-belt-set-temp-72"
+                    type="number"
+                    min={0}
+                    max={120}
+                    step={1}
+                    placeholder="Chamber temp"
+                    value={spec.gantry.belt.pretension_set_temp_c ?? ""}
+                    title="Frame temperature when the belts were tensioned. Leave empty if the tension above was measured at chamber temperature"
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      const prev = spec.gantry.belt.pretension_set_temp_c ?? null;
+                      if (raw === "") {
+                        if (prev === null) return;
+                        update((d) => {
+                          d.gantry.belt.pretension_set_temp_c = null;
+                        }, `Belt Tension Set Temperature: ${prev} °C → chamber temperature`);
+                        return;
+                      }
+                      const v = Number(raw);
+                      if (!Number.isFinite(v) || v < 0 || v > 120 || v === prev) return;
+                      update((d) => {
+                        d.gantry.belt.pretension_set_temp_c = v;
+                      }, `Belt Tension Set Temperature: ${prev ?? "chamber"} → ${v} °C`);
+                    }}
+                  />
+                </div>
+              </div>
+              {beltDyn && (beltDyn.thermal_tension_delta_n !== 0 || beltDyn.coupling_kappa !== 0) && (
+                <div className="hint-line">
+                  {beltDyn.thermal_tension_delta_n !== 0 &&
+                    `Operating tension ${beltDyn.operating_pretension_n.toFixed(1)} N at chamber temperature (${
+                      beltDyn.thermal_tension_delta_n > 0 ? "+" : ""
+                    }${beltDyn.thermal_tension_delta_n.toFixed(1)} N, ~${Math.round(
+                      beltDyn.pluck_hz_150mm_operating
+                    )} Hz @ 150 mm). `}
+                  {beltDyn.coupling_kappa !== 0 &&
+                    beltDyn.cross_peak_in_x != null &&
+                    beltDyn.cross_peak_in_y != null &&
+                    `Belt A ${beltDyn.tension_a_n?.toFixed(1)} N / B ${beltDyn.tension_b_n?.toFixed(
+                      1
+                    )} N: cross-axis peak ${Math.round(100 * beltDyn.cross_peak_in_x)}% on X, ${Math.round(
+                      100 * beltDyn.cross_peak_in_y
+                    )}% on Y.`}
+                </div>
+              )}
 
               <div className="sub-block">
                 <div className="sub-block-title">

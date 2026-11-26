@@ -18,6 +18,7 @@ from .registry import (
     get_hardware_asset_manifest,
     get_visual_glb_path,
     has_hardware_asset,
+    has_visual_asset,
     list_hardware_assets,
     load_superelement,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "get_hardware_asset_manifest",
     "get_visual_glb_path",
     "has_hardware_asset",
+    "has_visual_asset",
     "inspect_step_file",
     "list_hardware_assets",
     "load_superelement",

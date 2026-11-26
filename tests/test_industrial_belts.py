@@ -30,20 +30,22 @@ def test_belt_catalog_ea_and_datasheet_ratios() -> None:
     b_htd3m_15 = BeltSpec(type="htd3m_15mm")
     b_at5_16 = BeltSpec(type="at5_16mm")
 
-    # D-01: Exact Gates 2GT quasi-static catalog EA (18.9 kN/6mm) * 2.0 small-amplitude dynamic factor, below steel-cord AT3 (80 kN)
-    assert b_gt2_6.static_stiffness_ea_n == pytest.approx(18900.0)
-    assert b_gt2_6.dynamic_stiffening_factor == pytest.approx(2.0)
-    assert b_gt2_6.stiffness_ea_n == pytest.approx(37800.0)
-    assert b_gt2_9.stiffness_ea_n == pytest.approx(56700.0)
-    assert b_gt2_12.stiffness_ea_n == pytest.approx(75600.0)
-    assert b_gt2_15.stiffness_ea_n == pytest.approx(94500.0)
-    assert b_gt2_dual9.stiffness_ea_n == pytest.approx(113400.0)
+    # D-01: Gates Table 6 quasi-static EA (16.9 kN at 6 mm) x the 1.85 small-amplitude dynamic ratio
+    # fitted to controlled same-machine AWD / 2WD and motor-current measurements
+    assert b_gt2_6.static_stiffness_ea_n == pytest.approx(16900.0)
+    assert b_gt2_6.dynamic_stiffening_factor == pytest.approx(1.85)
+    assert b_gt2_6.stiffness_ea_n == pytest.approx(16900.0 * 1.85)
+    assert b_gt2_9.stiffness_ea_n == pytest.approx(25500.0 * 1.85)
+    assert b_gt2_12.stiffness_ea_n == pytest.approx(34000.0 * 1.85)
+    assert b_gt2_15.stiffness_ea_n == pytest.approx(47250.0 * 1.85)
+    assert b_gt2_dual9.stiffness_ea_n == pytest.approx(51000.0 * 1.85)
     assert b_gt2_9.stiffness_ea_n < b_at3_10.stiffness_ea_n
 
-    # Gates 3GT / 2GT unit-strain modulus ratio = 30k / 18k = 1.667x per mm width
+    # Gates Table 6 at 0.1 % elongation: 3GT 9 mm 8.9 lb vs 2GT 9 mm 5.7 lb (1.55x; the 30k / 18k
+    # unit-strain ratio of 1.667x only holds for belts wider than 1/2 in)
     assert b_3gt_9.pitch_mm == pytest.approx(3.0)
     assert b_3gt_9.core == "fiberglass"
-    assert b_3gt_9.stiffness_ea_n / b_gt2_9.stiffness_ea_n == pytest.approx(30.0 / 18.0, rel=0.01)
+    assert b_3gt_9.stiffness_ea_n / b_gt2_9.stiffness_ea_n == pytest.approx(39600.0 / 25500.0, rel=1e-6)
     assert b_3gt_15.stiffness_ea_n > b_gt2_15.stiffness_ea_n
 
     # Elatech / ContiTech steel-cord TPU exact datasheet C_spez values (Hookean steel -> dynamic factor 1.0)

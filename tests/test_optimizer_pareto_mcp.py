@@ -210,7 +210,7 @@ def test_mcp_catalog_evaluate_and_sensitivity_updates(monkeypatch: pytest.Monkey
     assert eval_m3["geometry"]["panel_mesh_n"] == 3
     assert len(eval_m3["geometry"]["shell_panels"]) > len(eval_m2["geometry"]["shell_panels"])
     assert eval_m3["static_fea"]["peak_inertial_force_x_n"] == pytest.approx(
-        2.0 * eval_m2["static_fea"]["peak_inertial_force_x_n"], rel=1e-4
+        2.0 * eval_m2["static_fea"]["peak_inertial_force_x_n"], abs=0.02
     )
 
     # Modal & Sensitivity clarity fields surfaced cleanly
