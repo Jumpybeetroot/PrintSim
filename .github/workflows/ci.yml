@@ -24,6 +24,10 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run pytest suite
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
         run: uv run pytest -n auto -q --tb=short
 
       - name: CLI evaluation smoke check

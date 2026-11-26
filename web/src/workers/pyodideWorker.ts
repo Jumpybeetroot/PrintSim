@@ -12,6 +12,7 @@ const PYODIDE_MJS_URL = `${PYODIDE_INDEX_URL}pyodide.mjs`;
 interface PyodideInstance {
   loadPackage(names: string | string[]): Promise<void>;
   pyimport(name: string): any;
+  runPython(code: string): any;
   runPythonAsync(code: string): Promise<any>;
   globals: { set(key: string, value: unknown): void; get(key: string): any; delete(key: string): void };
 }
@@ -21,15 +22,19 @@ type WorkerInMessage =
   | { type: "request"; id: number; method: string; path: string; bodyJson: string | null };
 
 let pyodide: PyodideInstance | null = null;
+let dispatchFn: ((method: string, path: string, bodyJson: string | null) => string) | null = null;
 let initPromise: Promise<void> | null = null;
 const installedExtras = new Set<string>();
+let cachedWasmZipUrl = "";
+// Serialize requests cleanly so concurrent /api/simulate + /api/bom calls never race
+let requestQueue: Promise<void> = Promise.resolve();
 
 function postStatus(state: "booting" | "ready" | "error", detail: string): void {
   self.postMessage({ type: "status", state, detail });
 }
 
 async function ensureInitialized(wasmZipUrl: string): Promise<void> {
-  if (pyodide) return;
+  if (pyodide && dispatchFn) return;
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
@@ -52,7 +57,7 @@ async function ensureInitialized(wasmZipUrl: string): Promise<void> {
       py.globals.set("_printsim_zip_bytes", zipBytes);
 
       await py.runPythonAsync(`
-import io, os, sys, zipfile
+import io, json, os, sys, zipfile
 _buf = io.BytesIO(bytes(_printsim_zip_bytes.to_py()))
 os.makedirs("/printsim", exist_ok=True)
 with zipfile.ZipFile(_buf, "r") as _zf:
@@ -60,9 +65,14 @@ with zipfile.ZipFile(_buf, "r") as _zf:
 if "/printsim" not in sys.path:
     sys.path.insert(0, "/printsim")
 import printsim.wasm_dispatch as _wasm_dispatch
+
+def _printsim_dispatch_json(method, path, body_json):
+    env = _wasm_dispatch.dispatch_api_request(method, path, body_json)
+    return json.dumps(env)
 `);
       py.globals.delete("_printsim_zip_bytes");
 
+      dispatchFn = py.globals.get("_printsim_dispatch_json");
       pyodide = py;
       postStatus("ready", "Browser Python FEA engine ready");
     } catch (err) {
@@ -102,67 +112,54 @@ function requiredExtraForPath(path: string): "trimesh" | "ezdxf" | null {
   return null;
 }
 
-let cachedWasmZipUrl = "";
+async function handleRequest(msg: Extract<WorkerInMessage, { type: "request" }>): Promise<void> {
+  try {
+    if (!pyodide || !dispatchFn) {
+      if (!cachedWasmZipUrl) {
+        throw new Error("PrintSim browser worker not initialized");
+      }
+      await ensureInitialized(cachedWasmZipUrl);
+    }
+    const extra = requiredExtraForPath(msg.path);
+    if (extra) {
+      try {
+        await ensureOptionalWheel(extra);
+      } catch (wheelErr) {
+        console.warn(`Optional Pyodide wheel '${extra}' failed:`, wheelErr);
+      }
+    }
 
-self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
+    const resultJson = dispatchFn!(msg.method, msg.path, msg.bodyJson);
+    self.postMessage({
+      type: "response",
+      id: msg.id,
+      envelope: JSON.parse(resultJson),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    self.postMessage({
+      type: "response",
+      id: msg.id,
+      envelope: {
+        status: 500,
+        content_type: "application/json",
+        body_text: JSON.stringify({ detail: `Browser engine error: ${detail}` }),
+      },
+    });
+  }
+}
+
+self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
   const msg = event.data;
   if (msg.type === "init") {
     cachedWasmZipUrl = msg.wasmZipUrl;
-    try {
-      await ensureInitialized(msg.wasmZipUrl);
-    } catch {
+    void ensureInitialized(msg.wasmZipUrl).catch(() => {
       // status already emitted
-    }
+    });
     return;
   }
 
   if (msg.type === "request") {
-    try {
-      if (!pyodide) {
-        if (!cachedWasmZipUrl) {
-          throw new Error("PrintSim browser worker not initialized");
-        }
-        await ensureInitialized(cachedWasmZipUrl);
-      }
-      const extra = requiredExtraForPath(msg.path);
-      if (extra) {
-        try {
-          await ensureOptionalWheel(extra);
-        } catch (wheelErr) {
-          // If optional wheel install fails offline, let dispatch surface a clean error
-          console.warn(`Optional Pyodide wheel '${extra}' failed:`, wheelErr);
-        }
-      }
-
-      const py = pyodide!;
-      py.globals.set("_req_method", msg.method);
-      py.globals.set("_req_path", msg.path);
-      py.globals.set("_req_body", msg.bodyJson);
-      const resultJson: string = await py.runPythonAsync(`
-import json as _json
-_env = _wasm_dispatch.dispatch_api_request(_req_method, _req_path, _req_body)
-_json.dumps(_env)
-`);
-      py.globals.delete("_req_method");
-      py.globals.delete("_req_path");
-      py.globals.delete("_req_body");
-
-      self.postMessage({
-        type: "response",
-        id: msg.id,
-        envelope: JSON.parse(resultJson),
-      });
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      self.postMessage({
-        type: "response",
-        id: msg.id,
-        envelope: {
-          status: 500,
-          content_type: "application/json",
-          body_text: JSON.stringify({ detail: `Browser engine error: ${detail}` }),
-        },
-      });
-    }
+    requestQueue = requestQueue.then(() => handleRequest(msg));
   }
 };
