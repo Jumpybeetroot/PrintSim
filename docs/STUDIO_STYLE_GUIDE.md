@@ -3,8 +3,8 @@
 This is the source of truth for how the web studio (`web/`) looks and behaves. Read it before
 changing anything under `web/src/`. It applies to people and to AI agents equally.
 
-- **Tokens and base styles:** [`web/src/styles.css`](../web/src/styles.css) (the `:root` block and the sections named in this guide)
-- **Automated check:** [`web/scripts/check-style.mjs`](../web/scripts/check-style.mjs), run by `npm run build --prefix web`
+- **Tokens and base styles:** [`web/src/styles.css`](../web/src/styles.css) importing ordered partials under [`web/src/styles/`](../web/src/styles/) (`tokens.css` holds the `:root` block; `layout.css`, `analysis.css`, `viewport.css`, `panels.css`, `modals.css` hold component rules)
+- **Automated check:** [`web/scripts/check-style.mjs`](../web/scripts/check-style.mjs), run by `npm run build --prefix web` (scans every `web/src/**/*.css` and `web/src/**/*.tsx` file)
 - **History of how it got here:** [`STUDIO_UI_OVERHAUL.md`](STUDIO_UI_OVERHAUL.md)
 
 The check enforces the mechanical rules (section 11). The rest of this guide is judgement that a
@@ -30,7 +30,7 @@ script cannot check, so it relies on you.
 
 ## 2. Tokens
 
-All defined in the `:root` block of `styles.css`. Use the variable, never the literal.
+All defined in the `:root` block of `web/src/styles/tokens.css` (imported first by `styles.css`). Use the variable, never the literal.
 
 ### Surfaces and text
 
@@ -138,6 +138,7 @@ which appears only after a change and is highlighted on purpose.
 | A helper note | a `*-note` class | Fill only, no border |
 | A list of ranked items | rows separated by `border-top: 1px solid var(--border)` | Like `.top-cause-row` |
 | A status callout | 3px left bar in the status colour + a faint tint | Like `.diag-item`, `.modal-mode-item` |
+| An Advanced Mode override strip | `.model-override-strip` (fill-only `--inset` + 2px left bar, `--accent` when `.overridden`) | Hidden unless Advanced Mode is ON; expandable compact inputs + Reset |
 
 Dividers are solid `1px solid var(--border)`. **Dashed lines mean "drop a file here" or "nothing
 here yet"** and nothing else.
@@ -200,9 +201,9 @@ Defined once, under "Pills & tags" in `styles.css`. Every small tag is one of th
 
 | Kind | Looks like | Use for | Classes |
 |---|---|---|---|
-| **Neutral** | `--inset` fill, `--border`, `--text-2` | A read-out or label: `X 450g / Y 1050g`, `3mm Acrylic`, `FLEX` | `.badge-pill`, `.sub-block-tag`, `.sub-accordion-tag`, `.tension-hz-pill`, `.mount-pill`, `.sens-badge`, `.cause-kind-tag`, `.deep-accordion-badge` |
+| **Neutral** | `--inset` fill, `--border`, `--text-2` | A read-out or label: `X 450g / Y 1050g`, `3mm Acrylic`, `FLEX` | `.badge-pill`, `.sub-block-tag`, `.sub-accordion-tag`, `.tension-hz-pill`, `.mount-pill`, `.sens-badge`, `.cause-kind-tag`, `.deep-accordion-badge`, `.modal-severity-pill` |
 | **Status** | Tint + text tint in green / amber / red | What a value **means**: ok, warning, limiting | add `.ok`, `.warn`, `.bad` / `.danger` to the above |
-| **Accent** | Accent tint | Selected or live; purple for beta | `.saved-active-badge`, `.changed-dot-label`, `.mount-pill.info`, `.beta-pill` |
+| **Accent** | Accent tint | Selected or live; purple for beta | `.saved-active-badge`, `.changed-dot-label`, `.badge-pill.info`, `.mount-pill.info`, `.modal-severity-pill.info`, `.beta-pill` |
 
 Rules:
 
@@ -326,3 +327,4 @@ checklist below.
    has a `title`.
 7. If you added a Printer-tab section, it is in the jump bar.
 8. If you changed a rule, this guide and `check-style.mjs` are updated in the same commit.
+9. **Flex-direction & header-wrapping safety** (see `docs/CAD_AND_FEA_PITFALLS.md` §5): never use `flex: 1 0 100%` or `flex-basis: 100%` inside a `flex-direction: column` container (where `flex-basis` controls **height**, clipping sibling rows), never nest `.field-row` inside `.field-row`, and ensure every sidebar header pairing a label with status pills has `flex-wrap: wrap`.

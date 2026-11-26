@@ -10,21 +10,22 @@
 - **Mixed Frame Upright Profiles (`FrameSpec.upright_profile`) & VzBot 4×Ø10 mm Belt-Synced Z**: Model authentic asymmetric frames (e.g., DoomCube `4040` vertical uprights + `2020` horizontals) with separate BOM stock-bar nesting, plus VzBot 330/235 single-motor belt-synced dual-Z (`leadscrew_dual_belt_sync`) with 4×Ø10 mm hardened smooth rods and `LMK10LUU` flanged linear bearings.
 - **New Community-Calibrated Presets — RatRig V-Core 3.1 300 & FLSUN V400 Delta**: Dedicated `examples/ratrig_vcore31_300.yaml` and `examples/flsun_v400_delta.yaml` builds calibrated directly against community Klipper input-shaper touchstones, alongside automatic KB preset mapping (`printsim kb calibrate`).
 - **2D CNC/Laser DXF Export, One-Click Klipper `printer.cfg` & `#spec=` Shareable URLs**: Export manufacturable R2010 2D DXF panel/plate kits (`printsim export-dxf`, including `side_panel`, `rear_panel`, `top_panel`, `trident_backbone`, and `corner_gusset`), generate ready-to-paste Klipper `printer.cfg` `[input_shaper]` / `[printer]` / stepper config snippets in one click, and share any live printer build via compressed `#spec=` URLs in the 3D Web Studio.
-- **Full Multiphysics Hardware Fidelity**: Bolted MITC4 shell enclosure panels, `GANTRY_BRACKET_CATALOG` creep physics, `EXTRUSION_FILLINGS` mineral-cast/granular damping, transformed-section composite linear rails, 6-DOF nozzle-to-bed structural loop, Klipper-exact PSD input shaper calibration, and `pymoo` NSGA-II 3-objective Pareto optimization (`printsim pareto`).
+- **CAD-Backed Craig–Bampton Hardware Superelements & Studio 3D GLB Assets (`printsim.cad_assets`, `use_cad_superelements`)**: Bake real vendor `.STEP` CAD once offline (`printsim bake-asset` / `printsim list-assets`) via Gmsh Tet4 + `scikit-fem` + VPT/RBE3 Craig–Bampton CMS into tiny `superelement.npz` matrices (~10 KB) + QEM-decimated `visual.glb` meshes (~70–95 KB). At runtime, PrintSim injects the exact 3D coupled bending/torsion/shear stiffness into the global static, modal, and adjoint FEA solvers in `< 1 ms`, renders the real CAD geometry in Three.js with live modal/stress deformation (`/api/assets/hardware`), and elevates confidence with a `CAD CMS` badge (Phase 1 includes **Chube Compact / Air / Conduction**, **Tricorn Short / Long**, and **Microwaved Bowden SLM**).
+- **Full Multiphysics Hardware Fidelity, Advanced Mode Lumped-Model Overrides & Model Confidence Audit (`model_overrides`, `model_confidence`)**: Bolted MITC4 shell enclosure panels, `GANTRY_BRACKET_CATALOG` creep physics, `EXTRUSION_FILLINGS` mineral-cast/granular damping, transformed-section composite linear rails, 6-DOF nozzle-to-bed structural loop, Klipper-exact PSD input shaper calibration, and `pymoo` NSGA-II 3-objective Pareto optimization (`printsim pareto`). Every lumped catalog option (14 physical models across Frame, Gantry, Toolhead, Hotend, and Bed/Z) exposes its exact baseline & effective parameters (`effective_model_params`) and supports direct per-parameter overrides via `PrinterSpec.model_overrides` (compactly omitted from YAML when unused) and the Studio **Advanced Mode** toggle, paired with a **WIP · Model Trust?** modal (`model_confidence`) listing every active parameter and its 0–100% engineering confidence rating.
 
 ## Core Capabilities
 
 - **Parametric Assembly DSL & OpenCASCADE STEP CAD (`printsim.schema`, `printsim.geometry.cad_b3d`)**: Declarative YAML/JSON/Python schema covering CoreXY, Cartesian Bedslinger, Delta, and arbitrary custom node-and-member trusses, backed by real datasheet materials and profiles — plus **`build123d` (OpenCASCADE B-Rep) STEP export** for full printer assemblies and parametric brackets with real fillets, M5/M3 bolt holes, and NEMA17 mounting patterns.
-- **3D Frame FEA, Curved Tet10 Continuum FEA, Solid Hex8 FEA & SIMP Topology Optimization (`printsim.fea`)**:
-  - Exact 12-DOF 3D Euler-Bernoulli frame FEM solver (`K` stiffness & consistent `M` mass matrices, verified against textbook analytical cantilever deflection & frequency benchmarks).
-  - **Conformal 3D Tetrahedral Continuum FEA (`tet_fem.py`)** powered by **Gmsh + scikit-fem** (`Tet10 P2` / `Tet4 P1`) directly on OpenCASCADE STEP files or parametric brackets, supporting isotropic metals & transversely isotropic FDM Z-layer delamination, smooth Three.js surface stress rendering, and ParaView `.vtu` export.
-  - **3D Solid Hex8 Continuum FEM (`solid_fem.py`)** and **3D SIMP Topology Optimization (`topology.py`)** with sensitivity filtering, boundary preservation, and watertight printable STL export.
-  - Generalized eigenvalue modal analysis ($K\phi = \omega^2 M\phi$) → 3D animated vibration modes, dominant X/Y resonance frequencies, coupled belt+motor+bracket+structure resonance, and Klipper Input Shaper recommendations.
-- **Manufacturable Cut-List, Stock Nesting & BOM (`printsim.geometry.bom`)**: Auto-merges split structural members into physical cut lengths, runs 1D stock bar nesting (`1000mm`/`2000mm` bars + saw kerf & scrap `%`), calculates exact belt/rail/motor/bracket/filling/panel/fastener counts and cost breakdowns, and exports to **JSON, CSV, or Markdown**.
-- **Kinematics & Clearance (`printsim.kinematics`)**: CoreXY, Cartesian, and Delta exact FK/IK, stepper electromagnetic torque roll-off at high RPM (`24V`/`48V` + inductance), belt dynamic slack-side slip & overtension checks, packaging efficiency, and frame/toolhead collision detection.
-- **Hotend FVM Thermal, Multi-Filament Rheology & Cooling (`printsim.thermal`)**: 40-node 1D Finite-Volume axial temperature solver $T(z)$ (Nozzle → Heater Block → Heatbreak → Heatsink), multi-filament database (`PLA`, `PETG`, `ABS`, `ASA`, `PA12-CF`, `TPU 95A`) with shear-thinning viscosity & $T_g$ heat-creep thresholds, transient heat-up curves, and overhang/bridging cooling predictions.
-- **G-code Lookahead & Virtual Print (`printsim.gcode`)**: Parses standard Marlin/Klipper/OrcaSlicer G-code (or runs the built-in high-speed calibration cube benchmark), computes lookahead trapezoidal motion timings, and tags every toolpath segment with physical defects (`ok`, `ringing`, `underextrusion`, `step_skip`).
-- **Interactive 3D Web Studio (`web/`)**: React + Three.js studio with live 3D modes (Assembly, Frame FEA heatmap, Animated Modal Vibration, Virtual Print toolpath scrubber, **Curved Tet10 / Voxel Hex8 Solid Part FEA** with `.step`/`.stl` upload, and **3D SIMP Topology Optimization**), **Klipper ADXL345 CSV Overlay & Auto-Fit**, **Klipper PSD & Pareto Trade-Off Frontier** charts, **BOM & Cut-List inspector**, **one-click Klipper `printer.cfg` export**, **`#spec=` shareable build URLs**, and STEP/STL/DXF/CSV downloads.
+- **3D Frame FEA, Curved Tet10 Continuum FEA, QM6-3D Hex8 FEA & SIMP Topology Optimization (`printsim.fea`)**:
+  - Deterministic 12-DOF 3D Euler-Bernoulli frame FEM with consistent self-weight fixed-end moments, per-node plate/disk bed rotary inertia, and QM6 MITC4 bolted shell panels (`_ALPHA_DRILL = 1e-3`).
+  - **Conformal 3D Tetrahedral Continuum FEA (`tet_fem.py`)** powered by **Gmsh + scikit-fem** (`Tet10 P2` / `Tet4 P1`) with surface vertex stress recovery, isotropic metals & transversely isotropic FDM Z-layer delamination, smooth Three.js rendering, and ParaView `.vtu` export.
+  - **Wilson–Taylor QM6-3D Solid Hex8 Continuum FEM (`solid_fem.py`)**, feature-aligned rectilinear bracket meshing (`bracket_designer.py` / `superelement.py`), and **3D SIMP Topology Optimization (`topology.py`)** with watertight printable STL export.
+  - Coupled modal + drive receptance analysis (moving-mass-consistent series compliance + Rayleigh reflected stepper rotor inertia + feet-sprung receptance) and upstream Klipper multi-damping input shaper calibration (`ZV`, `ZVD`, `MZV`, `EI`, `2HUMP_EI`, `3HUMP_EI`).
+- **Manufacturable Cut-List, Stock Nesting & BOM (`printsim.geometry.bom`)**: Auto-merges split structural members into physical cut lengths (including net butt-joint lengths), runs 1D stock bar nesting (`1000mm`/`2000mm` bars + saw kerf & scrap `%`), calculates exact belt/rail/smooth-rod/motor/bracket/filling/panel/fastener counts and reconciled cost breakdowns, and exports to **JSON, CSV, or Markdown**.
+- **Kinematics & Clearance (`printsim.kinematics`)**: CoreXY, Cartesian, and Delta exact FK/IK + full Delta Jacobian torque/RPM/workspace & tower-height checks, peak/RMS-consistent stepper pull-out torque-speed curves & torque-balance max velocity, decomposed static/dynamic belt `EA` with exact pulley-to-pulley free-span lengths, exact 2WD/AWD worst-direction accel limits, and dynamic tight-side overtension / slack-side slip checks.
+- **Hotend FVM Thermal, Multi-Filament Rheology & Cooling (`printsim.thermal`)**: 40-node 1D Finite-Volume axial temperature solver $T(z)$ honoring enclosure `chamber_temp_c`, melt-averaged DSC multi-filament database (`PLA`, `PETG`, `ABS`, `ASA`, `PA12-CF`, `TPU 95A`) with Arrhenius $K \cdot a_T^n$ shear-thinning viscosity & $T_g$ heat-creep thresholds, transient heat-up curves, and overhang/bridging cooling predictions.
+- **G-code Lookahead & Virtual Print (`printsim.gcode`)**: Parses Marlin/Klipper/OrcaSlicer G-code including `G2`/`G3` arcs, `M204 T`, `SET_VELOCITY_LIMIT`, and E-only retracts, computes lookahead trapezoidal motion timings, and tags every toolpath segment with physical defects (`ok`, `ringing` in µm, `smoothing`, `underextrusion`, `step_skip`, `belt_slip`).
+- **Interactive 3D Web Studio (`web/`)**: React + Three.js studio surfacing inertial nozzle flex vs. gravity sag, plane-removed bed plate flatness + tilt/settlement, dynamic belt tension breakdowns, live 3D modes (Assembly, Frame FEA heatmap, Animated Modal Vibration, Virtual Print toolpath scrubber, **Curved Tet10 / QM6-3D Hex8 Solid Part FEA** with `.step`/`.stl` upload, and **3D SIMP Topology Optimization**), **Klipper ADXL345 CSV Overlay & Auto-Fit**, **Klipper PSD & Pareto Trade-Off Frontier (`Flex @ 10k`)** charts, **BOM & Cut-List inspector**, **one-click Klipper `printer.cfg` export**, **`#spec=` shareable build URLs**, and STEP/STL/DXF/CSV downloads.
 
 ## Quickstart
 
@@ -71,11 +72,23 @@ uv run printsim export-dxf examples/voron_trident_300.yaml --part all_plates --o
 
 # Run conformal 3D Tet10 FEA (Gmsh + scikit-fem) on a B-Rep bracket or STEP file
 uv run printsim tet-fea --preset xy_motor_mount --material pa12_cf_printed --vtu motor_mount.vtu
+
+# List pre-baked CAD Craig-Bampton hardware superelements & run the zero-LLM local CAD pipeline
+uv run printsim list-assets
+uv run printsim cad inspect path/to/part.step
+uv run printsim cad bake cad_recipes/my_part.yaml --fast   # cached Tet4 + 2x2 preview PNG + QA gate
+uv run printsim cad verify                                 # verify all baked assets against QA invariants
+uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --out cad_sources/part.step
+
+# Zero-LLM diagnostics, A/B comparisons & parallel SQLite-cached sweeps
+uv run printsim diagnose examples/corexy_voron_style.yaml
+uv run printsim compare examples/corexy_voron_style.yaml -O frame.bracing=full_truss
+uv run printsim sweep sweeps/example_parametric_sweep.yaml --workers 4
 ```
 
 ### 2. AI Agent & MCP Plug-and-Play Setup
 
-Connect PrintSim directly to **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, **Gemini CLI**, or **LangGraph / OpenAI Agents** — see **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** for copy-paste config JSONs, all 21 MCP tool schemas, REST endpoints, and example engineering prompts.
+Connect PrintSim directly to **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, **Gemini CLI**, or **LangGraph / OpenAI Agents** — see **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** for copy-paste config JSONs, all 21 MCP tool schemas, REST endpoints, zero-LLM local CLI workflows, and example engineering prompts.
 
 ### 3. Launch the Interactive 3D Web Studio
 
@@ -83,18 +96,18 @@ Connect PrintSim directly to **Claude Desktop**, **Cursor**, **Antigravity / Win
 # Build frontend once (if not already built)
 cd web && npm install && npm run build && cd ..
 
-# Start FastAPI backend + Web 3D Studio on http://127.0.0.1:8000
-uv run printsim serve --port 8000
+# Start FastAPI backend + Web 3D Studio on http://127.0.0.1:8000 (with Python hot-reload)
+uv run printsim serve --port 8000 --reload
 ```
 
-For frontend hot-reload development, run `uv run printsim serve --port 8000` in one terminal and `cd web && npm run dev` in another (proxies `/api` to port 8000).
+For frontend hot-reload development, run `uv run printsim serve --port 8000 --reload` in one terminal and `cd web && npm run dev` in another (proxies `/api` to port 8000).
 
 Changing the studio UI? Follow [docs/STUDIO_STYLE_GUIDE.md](docs/STUDIO_STYLE_GUIDE.md). `npm run build` runs a style check (`npm run check:style`) before compiling and fails on raw colours, off-scale sizes and unlabelled controls.
 
 ### 4. Run the Physics Verification Suite
 
 ```bash
-uv run pytest -v
+uv run pytest -n auto -q --tb=short
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for architecture details and [docs/monolith_discord_benchmarks.md](docs/monolith_discord_benchmarks.md) for empirical CoreXY input-shaper calibration benchmarks.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for architecture details, [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) for the auto-generated symbol/line-range map, [docs/MODEL_CONFIDENCE_AND_REFERENCES.md](docs/MODEL_CONFIDENCE_AND_REFERENCES.md) for the full 0–100% physics confidence ledger & engineering references, and [docs/monolith_discord_benchmarks.md](docs/monolith_discord_benchmarks.md) for empirical CoreXY input-shaper calibration benchmarks.

@@ -3,7 +3,7 @@ name: thermal-extrusion-engineer
 description: Hotend thermal network, heat-creep, melt-zone volumetric flow, part-cooling airflow, and polymer extrusion rheology specialist for PrintSim. Delegate to this agent when developing or calibrating hotend, heater block, heatbreak, extruder, or bed thermal physics.
 subagent: true
 mainAgent: false
-model: pro
+model: inherit
 tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]
 ---
 
@@ -19,4 +19,4 @@ You are the heat transfer, hotend thermodynamics, and polymer extrusion speciali
 ## Operating Rules
 1. Keep all thermal calculations in strict SI units (`W`, `K`, `W/(m·K)`, `J/(kg·K)`, `m^2`, `Pa`).
 2. Ensure physical monotonicity tests exist in `tests/test_kinematics_thermal.py` (e.g., higher heater wattage reduces heat-up time, titanium heatbreak reduces cold-side temp vs thick stainless, longer melt zone boosts volumetric flow).
-3. Run `uv run pytest -v` before completing your task.
+3. Batch independent reads/edits, use `grep -rn` (not `rg`), never poll `manage_task(status)` in a loop, and verify with `uv run pytest tests/test_kinematics_thermal.py -q --tb=short`.

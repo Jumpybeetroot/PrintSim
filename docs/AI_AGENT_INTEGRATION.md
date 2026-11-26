@@ -209,3 +209,40 @@ bracket = design_and_evaluate_bracket(
 )
 print(bracket["stiffness_n_per_mm"], bracket["specific_stiffness_n_per_mm_per_g"])
 ```
+
+---
+
+## 6. Hands-Off Discord & Touchstone KB Research Workflow
+
+To gather empirical 3D-printer hardware specs (toolhead/hotend weights, gantry masses, polymer tests, and Klipper/Shake&Tune ADXL resonance data) from public 3D-printing Discord communities without manual babysitting, PrintSim combines:
+
+- **Workspace Skill & Server Directory**: [`.agents/skills/discord-research/SKILL.md`](../.agents/skills/discord-research/SKILL.md) + [`.agents/skills/discord-research/servers.yaml`](../.agents/skills/discord-research/servers.yaml) (pre-mapped channel IDs for Monolith, VzBoT, Klipper, Luke's Laboratory, Isik's Tech, ANNEX Engineering, Armchair Heavy Industries, and Kalico).
+- **Zero-LLM Query Router + KB Cache Check**:
+  ```bash
+  uv run python .agents/skills/discord-research/scripts/route_query.py "vzbot 330 adxl" --topic adxl
+  ```
+  Checks PrintSim's local SQLite+FTS5 Touchstone KB (`data/touchstones/printsim_kb.db`) first, then emits direct Discord channel URLs, `[CHECK PINS FIRST]` hints, and native Discord search queries (`in:#channel`, `has:file`, `has:image`).
+- **Automatic Persistence**: Captured thread findings (`data/touchstones/discord_captures/*.json`) and downloaded Klipper/Shake&Tune CSVs (`data/touchstones/adxl_csvs/*.csv`) are ingested directly into the local KB via `uv run printsim kb ingest <path> --auto-approve` so future lookups return in <1 second without re-opening Discord.
+
+---
+
+## 6. Zero-LLM Local CAD & FEA Batch CLI Workflow (Token-Efficient Mode)
+
+To avoid burning LLM turns on interactive STEP geometry probing, Gmsh re-meshing, or multi-case 3D FEA calibration loops, offload heavy CAD and sweep work to PrintSim's local cached CLIs and feed only the compact Markdown/JSON summaries back to the agent:
+
+```bash
+# 1. Inspect any STEP/STL in 1 command (solids, bbox, faces, bolt holes, overlaps, port hints)
+uv run printsim cad inspect cad_sources/my_hotend.step
+
+# 2. Bake a declarative YAML recipe with SHA-256 mesh caching + 2x2 preview PNG + QA gate
+uv run printsim cad bake cad_recipes/my_hotend.yaml --fast
+uv run printsim cad verify
+
+# 3. Export STEP directly from an existing Onshape document (requires ONSHAPE_ACCESS_KEY/SECRET_KEY)
+uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --out cad_sources/part.step
+
+# 4. Run compact physics diagnostics, A/B override deltas, and parallel SQLite-cached sweeps
+uv run printsim diagnose examples/corexy_voron_style.yaml
+uv run printsim compare examples/corexy_voron_style.yaml -O frame.bracing=full_truss
+uv run printsim sweep sweeps/example_parametric_sweep.yaml --workers 4
+```

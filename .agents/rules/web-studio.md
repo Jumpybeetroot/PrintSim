@@ -15,6 +15,7 @@ globs: web/**
    - Run `npm run build --prefix web` (`tsc && vite build`) to verify zero type or bundle errors after any frontend edit.
 4. **Scientific Visualization Clarity**:
    - Preserve clear legends and scales for FEA stress heatmaps, deflection exaggeration multipliers, modal mode frequency labels, and G-code defect colors.
+   - **Explicit Derived-Metric Warnings**: Whenever a warning, badge, or status pill triggers on a derived or dynamic quantity (e.g., peak dynamic belt tension = static pretension + accel load, inertial nozzle flex vs. gravity sag, or plane-removed bed flatness vs. rigid tilt) rather than the raw slider value beside it, display the derived value and its component breakdown directly in the warning text so users never see an unexplained violation next to an in-range input.
 5. **Visual System & Style Guide** (`docs/STUDIO_STYLE_GUIDE.md`):
    - Read `docs/STUDIO_STYLE_GUIDE.md` before changing anything in `web/src/`. It defines the design tokens, the container and pill patterns, label/unit wording, and the accessibility requirements.
    - Use tokens only: no raw colours, no font sizes outside `--fs-*` (11px floor), no radii outside `--radius-sm` / `--radius` / `--radius-pill`, no weights outside 400/500/600/700, no decorative gradients, no new inline `style={{}}` for static styling.

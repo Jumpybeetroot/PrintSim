@@ -19,19 +19,26 @@ web/dist/
 *.stl
 *.obj
 *.glb
+!src/printsim/assets/hardware/**/*.glb
 *.step
 *.stp
 *.vtk
 *.vtu
 *.msh
 
+# Local CAD raw sources, caches & sweep outputs
+.cache/
+cad_sources/
+sweeps/out/
+
 # Live Studio session bridge & local touchstone KB
 .printsim_session/
 data/touchstones/
 review_queue/
 
-# OS / Editor
+# OS / Editor / Local tool state
 .DS_Store
 .vscode/
 .idea/
+.claude/
 *.swp

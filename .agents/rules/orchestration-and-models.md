@@ -37,20 +37,40 @@ Based on Artificial Analysis Intelligence Index v5.0.1 and Coding Agent Index v2
 - Do **not** keep an orchestrator on `gemini-4-neon-xhigh` for routine routing turns (+72% cost & 56s TTFT for +1 Intelligence point).
 
 ### B. Per-Role Subagent & Swarm Worker Mapping
-In a **Swarm**, explicitly pass the `model` ID below on `swarm(action="add")` (user-approved override of the default coordinator-inheritance behavior). In **`invoke_subagent`** or **`run_workflow`**, use the listed tier.
+In a **Swarm**, explicitly pass the `model` ID below on `swarm(action="add")` (user-approved override of the default coordinator-inheritance behavior).
+
+> **CRITICAL `invoke_subagent` ROUTING RULE (Verified from Transcript Telemetry):**
+> In `invoke_subagent`, **`Model="pro"` currently resolves to `gemini-4-hydrogen-tiered-xhigh`** (which is on the Do-Not-Use list and historically caused 52% of all PrintSim token burn via 80–293 turn thrashing!). Therefore:
+> - **NEVER pass `Model="pro"` to `invoke_subagent`** and **NEVER set `model: pro` in `.agents/agents/*.md`**.
+> - Use **`Model="inherit"`** for `fea-engineer`, `thermal-extrusion-engineer`, `studio-frontend`, and `printer-designer` so they run on the parent's `Gemini 4 Neon (High)` or `Gemini 4 Neon (Medium)`!
+> - Use **`Model="flash"`** only for `research` and `browser` subagents (maps to `gemini-4-hydrogen-tiered-high`).
 
 | Role / Agent | Swarm Exact Model ID | Separate-Pool Fallback | `invoke_subagent` Tier | Notes |
 | :--- | :--- | :--- | :---: | :--- |
-| `fea-engineer`, `thermal-extrusion-engineer` (routine solver/tests) | `gemini-4-neon-high` | `claude-opus-5-5-high` | `pro` | Best cost/intelligence Pareto knee (60 Intel, 65.7% TB-Science). |
-| `fea-engineer`, `thermal-extrusion-engineer` (hard FEM derivations, eigensolver/nonlinear bugs) | `gemini-4-neon-xhigh` | `claude-opus-5-5-high` | `pro` | Escalate to `xhigh` **only** for hard physics/math (70.0% TB-Science, 71.3% HLE-Diamond). |
+| `fea-engineer`, `thermal-extrusion-engineer` (routine solver/tests) | `gemini-4-neon-high` | `claude-opus-5-5-high` | `inherit` | Inherits parent Neon High/Medium. Never pass `pro` (routes to banned `hydrogen-xhigh`). |
+| `fea-engineer`, `thermal-extrusion-engineer` (hard FEM derivations, eigensolver/nonlinear bugs) | `gemini-4-neon-xhigh` | `claude-opus-5-5-high` | `inherit` | Escalate via Swarm `model` or parent model switch **only** for hard physics/math. |
 | `studio-frontend` (day-to-day React/TS/UI) | `gemini-4-neon-medium` | `claude-opus-5-5-high` | `inherit` | Beats Claude Opus/Sonnet High on Engineering (61) & FrontierCode (36.9%). |
-| `studio-frontend` (complex Three.js shaders/state) | `gemini-4-neon-high` | `claude-opus-5-5-high` | `pro` | Use `high` for intricate 3D geometry/WebGL refactors. |
-| `printer-designer` (YAML sweeps, `printsim evaluate`/`optimize`) | `gemini-4-hydrogen-high` or `gemini-4-neon-medium` | `claude-opus-5-5-medium` | `inherit` | Fast CLI loops (161 tok/s, 54.0% TB, 91.3% non-hallucination). |
-| Verifier / Code Reviewer | `gemini-4-neon-high` or `claude-opus-5-5-high` | `claude-opus-5-5-high` | `pro` | `claude-opus-5-5-high` adds cross-family review & separate quota; require cited files & test output (lower non-hallucination). |
+| `studio-frontend` (complex Three.js shaders/state) | `gemini-4-neon-high` | `claude-opus-5-5-high` | `inherit` | Use Neon High parent or Swarm for intricate 3D geometry/WebGL refactors. |
+| `printer-designer` (YAML sweeps, `printsim evaluate`/`optimize`) | `gemini-4-hydrogen-high` or `gemini-4-neon-medium` | `claude-opus-5-5-medium` | `inherit` | Prefer running `printsim sweep`/`diagnose` locally at 0 tokens first. |
+| Verifier / Code Reviewer | `gemini-4-neon-high` or `claude-opus-5-5-high` | `claude-opus-5-5-high` | `inherit` | `claude-opus-5-5-high` adds cross-family review & separate quota; require cited files & test output. |
 | `research` / codebase search | `gemini-4-hydrogen-high` (agentic) / `gemini-4-neon-low` (fast Q&A) | `claude-sonnet-5-5-high` | `flash` | Fast exploration without burning flagship quota. |
 | `browser` | `gemini-4-hydrogen-high` | — | `flash` | Keep default `flash` tier per browser guidelines. |
 | Docs / specs / architecture prose | `claude-opus-5-5-high` or `claude-sonnet-5-5-high` | `gemini-4-neon-medium` | `inherit` | Top AA-Briefcase Elo (1682 / 1634). |
 | Trivial zero-tool mechanical edits / extraction | `gemini-4-hydrogen-low` | — | `flash_lite` | Only safe for non-agentic mechanical text tasks. |
+
+## 3. Token & Quota Hygiene Rules (Mandatory)
+1. **Zero Polling Loops:** NEVER call `manage_task(action="status")` repeatedly while waiting on Gmsh, `scikit-fem`, `pytest`, or builds. Set `NotificationTimeoutSeconds` and end the turn to wait reactively — or for sweeps taking >60s, hand the user the exact CLI command (`uv run printsim sweep ...`) to run locally at 0 LLM tokens.
+2. **Keep Context Lean (< 150k):** Aim for **one milestone per thread**; recommend `/compact` or a fresh thread after completing a feature. Scope every subagent to a crisp deliverable that completes in **<= 35 turns**.
+3. **Zero-LLM CAD & FEA First:**
+   - Use `uv run printsim cad inspect <part.step>` instead of ad-hoc `python -c` STEP probing.
+   - Use declarative `cad_recipes/*.yaml` + `uv run printsim cad bake` (with `--fast` preview contact-sheet PNG and `.cache/cad_fea/` mesh caching) instead of writing one-off baker scripts or taking repeated browser screenshots.
+   - Use `build123d` scripts locally for AI-authored CAD; use Onshape MCP only for exporting existing user assemblies (`printsim cad fetch-onshape`) or flipping Onshape Variables — never build complex parts via dozens of turn-by-turn Onshape MCP sketch/extrude calls.
+   - Use `uv run printsim sweep`, `printsim diagnose`, and `printsim compare` instead of ad-hoc `python -c` diagnostic scripts.
+4. **Fast Dev-Loop Defaults:**
+   - Read `docs/CODEBASE_MAP.md` first to jump to exact line ranges instead of reading entire large files.
+   - Use `grep -rn` (not `rg`, unless `rg` is verified installed).
+   - Run `uv run printsim serve --reload` once per session instead of repeatedly killing/restarting the server.
+   - Run targeted `uv run pytest tests/test_<area>.py -q --tb=short` during iteration and `uv run pytest -n auto -q --tb=short` (or `-q --tb=short`) once at final verification.
 
 ### C. Explicit Do-Not-Use Models (Guardrails)
 Never select or pin these models for PrintSim coding/orchestration roles:
