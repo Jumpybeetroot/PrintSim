@@ -465,6 +465,14 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         ],
     },
 }
+from printsim.schema.printdb_bridge import (
+    hydrate_belt_catalog as _hydrate_belt_catalog,
+    hydrate_hotend_catalog as _hydrate_hotend_catalog,
+    hydrate_stepper_catalog as _hydrate_stepper_catalog,
+)
+
+_hydrate_belt_catalog(BELT_CATALOG)
+
 HotendMountStyleType = Literal[
     "groove_mount", "rigid_4bolt_m3", "dragon_4bolt_m25", "chube_6bolt_m3_18pcd"
 ]
@@ -710,7 +718,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "name": "Luke's Lab Chube Compact (80W Ti Shell)",
         "short_name": "Chube Compact",
         "mount_style": "rigid_4bolt_m3",
-        "structural_stiffness_n_per_mm": 2600.0,
+        "structural_stiffness_n_per_mm": 2975.0,
         "mass_g": 63.0,
         "overall_length_mm": 47.2,
         "melt_zone_length_mm": 33.0,
@@ -725,7 +733,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "heatsink_thermal_resistance_k_w": 2.6,
         "max_temp_c": 500.0,
         "cost_usd": 170.0,
-        "notes": "Official SolidWorks STEP (Chube_Compact_integration_assembly.STEP): 47.2 mm OAL w/ V6 nozzle, Ø22.23 mm Ti monocoque shell, 4× M3 Ø16 mm Dragon PCD mount, 33 mm meltzone, Chalice Ti heatbreak, 50 g bare / 63 g dressed; 31k-elem Tet4 FEA calibrated stiffness 3,015/2,277 N/mm (shorter 47.2 mm lever arm)",
+        "notes": "Official SolidWorks STEP (Chube_Compact_integration_assembly.STEP): 47.2 mm OAL w/ V6 nozzle, Ø22.23×0.89 mm Ti monocoque shell w/ exact 4× Ø12.50 mm cooling cutouts @ 45/135/225/315°, 4× M3 Ø16 mm Dragon PCD mount, 33 mm meltzone, Chalice Ti heatbreak, 50 g bare / 63 g dressed; 49.3k-elem Tet4 FEA calibrated stiffness 3,020/2,931 N/mm (short 47.2 mm lever arm + solid lower shell)",
     },
     "chube_air": {
         "id": "chube_air",
@@ -733,7 +741,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "name": "Luke's Lab Chube Air (100W Ti Shell)",
         "short_name": "Chube Air",
         "mount_style": "chube_6bolt_m3_18pcd",
-        "structural_stiffness_n_per_mm": 2250.0,
+        "structural_stiffness_n_per_mm": 560.0,
         "mass_g": 79.0,
         "overall_length_mm": 66.0,
         "melt_zone_length_mm": 42.0,
@@ -748,7 +756,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "heatsink_thermal_resistance_k_w": 2.5,
         "max_temp_c": 500.0,
         "cost_usd": 260.0,
-        "notes": "Official OEM STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4 mm × 0.90 mm wall Ti monocoque shell, 6× M3 Ø18 mm PCD, 42 mm meltzone, 6×20 mm heater, 69 g bare (CoM 36.15 mm) / 79 g dressed, 500 °C rated; 49.5k-elem Tet4 FEA calibrated stiffness 2,140/2,357 N/mm",
+        "notes": "Official OEM STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4×0.90 mm Ti monocoque shell w/ exact 6× staggered Ø19.0 mm cutouts, 6× M3 Ø18 mm PCD, 42 mm meltzone, 6×21 mm heater, 69 g bare (66.9 g FEA) / 79 g dressed, 500 °C rated; 70.7k-elem Tet4 FEA calibrated stiffness 549/568 N/mm",
     },
     "chube_conduction": {
         "id": "chube_conduction",
@@ -756,7 +764,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "name": "Luke's Lab Chube Conduction (120W Ti Shell)",
         "short_name": "Chube Conduction",
         "mount_style": "chube_6bolt_m3_18pcd",
-        "structural_stiffness_n_per_mm": 5670.0,
+        "structural_stiffness_n_per_mm": 815.0,
         "mass_g": 90.0,
         "overall_length_mm": 66.0,
         "melt_zone_length_mm": 52.0,
@@ -771,7 +779,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "heatsink_thermal_resistance_k_w": 2.2,
         "max_temp_c": 500.0,
         "cost_usd": 320.0,
-        "notes": "Official OEM STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4 mm × 0.90 mm wall solid-top Ti monocoque shell, 6× M3 Ø18 mm PCD (requires ≥80 cm² metal mount), 52 mm meltzone, 6×47.5 mm 120W Supervolcano heater, 74 g bare / 90 g dressed, 500 °C rated; 56k-elem Tet4 FEA calibrated stiffness 5,529/5,820 N/mm",
+        "notes": "Official OEM STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4×0.90 mm Ti monocoque shell w/ exact 6× staggered Ø19.0 mm cutouts + 8 mm solid CNC Al conduction top block, 6× M3 Ø18 mm PCD (requires ≥80 cm² metal mount), 52 mm meltzone, 6×46.5 mm 120W Supervolcano heater, 74 g bare (78.2 g FEA, CoM -35.2 mm) / 90 g dressed, 500 °C rated; 80.2k-elem Tet4 FEA calibrated stiffness 801/830 N/mm",
     },
     "tricorn_short": {
         "id": "tricorn_short",
@@ -820,6 +828,7 @@ HOTEND_CATALOG: dict[str, dict] = {
         "notes": "Open-source Okano Tricorn Long (STEP CAD: 66 mm overall, 53.5 mm melt zone w/ V6 nozzle, 31.4 g CuCrZr block, 3×40W 4×40mm heaters, inverted Ti-6Al-4V heatbreak 0.45 mm wall, SLM Ti crown/shield + M3 Dragon mount); 116k-elem Tet4 FEA calibrated unbraced stiffness 262/264 N/mm (higher w/ Microwaved Ti bottom brace)",
     },
 }
+_hydrate_hotend_catalog(HOTEND_CATALOG)
 
 # Z-axis drive mechanism catalog (ISO 2901 TR8 leadscrews, HIWIN/TBI SFU1204+BK10 ballscrew, Gates 2GT Z belts)
 Z_DRIVE_MECHANISM_CATALOG: dict[str, dict] = {
@@ -2147,21 +2156,29 @@ class GantrySpec(BaseModel):
 
 
 class StepperSpec(BaseModel):
-    """Stepper motor electromechanical model calibrated to manufacturer datasheets."""
+    """Stepper motor electromechanical & thermal model calibrated to manufacturer datasheets."""
 
     preset_id: str = "ldo_2504ac"
     name: str = "NEMA17-48mm (LDO 42STH48-2504AC)"
     holding_torque_nm: float = Field(0.55, gt=0)
     rated_current_a: float = Field(2.5, gt=0, description="Motor datasheet rated RMS current per phase (A)")
     run_current_a: float = Field(
-        1.2, gt=0.1, le=5.0, description="Configured driver RMS run current per phase (A)"
+        1.2, gt=0.1, le=8.0, description="Configured driver RMS run current per phase (A)"
     )
-    phase_resistance_ohm: float = Field(1.2, gt=0.05, description="Winding phase resistance R (Ohms)")
+    phase_resistance_ohm: float = Field(1.2, gt=0.05, description="Winding phase resistance R at 25C (Ohms)")
     inductance_mh: float = Field(1.5, gt=0, description="Winding phase inductance L (mH)")
     supply_voltage_v: float = Field(24.0, gt=0, le=96.0, description="Stepper driver bus voltage (V)")
     rotor_inertia_kg_m2: float = Field(6.8e-6, gt=0)
     motor_mass_g: float = Field(340.0, gt=0)
     steps_per_rev: int = Field(200, ge=100, description="200 for 1.8 deg, 400 for 0.9 deg")
+    nema_size: int = Field(17, ge=14, le=34, description="NEMA faceplate frame size (14, 17, 23)")
+    body_length_mm: float = Field(48.0, gt=10.0, le=150.0, description="Motor stack body length (mm)")
+    insulation_class: Literal["B", "F", "H"] = Field(
+        "B", description="Winding thermal insulation class: B=130C, F=155C, H=180C"
+    )
+    has_encoder: bool = Field(
+        False, description="Whether motor includes an integrated optical/magnetic shaft encoder"
+    )
 
     @property
     def pole_pairs(self) -> float:
@@ -2169,15 +2186,40 @@ class StepperSpec(BaseModel):
         return self.steps_per_rev / 4.0
 
     @property
-    def effective_holding_torque_nm(self) -> float:
-        """Current-scaled static holding torque: linear below rated current, soft saturation above."""
+    def max_winding_temp_c(self) -> float:
+        """IEC 60085 continuous winding insulation limit (Class B=130°C, F=155°C, H=180°C)."""
+        return {"B": 130.0, "F": 155.0, "H": 180.0}.get(self.insulation_class, 130.0)
+
+    @property
+    def shaft_diameter_mm(self) -> float:
+        """Standard output shaft diameter by NEMA frame size (NEMA 14/17: 5.0 mm, NEMA 23: 6.35 mm)."""
+        return 6.35 if self.nema_size >= 23 else 5.0
+
+    @property
+    def thermal_resistance_k_per_w(self) -> float:
+        """Steady-state winding-to-ambient thermal resistance R_th (K/W) scaled by motor surface area.
+
+        Calibrated to NEMA 17 48 mm benchmark (~4.6 K/W mounted on aluminum/bracket in enclosure).
+        """
+        face_mm = {14: 35.2, 17: 42.3, 23: 57.0}.get(self.nema_size, 2.54 * self.nema_size)
+        area_mm2 = 4.0 * face_mm * self.body_length_mm + 2.0 * (face_mm**2)
+        area_ref_mm2 = 4.0 * 42.3 * 48.0 + 2.0 * (42.3**2)  # 11,700 mm^2 (NEMA 17 48 mm)
+        return 4.6 * ((area_ref_mm2 / max(area_mm2, 1000.0)) ** 0.85)
+
+    def torque_at_rms_current_nm(self, i_rms_a: float) -> float:
+        """Static electromagnetic torque at RMS phase current: linear below rated, soft tanh saturation above."""
         import math
 
-        ratio = max(self.run_current_a, 0.0) / max(self.rated_current_a, 0.1)
+        ratio = max(i_rms_a, 0.0) / max(self.rated_current_a, 0.1)
         if ratio <= 1.0:
             return self.holding_torque_nm * ratio
         sat = 1.8
         return self.holding_torque_nm * (1.0 + math.tanh(sat * (ratio - 1.0)) / sat)
+
+    @property
+    def effective_holding_torque_nm(self) -> float:
+        """Current-scaled static holding torque: linear below rated current, soft saturation above."""
+        return self.torque_at_rms_current_nm(self.run_current_a)
 
     def _phase_constants(self) -> tuple[float, float]:
         """Return consistent per-phase peak back-EMF constant Kt_phase (V_pk/(rad/s)) and peak current I_pk (A)."""
@@ -2235,11 +2277,56 @@ class StepperSpec(BaseModel):
 
     @property
     def power_dissipation_w(self) -> float:
-        """Approximate steady-state 2-phase copper heat dissipation P = 2 * I_rms^2 * R (W)."""
+        """Steady-state 2-phase 25°C copper heat dissipation P = 2 * I_rms^2 * R (W)."""
         return 2.0 * (self.run_current_a**2) * self.phase_resistance_ohm
+
+    def estimated_winding_temp_c(self, ambient_temp_c: float = 25.0) -> float:
+        """Self-consistent steady-state winding temperature including copper TCR (+0.3854%/K at 25°C).
+
+        Solves T_w = T_amb + R_th * P_25 * (1 + alpha_cu * (T_w - 25)) in closed form.
+        """
+        alpha_cu = 0.003854  # Copper TCR referenced to 25°C (0.00393 / (1 + 5*0.00393))
+        r_th_p = self.thermal_resistance_k_per_w * self.power_dissipation_w
+        denom = max(1.0 - r_th_p * alpha_cu, 0.15)
+        t_w = (ambient_temp_c + r_th_p * (1.0 - 25.0 * alpha_cu)) / denom
+        return max(ambient_temp_c, min(t_w, 300.0))
 
 
 STEPPER_CATALOG: dict[str, dict] = {
+    "excit3d_max": {
+        "preset_id": "excit3d_max",
+        "name": "Excit3D Max Motor (48mm 1.8° 4.0A 0.6mH Class H)",
+        "holding_torque_nm": 0.56,
+        "rated_current_a": 4.0,
+        "run_current_a": 3.5,
+        "phase_resistance_ohm": 0.45,
+        "inductance_mh": 0.6,
+        "rotor_inertia_kg_m2": 8.2e-6,
+        "motor_mass_g": 370.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 35.0,
+    },
+    "isik_ouroboros": {
+        "preset_id": "isik_ouroboros",
+        "name": "Isik's Tech Ouroboros (48mm 1.8° 1000 PPR Encoder)",
+        "holding_torque_nm": 0.55,
+        "rated_current_a": 2.5,
+        "run_current_a": 1.8,
+        "phase_resistance_ohm": 1.2,
+        "inductance_mh": 1.6,
+        "rotor_inertia_kg_m2": 8.2e-6,
+        "motor_mass_g": 375.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": True,
+        "unit_cost_usd": 39.0,
+    },
     "ldo_2504ac": {
         "preset_id": "ldo_2504ac",
         "name": "LDO 42STH48-2504AC (48mm 1.8° Speedy Power)",
@@ -2248,57 +2335,167 @@ STEPPER_CATALOG: dict[str, dict] = {
         "run_current_a": 1.2,
         "phase_resistance_ohm": 1.2,
         "inductance_mh": 1.5,
-        "rotor_inertia_kg_m2": 6.8e-6,
+        "rotor_inertia_kg_m2": 8.45e-6,
         "motor_mass_g": 340.0,
         "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 22.0,
+    },
+    "ldo_2504ah": {
+        "preset_id": "ldo_2504ah",
+        "name": "LDO 42STH48-2504AH (48mm 1.8° High-Temp 180°C)",
+        "holding_torque_nm": 0.55,
+        "rated_current_a": 2.5,
+        "run_current_a": 2.0,
+        "phase_resistance_ohm": 1.2,
+        "inductance_mh": 1.5,
+        "rotor_inertia_kg_m2": 8.45e-6,
+        "motor_mass_g": 360.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 26.0,
     },
     "ldo_2804ah": {
         "preset_id": "ldo_2804ah",
-        "name": "LDO 42STH48-2804AH (48mm 1.8° Ultra-Low 0.6mH)",
+        "name": "LDO 42STH48-2804AH (48mm 1.8° Super Power 0.6mH)",
         "holding_torque_nm": 0.42,
         "rated_current_a": 2.8,
         "run_current_a": 2.0,
         "phase_resistance_ohm": 0.7,
         "inductance_mh": 0.6,
-        "rotor_inertia_kg_m2": 6.2e-6,
+        "rotor_inertia_kg_m2": 8.45e-6,
         "motor_mass_g": 350.0,
         "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 28.0,
+    },
+    "kraken_motor_v2": {
+        "preset_id": "kraken_motor_v2",
+        "name": "Kraken Motor V2 (60mm 1.8° 3.0A 1.6mH High-Speed)",
+        "holding_torque_nm": 0.80,
+        "rated_current_a": 3.0,
+        "run_current_a": 2.4,
+        "phase_resistance_ohm": 1.0,
+        "inductance_mh": 1.6,
+        "rotor_inertia_kg_m2": 10.0e-6,
+        "motor_mass_g": 500.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 60.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 32.0,
     },
     "ldo_60_3004": {
         "preset_id": "ldo_60_3004",
-        "name": "LDO 42STH60-3004MAC (60mm 1.8° Kraken High-Torque)",
-        "holding_torque_nm": 0.80,
+        "name": "LDO 42STH60-3004AC (60mm 1.8° 3.0A High-Torque)",
+        "holding_torque_nm": 0.90,
         "rated_current_a": 3.0,
         "run_current_a": 2.2,
-        "phase_resistance_ohm": 0.9,
-        "inductance_mh": 1.8,
-        "rotor_inertia_kg_m2": 8.6e-6,
-        "motor_mass_g": 520.0,
+        "phase_resistance_ohm": 1.1,
+        "inductance_mh": 2.3,
+        "rotor_inertia_kg_m2": 12.0e-6,
+        "motor_mass_g": 500.0,
         "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 60.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 30.0,
+    },
+    "ldo_60_2004ah": {
+        "preset_id": "ldo_60_2004ah",
+        "name": "LDO 42STH60-2004AH (60mm 1.8° 2.0A High-Temp)",
+        "holding_torque_nm": 0.83,
+        "rated_current_a": 2.0,
+        "run_current_a": 1.6,
+        "phase_resistance_ohm": 2.0,
+        "inductance_mh": 3.3,
+        "rotor_inertia_kg_m2": 10.2e-6,
+        "motor_mass_g": 500.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 60.0,
+        "insulation_class": "H",
+        "has_encoder": False,
+        "unit_cost_usd": 27.0,
     },
     "ldo_09deg_2504": {
         "preset_id": "ldo_09deg_2504",
         "name": "LDO 42STH48-2504MAC (48mm 0.9° 2× Magnetic Stiffness)",
-        "holding_torque_nm": 0.50,
+        "holding_torque_nm": 0.45,
         "rated_current_a": 2.5,
         "run_current_a": 1.6,
         "phase_resistance_ohm": 1.2,
-        "inductance_mh": 2.2,
-        "rotor_inertia_kg_m2": 6.8e-6,
+        "inductance_mh": 1.5,
+        "rotor_inertia_kg_m2": 8.5e-6,
         "motor_mass_g": 340.0,
         "steps_per_rev": 400,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 25.0,
+    },
+    "leadshine_42cm06": {
+        "preset_id": "leadshine_42cm06",
+        "name": "Leadshine 42CM06 (47mm 1.8° 0.60 N·m Low-R)",
+        "holding_torque_nm": 0.60,
+        "rated_current_a": 2.5,
+        "run_current_a": 2.0,
+        "phase_resistance_ohm": 0.9,
+        "inductance_mh": 1.6,
+        "rotor_inertia_kg_m2": 7.2e-6,
+        "motor_mass_g": 350.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 47.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 24.0,
     },
     "moons_420i": {
         "preset_id": "moons_420i",
         "name": "MOONS' MS17HD6P420I (48mm 1.8° Voron Standard)",
-        "holding_torque_nm": 0.65,
+        "holding_torque_nm": 0.67,
         "rated_current_a": 2.0,
         "run_current_a": 1.2,
         "phase_resistance_ohm": 1.3,
-        "inductance_mh": 2.8,
-        "rotor_inertia_kg_m2": 7.2e-6,
+        "inductance_mh": 2.7,
+        "rotor_inertia_kg_m2": 8.2e-6,
         "motor_mass_g": 360.0,
         "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.3,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 23.0,
+    },
+    "stepperonline_2504s": {
+        "preset_id": "stepperonline_2504s",
+        "name": "STEPPERONLINE 17HS19-2504S (48mm 1.8° 2.5A 1.75mH)",
+        "holding_torque_nm": 0.60,
+        "rated_current_a": 2.5,
+        "run_current_a": 1.8,
+        "phase_resistance_ohm": 1.1,
+        "inductance_mh": 1.75,
+        "rotor_inertia_kg_m2": 6.8e-6,
+        "motor_mass_g": 390.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 17.0,
     },
     "stepperonline_2004": {
         "preset_id": "stepperonline_2004",
@@ -2308,11 +2505,85 @@ STEPPER_CATALOG: dict[str, dict] = {
         "run_current_a": 1.0,
         "phase_resistance_ohm": 1.4,
         "inductance_mh": 3.0,
-        "rotor_inertia_kg_m2": 6.8e-6,
+        "rotor_inertia_kg_m2": 8.2e-6,
         "motor_mass_g": 390.0,
         "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 14.0,
+    },
+    "stepperonline_09deg_2004": {
+        "preset_id": "stepperonline_09deg_2004",
+        "name": "STEPPERONLINE 17HM19-2004S (48mm 0.9° Budget)",
+        "holding_torque_nm": 0.46,
+        "rated_current_a": 2.0,
+        "run_current_a": 1.4,
+        "phase_resistance_ohm": 1.45,
+        "inductance_mh": 4.0,
+        "rotor_inertia_kg_m2": 8.2e-6,
+        "motor_mass_g": 390.0,
+        "steps_per_rev": 400,
+        "nema_size": 17,
+        "body_length_mm": 48.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 19.0,
+    },
+    "ldo_40_1684ac": {
+        "preset_id": "ldo_40_1684ac",
+        "name": "LDO 42STH40-1684AC (40mm 1.8° Compact)",
+        "holding_torque_nm": 0.45,
+        "rated_current_a": 1.68,
+        "run_current_a": 1.0,
+        "phase_resistance_ohm": 1.65,
+        "inductance_mh": 3.6,
+        "rotor_inertia_kg_m2": 5.3e-6,
+        "motor_mass_g": 280.0,
+        "steps_per_rev": 200,
+        "nema_size": 17,
+        "body_length_mm": 40.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 18.0,
+    },
+    "ldo_57_2804mac": {
+        "preset_id": "ldo_57_2804mac",
+        "name": "LDO 57STH41-2804MAC (NEMA 23 41mm 0.9° HevORT)",
+        "holding_torque_nm": 0.60,
+        "rated_current_a": 2.8,
+        "run_current_a": 2.2,
+        "phase_resistance_ohm": 0.7,
+        "inductance_mh": 1.4,
+        "rotor_inertia_kg_m2": 12.0e-6,
+        "motor_mass_g": 420.0,
+        "steps_per_rev": 400,
+        "nema_size": 23,
+        "body_length_mm": 41.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 38.0,
+    },
+    "stepperonline_23hs22_2804": {
+        "preset_id": "stepperonline_23hs22_2804",
+        "name": "STEPPERONLINE 23HS22-2804S (NEMA 23 56mm 1.8° 1.26 N·m)",
+        "holding_torque_nm": 1.26,
+        "rated_current_a": 2.8,
+        "run_current_a": 2.4,
+        "phase_resistance_ohm": 0.9,
+        "inductance_mh": 2.5,
+        "rotor_inertia_kg_m2": 30.0e-6,
+        "motor_mass_g": 700.0,
+        "steps_per_rev": 200,
+        "nema_size": 23,
+        "body_length_mm": 56.0,
+        "insulation_class": "B",
+        "has_encoder": False,
+        "unit_cost_usd": 29.0,
     },
 }
+_hydrate_stepper_catalog(STEPPER_CATALOG)
 
 
 class KinematicsSpec(BaseModel):
@@ -2660,6 +2931,18 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "mount_material": "aluminum_6061_t6",
         "body_construction": "cnc_monoblock",
         "internal_stiffness_n_per_mm": 5340.0,
+        "z_probe_type": "static_eddy",
+        "extruder_type": "bowden",
+    },
+    "microwaved_bowden_chube": {
+        "preset_id": "microwaved_bowden_chube",
+        "name": "Microwaved Bowden Chube V1 SLM (CPAP + Beacon)",
+        "total_mass_g": 135.0,
+        "cog_offset_mm": [0.0, -10.5, -3.0],
+        "nozzle_offset_mm": [0.0, -20.5, -38.5],
+        "mount_material": "aluminum_6061_t6",
+        "body_construction": "cnc_monoblock",
+        "internal_stiffness_n_per_mm": 2990.0,
         "z_probe_type": "static_eddy",
         "extruder_type": "bowden",
     },

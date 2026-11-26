@@ -59,7 +59,7 @@ toolhead:
   hotend:
     preset_id: chube_compact
     mount_style: rigid_4bolt_m3
-    structural_stiffness_n_per_mm: 2600.0
+    structural_stiffness_n_per_mm: 2975.0
     overall_length_mm: 47.2
     mass_g: 63.0
     name: Luke's Lab Chube Compact

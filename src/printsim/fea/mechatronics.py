@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 
 from printsim.fea.components import (
+    belt_damping_ratio,
     belt_effective_ea_n,
     gerbert_tooth_mesh_stiffness_n_m,
     idler_shaft_and_bearing_stiffness,
@@ -222,51 +223,25 @@ def _corexy_branch_details(
     u_rel: float,
     v_rel: float,
 ) -> dict[str, object]:
-    """Compute exact position-dependent CoreXY (or Cartesian/Delta) belt branch stiffnesses (SI)."""
+    """Compute exact position-dependent belt branch stiffnesses unified with canonical solvers.py."""
     spec = assembly.spec
-    belt = spec.gantry.belt
-    bkt_mat = get_material(spec.gantry.bracket_material)
-    e_bkt_eff = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
-    idler_info = idler_shaft_and_bearing_stiffness(
-        belt,
-        double_shear=spec.gantry.double_shear_pulleys,
-        bracket_e_pa=e_bkt_eff,
-    )
-    k_idler = float(idler_info["k_idler_n_m"])
-    k_bkt_total = compute_bracket_stiffness_n_per_m(assembly)
-    x, y, w_g, d_g = _xy_coordinates_m(assembly, u_rel, v_rel)
-    l_dead = 0.05  # pulley wrap + carriage clamp engagement offset (m)
+    det_x = compute_drive_stiffness_details_n_per_m(assembly, axis="X", u_rel=u_rel, v_rel=v_rel)
+    k_bkt_total = float(det_x["k_bracket_n_m"])
 
     if spec.architecture == "corexy":
         is_awd = spec.gantry.drive_mode == "awd"
+        k_bkt_loop = 0.5 * k_bkt_total
         if is_awd:
-            # 4-motor AWD: rear+front motors on each loop split spans into short independent branches
-            l_a1 = (w_g - x) + (d_g - y) + l_dead
-            l_a2 = x + y + l_dead
-            l_b1 = x + (d_g - y) + l_dead
-            l_b2 = (w_g - x) + y + l_dead
+            kb_a1, kb_a2, kb_b1, kb_b2 = det_x["branch_stiffnesses_n_m"]  # type: ignore[misc]
 
-            def _awd_loop(l1: float, l2: float) -> tuple[float, float, float]:
-                ea1 = belt_effective_ea_n(belt, l1)
-                ea2 = belt_effective_ea_n(belt, l2)
-                kb1 = 1.0 / (
-                    1.0 / (ea1 / l1)
-                    + 1.0 / gerbert_tooth_mesh_stiffness_n_m(belt, ea1, spec.frame.chamber_temp_c)
-                    + 1.0 / k_idler
-                )
-                kb2 = 1.0 / (
-                    1.0 / (ea2 / l2)
-                    + 1.0 / gerbert_tooth_mesh_stiffness_n_m(belt, ea2, spec.frame.chamber_temp_c)
-                    + 1.0 / k_idler
-                )
-                k_sum = kb1 + kb2
-                k_bkt_loop = 0.5 * k_bkt_total
+            def _apply_bkt_awd(kb1: float, kb2: float) -> tuple[float, float, float]:
+                k_sum = float(kb1) + float(kb2)
                 k_loop = 1.0 / (1.0 / max(k_sum, 1e-9) + 1.0 / max(k_bkt_loop, 1e-9))
-                frac1 = kb1 / max(k_sum, 1e-12)
+                frac1 = float(kb1) / max(k_sum, 1e-12)
                 return k_loop * frac1, k_loop * (1.0 - frac1), k_loop
 
-            k_a1, k_a2, k_a = _awd_loop(l_a1, l_a2)
-            k_b1, k_b2, k_b = _awd_loop(l_b1, l_b2)
+            k_a1, k_a2, k_a = _apply_bkt_awd(kb_a1, kb_a2)
+            k_b1, k_b2, k_b = _apply_bkt_awd(kb_b1, kb_b2)
             k_cart = np.array([[k_a + k_b, k_a - k_b], [k_a - k_b, k_a + k_b]], dtype=float)
             return {
                 "arch": "corexy_awd",
@@ -276,27 +251,10 @@ def _corexy_branch_details(
                 "branches": (k_a1, k_a2, k_b1, k_b2),
             }
 
-        # 2WD CoreXY: rear motors A (rear-right) and B (rear-left) with full perimeter return loop
-        l_a1 = (w_g - x) + (d_g - y) + l_dead
-        l_a2 = w_g + d_g + x + y + l_dead
-        l_b1 = x + (d_g - y) + l_dead
-        l_b2 = 2.0 * w_g + d_g - x + y + l_dead
-
-        def _2wd_loop(l1: float, l2: float) -> float:
-            ea1 = belt_effective_ea_n(belt, l1)
-            ea2 = belt_effective_ea_n(belt, l2)
-            k_cord = ea1 / l1 + ea2 / l2
-            k_mesh = gerbert_tooth_mesh_stiffness_n_m(belt, 0.5 * (ea1 + ea2), spec.frame.chamber_temp_c)
-            k_bkt_loop = 0.5 * k_bkt_total
-            return 1.0 / (
-                1.0 / max(k_cord, 1e-9)
-                + 1.0 / max(k_mesh, 1e-9)
-                + 1.0 / max(k_idler, 1e-9)
-                + 1.0 / max(k_bkt_loop, 1e-9)
-            )
-
-        k_a = _2wd_loop(l_a1, l_a2)
-        k_b = _2wd_loop(l_b1, l_b2)
+        k_a_belt = float(det_x["k_A_n_m"])
+        k_b_belt = float(det_x["k_B_n_m"])
+        k_a = 1.0 / (1.0 / max(k_a_belt, 1e-9) + 1.0 / max(k_bkt_loop, 1e-9))
+        k_b = 1.0 / (1.0 / max(k_b_belt, 1e-9) + 1.0 / max(k_bkt_loop, 1e-9))
         k_cart = np.array([[k_a + k_b, k_a - k_b], [k_a - k_b, k_a + k_b]], dtype=float)
         return {
             "arch": "corexy_2wd",
@@ -307,22 +265,9 @@ def _corexy_branch_details(
         }
 
     if spec.architecture == "cartesian_bedslinger":
-        def _cart_axis(pos: float, span: float) -> float:
-            l1 = max(pos, 0.03) + l_dead
-            l2 = max(span - pos, 0.03) + l_dead
-            ea1 = belt_effective_ea_n(belt, l1)
-            ea2 = belt_effective_ea_n(belt, l2)
-            k_cord = ea1 / l1 + ea2 / l2
-            k_mesh = gerbert_tooth_mesh_stiffness_n_m(belt, 0.5 * (ea1 + ea2), spec.frame.chamber_temp_c)
-            return 1.0 / (
-                1.0 / max(k_cord, 1e-9)
-                + 1.0 / max(k_mesh, 1e-9)
-                + 1.0 / max(k_idler, 1e-9)
-                + 1.0 / max(k_bkt_total, 1e-9)
-            )
-
-        k_x = _cart_axis(x, w_g)
-        k_y = _cart_axis(y, d_g)
+        det_y = compute_drive_stiffness_details_n_per_m(assembly, axis="Y", u_rel=u_rel, v_rel=v_rel)
+        k_x = 1.0 / (1.0 / max(float(det_x["k_belt_subsystem_n_m"]), 1e-9) + 1.0 / max(k_bkt_total, 1e-9))
+        k_y = 1.0 / (1.0 / max(float(det_y["k_belt_subsystem_n_m"]), 1e-9) + 1.0 / max(k_bkt_total, 1e-9))
         return {
             "arch": "cartesian",
             "k_cart": np.diag([k_x, k_y]),
@@ -332,10 +277,10 @@ def _corexy_branch_details(
         }
 
     # Delta: 3 vertical tower belts acting through effector Jacobian
-    details_x = compute_drive_stiffness_details_n_per_m(assembly, "X")
+    x, y, w_g, d_g = _xy_coordinates_m(assembly, u_rel, v_rel)
     k_belt_base = 1.0 / (
-        1.0 / max(float(details_x["k_belt_subsystem_n_m"]), 1e-9)
-        + 1.0 / max(float(details_x["k_bracket_n_m"]), 1e-9)
+        1.0 / max(float(det_x["k_belt_subsystem_n_m"]), 1e-9)
+        + 1.0 / max(k_bkt_total, 1e-9)
     )
     # Mild geometric modulation from effector radial offset from center
     r_eff = math.hypot(x - 0.5 * w_g, y - 0.5 * d_g)
@@ -691,12 +636,15 @@ def build_coupled_state_space(
     K = np.zeros((n_dof, n_dof), dtype=float)
     C = np.zeros((n_dof, n_dof), dtype=float)
 
+    # Include Rayleigh moving-belt inertia on carriage DOFs (consistent with modal.py)
+    det_c = compute_drive_stiffness_details_n_per_m(assembly, axis="X", u_rel=u_rel, v_rel=v_rel)
+    m_belt_eff = float(det_c.get("belt_moving_mass_kg", 0.0))
     M[0, 0] = m_fx
     M[1, 1] = m_fy
     for i in range(n_mot):
         M[2 + i, 2 + i] = m_ref_1
-    M[2 + n_mot, 2 + n_mot] = m_cx
-    M[3 + n_mot, 3 + n_mot] = m_cy
+    M[2 + n_mot, 2 + n_mot] = m_cx + m_belt_eff
+    M[3 + n_mot, 3 + n_mot] = m_cy + m_belt_eff
 
     # Structural frame stiffness & Rayleigh/modal damping: k_struct = (m_f + m_c) * omega_struct^2
     omega_sx = 2.0 * math.pi * max(f_sx, 5.0)
@@ -729,11 +677,11 @@ def build_coupled_state_space(
     K_belt_full = E_belt.T @ np.diag(k_branches_eff) @ E_belt
     K += K_belt_full
 
-    # Elastomer belt hysteresis damping proportional to K_belt (zeta_belt ~ 0.045 + AWD sync delta)
+    # Elastomer belt hysteresis damping proportional to K_belt (material/temp/tension dependent + AWD sync delta)
     k_drive_ref = max(float(np.mean(np.diag(k_cart))), 1e3)
     m_avg = 0.5 * (m_cx + m_cy)
     omega_drive_ref = math.sqrt(k_drive_ref / max(m_avg, 0.05))
-    zeta_belt = 0.045 + delta_zeta_belt
+    zeta_belt = belt_damping_ratio(belt, chamber_temp_c=spec.frame.chamber_temp_c) + delta_zeta_belt
     beta_belt = (2.0 * zeta_belt) / max(omega_drive_ref, 10.0)
     C += beta_belt * K_belt_full
 
@@ -756,8 +704,10 @@ def build_coupled_state_space(
         omega_dy = math.sqrt(k_drv_y / max(m_cy, 0.05))
         omega_eff_x = 1.0 / math.sqrt(1.0 / (omega_sx**2) + 1.0 / (omega_dx**2))
         omega_eff_y = 1.0 / math.sqrt(1.0 / (omega_sy**2) + 1.0 / (omega_dy**2))
-        C[2 + n_mot, 2 + n_mot] += 2.0 * 0.07 * m_cx * omega_eff_x
-        C[3 + n_mot, 3 + n_mot] += 2.0 * 0.07 * m_cy * omega_eff_y
+        omega_sky_x = max(omega_eff_x, 0.95 * omega_dx)
+        omega_sky_y = max(omega_eff_y, 0.95 * omega_dy)
+        C[2 + n_mot, 2 + n_mot] += 2.0 * 0.07 * (m_cx + m_belt_eff) * omega_sky_x
+        C[3 + n_mot, 3 + n_mot] += 2.0 * 0.07 * (m_cy + m_belt_eff) * omega_sky_y
 
     # Input matrix F_cmd (n_dof x 2): motor command u_cart = [u_x, u_y] -> T_cart @ u_cart
     F_cmd = np.zeros((n_dof, 2), dtype=float)
@@ -811,8 +761,8 @@ def build_coupled_state_space(
         wn = abs(lam)
         freq_hz = wn / (2.0 * math.pi)
         zeta = max(0.0, min(0.999, -float(lam.real) / max(wn, 1e-12)))
-        # Corner-ringing (velocity/acceleration) receptance weight scales as |R| / (zeta * wn^2)
-        denom_w = max(zeta, 0.005) * (max(wn, 1.0) ** 2)
+        # Corner-ringing displacement-energy weight for velocity-step turn: |R| / (zeta * wn^3)
+        denom_w = max(zeta, 0.005) * (max(wn, 1.0) ** 3)
         res_xx = abs(c_v[0, k_idx] * v_inv_b[k_idx, 0]) / denom_w
         res_yy = abs(c_v[1, k_idx] * v_inv_b[k_idx, 1]) / denom_w
         osc_modes.append((freq_hz, zeta, res_xx, res_yy))

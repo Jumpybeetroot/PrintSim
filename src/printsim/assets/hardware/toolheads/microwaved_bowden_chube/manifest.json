@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "microwaved_bowden_chube",
+  "name": "Microwaved Bowden Chube V1 (SLM AlSi10Mg / Ti)",
+  "source_cad": "MBT_Chube_V1.STEP",
+  "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+  "baked_at": "2026-11-26T01:01:11Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 25105,
+  "num_elements": 75310,
+  "num_dofs": 75315,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.00978,
+  "mass_kg": 0.056525,
+  "com_mm": [
+    -0.0323,
+    -3.432,
+    5.9247
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -12.76,
+    27.5
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 3498.559,
+    "ky": 2610.576,
+    "kz": 10912.811
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1568.449,
+    "kry": 7555.983,
+    "krz": 1464.428
+  },
+  "fixed_interface_freqs_hz": [
+    2980.25,
+    3441.48,
+    4481.25,
+    5732.64,
+    6931.5,
+    8660.22,
+    8943.37,
+    9076.19
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23997,
+  "visual_bytes": 774764,
+  "cad_trust_pct": 86,
+  "source_hash": "a4d7168c57d072cd5f0088e94ac1be1d27680d202b3d07c23ccd0e6bc8b8ce60"
+}

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "category": "hotends",
   "asset_id": "chube_compact",
-  "source_cad": "chube_compact.step",
+  "source_cad": "Chube_Compact_integration_assembly.step",
   "source_url": "https://www.chubehotends.com/",
   "regions": [
     {
@@ -16,6 +16,11 @@
       "fdm_anisotropic": false
     },
     {
+      "label": "compact_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
       "label": "copper_melt_core",
       "material_id": "copper_c110",
       "fdm_anisotropic": false
@@ -25,5 +30,6 @@
   "outer_diameter_mm": 22.23,
   "wall_thickness_mm": 0.89,
   "mount_pcd_mm": 16.0,
-  "meltzone_length_mm": 33.0
+  "meltzone_length_mm": 33.0,
+  "cutouts": "4x \u00d812.50 mm @ z=-12.90 mm (45/135/225/315 deg)"
 }

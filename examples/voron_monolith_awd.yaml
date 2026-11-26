@@ -75,7 +75,7 @@ toolhead:
   hotend:
     preset_id: chube_conduction
     mount_style: chube_6bolt_m3_18pcd
-    structural_stiffness_n_per_mm: 5670.0
+    structural_stiffness_n_per_mm: 815.0
     overall_length_mm: 66.0
     mass_g: 90.0
     name: Luke's Lab Chube Conduction

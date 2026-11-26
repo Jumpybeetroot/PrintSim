@@ -548,6 +548,10 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
     ),
 }
 
+from printsim.schema.printdb_bridge import hydrate_material_catalog as _hydrate_material_catalog
+
+_hydrate_material_catalog(MATERIAL_CATALOG)
+
 
 def get_material(material_id: str) -> MaterialSpec:
     """Look up a material from the catalog by ID."""

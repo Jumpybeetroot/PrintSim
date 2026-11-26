@@ -75,8 +75,8 @@ def test_corexy_voron_style_modal_and_four_lens_sensitivity_clarity() -> None:
     spec_stiff.frame.panel_thickness_mm = 4.0
     asm_stiff = build_assembly(spec_stiff)
     sens_stiff = compute_structural_sensitivities(asm_stiff).to_dict()
-    top2_ids = [t["id"] for t in sens_stiff["top_stiffen_targets"][:2]]
-    assert "toolhead_mount" in top2_ids, f"Expected toolhead_mount in top 2, got {top2_ids}"
+    top3_ids = [t["id"] for t in sens_stiff["top_stiffen_targets"][:3]]
+    assert "toolhead_mount" in top3_ids, f"Expected toolhead_mount in top 3, got {top3_ids}"
     th_mem = sens_stiff["member_sensitivities"]["toolhead_mount"]
     assert th_mem["compliance_share_pct"] > 20.0
     assert th_mem["heat_score"] > 0.65

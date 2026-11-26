@@ -18,6 +18,7 @@ from printsim.fea.sensitivity import compute_structural_sensitivities
 from printsim.geometry.builder import build_assembly, compute_toolhead_link_props
 from printsim.kinematics.solvers import (
     compute_bracket_stiffness_n_per_m,
+    compute_drive_stiffness_details_n_per_m,
     compute_drive_stiffness_n_per_m,
 )
 from printsim.schema import (
@@ -110,11 +111,23 @@ def test_b01_coupled_series_compliance_and_consistent_shares() -> None:
 
     k_belt_x, k_motor_x, _ = compute_drive_stiffness_n_per_m(asm, "X")
     k_bracket = compute_bracket_stiffness_n_per_m(asm)
+    det_x = compute_drive_stiffness_details_n_per_m(asm, "X")
     r_p = spec.gantry.belt.pitch_radius_m
     m_rot = 2.0 * (spec.kinematics.xy_stepper.rotor_inertia_kg_m2 / (r_p**2))
-    m_x = asm.x_moving_mass_kg
-    k_motor_eff = k_motor_x * (m_x / (m_x + m_rot))
-    c_total_x = c_struct_x + 1.0 / k_belt_x + 1.0 / k_motor_eff + 1.0 / k_bracket
+    m_x = asm.x_moving_mass_kg + float(det_x["belt_moving_mass_kg"])
+    # Exact 2-DOF [m_rot, m_x] coupled drive eigenproblem (replaces biased 1-DOF Rayleigh)
+    k_bb = 1.0 / (1.0 / k_belt_x + 1.0 / k_bracket)
+    b_q = (k_motor_x + k_bb) / m_rot + k_bb / m_x
+    c_q = (k_motor_x * k_bb) / (m_rot * m_x)
+    w1_sq = 0.5 * (b_q - math.sqrt(max(b_q * b_q - 4.0 * c_q, 0.0)))
+    c_drv_exact = 1.0 / (m_x * w1_sq)
+    alpha_1 = k_bb / (k_motor_x + k_bb - w1_sq * m_rot)
+    u_mot = 0.5 * k_motor_x * (alpha_1**2)
+    u_bb = 0.5 * k_bb * ((1.0 - alpha_1) ** 2)
+    u_belt = u_bb * (k_bb / k_belt_x)
+    u_bkt = u_bb * (k_bb / k_bracket)
+    u_tot = u_mot + u_belt + u_bkt
+    c_total_x = c_struct_x + c_drv_exact
     f_eff_exact = 1.0 / (2.0 * math.pi * math.sqrt(m_x * c_total_x))
 
     assert mo.shaper_x.effective_freq_hz == pytest.approx(f_eff_exact, rel=1e-6)
@@ -125,13 +138,13 @@ def test_b01_coupled_series_compliance_and_consistent_shares() -> None:
     )
     assert f_eff_exact > f_dunk_buggy * 1.25
 
-    # Verify compliance shares reflect physical compliances on the same moving mass
+    # Verify compliance shares reflect exact mode-1 modal strain energies summing to 100%
     shares = mo.shaper_x.compliance_share_pct
     assert sum(shares.values()) == pytest.approx(100.0, abs=0.2)
     assert shares["frame"] == pytest.approx(100.0 * c_struct_x / c_total_x, abs=0.2)
-    assert shares["belt"] == pytest.approx(100.0 * (1.0 / k_belt_x) / c_total_x, abs=0.2)
-    assert shares["motor"] == pytest.approx(100.0 * (1.0 / k_motor_eff) / c_total_x, abs=0.2)
-    assert shares["bracket"] == pytest.approx(100.0 * (1.0 / k_bracket) / c_total_x, abs=0.2)
+    assert shares["belt"] == pytest.approx(100.0 * (c_drv_exact * u_belt / u_tot) / c_total_x, abs=0.2)
+    assert shares["motor"] == pytest.approx(100.0 * (c_drv_exact * u_mot / u_tot) / c_total_x, abs=0.2)
+    assert shares["bracket"] == pytest.approx(100.0 * (c_drv_exact * u_bkt / u_tot) / c_total_x, abs=0.2)
 
 
 def test_b02_mode_count_convergence_and_no_overhang_double_count() -> None:

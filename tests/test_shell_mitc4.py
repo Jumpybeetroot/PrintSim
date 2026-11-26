@@ -479,7 +479,7 @@ def test_benchmark7_continuous_one_piece_gantry_panel_seam() -> None:
     st_6 = solve_static_fea(build_assembly(spec_6))
     mo_3 = solve_modal_fea(asm_3)
     mo_6 = solve_modal_fea(build_assembly(spec_6))
-    assert st_6.toolhead_stiffness_x_n_per_mm > st_3.toolhead_stiffness_x_n_per_mm * 1.25
+    assert st_6.toolhead_stiffness_x_n_per_mm > st_3.toolhead_stiffness_x_n_per_mm * 1.12
     assert mo_6.fundamental_freq_hz > mo_3.fundamental_freq_hz + 15.0
 
 

@@ -23,6 +23,7 @@ from printsim.schema import (
     EXTRUSION_FILLINGS,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
+    STEPPER_CATALOG,
     TOP_BRACE_CATALOG,
     Z_DRIVE_MECHANISM_CATALOG,
     PrinterSpec,
@@ -547,7 +548,11 @@ def _compute_net_cut_length_mm(
 
     upright_prof = get_profile(spec.frame.effective_upright_profile)
     upright_w_mm = upright_prof.width_m * 1000.0
-    if spec.architecture == "corexy" and role in ("frame", "gantry", "rail"):
+    if spec.architecture == "corexy" and role == "gantry":
+        from printsim.geometry._builder_gantry import corexy_x_beam_span_m
+
+        return round(corexy_x_beam_span_m(spec) * 1000.0, 1)
+    if spec.architecture == "corexy" and role in ("frame", "rail"):
         return round(max(centerline_mm - 2.0 * upright_w_mm, 10.0), 1)
     if spec.architecture == "cartesian_bedslinger" and role in ("gantry",):
         return round(max(centerline_mm - 2.0 * upright_w_mm, 10.0), 1)
@@ -920,10 +925,13 @@ def generate_bom(
         unit_mass_g=bkt_kit_mass_g,
     )
     if spec.gantry.effective_cf_rail_mounting == "two_wall_clamped_inserts":
+        from printsim.geometry._builder_gantry import corexy_x_beam_span_m
+
+        x_span_m = corexy_x_beam_span_m(spec) if arch == "corexy" else (w * 1e-3)
         insert_mass_g = round(
             assembly.x_beam_insert_mass_kg * 1000.0
             if assembly.x_beam_insert_mass_kg > 0.0
-            else (4.0 + 18.0 * (w * 1e-3)),
+            else (4.0 + 18.0 * x_span_m),
             1,
         )
         _add_bom_item(
@@ -933,7 +941,7 @@ def generate_bom(
             name="Carbonara 2-Wall CF X-Beam Internal Insert & Ti Bolt Kit",
             specification=(
                 f"100%-infill annealed CF/GF internal rail inserts + XY-joint end inserts, "
-                f"M5 hex standoffs & Grade 5 Ti M3x28 clamped hardware (L={w:.0f} mm)"
+                f"M5 hex standoffs & Grade 5 Ti M3x28 clamped hardware (L={x_span_m * 1000.0:.0f} mm)"
             ),
             quantity=1,
             unit="kit",
@@ -1048,7 +1056,9 @@ def generate_bom(
     }.get(spec.gantry.y_rail_mount, f"{spec.gantry.y_rail_mount} mount")
 
     if arch == "corexy":
-        x_rail_len = round(min(w - 40.0, max(bx + 60.0, w - 60.0)), 0)
+        from printsim.geometry._builder_gantry import corexy_x_rail_len_m
+
+        x_rail_len = round(corexy_x_rail_len_m(spec) * 1000.0, 0)
         y_rail_len = round(min(d - 40.0, max(by + 60.0, d - 60.0)), 0)
         z_rail_len = round(min(h - 60.0, max(bz + 80.0, h - 100.0)), 0)
         x_rail_qty = 2 if spec.gantry.effective_dual_x_rails else 1
@@ -1506,16 +1516,24 @@ def generate_bom(
     xy_motor_qty = 3 if arch == "delta" else (4 if is_awd else 2)
     z_motor_qty = _z_motor_count(arch, spec.bed.z_drive)
 
-    xy_unit_cost = 12.0 + xy_stepper.holding_torque_nm * 18.0
+    xy_cat = STEPPER_CATALOG.get(xy_stepper.preset_id or "")
+    xy_unit_cost = (
+        float(xy_cat["unit_cost_usd"])
+        if xy_cat is not None and "unit_cost_usd" in xy_cat
+        else 12.0 + xy_stepper.holding_torque_nm * 18.0
+    )
     xy_motor_label = "Tower" if arch == "delta" else ("XY AWD" if is_awd else "XY")
+    xy_enc_tag = ", 1000 PPR encoder" if xy_stepper.has_encoder else ""
     _add_bom_item(
         items,
         sku="MTR-XY",
         category="motors",
         name=f"{xy_motor_label} Stepper Motor — {xy_stepper.name}",
         specification=(
+            f"NEMA{xy_stepper.nema_size} {xy_stepper.body_length_mm:.0f}mm, "
             f"{xy_stepper.holding_torque_nm:.2f} N·m, {xy_stepper.rated_current_a:.1f}A, "
-            f"{xy_stepper.inductance_mh:.1f}mH, {xy_stepper.supply_voltage_v:.0f}V"
+            f"{xy_stepper.phase_resistance_ohm:.2f}Ω, {xy_stepper.inductance_mh:.2f}mH, "
+            f"Class {xy_stepper.insulation_class}{xy_enc_tag}, {xy_stepper.supply_voltage_v:.0f}V"
         ),
         quantity=xy_motor_qty,
         unit="pcs",

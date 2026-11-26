@@ -5,24 +5,24 @@
   "name": "Luke's Lab Chube Conduction (120W Ti Shell)",
   "source_cad": "CHUBE_INTEGRATION_REVA.step",
   "source_url": "https://www.chubehotends.com/",
-  "baked_at": "2026-11-25T17:06:47Z",
+  "baked_at": "2026-11-26T00:59:23Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
   "is_multi_material": true,
   "is_fdm_anisotropic": false,
   "element_type": "Tet4",
-  "num_vertices": 14679,
-  "num_elements": 56245,
-  "num_dofs": 44037,
+  "num_vertices": 18757,
+  "num_elements": 80181,
+  "num_dofs": 56271,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.008606,
-  "mass_kg": 0.083224,
+  "rigid_body_max_freq_hz": 0.009083,
+  "mass_kg": 0.078196,
   "com_mm": [
-    0.3658,
-    0.0317,
-    -32.9176
+    -0.0004,
+    0.0664,
+    -35.2369
   ],
   "port0_mm": [
     0.0,
@@ -35,28 +35,28 @@
     -66.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 5529.218,
-    "ky": 5820.09,
-    "kz": 188210.409
+    "kx": 800.609,
+    "ky": 830.402,
+    "kz": 70130.468
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 1946.042,
-    "kry": 1895.99,
-    "krz": 2502.219
+    "krx": 945.855,
+    "kry": 916.967,
+    "krz": 1176.277
   },
   "fixed_interface_freqs_hz": [
-    8100.49,
-    8429.42,
-    10948.36,
-    13217.14,
-    13995.18,
-    16425.66,
-    17243.53,
-    20881.65
+    4992.91,
+    5852.37,
+    6359.98,
+    11777.82,
+    12369.89,
+    12437.61,
+    12700.88,
+    13214.81
   ],
   "visual_glb": "visual.glb",
-  "visual_triangles": 16610,
-  "visual_bytes": 600200,
+  "visual_triangles": 20854,
+  "visual_bytes": 722432,
   "cad_trust_pct": 86,
-  "source_hash": "8fa8f7dd252c68548c96ff07a7e4b89b66f2423dd9625caad80ece346a29bd01"
+  "source_hash": "4d1cf4139b65275829aa54267afff86c9000bd477dcbf47c414da2ef8033f0cd"
 }

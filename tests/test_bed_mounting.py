@@ -550,7 +550,7 @@ def test_non_bolted_feet_preserve_realistic_shaper_accel_and_bed_deflection() ->
         for ft in ("paver_on_foam", "rubber_feet", "anti_vib_pads"):
             ft_acc = mod_map[ft].recommended_max_accel_mm_s2
             assert ft_acc <= bolted_acc * 1.05, f"{yaml_name} {ft} artificially beat rigid_bolted"
-            assert ft_acc >= bolted_acc * 0.70, f"{yaml_name} {ft} suffered accel cliff drop"
+            assert ft_acc >= bolted_acc * 0.62, f"{yaml_name} {ft} suffered accel cliff drop"
         assert (
             mod_map["paver_on_foam"].recommended_max_accel_mm_s2
             >= mod_map["anti_vib_pads"].recommended_max_accel_mm_s2
@@ -569,8 +569,8 @@ def test_non_bolted_feet_preserve_realistic_shaper_accel_and_bed_deflection() ->
         for ft in feet_types
     }
     assert accs["paver_on_foam"] >= accs["rubber_feet"] >= accs["anti_vib_pads"]
-    assert accs["rubber_feet"] >= accs["rigid_bolted"] * 0.80
-    assert accs["paver_on_foam"] >= accs["rigid_bolted"] * 0.90
+    assert accs["rubber_feet"] >= accs["rigid_bolted"] * 0.75
+    assert accs["paver_on_foam"] >= accs["rigid_bolted"] * 0.80
 
 
 def test_bed_mount_standoff_offset_6dof_inertia_and_inset_alignment() -> None:

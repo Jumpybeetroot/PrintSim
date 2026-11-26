@@ -101,7 +101,11 @@ def test_2dof_motor_belt_carriage_closed_form_eigenvalues() -> None:
 
 def test_corexy_2wd_corner_cross_coupling_and_awd_improvement() -> None:
     """2WD CoreXY has 0% coupling on symmetry centerline vs >2% in corners; AWD improves both."""
+    # Use bolted ACM panels so frame racking does not mask the 2WD -> AWD belt-drive frequency jump
     spec_2wd = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    spec_2wd.frame.enclosed_panels = True
+    spec_2wd.frame.panel_mounting = "bolted_structural"
+    spec_2wd.frame.panel_material = "acm_dibond"
     spec_2wd.gantry.drive_mode = "2wd"
     asm_2wd = build_assembly(spec_2wd)
     mod_2wd = solve_modal_fea(asm_2wd)

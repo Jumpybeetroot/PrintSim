@@ -23,6 +23,37 @@ if TYPE_CHECKING:
     )
 
 
+def corexy_x_beam_span_m(spec: PrinterSpec) -> float:
+    """Physical CoreXY X-gantry beam cut length between left/right XY-joint mounting faces (m).
+
+    Subtracts the left/right vertical frame uprights (``2 * b_upright``) plus left/right
+    XY-joint bracket and Y-carriage mounting offsets (``2 * 20 mm = 40 mm``), matching real
+    Voron 2.4 / Trident / Carbonara beams (330 / 380 / 430 mm on 410 / 460 / 510 mm 2020
+    frames; 380 mm on 500 mm 4040 DoomCube 300; 400 mm on 500 mm 3030 RatRig 300).
+    """
+    w = float(spec.frame.width_mm) * 1e-3
+    if spec.architecture != "corexy":
+        return max(w, 0.12)
+    bx = float(spec.kinematics.build_volume_mm[0]) * 1e-3
+    b_up = float(get_profile(spec.frame.effective_upright_profile).width_m)
+    inner_span = w - 2.0 * (b_up + 0.020)
+    return float(min(w, max(inner_span, min(w - 2.0 * b_up, bx + 0.050), 0.12)))
+
+
+def corexy_x_rail_len_m(spec: PrinterSpec) -> float:
+    """Physical CoreXY X-axis linear rail cut length bolted to the X-gantry beam (m).
+
+    Covers X build travel plus carriage-block and endstop clearance (``bx + 50 mm`` ->
+    exact official Voron BOM 300 / 350 / 400 mm MGN12R rails for 250 / 300 / 350 mm
+    builds), bounded by the physical X-beam span.
+    """
+    beam_span = corexy_x_beam_span_m(spec)
+    if spec.architecture != "corexy":
+        return beam_span
+    bx = float(spec.kinematics.build_volume_mm[0]) * 1e-3
+    return float(min(beam_span, max(bx + 0.050, 0.12)))
+
+
 def _member_local_axes(p0: np.ndarray, p1: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return local (ey, ez) unit vectors matching ``fea.beam3d.beam_rotation_matrix``."""
     vec = p1 - p0
@@ -104,6 +135,7 @@ def _apply_bolted_linear_rail(
     track_as_rail: bool = True,
     chamber_temp_c: float = 25.0,
     cf_rail_mounting: str = "single_wall_bare",
+    mass_length_scale: float = 1.0,
 ) -> tuple[float, float, float]:
     """Model 1 or 2 steel linear rails (or backer bar) bolted to beam face(s) via Newmark partial interaction.
 
@@ -183,7 +215,10 @@ def _apply_bolted_linear_rail(
     )
 
     m_rail_member = (
-        len(mount_normals) * rail_profile.area_m2 * length * rail_material.density_kg_m3
+        len(mount_normals)
+        * rail_profile.area_m2
+        * (length * max(float(mass_length_scale), 0.0))
+        * rail_material.density_kg_m3
     )
     rho_delta = m_rail_member / max(a_ext * length, 1e-12)
     member.material = member.material.model_copy(
@@ -210,6 +245,7 @@ def _apply_bolted_rail_with_opposite_backer(
     l_eff_m: float | None = None,
     chamber_temp_c: float = 25.0,
     cf_rail_mounting: str = "single_wall_bare",
+    mass_length_scale: float = 1.0,
 ) -> tuple[float, float, float]:
     """Model a bolted linear rail paired with an opposite-face backer using exact sandwich neutral-axis shift."""
     p0 = node_map[member.start_id].position_m
@@ -285,8 +321,9 @@ def _apply_bolted_rail_with_opposite_backer(
         }
     )
 
-    m_rail_member = rail_profile.area_m2 * length * rail_material.density_kg_m3
-    m_backer_member = backer_profile.area_m2 * length * backer_material.density_kg_m3
+    eff_mass_len = length * max(float(mass_length_scale), 0.0)
+    m_rail_member = rail_profile.area_m2 * eff_mass_len * rail_material.density_kg_m3
+    m_backer_member = backer_profile.area_m2 * eff_mass_len * backer_material.density_kg_m3
     rho_delta = (m_rail_member + m_backer_member) / max(a_beam * length, 1e-12)
     member.material = member.material.model_copy(
         update={"density_kg_m3": member.material.density_kg_m3 + rho_delta}
@@ -674,6 +711,19 @@ def _apply_corexy_gantry_rails(
                 }
             )
 
+    # Physical X-beam cut length (between XY-joint faces) and bolted X-rail cut length
+    # (build_X + 50 mm) are shorter than the outer frame width w; scale bare beam and
+    # folded rail/backer densities across geometric [0, w] so FEA M, y_moving_mass, and BOM match.
+    x_beam_span = corexy_x_beam_span_m(spec)
+    x_rail_len = corexy_x_rail_len_m(spec)
+    beam_len_scale = x_beam_span / max(w, 1e-9)
+    rail_len_scale = x_rail_len / max(w, 1e-9)
+    for mid in ("x_gantry_l", "x_gantry_r"):
+        m_xb = member_by_id[mid]
+        m_xb.material = m_xb.material.model_copy(
+            update={"density_kg_m3": m_xb.material.density_kg_m3 * beam_len_scale}
+        )
+
     x_boost_iy = 0.0
     x_boost_iz = 0.0
     cf_mount = spec.gantry.effective_cf_rail_mounting
@@ -696,6 +746,7 @@ def _apply_corexy_gantry_rails(
                 l_eff_m=w,
                 chamber_temp_c=chamber_c,
                 cf_rail_mounting=cf_mount,
+                mass_length_scale=rail_len_scale,
             )
             x_boost_iy += d_iy_x
             x_boost_iz += d_iz_x
@@ -712,11 +763,12 @@ def _apply_corexy_gantry_rails(
                 l_eff_m=w,
                 chamber_temp_c=chamber_c,
                 cf_rail_mounting=cf_mount,
+                mass_length_scale=rail_len_scale,
             )
             x_boost_iy += d_iy_x
             x_boost_iz += d_iz_x
     x_beam_insert_mass_kg = _apply_cf_two_wall_clamped_inserts(
-        member_by_id, nmap, spec, w
+        member_by_id, nmap, spec, x_beam_span
     )
     x_boost_iy *= 0.5
     x_boost_iz *= 0.5

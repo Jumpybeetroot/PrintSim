@@ -38,6 +38,7 @@ from .overrides import (
     resolve_z_drive_mechanism,
     resolve_z_probe,
 )
+from .printdb_bridge import get_printdb, get_printdb_status, is_printdb_available
 from .profiles import PROFILE_CATALOG, ProfileSpec, get_profile
 from .printer import (
     BEARING_RADIAL_PLAY_UM,
@@ -200,4 +201,7 @@ __all__ = [
     "ZLeadscrewType",
     "ZProbeType",
     "ZRailProfileType",
+    "get_printdb",
+    "get_printdb_status",
+    "is_printdb_available",
 ]

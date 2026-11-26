@@ -362,10 +362,12 @@ def test_dual_top_bottom_matches_legacy_dual_x_rails_mass_and_bom() -> None:
     )
 
     # Exact +1 extra X rail mass (+ 1 extra 54 g MGN12H carriage block on moving gantry/toolhead)
+    from printsim.geometry.builder import corexy_x_rail_len_m
+
     x_rail_prof = get_profile(spec_front.gantry.x_rail_profile)
     rail_mat = get_material(spec_front.gantry.rail_material)
-    w_m = spec_front.frame.width_mm * 1e-3
-    one_x_rail_kg = x_rail_prof.area_m2 * w_m * rail_mat.density_kg_m3
+    x_rail_len_m = corexy_x_rail_len_m(spec_front)
+    one_x_rail_kg = x_rail_prof.area_m2 * x_rail_len_m * rail_mat.density_kg_m3
     extra_block_kg = 0.054
 
     assert (asm_dual_mount.x_moving_mass_kg - asm_front.x_moving_mass_kg) == pytest.approx(extra_block_kg, rel=1e-9)
@@ -466,7 +468,10 @@ def test_zero_mass_cost_double_counting_with_cf_beam_and_epoxy_granite() -> None
     asm_f = build_assembly(s_cf_epoxy_front)
     asm_d = build_assembly(s_cf_epoxy_dual)
 
-    w_m = s_cf_none_front.frame.width_mm * 1e-3
+    from printsim.geometry.builder import corexy_x_beam_span_m, corexy_x_rail_len_m
+
+    x_beam_span_m = corexy_x_beam_span_m(s_cf_none_front)
+    x_rail_len_m = corexy_x_rail_len_m(s_cf_none_front)
     d_m = s_cf_none_front.frame.depth_mm * 1e-3
     cf_prof = get_profile("cf_tube_20x20x2")
     cf_mat = get_material("carbon_fiber_tube")
@@ -474,8 +479,8 @@ def test_zero_mass_cost_double_counting_with_cf_beam_and_epoxy_granite() -> None
     x_rail_prof = get_profile("mgn12_rail")
     y_rail_prof = get_profile("mgn12_rail")
 
-    bare_cf_kg = cf_prof.area_m2 * w_m * cf_mat.density_kg_m3
-    one_x_rail_kg = x_rail_prof.area_m2 * w_m * steel_mat.density_kg_m3
+    bare_cf_kg = cf_prof.area_m2 * x_beam_span_m * cf_mat.density_kg_m3
+    one_x_rail_kg = x_rail_prof.area_m2 * x_rail_len_m * steel_mat.density_kg_m3
     two_y_rails_kg = 2.0 * y_rail_prof.area_m2 * d_m * steel_mat.density_kg_m3
     h_m = s_cf_none_front.frame.height_mm * 1e-3
     z_rail_prof = get_profile(s_cf_none_front.bed.z_rail_profile)

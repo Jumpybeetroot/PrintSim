@@ -19,13 +19,19 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from printsim.schema.printdb_bridge import get_reference_constant as _get_printdb_const
+
 SHAPER_NAMES: tuple[str, ...] = ("ZV", "MZV", "EI", "2HUMP_EI", "3HUMP_EI")
 ADVANCED_SHAPER_NAMES: tuple[str, ...] = ("ZVD", "ZVDD", "SMOOTH_ZV", "SMOOTH_EI", "SMOOTH_FLATNESS")
-DEFAULT_SHAPER_DAMPING_RATIO: float = 0.1
+DEFAULT_SHAPER_DAMPING_RATIO: float = _get_printdb_const(
+    "references/dynamics/input-shaping-zv-mzv-ei", "default_damping_ratio", 0.1
+)
 TEST_DAMPING_RATIOS: tuple[float, ...] = (0.075, 0.1, 0.15)
 DEFAULT_TARGET_SMOOTHING: float = 0.12
 SHAPER_VIBRATION_REDUCTION: float = 20.0  # Klipper shaper_defs.SHAPER_VIBRATION_REDUCTION
-EI_SHAPER_VIB_TOL: float = 0.05  # Klipper shaper_defs default shaper_vib_tol
+EI_SHAPER_VIB_TOL: float = _get_printdb_const(
+    "references/dynamics/input-shaping-zv-mzv-ei", "ei_tolerable_vibration", 0.05
+)
 NONE_SHAPER_ALLOWABLE_RINGING_MM: float = 0.0228  # ~22.8 um allowable unshaped ringing (0.9 / (2*pi)^2)
 MIN_FREQ_HZ: float = 5.0
 MAX_FREQ_HZ: float = 220.0
@@ -518,9 +524,9 @@ def synthesize_axis_psd(
     for mode_freq_hz, participation in secondary_modes:
         if 10.0 <= mode_freq_hz <= 215.0 and abs(mode_freq_hz - f_primary) >= 2.0 and participation > 0.15:
             # Align with Klipper's 1/f-normalized acceleration sweep PSD (linear in f/f_primary),
-            # rolled off above ~1.8 * f_primary where belt/gantry compliance isolates local modes.
+            # rolled off above ~1.75 * f_primary where belt/gantry compliance isolates local modes.
             freq_ratio = float(mode_freq_hz) / f_primary
-            drive_isolation = 1.0 / (1.0 + (freq_ratio / 1.80) ** 8)
+            drive_isolation = 1.0 / (1.0 + (freq_ratio / 1.75) ** 8)
             weight = min(0.85, (float(participation) ** 2) * 0.45 * freq_ratio * drive_isolation)
             psd += weight * _mobility_psd(freqs, float(mode_freq_hz), damping_secondary)
 
@@ -783,6 +789,7 @@ def calibrate_axis_shapers(
     freqs_hz: np.ndarray | None = None,
     raw_psd: np.ndarray | None = None,
     psd_damping_ratio: float | None = None,
+    psd_damping_secondary: float | None = None,
     normalize_psd: bool = True,
     ref_peak: float = 100.0,
     ref_all_vibrations: float | None = None,
@@ -792,13 +799,14 @@ def calibrate_axis_shapers(
 ) -> AxisShaperGraph:
     """Run full Klipper `shaper_calibrate` optimization over `[5, 220] Hz` for one axis."""
     psd_zeta = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
+    psd_zeta_sec = psd_zeta if psd_damping_secondary is None else float(psd_damping_secondary)
     if raw_psd is None:
         freqs, psd = synthesize_axis_psd(
             axis=axis,
             primary_freq_hz=primary_freq_hz,
             secondary_modes=secondary_modes,
             damping_primary=psd_zeta,
-            damping_secondary=psd_zeta,
+            damping_secondary=psd_zeta_sec,
             freqs_hz=freqs_hz,
         )
     else:
@@ -830,7 +838,7 @@ def calibrate_axis_shapers(
             primary_freq_hz=primary_freq_hz,
             secondary_modes=secondary_modes,
             damping_primary=psd_zeta,
-            damping_secondary=psd_zeta,
+            damping_secondary=psd_zeta_sec,
             freqs_hz=fine_freqs,
         )
         measured_zeta = estimate_psd_damping_ratio(fine_freqs, fine_psd)

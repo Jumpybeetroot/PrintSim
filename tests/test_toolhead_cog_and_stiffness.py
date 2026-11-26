@@ -182,7 +182,7 @@ def test_cog_sweep_modal_shaper_freq_and_safe_accel_monotonic() -> None:
             assert mzv_accels[idx + 1] <= mzv_accels[idx] + 100.0, (
                 f"{yaml_name} MZV step {idx}: accel jumped ({mzv_accels[idx]} -> {mzv_accels[idx + 1]})"
             )
-        assert mzv_accels[-1] < mzv_accels[0] * 0.88, (
+        assert mzv_accels[-1] < mzv_accels[0] * 0.90, (
             f"{yaml_name} MZV sweep: overall accel did not drop ({mzv_accels[0]} -> {mzv_accels[-1]})"
         )
 

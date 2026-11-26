@@ -203,9 +203,10 @@ def test_a10_pareto_safe_accel_respects_1x_motor_and_belt_limits() -> None:
     assert cand.point.safe_max_accel_mm_s2 <= rep.kinematics.motor_max_accel_mm_s2 + 1e-6
     assert cand.point.safe_max_accel_mm_s2 <= rep.kinematics.belt_max_accel_mm_s2 + 1e-6
 
-    # Belt-limited build: low belt pretension caps safe_accel at belt_max_accel_mm_s2
+    # Belt-limited build: low wrap angle + modest pretension triggers tooth-cam-out belt slip below shaper limit
     belt_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
-    belt_spec.gantry.belt.pretension_n = 4.5
+    belt_spec.gantry.belt.wrap_angle_deg = 90.0
+    belt_spec.gantry.belt.pretension_n = 14.0
     rep_belt = evaluate_printer(belt_spec, panel_mesh_n=2, include_advanced_analysis=False)
     assert rep_belt.kinematics.belt_max_accel_mm_s2 > 0.0
     assert rep_belt.kinematics.belt_max_accel_mm_s2 < rep_belt.kinematics.motor_max_accel_mm_s2
@@ -224,7 +225,7 @@ def test_a10_pareto_evaluates_kinematic_constraints_at_safe_accel() -> None:
     # - At advertised safe_accel (~15k-30k mm/s^2), dynamic tension exceeds 58 N (overtension True).
     spec.gantry.belt.type = "gt2_6mm"
     spec.gantry.belt.core = "fiberglass"
-    spec.gantry.belt.pretension_n = 57.0
+    spec.gantry.belt.pretension_n = 55.0
     spec.gantry.double_shear_pulleys = True
     spec.kinematics.max_accel_mm_s2 = 2000.0
 

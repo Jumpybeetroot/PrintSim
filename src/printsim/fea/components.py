@@ -27,6 +27,10 @@ import numpy as np
 
 from printsim.schema import get_material, get_profile
 from printsim.schema.overrides import resolve_bed_mount, resolve_rail_quality
+from printsim.schema.printdb_bridge import (
+    get_reference_constant as _get_printdb_const,
+    hydrate_rail_catalog as _hydrate_rail_catalog,
+)
 from printsim.schema.printer import (
     BEARING_RADIAL_PLAY_UM,
     CORNER_JOINT_BASE_2020,
@@ -40,7 +44,9 @@ if TYPE_CHECKING:
     from printsim.geometry.builder import AssemblyModel
     from printsim.schema.printer import PrinterSpec
 
-_G_ACC = 9.80665
+_G_ACC = _get_printdb_const(
+    "references/fluid_cooling/fan-pq-operating-point", "mmh2o_to_pa", 9.80665
+)
 
 # HIWIN MGN / HGH catalog parameters: (ball_d_m, row_half_pitch_m, n_rows, L1_C_m, C_C_n, L1_H_m, C_H_n, seal_drag_n)
 # row_half_pitch_m = W_R / 2 (actual ball-track lateral half-span matching HIWIN static roll moment M_R / C_0:
@@ -67,6 +73,7 @@ _RAIL_BLOCK_MASS_G: dict[str, tuple[float, float]] = {
     "steel_rod_10mm": (31.0, 56.0),
     "steel_rod_12mm": (41.0, 76.0),
 }
+_hydrate_rail_catalog(_RAIL_CARRIAGE_CATALOG, _RAIL_BLOCK_MASS_G)
 
 _PRELOAD_FRACTION: dict[str, float] = RAIL_PRELOAD_FRACTIONS
 
@@ -348,14 +355,88 @@ def iwan_joint_damping_delta(
     return _IWAN_DAMPING_DELTA.get(joint_type.lower().strip(), 0.003)
 
 
+def belt_flexural_rigidity_nm2(
+    belt: BeltSpec,
+    chamber_temp_c: float = 25.0,
+) -> float:
+    """Effective composite belt bending stiffness EI_b (N·m²) for pulley wrap-fillet compliance.
+
+    Calibrated to multi-filament twisted fiberglass/aramid/steel cords embedded in EPDM/TPU
+    backing (e.g., 6 mm Gates 2GT fiberglass EI ≈ 9.0 N·mm² -> ~7 mm self-weight droop over
+    50 mm cantilever; thicker 3GT / steel-cord TPU / AT5 scale with h_back^3 and wire EI).
+    """
+    w_m = max(float(belt.width_mm), 1.0) * 1e-3
+    if belt.pitch_mm >= 4.5:
+        base_ei_per_m = 0.036
+    elif belt.pitch_mm >= 2.8:
+        base_ei_per_m = 0.0145 if belt.core == "fiberglass" else 0.0195
+    else:
+        base_ei_per_m = 0.0015
+        if belt.core == "aramid":
+            base_ei_per_m *= 0.85
+        elif belt.core == "steel":
+            base_ei_per_m *= 2.40
+    # Matrix elastomer contributes ~35% of bending stiffness and softens with chamber temperature
+    ret = belt.tooth_modulus_retention(chamber_temp_c)
+    return base_ei_per_m * w_m * (0.65 + 0.35 * ret)
+
+
+def belt_damping_ratio(
+    belt: BeltSpec,
+    chamber_temp_c: float = 25.0,
+    slack_margin_ratio: float = 1.0,
+) -> float:
+    """Effective belt-subsystem damping ratio zeta_belt vs core, elastomer, temp, and pretension.
+
+    Captures base elastomer/cord hysteresis (EPDM fiberglass ~0.044, aramid ~0.054, TPU/steel
+    ~0.036 rising as TPU approaches softening temp), low-tension wrap/tooth micro-slip hysteresis,
+    and bilinear slack-unloading PSD broadening when dynamic load approaches pretension.
+    """
+    t0 = max(float(belt.pretension_n), 0.25)
+    q0 = t0 / max(float(belt.width_mm), 1.0)
+    # Calibrated to measured CoreXY ADXL damping (HVFDesigns X=0.034-0.041, Y=0.044-0.063)
+    if belt.core == "aramid":
+        z_base = 0.052
+    elif belt.body_material == "tpu":
+        z_base = 0.036
+    else:
+        z_base = 0.044
+
+    # Thermal viscoelastic loss rise as matrix softens (notably TPU > 45 C)
+    ret = belt.tooth_modulus_retention(chamber_temp_c)
+    z_temp = 0.040 * max(0.0, 1.0 - ret)
+
+    # Low-tension cord-bedding / wrap-unwrapping / tooth-seating hysteresis
+    z_low_t = 0.036 * math.exp(-q0 / 1.7)
+
+    # Nonlinear bilinear peak broadening when dynamic slack margin drops below 45%
+    z_slack = 0.0
+    if slack_margin_ratio < 0.45:
+        u_slack = max(0.0, min(1.0, (0.45 - float(slack_margin_ratio)) / 0.85))
+        z_slack = 0.050 * u_slack
+
+    return float(min(0.18, z_base + z_temp + z_low_t + z_slack))
+
+
 def belt_effective_ea_n(
     belt: BeltSpec,
     span_m: float,
     ea_override_n: float | None = None,
     linear_mass_override_kg_m: float | None = None,
+    n_pulley_tangents: float = 4.0,
+    chamber_temp_c: float = 25.0,
 ) -> float:
-    """Effective belt tensile modulus EA (N) from cord crimp straightening & Ernst catenary sag."""
-    t0 = max(float(belt.pretension_n), 0.5)
+    """Effective belt tensile modulus EA (N) vs pretension, width, pulley wrap bending, & sag.
+
+    Combines four physical compliance mechanisms in series:
+      1. Width-normalized cord crimp / elastomer toe straightening (q0 = T0 / width_mm,
+         Wang et al. 2018; Perneder & Osborne 2012) + preload-engaged dynamic stiffening.
+      2. Euler-Bernoulli pulley/idler wrap flexural-fillet seating compliance around pulley
+         radius R (Gerbert 1981 / Kong & Parker 2005): c_wrap = n_tan * 3/8 * EI^1.5 / (R^2 * T_reg^2.5),
+         regularized smoothly by Euler wrap tension T_wrap = EI / R^2.
+      3. Ernst (1965) gravity catenary sag axial compliance: EA_cat = 12 * T0^3 / ((mu * g * L)^2).
+    """
+    t0 = max(float(belt.pretension_n), 0.25)
     mu = max(
         float(
             linear_mass_override_kg_m
@@ -365,17 +446,41 @@ def belt_effective_ea_n(
         1e-4,
     )
     span = max(float(span_m), 0.05)
+    w_mm = max(float(belt.width_mm), 1.0)
+    q0 = t0 / w_mm  # line tension (N per mm of belt width)
 
-    # 1. Cord crimp straightening under tension T0
-    crimp_factor = 1.0 - 0.32 * math.exp(-t0 / 15.0)
+    # 1. Width-normalized cord crimp straightening + elastomer toe modulus (Wang et al. 2018; Perneder 2012)
+    # Single unified preload-engagement curve keyed to line tension q0 = T0 / width_mm so belts are
+    # compliant in the low-tension toe regime (q0 < 2 N/mm) while reaching >92% of rated dynamic EA
+    # at normal working tensions (q0 ~ 3.5-5 N/mm).
+    if belt.core == "steel":
+        a_crimp, q_crimp = 0.30, 1.5
+    elif belt.core == "aramid":
+        a_crimp, q_crimp = 0.52, 2.2
+    else:
+        a_crimp, q_crimp = 0.52, 2.3
+    crimp_factor = 1.0 - a_crimp * math.exp(-q0 / q_crimp)
+
     ea_raw = float(ea_override_n) if ea_override_n is not None else belt.stiffness_ea_n
-    ea_crimp = ea_raw * crimp_factor
+    ea_cord = max(ea_raw * crimp_factor, 1.0)
 
-    # 2. Ernst (1965) catenary sag axial stiffness k_cat = 12*T0^3 / ((mu*g)^2 * L^3) -> EA_cat = k_cat * L
-    k_cat = 12.0 * (t0**3) / (((mu * _G_ACC) ** 2) * (span**3))
-    ea_cat = k_cat * span
+    # 2. Pulley/idler wrap flexural-fillet seating compliance
+    n_tan = max(float(n_pulley_tangents), 0.0)
+    if n_tan > 0.0:
+        ei_b = belt_flexural_rigidity_nm2(belt, chamber_temp_c=chamber_temp_c)
+        r_p = max(float(belt.pitch_radius_m), 0.003)
+        t_wrap = ei_b / (r_p**2)
+        t_reg = t0 + 0.85 * t_wrap
+        c_wrap = n_tan * 0.375 * (ei_b**1.5) / ((r_p**2) * (t_reg**2.5))
+        inv_ea_wrap = c_wrap / span
+    else:
+        inv_ea_wrap = 0.0
 
-    return (ea_crimp * ea_cat) / max(ea_crimp + ea_cat, 1e-9)
+    # 3. Ernst (1965) catenary sag axial stiffness: EA_cat = 12*T0^3 / ((mu*g*L)^2)
+    ea_cat = 12.0 * (t0**3) / (((mu * _G_ACC) ** 2) * (span**2))
+    inv_ea_cat = 1.0 / max(ea_cat, 1e-9)
+
+    return 1.0 / max((1.0 / ea_cord) + inv_ea_wrap + inv_ea_cat, 1e-18)
 
 
 def gerbert_tooth_mesh_stiffness_n_m(
@@ -384,14 +489,17 @@ def gerbert_tooth_mesh_stiffness_n_m(
     chamber_temp_c: float = 25.0,
     tooth_shear_override: float | None = None,
 ) -> float:
-    """Gerbert (1972) discrete spring-chain tooth-mesh shear stiffness (N/m) with elastomer T(chamber) retention."""
-    w_mm = float(belt.width_mm)
+    """Gerbert (1972) discrete spring-chain tooth-mesh shear stiffness (N/m) with T(chamber) & radial seating."""
+    w_mm = max(float(belt.width_mm), 1.0)
+    q0 = max(float(belt.pretension_n), 0.25) / w_mm
+    # Radial belt pressure T0/(w*R) seats belt tooth flanks into pulley grooves (Koyama 1979; Gerbert 1978)
+    seating_factor = 0.22 + 0.78 * (1.0 - math.exp(-q0 / 2.2))
     k_t_base = (
         float(tooth_shear_override)
         if tooth_shear_override is not None
         else float(belt.tooth_shear_k_n_per_m_mm)
     )
-    k_t = k_t_base * belt.tooth_modulus_retention(chamber_temp_c)
+    k_t = k_t_base * belt.tooth_modulus_retention(chamber_temp_c) * seating_factor
     p_m = belt.pitch_mm * 1e-3
     z_e = max(float(belt.pulley_teeth) * (float(belt.wrap_angle_deg) / 360.0), 1.0)
     ea_safe = max(float(ea_eff_n), 100.0)

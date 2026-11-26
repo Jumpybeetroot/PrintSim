@@ -223,6 +223,8 @@ def test_fetch_onshape_step_parsing_and_credentials(tmp_path: Path, monkeypatch:
 
     monkeypatch.delenv("ONSHAPE_ACCESS_KEY", raising=False)
     monkeypatch.delenv("ONSHAPE_SECRET_KEY", raising=False)
+    monkeypatch.setattr("printsim.cad_assets.recipes.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("printsim.cad_assets.recipes.sys.platform", "linux")
     with pytest.raises(RuntimeError, match="ONSHAPE_ACCESS_KEY"):
         fetch_onshape_step(url, tmp_path / "out.step")
 

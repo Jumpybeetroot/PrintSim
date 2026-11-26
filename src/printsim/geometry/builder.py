@@ -846,6 +846,8 @@ from printsim.geometry._builder_gantry import (  # noqa: E402
     _populate_linear_rail_telemetry,
     _x_rail_mount_normals,
     _y_rail_mount_normals,
+    corexy_x_beam_span_m,
+    corexy_x_rail_len_m,
     x_carriage_block_mass_delta_g,
     y_carriage_block_mass_delta_g,
 )
@@ -1626,7 +1628,8 @@ def _build_corexy(
         if m.role == "gantry"
     )
     x_backer_mass = sum(m.backer_mass_kg for m in members if m.role == "gantry")
-    x_rail_mass = x_rail_prof.area_m2 * w * rail_mat.density_kg_m3
+    x_rail_len = corexy_x_rail_len_m(spec)
+    x_rail_mass = x_rail_prof.area_m2 * x_rail_len * rail_mat.density_kg_m3
     if spec.gantry.effective_dual_x_rails:
         x_rail_mass *= 2.0
 

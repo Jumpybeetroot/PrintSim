@@ -74,6 +74,7 @@ STEPPER_SETUPS: tuple[tuple[str, float, float], ...] = (
     ("ldo_2504ac", 24.0, 1.2),
     ("ldo_2504ac", 48.0, 2.0),
     ("ldo_2804ah", 48.0, 2.2),
+    ("excit3d_max", 48.0, 3.5),
     ("ldo_60_3004", 48.0, 2.4),
     ("ldo_09deg_2504", 48.0, 1.8),
 )
@@ -314,8 +315,10 @@ def _encode_baseline_vector(spec: PrinterSpec) -> tuple[int, ...]:
     x6 = 0
     if st.supply_voltage_v >= 36.0:
         if st.steps_per_rev >= 400 or st.preset_id == "ldo_09deg_2504":
+            x6 = 5
+        elif st.holding_torque_nm >= 0.72 or st.preset_id in ("ldo_60_3004", "kraken_motor_v2", "ldo_60_2004ah"):
             x6 = 4
-        elif st.holding_torque_nm >= 0.72 or st.preset_id == "ldo_60_3004":
+        elif st.preset_id == "excit3d_max" or (st.rated_current_a >= 3.5 and st.inductance_mh <= 0.8):
             x6 = 3
         elif st.inductance_mh <= 0.8 or st.preset_id == "ldo_2804ah":
             x6 = 2

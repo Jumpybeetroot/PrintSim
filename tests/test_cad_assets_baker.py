@@ -41,6 +41,7 @@ PHASE1_ASSETS: list[tuple[str, str]] = [
     ("hotends", "tricorn_short"),
     ("hotends", "tricorn_long"),
     ("toolheads", "microwaved_bowden"),
+    ("toolheads", "microwaved_bowden_chube"),
 ]
 
 REQUIRED_MANIFEST_KEYS = {
@@ -248,7 +249,7 @@ def test_phase1_baked_assets_load_verify_order_and_scale() -> None:
     assert k_tshort["kx"] > k_tlong["kx"]
     assert k_tshort["ky"] > k_tlong["ky"]
 
-    # Material scaling check on mono-material toolhead (Ti-6Al-4V -> Al 6061-T6)
+    # Material scaling check on mono-material toolheads (Ti-6Al-4V <-> Al 6061-T6)
     ti_mat = get_material("titanium_grade5")
     al_mat = get_material("aluminum_6061_t6")
     mbt_ti = load_superelement("toolheads", "microwaved_bowden")
@@ -264,6 +265,16 @@ def test_phase1_baked_assets_load_verify_order_and_scale() -> None:
         np.asarray(mbt_ti.fixed_interface_freqs_hz) * math.sqrt(expected_ek / expected_em),
         rtol=1e-12,
     )
+
+    mbt_chube_al = load_superelement("toolheads", "microwaved_bowden_chube")
+    mbt_chube_ti = load_superelement("toolheads", "microwaved_bowden_chube", material_id="titanium_grade5")
+    assert mbt_chube_al is not None and mbt_chube_ti is not None
+    np.testing.assert_allclose(mbt_chube_al.port_coords_m[0], [0.0, 0.0, 0.0], atol=1e-9)
+    np.testing.assert_allclose(mbt_chube_al.port_coords_m[1], [0.0, -0.01276, 0.0275], atol=1e-9)
+    inv_ek = ti_mat.youngs_modulus_pa / al_mat.youngs_modulus_pa
+    inv_em = ti_mat.density_kg_m3 / al_mat.density_kg_m3
+    np.testing.assert_allclose(mbt_chube_ti.K_cb, mbt_chube_al.K_cb * inv_ek, rtol=1e-12)
+    np.testing.assert_allclose(mbt_chube_ti.M_cb, mbt_chube_al.M_cb * inv_em, rtol=1e-12)
 
     # Temperature softening check on polymer scaling
     mbt_abs_cold = load_superelement("toolheads", "microwaved_bowden", material_id="abs_printed", chamber_temp_c=25.0)
@@ -388,6 +399,7 @@ def test_cli_list_assets_and_missing_asset_graceful() -> None:
     payload = json.loads(res.stdout)
     assert len(payload["hotends"]) >= 5
     assert "microwaved_bowden" in payload["toolheads"]
+    assert "microwaved_bowden_chube" in payload["toolheads"]
     assert "microwaved_bowden__tricorn_long" in payload["assemblies"]
 
 

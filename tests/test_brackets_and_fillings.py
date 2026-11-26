@@ -368,8 +368,8 @@ def test_bonded_vs_unbonded_stiffness_and_monotonic_damping() -> None:
         assert m_bnd.profile.j_m4 > prof_ref.j_m4 * 1.10
         # Castigliano w_end=0.49 Z-rail stiffening leaves +4.75% X stiffness gain from epoxy/UHPC column fill
         assert statics[bonded_id].toolhead_stiffness_x_n_per_mm > statics["none"].toolhead_stiffness_x_n_per_mm * 1.04
-        # In Y on Trident with Castigliano w_end=0.49 Z-rails, >90% of loop compliance sits in X-gantry + toolhead
-        assert statics[bonded_id].toolhead_stiffness_y_n_per_mm > statics["none"].toolhead_stiffness_y_n_per_mm * 1.007
+        # In Y on Trident with Castigliano w_end=0.49 Z-rails & physical X-beam cut length, >90% of loop compliance sits in X-gantry + toolhead
+        assert statics[bonded_id].toolhead_stiffness_y_n_per_mm > statics["none"].toolhead_stiffness_y_n_per_mm * 1.006
         assert statics[bonded_id].combined_max_deflection_um < statics["none"].combined_max_deflection_um
 
     assert statics["uhpc_grout"].toolhead_stiffness_x_n_per_mm > statics["epoxy_granite"].toolhead_stiffness_x_n_per_mm
@@ -475,7 +475,8 @@ def test_api_catalog_and_simulate_expose_fillings_and_brackets() -> None:
     assert sim["geometry"]["extrusion_filling"]["id"] == "uhpc_grout"
     assert sim["geometry"]["extrusion_filling"]["bonded"] is True
     assert sim["geometry"]["gantry_brackets"]["material_id"] == "aluminum_6061_t6"
-    assert sim["modal_fea"]["frame_damping_ratio"] == pytest.approx(0.069, abs=1e-4)
+    # Base 0.069 (UHPC + CNC Al brackets + bolted panels) + 0.006 CF two-wall clamped rail inserts
+    assert sim["modal_fea"]["frame_damping_ratio"] == pytest.approx(0.075, abs=1e-4)
     assert sim["kinematics"]["bracket_material"] == "aluminum_6061_t6"
     assert sim["kinematics"]["bracket_stiffness_n_per_mm"] > 5000.0
     assert sim["kinematics"]["bracket_creep_risk"] is False

@@ -28,8 +28,10 @@ from printsim.engine.diagnostics import (
     parse_overrides_input,
     _run_evaluate_printer,
 )
-from printsim.mcp_server import EXAMPLES_DIR, PROJECT_ROOT
 from printsim.schema import PrinterSpec
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+EXAMPLES_DIR = PROJECT_ROOT / "examples"
 
 CACHE_SCHEMA_VERSION = "1.0"
 DEFAULT_CACHE_DB = PROJECT_ROOT / ".cache" / "sweeps" / "sweep_cache.sqlite"

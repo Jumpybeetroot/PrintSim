@@ -609,7 +609,9 @@ def test_cf_rail_mounting_auto_resolution_and_two_wall_insert_physics() -> None:
     assert (g_ins_85 / g_ins_25) > (g_bare_85 / g_bare_25)
     assert g_ins_85 > g_bare_85 * 1.4
 
-    # 4. Exact insert mass conservation across span_m, AssemblyModel, FEA M matrix, & zero double-counting
+    # 4. Exact insert mass conservation across physical x_beam_span, AssemblyModel, FEA M matrix, & zero double-counting
+    from printsim.geometry.builder import corexy_x_beam_span_m
+
     for width_mm in (380.0, 460.0):
         s_w_ins = s_carb.model_copy(deep=True)
         s_w_ins.frame.width_mm = width_mm
@@ -618,7 +620,7 @@ def test_cf_rail_mounting_auto_resolution_and_two_wall_insert_physics() -> None:
 
         a_ins = build_assembly(s_w_ins)
         a_bare = build_assembly(s_w_bare)
-        span_m = width_mm * 1e-3
+        span_m = corexy_x_beam_span_m(s_w_ins)
         expected_ins_kg = (4.0 + 18.0 * span_m) * 1e-3
 
         assert a_ins.x_beam_insert_mass_kg == pytest.approx(expected_ins_kg, rel=1e-12)
@@ -645,7 +647,9 @@ def test_cf_rail_mounting_auto_resolution_and_two_wall_insert_physics() -> None:
     lr_bare = asm_bare_25.to_geometry_dict()["linear_rails"]
     assert lr_ins["cf_rail_mounting"] == "two_wall_clamped_inserts"
     assert lr_bare["cf_rail_mounting"] == "single_wall_bare"
-    assert lr_ins["x_beam_insert_mass_g"] == pytest.approx(round((4.0 + 18.0 * 0.46) * 1.0, 1))
+    assert lr_ins["x_beam_insert_mass_g"] == pytest.approx(
+        round(4.0 + 18.0 * corexy_x_beam_span_m(s_carb), 1)
+    )
     assert lr_bare["x_beam_insert_mass_g"] == 0.0
 
     bom_ins = generate_bom(s_carb)
@@ -676,6 +680,54 @@ def test_cf_rail_mounting_auto_resolution_and_two_wall_insert_physics() -> None:
     assert (asm_bs_ins.total_mass_kg - asm_bs_bare.total_mass_kg) == pytest.approx(
         exp_bs_ins_kg, rel=1e-12
     )
+
+
+def test_corexy_physical_x_beam_and_x_rail_spans_match_voron_carbonara_bom() -> None:
+    """CoreXY X-beam & X-rail moving mass and BOM match physical cut lengths (not outer frame width)."""
+    from printsim.geometry.builder import corexy_x_beam_span_m, corexy_x_rail_len_m
+
+    cases = [
+        # (frame_w_mm, upright_prof, bx_mm, expected_beam_mm, expected_rail_mm, expected_carb_g)
+        (410.0, "extrusion_2020", 250.0, 330.0, 300.0, 64.9),  # Voron 250 / Carbonara 330
+        (460.0, "extrusion_2020", 300.0, 380.0, 350.0, 74.7),  # Voron 300 / Carbonara 380
+        (510.0, "extrusion_2020", 350.0, 430.0, 400.0, 84.6),  # Voron 350 / Carbonara 430
+        (490.0, "extrusion_2020", 300.0, 410.0, 350.0, 80.6),  # Wide 490mm 300-size Trident
+        (500.0, "extrusion_4040", 300.0, 380.0, 350.0, 74.7),  # DoomCube 4040 300
+    ]
+    for fw, up, bx, exp_beam_mm, exp_rail_mm, exp_carb_g in cases:
+        spec = _corexy_cf_base(
+            x_beam_profile="cf_tube_20x20_carbonara",
+            x_beam_material="carbon_fiber_torsional_45",
+        )
+        spec.frame.width_mm = fw
+        spec.frame.depth_mm = fw
+        spec.frame.profile = up
+        spec.kinematics.build_volume_mm = (bx, bx, 250.0)
+
+        assert corexy_x_beam_span_m(spec) * 1000.0 == pytest.approx(exp_beam_mm, abs=1e-6)
+        assert corexy_x_rail_len_m(spec) * 1000.0 == pytest.approx(exp_rail_mm, abs=1e-6)
+
+        asm = build_assembly(spec)
+        assert asm.x_beam_mass_kg * 1000.0 == pytest.approx(exp_carb_g, abs=0.4)
+        # MGN12R = 0.65 g/mm -> 195.0 / 227.5 / 260.0 g
+        assert asm.x_rail_mass_kg * 1000.0 == pytest.approx(0.65 * exp_rail_mm, abs=0.2)
+
+        # FEA consistent mass matrix & AssemblyModel member masses match physical X-beam + X-rail + inserts
+        gantry_members = [m for m in asm.members if m.role == "gantry"]
+        nmap = asm.node_map
+        assert sum(m.rail_mass_kg for m in gantry_members) == pytest.approx(asm.x_rail_mass_kg, rel=1e-9)
+        assert sum(m.mass_kg(nmap) for m in gantry_members) == pytest.approx(
+            asm.x_beam_mass_kg + asm.x_rail_mass_kg + asm.x_backer_mass_kg + asm.x_beam_insert_mass_kg,
+            rel=1e-9,
+        )
+
+        # BOM X-rail & cut-list net beam length agree with physical span
+        bom = generate_bom(spec)
+        x_rail_bom = next(i for i in bom.items if i.sku == "MOT-X-RAIL")
+        assert f"L={exp_rail_mm:.0f} mm" in x_rail_bom.specification
+        assert x_rail_bom.total_mass_g == pytest.approx(asm.x_rail_mass_kg * 1000.0, abs=0.2)
+        gantry_cut = next(c for c in bom.cut_list if c.role == "gantry")
+        assert gantry_cut.net_length_mm == pytest.approx(exp_beam_mm, abs=0.1)
 
 
 def test_xbeam_3d_tet10_fea_calibrated_constants_and_confidence() -> None:

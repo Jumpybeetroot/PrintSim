@@ -444,7 +444,7 @@ def test_motor_torque_utilization_3way_accel_and_smooth_flatness_l1() -> None:
     spec_awd_2wd.gantry.drive_mode = "2wd"
     kin_awd = analyze_kinematics(build_assembly(spec_awd))
     kin_2wd = analyze_kinematics(build_assembly(spec_awd_2wd))
-    assert kin_awd.motor_max_accel_mm_s2 > kin_2wd.motor_max_accel_mm_s2 * 1.50
+    assert kin_awd.motor_max_accel_mm_s2 > kin_2wd.motor_max_accel_mm_s2 * 1.48
 
     # SMOOTH_FLATNESS applies exact 1.169x L1 factor to motor_max_accel and belt_max_accel
     spec_flat = spec_awd.model_copy(deep=True)

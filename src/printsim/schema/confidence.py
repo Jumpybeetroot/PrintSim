@@ -95,6 +95,21 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "are not explicitly modeled; scale-weighing an assembled build would raise mass confidence >92%."
             ),
         },
+        "microwaved_bowden_chube": {
+            "trust_pct": 84,
+            "basis": (
+                "Official STEP CAD (micreathonn/Microwaved-Bowden-Toolhead MBT_Chube_V1.STEP) exact "
+                "geometry & 75.3k-elem Tet4 FEA calibration (3,499 X / 2,611 Y N/mm, 2,990 N/mm "
+                "harmonic mean in SLM Al 6061-T6/AlSi10Mg; scales to Ti-6Al-4V or polymers by E ratio): "
+                "Main_Body (~56.5 g SLM Al), integrated 6× M3 Ø18 mm PCD Chube conduction mount at "
+                "Port 1 [0, -12.76, +27.50] mm, MGN12H (48.3 g), Monolith SLM belt clamp (~16 g), "
+                "Beacon RevH, and ECAS/screws = 135 g excl. hotend (-38.5 mm nozzle drop)."
+            ),
+            "caveat": (
+                "16 mm CPAP hose, Bowden PTFE/Kevlar sheath dynamic drag, and SLM porosity (~99% dense) "
+                "are not explicitly modeled; live CAD CMS raises trust to 86%."
+            ),
+        },
         "heavy_uhf_long": {
             "trust_pct": 56,
             "basis": (
@@ -238,39 +253,41 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             "trust_pct": 78,
             "basis": (
                 "Official Luke's Laboratory STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP, "
-                "Chube_hotend_integration_specifications.pdf) & 56k-elem Tet4 FEA calibration "
-                "(5,529/5,820 → 5,670 N/mm): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4×0.90 mm solid-top Ti tube, "
-                "6× M3 Ø18 mm PCD, 52 mm meltzone, 74 g bare (CoM 34.82 mm) / 90 g dressed, 500 °C."
+                "Chube_hotend_integration_specifications.pdf) & 80.2k-elem exact-cutout Tet4 FEA calibration "
+                "(801/830 → 815 N/mm): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4×0.90 mm Ti tube w/ "
+                "6× staggered Ø19.0 mm cutouts + 8 mm solid Al conduction top block, 6× M3 Ø18 mm PCD, "
+                "52 mm meltzone, 74 g bare (78.2 g FEA, CoM -35.2 mm) / 90 g dressed, 500 °C."
             ),
             "caveat": (
-                "Even with 56k-elem Tet4 FEA-calibrated stiffness (5,670 N/mm), carriage-interface 6-bolt M3 preload "
-                "and mount material introduce ±12% effective tip stiffness spread. Live CAD CMS raises trust to 86%."
+                "Even with 80.2k-elem exact-cutout Tet4 FEA calibration (815 N/mm), 6-bolt M3 preload "
+                "and mount interface compliance introduce ±12% effective tip stiffness spread. Live CAD CMS raises trust to 86%."
             ),
         },
         "chube_air": {
             "trust_pct": 78,
             "basis": (
                 "Official Luke's Laboratory STEP & Rev A drawing (CHUBE_INTEGRATION_REVA.STEP, "
-                "Chube_hotend_integration_specifications.pdf) & 49.5k-elem Tet4 FEA calibration "
-                "(2,140/2,357 → 2,250 N/mm): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4×0.90 mm Ti tube, "
-                "6× M3 Ø18 mm PCD, 42 mm meltzone, 69 g bare (CoM 36.15 mm) / 79 g dressed, 500 °C."
+                "Chube_hotend_integration_specifications.pdf) & 70.7k-elem exact-cutout Tet4 FEA calibration "
+                "(549/568 → 560 N/mm): 66.0 mm OAL w/ V6 nozzle (60.0 mm bare), Ø25.4×0.90 mm Ti tube w/ "
+                "6× staggered Ø19.0 mm cutouts + 4-fin Al air heatsink, 6× M3 Ø18 mm PCD, 42 mm meltzone, "
+                "69 g bare (66.9 g FEA, CoM -38.3 mm) / 79 g dressed, 500 °C."
             ),
             "caveat": (
-                "Side cooling-window stiffness knockdown is captured by 49.5k-elem Tet4 FEA (2,250 N/mm); "
-                "carriage-interface 6-bolt M3 preload introduces ±12% build variance. Live CAD CMS raises trust to 86%."
+                "Dual-tier Ø19.0 mm airflow/isolation window Vierendeel compliance is captured by 70.7k-elem "
+                "Tet4 FEA (560 N/mm); 6-bolt M3 preload introduces ±12% build variance. Live CAD CMS raises trust to 86%."
             ),
         },
         "chube_compact": {
             "trust_pct": 76,
             "basis": (
                 "Official Luke's Laboratory SolidWorks STEP (Chube_Compact_integration_assembly.STEP) & "
-                "31k-elem Tet4 FEA calibration (3,015/2,277 → 2,600 N/mm): 47.2 mm OAL w/ V6 nozzle, "
-                "Ø22.23 mm Ti tube, 4× M3 Ø16 mm Dragon PCD, 33 mm meltzone, 80W 6×16 mm heater, "
-                "50 g bare / 63 g dressed w/ sock, 500 °C."
+                "49.3k-elem exact-cutout Tet4 FEA calibration (3,020/2,931 → 2,975 N/mm): 47.2 mm OAL w/ V6 nozzle, "
+                "Ø22.23×0.89 mm Ti tube w/ 4× Ø12.50 mm cutouts @ 45/135/225/315° + solid lower shell, "
+                "4× M3 Ø16 mm Dragon PCD, 33 mm meltzone, 80W 6×16 mm heater, 50 g bare / 63 g dressed, 500 °C."
             ),
             "caveat": (
-                "31k-elem Tet4 FEA captures asymmetric 4-bolt flange compliance (2,600 N/mm); 4× M3 Dragon-pattern "
-                "mount clamp stiffness in series limits effective assembly stiffness. Live CAD CMS raises trust to 86%."
+                "49.3k-elem Tet4 FEA captures exact 4-cutout tube & short-lever stiffness (2,975 N/mm); "
+                "4× M3 Dragon-pattern mount clamp stiffness in series limits effective assembly stiffness. Live CAD CMS raises trust to 86%."
             ),
         },
         "phaetus_dragon_hf": {
@@ -389,18 +406,20 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "gt2_6mm": {
             "trust_pct": 84,
             "basis": (
-                "Gates PowerGrip 2GT 6 mm catalog EA (18.9 kN × 2.0 dynamic factor) extensively validated "
-                "against Voron Trident/2.4 CoreXY ADXL resonance logs."
+                "Gates PowerGrip 2GT 6 mm catalog EA (18.9 kN × 2.0 dynamic factor) with width-normalized "
+                "crimp, Euler–Bernoulli pulley-wrap compliance, tooth seating, & exact 2-DOF shaper coupling "
+                "validated against Voron Trident/2.4 CoreXY ADXL resonance logs."
             ),
             "caveat": (
-                "Actual belt peak shifts with tension gauge accuracy, wrap angle, and EPDM thermal soak; scalar 2.0× dynamic factor awaits shaker curves."
+                "Actual belt peak shifts with tension gauge accuracy, wrap angle, and EPDM thermal soak; controlled multi-tension shaker curves will further refine wrap EI and dynamic factor."
             ),
         },
         "gt2_9mm": {
             "trust_pct": 82,
             "basis": (
-                "Gates PowerGrip 2GT 9 mm catalog EA (28.35 kN × 2.0 dynamic factor) calibrated against "
-                "RatRig, Monolith, and VzBot community ADXL logs."
+                "Gates PowerGrip 2GT 9 mm catalog EA (28.35 kN × 2.0 dynamic factor) with width-normalized "
+                "crimp, pulley-wrap seating, belt inertia/damping, & exact 2-DOF AWD shaper coupling "
+                "calibrated against RatRig, Monolith, and VzBot community ADXL logs."
             ),
             "caveat": (
                 "Real resonance depends on accurate tension balancing and stiffer double-shear idlers at >80 N preload."

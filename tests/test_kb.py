@@ -887,7 +887,7 @@ def test_cli_kb_end_to_end_smoke(tmp_path: Path) -> None:
     assert r_seed.exit_code == 0, r_seed.output
     seed_data = json.loads(r_seed.output)
     assert seed_data["builds_added"] == 19  # 6 monolith + 13 community touchstones
-    assert seed_data["weights_added"] == 17
+    assert seed_data["weights_added"] == 19
 
     r_stats = runner.invoke(app, ["kb", "stats", "--db", str(db_path), "--json"])
     assert r_stats.exit_code == 0, r_stats.output

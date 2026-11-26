@@ -350,9 +350,14 @@ def test_human_readable_fea_modal_and_grouped_sensitivity_diagnoses() -> None:
             assert t["hz_gain_per_100g_saved"] > 0.0
             assert {"id", "role", "mass_sens_hz", "hz_per_100g", "action_hint"} <= set(t.keys())
 
-    # Spec-tailored physical bottleneck hints check: Trident (clip acrylic) vs Monolith (already bolted 4mm Al)
-    trident_rep = evaluate_printer(PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml"))
-    monolith_rep = evaluate_printer(PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml"))
+    # Spec-tailored physical bottleneck hints check: Trident (clip acrylic) vs Bolted 4mm Al Trident
+    trident_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
+    bolted_spec = trident_spec.model_copy(deep=True)
+    bolted_spec.frame.panel_mounting = "bolted_structural"
+    bolted_spec.frame.panel_material = "aluminum_5052_sheet"
+    bolted_spec.frame.panel_thickness_mm = 4.0
+    trident_rep = evaluate_printer(trident_spec)
+    monolith_rep = evaluate_printer(bolted_spec)
     assert trident_rep.sensitivity is not None and monolith_rep.sensitivity is not None
     trident_col = next(
         t for t in trident_rep.sensitivity.top_stiffen_targets if t["id"] == "front_frame_columns"

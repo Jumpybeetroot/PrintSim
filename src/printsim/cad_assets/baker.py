@@ -605,10 +605,220 @@ def _export_shape_for_gmsh(shape: Any, path_stem: Path, prefer_brep: bool = Fals
     return brep_path
 
 
+def _fill_surface_holes_numpy(tm: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Close small open boundary loops in a surface mesh using pure NumPy (no networkx needed)."""
+    if tm.is_watertight or len(tm.faces) == 0:
+        return tm
+    faces = np.asarray(tm.faces, dtype=np.int64)
+    verts = np.asarray(tm.vertices, dtype=np.float64)
+    dir_edges = faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+    sorted_e = np.sort(dir_edges, axis=1)
+    _, first_idx, counts = np.unique(sorted_e, axis=0, return_index=True, return_counts=True)
+    bnd_edges = dir_edges[first_idx[counts == 1]]
+    if len(bnd_edges) == 0:
+        return tm
+
+    # Trace closed boundary cycles; reverse each boundary edge (v->u) so cap normals match outward winding
+    nxt_map: dict[int, list[int]] = {}
+    for u, v in bnd_edges.tolist():
+        nxt_map.setdefault(v, []).append(u)
+
+    new_verts = verts.tolist()
+    new_faces: list[list[int]] = []
+    used_edges: set[tuple[int, int]] = set()
+
+    for v_start, nbrs in list(nxt_map.items()):
+        for u_next in nbrs:
+            if (v_start, u_next) in used_edges:
+                continue
+            loop = [v_start]
+            cur = u_next
+            used_edges.add((v_start, u_next))
+            while cur != v_start and len(loop) < 2000:
+                loop.append(cur)
+                cands = [n for n in nxt_map.get(cur, []) if (cur, n) not in used_edges]
+                if not cands:
+                    break
+                nxt = cands[0]
+                used_edges.add((cur, nxt))
+                cur = nxt
+            if cur == v_start and len(loop) >= 3:
+                if len(loop) == 3:
+                    new_faces.append([loop[0], loop[1], loop[2]])
+                else:
+                    c_idx = len(new_verts)
+                    centroid = np.mean(verts[loop], axis=0).tolist()
+                    new_verts.append(centroid)
+                    n_l = len(loop)
+                    for k in range(n_l):
+                        new_faces.append([c_idx, loop[k], loop[(k + 1) % n_l]])
+
+    if not new_faces:
+        return tm
+    out = trimesh.Trimesh(
+        vertices=np.asarray(new_verts, dtype=np.float64),
+        faces=np.vstack([faces, np.asarray(new_faces, dtype=np.int64)]),
+        process=False,
+    )
+    out.update_faces(out.nondegenerate_faces())
+    out.remove_unreferenced_vertices()
+    return out
+
+
+def _mesh_solid_voxel_tet4(
+    shape: Any,
+    mesh_size_mm: float,
+    snap_coords_mm: tuple[tuple[float, float, float], ...] = (),
+) -> tuple[np.ndarray, np.ndarray]:
+    """Robust pure-NumPy conforming 5-tet-per-voxel fallback for self-intersecting SolidWorks B-Reps.
+
+    Classifies voxel centers via exact Z-column triangle parity rasterization (zero rtree/networkx
+    dependency), retains the primary 6-connected solid component, and decomposes each occupied cube
+    with alternating-parity 5-tetrahedra splits (100% conforming shared diagonals, positive volume).
+    Grid planes are snapped to ``snap_coords_mm`` (e.g., Port 0 / Port 1 mounting faces).
+    """
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    tm = _shape_to_trimesh_mm(shape, tolerance_mm=0.06, angular_tol=0.18)
+    bmin, bmax = tm.bounds
+    h = float(np.clip(mesh_size_mm * 0.62, 0.75, 1.80))
+
+    # Align X, Y, Z grids cleanly: snap Y to Port 0 plane (e.g. MGN carriage face Y=0) and Z to Port 1 plane (e.g. Z=27.5)
+    axes_grids: list[np.ndarray] = []
+    for ax in range(3):
+        anchor = 0.0
+        if snap_coords_mm:
+            if ax == 2 and len(snap_coords_mm) >= 2 and abs(float(snap_coords_mm[1][ax])) > 1e-6:
+                anchor = float(snap_coords_mm[1][ax])
+            else:
+                anchor = float(snap_coords_mm[0][ax])
+        shift = anchor - math.floor(anchor / h) * h
+        lo = math.floor((float(bmin[ax]) - shift) / h) * h + shift - h
+        hi = math.ceil((float(bmax[ax]) - shift) / h) * h + shift + 1.5 * h
+        axes_grids.append(np.arange(lo, hi, h, dtype=np.float64))
+
+    xs, ys, zs = axes_grids
+    nx, ny, nz = len(xs) - 1, len(ys) - 1, len(zs) - 1
+    xc = 0.5 * (xs[:-1] + xs[1:])
+    yc = 0.5 * (ys[:-1] + ys[1:])
+    zc = 0.5 * (zs[:-1] + zs[1:])
+
+    tris = np.asarray(tm.triangles, dtype=np.float64)
+    x0, y0, z0 = tris[:, 0, 0], tris[:, 0, 1], tris[:, 0, 2]
+    x1, y1, z1 = tris[:, 1, 0], tris[:, 1, 1], tris[:, 1, 2]
+    x2, y2, z2 = tris[:, 2, 0], tris[:, 2, 1], tris[:, 2, 2]
+    det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+    valid = np.abs(det) > 1e-10
+    tris, det = tris[valid], det[valid]
+    x0, y0, z0 = tris[:, 0, 0], tris[:, 0, 1], tris[:, 0, 2]
+    x1, y1, z1 = tris[:, 1, 0], tris[:, 1, 1], tris[:, 1, 2]
+    x2, y2, z2 = tris[:, 2, 0], tris[:, 2, 1], tris[:, 2, 2]
+
+    # Tiny irrational jitter guarantees rays never graze exact mesh edges
+    xcp = xc + 1.37e-5
+    ycp = yc + 2.71e-5
+    ix_lo = np.clip(np.searchsorted(xcp, np.minimum(np.minimum(x0, x1), x2)), 0, nx)
+    ix_hi = np.clip(np.searchsorted(xcp, np.maximum(np.maximum(x0, x1), x2)), 0, nx)
+    iy_lo = np.clip(np.searchsorted(ycp, np.minimum(np.minimum(y0, y1), y2)), 0, ny)
+    iy_hi = np.clip(np.searchsorted(ycp, np.maximum(np.maximum(y0, y1), y2)), 0, ny)
+
+    diff_z = np.zeros((nx, ny, nz + 1), dtype=np.int16)
+    active = np.where((ix_hi > ix_lo) & (iy_hi > iy_lo))[0]
+    for fi in active:
+        a0, b0, c0 = float(x0[fi]), float(y0[fi]), float(z0[fi])
+        e1x, e1y, e1z = float(x1[fi]) - a0, float(y1[fi]) - b0, float(z1[fi]) - c0
+        e2x, e2y, e2z = float(x2[fi]) - a0, float(y2[fi]) - b0, float(z2[fi]) - c0
+        inv_d = 1.0 / float(det[fi])
+        for ix in range(int(ix_lo[fi]), int(ix_hi[fi])):
+            px = float(xcp[ix]) - a0
+            for iy in range(int(iy_lo[fi]), int(iy_hi[fi])):
+                py = float(ycp[iy]) - b0
+                u = (px * e2y - py * e2x) * inv_d
+                if u < 0.0 or u > 1.0:
+                    continue
+                v = (e1x * py - e1y * px) * inv_d
+                if v < 0.0 or (u + v) > 1.0:
+                    continue
+                zh = c0 + u * e1z + v * e2z
+                iz = int(np.searchsorted(zc, zh))
+                if iz < nz:
+                    diff_z[ix, iy, iz] ^= 1
+
+    occ = (np.cumsum(diff_z[:, :, :nz], axis=2) & 1).astype(bool)
+    occ_idx = np.argwhere(occ)
+    if len(occ_idx) == 0:
+        raise RuntimeError("Voxel Tet4 fallback classified 0 interior voxels")
+
+    # Keep only the primary 6-connected solid component
+    lin = (occ_idx[:, 0] * ny + occ_idx[:, 1]) * nz + occ_idx[:, 2]
+    idx_map = np.full(nx * ny * nz, -1, dtype=np.int32)
+    idx_map[lin] = np.arange(len(occ_idx), dtype=np.int32)
+    r_blocks: list[np.ndarray] = []
+    c_blocks: list[np.ndarray] = []
+    for axis, step in ((0, ny * nz), (1, nz), (2, 1)):
+        mask = occ_idx[:, axis] + 1 < (nx, ny, nz)[axis]
+        a = np.where(mask)[0]
+        b = idx_map[lin[a] + step]
+        ok = b >= 0
+        if np.any(ok):
+            r_blocks.append(a[ok])
+            c_blocks.append(b[ok])
+    if r_blocks:
+        rr = np.concatenate(r_blocks)
+        cc = np.concatenate(c_blocks)
+        adj = csr_matrix(
+            (np.ones(len(rr) * 2, dtype=np.int8), (np.concatenate([rr, cc]), np.concatenate([cc, rr]))),
+            shape=(len(occ_idx), len(occ_idx)),
+        )
+        _, labels = connected_components(adj, directed=False)
+        main_lbl = int(np.argmax(np.bincount(labels)))
+        occ_idx = occ_idx[labels == main_lbl]
+
+    # Map occupied cube corners (i+dx, j+dy, k+dz) to compact vertex indices
+    nx1, ny1, nz1 = nx + 1, ny + 1, nz + 1
+    ci, cj, ck = occ_idx[:, 0], occ_idx[:, 1], occ_idx[:, 2]
+    # 8 corners ordered by bit 0=x, bit 1=y, bit 2=z
+    corners = np.stack(
+        [
+            ((ci + dx) * ny1 + (cj + dy)) * nz1 + (ck + dz)
+            for dz in (0, 1)
+            for dy in (0, 1)
+            for dx in (0, 1)
+        ],
+        axis=1,
+    )  # (N_vox, 8)
+    u_nodes, inv = np.unique(corners.ravel(), return_inverse=True)
+    c_local = inv.reshape(-1, 8).astype(np.int32)
+
+    ui = u_nodes // (ny1 * nz1)
+    rem = u_nodes % (ny1 * nz1)
+    uj = rem // nz1
+    uk = rem % nz1
+    points_mm = np.column_stack([xs[ui], ys[uj], zs[uk]]).astype(np.float64)
+
+    # Alternating-parity 5-tet decomposition (100% conforming across all 6 faces!)
+    even_pat = np.array(
+        [[0, 3, 5, 6], [0, 1, 3, 5], [0, 2, 3, 6], [0, 4, 5, 6], [3, 5, 6, 7]], dtype=np.int32
+    )
+    odd_pat = np.array(
+        [[1, 2, 4, 7], [0, 1, 2, 4], [1, 2, 3, 7], [1, 4, 5, 7], [2, 4, 6, 7]], dtype=np.int32
+    )
+    parity = ((ci + cj + ck) & 1).astype(bool)
+    tet_blocks: list[np.ndarray] = []
+    if np.any(~parity):
+        tet_blocks.append(c_local[~parity][:, even_pat].reshape(-1, 4))
+    if np.any(parity):
+        tet_blocks.append(c_local[parity][:, odd_pat].reshape(-1, 4))
+    tets = np.ascontiguousarray(np.vstack(tet_blocks), dtype=np.int32)
+    return np.ascontiguousarray(points_mm, dtype=np.float64), tets
+
+
 def _mesh_regions_tet4(
     regions: list[MaterialRegion],
     mesh_size_mm: float,
     fea_surface_max_triangles: int = 60000,
+    snap_coords_mm: tuple[tuple[float, float, float], ...] = (),
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Generate a conformal 3D Tet4 mesh in mm with per-element ``region_id``.
 
@@ -649,6 +859,7 @@ def _mesh_regions_tet4(
             proc2d = subprocess.run(
                 [
                     sys.executable,
+                    "-P",
                     str(Path(__file__).resolve()),
                     "--gmsh-worker-2d",
                     str(brep_path),
@@ -673,7 +884,12 @@ def _mesh_regions_tet4(
             tm.update_faces(tm.nondegenerate_faces())
             tm.update_faces(tm.unique_faces())
             tm.remove_unreferenced_vertices()
-            tm.fix_normals()
+            if not tm.is_watertight:
+                tm = _fill_surface_holes_numpy(tm)
+            try:
+                tm.fix_normals()
+            except ModuleNotFoundError:
+                trimesh.repair.fix_inversion(tm)
             if len(tm.faces) > fea_surface_max_triangles:
                 tm = decimate_trimesh_qem(tm, target_triangles=fea_surface_max_triangles)
 
@@ -682,6 +898,7 @@ def _mesh_regions_tet4(
             proc3d = subprocess.run(
                 [
                     sys.executable,
+                    "-P",
                     str(Path(__file__).resolve()),
                     "--gmsh-worker-stl",
                     str(stl_path),
@@ -692,12 +909,20 @@ def _mesh_regions_tet4(
                 text=True,
                 check=False,
             )
-            if proc3d.returncode != 0 or not out_npz.exists():
-                err = (proc3d.stderr or proc3d.stdout).strip()
-                raise RuntimeError(f"Gmsh STL-to-Tet4 meshing failed: {err}")
-            with np.load(out_npz) as data:
-                pts_mm = np.ascontiguousarray(data["points_mm"], dtype=np.float64)
-                tets = np.ascontiguousarray(data["tets"], dtype=np.int32)
+            if proc3d.returncode == 0 and out_npz.exists():
+                with np.load(out_npz) as data:
+                    pts_mm = np.ascontiguousarray(data["points_mm"], dtype=np.float64)
+                    tets = np.ascontiguousarray(data["tets"], dtype=np.int32)
+                if len(tets) > 0:
+                    return pts_mm, tets, np.zeros(len(tets), dtype=np.int32)
+
+            # Tier-3 fallback for self-intersecting SolidWorks lofts (e.g. MBT_Chube_V1 CPAP duct):
+            # pure-NumPy conforming 5-tet-per-voxel mesh snapped to exact Port 0 / Port 1 planes.
+            pts_mm, tets = _mesh_solid_voxel_tet4(
+                regions[0].solid,
+                mesh_size_mm=mesh_size_mm,
+                snap_coords_mm=snap_coords_mm,
+            )
             return pts_mm, tets, np.zeros(len(tets), dtype=np.int32)
 
         # Multi-region conformal meshing via occ.fragment in isolated child process
@@ -714,6 +939,7 @@ def _mesh_regions_tet4(
         proc_m = subprocess.run(
             [
                 sys.executable,
+                "-P",
                 str(Path(__file__).resolve()),
                 "--gmsh-worker-multi",
                 str(spec_json),
@@ -1304,6 +1530,7 @@ def bake_solid_superelement(
         regions=regions,
         mesh_size_mm=spec.mesh_size_mm,
         fea_surface_max_triangles=spec.fea_surface_max_triangles,
+        snap_coords_mm=(spec.port0.vp_coord_mm, spec.port1.vp_coord_mm),
     )
     pts_m = pts_mm * 1e-3
 
@@ -1656,9 +1883,22 @@ def _gmsh_worker_stl_main(stl_path: Path, out_npz: Path, mesh_size_mm: float) ->
         h = max(0.25, float(mesh_size_mm))
         gmsh.option.setNumber("Mesh.CharacteristicLengthMin", max(0.25, 0.35 * h))
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", h * 1.15)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 10)  # HXT
+        gmsh.option.setNumber("Mesh.Algorithm3D", 10)  # HXT (fast)
         gmsh.option.setNumber("Mesh.Optimize", 1)
-        gmsh.model.mesh.generate(3)
+        try:
+            gmsh.model.mesh.generate(3)
+        except Exception:
+            # Robust Delaunay fallback for intricate SLM fillets where HXT rejects thin edges
+            gmsh.model.mesh.clear()
+            gmsh.merge(str(stl_path))
+            gmsh.model.mesh.createTopology()
+            surfaces = gmsh.model.getEntities(2)
+            loop = gmsh.model.geo.addSurfaceLoop([e[1] for e in surfaces])
+            gmsh.model.geo.addVolume([loop])
+            gmsh.model.geo.synchronize()
+            gmsh.option.setNumber("Mesh.Algorithm3D", 1)  # Delaunay
+            gmsh.option.setNumber("Mesh.Optimize", 1)
+            gmsh.model.mesh.generate(3)
         points_mm, tets, _ = _gmsh_extract_tet4_arrays(gmsh)
         np.savez(out_npz, points_mm=points_mm, tets=tets)
     finally:

@@ -55,17 +55,88 @@ DEFAULT_CAD_DIR = Path(
 
 # Authentic PBR material palette
 COLOR_SATIN_TI = "#b8c2ce"
-COLOR_CHUBE_TI = "#757c86"
+COLOR_CHUBE_TI = "#6f7782"
 COLOR_DARK_TI = "#8e99a8"
 COLOR_CNC_AL = "#dfe6ef"
+COLOR_SLM_AL = "#cfd8e3"
 COLOR_COPPER = "#d97742"
 COLOR_NICKEL_CU = "#cdc6ba"
 COLOR_BRASS_NOZZLE = "#eab308"
 COLOR_DARK_SOCK = "#232a36"
 COLOR_TI_SHIELD = "#64748b"
 COLOR_STAINLESS = "#d8e0ea"
+COLOR_SCREW_SOCKET = "#374151"
+COLOR_HEATER_LEAD = "#c2410c"
+COLOR_THERM_LEAD = "#e2e8f0"
 COLOR_CERAMIC = "#e5e7eb"
 COLOR_PCB_DARK = "#1e293b"
+
+
+def _resolve_cad_file(cad_dir: Path, *candidates: str) -> Path:
+    """Resolve the first existing STEP path under ``cad_dir`` or ``cad_sources/``."""
+    search_roots = [cad_dir, Path("cad_sources"), DEFAULT_CAD_DIR]
+    for root in search_roots:
+        for rel in candidates:
+            p = root / rel
+            if p.is_file():
+                return p
+    raise FileNotFoundError(
+        f"None of {candidates} found under {[str(r) for r in search_roots]}"
+    )
+
+
+def _find_child_by_substr(parent: Any, *substrings: str) -> Any:
+    """Find first child whose label contains any of ``substrings`` (case-insensitive)."""
+    lows = [s.lower() for s in substrings]
+    for ch in getattr(parent, "children", []):
+        lbl = (getattr(ch, "label", "") or "").lower()
+        if any(s in lbl for s in lows):
+            return ch
+    raise KeyError(f"No child matching {substrings} in {getattr(parent, 'label', parent)}")
+
+
+def _make_flush_torx_screw(
+    origin_mm: tuple[float, float, float],
+    outward_dir: tuple[float, float, float],
+    head_diam_mm: float = 5.2,
+    head_height_mm: float = 1.4,
+    shank_diam_mm: float = 3.0,
+    shank_len_mm: float = 2.6,
+) -> Any:
+    """Build a crisp, flush-seated M3 countersunk flat-head Torx screw (no QEM-mangled spikes).
+
+    ``origin_mm`` is the outer center of the flat screw face; ``outward_dir`` points outward
+    from the mounting surface. The conical head extends inward along ``-outward_dir``.
+    """
+    d = np.asarray(outward_dir, dtype=float)
+    d /= max(float(np.linalg.norm(d)), 1e-12)
+    ref = np.array([1.0, 0.0, 0.0]) if abs(d[2]) > 0.95 else np.array([0.0, 0.0, 1.0])
+    x_dir = np.cross(ref, d)
+    x_dir /= np.linalg.norm(x_dir)
+    o = np.asarray(origin_mm, dtype=float)
+
+    # Slight 0.20 mm cylindrical rim + 90-deg countersunk taper + short shank inward
+    rim_h = 0.22
+    r_head = 0.5 * head_diam_mm
+    r_shank = 0.5 * shank_diam_mm
+    p_rim = b3d.Plane(origin=tuple(o - rim_h * d), x_dir=tuple(x_dir), z_dir=tuple(d))
+    rim = b3d.Solid.make_cylinder(r_head, rim_h, plane=p_rim)
+
+    cone_h = max(head_height_mm - rim_h, 0.6)
+    p_cone = b3d.Plane(origin=tuple(o - (rim_h + cone_h) * d), x_dir=tuple(x_dir), z_dir=tuple(d))
+    cone = b3d.Solid.make_cone(r_shank, r_head, cone_h, plane=p_cone)
+
+    p_shank = b3d.Plane(
+        origin=tuple(o - (rim_h + cone_h + shank_len_mm) * d),
+        x_dir=tuple(x_dir),
+        z_dir=tuple(d),
+    )
+    shank = b3d.Solid.make_cylinder(r_shank, shank_len_mm, plane=p_shank)
+
+    # Clean T10 hex/Torx recess pocket in the top face for authentic visual detail
+    p_sock = b3d.Plane(origin=tuple(o - 0.85 * d), x_dir=tuple(x_dir), z_dir=tuple(d))
+    socket = b3d.Solid.make_cylinder(1.32, 1.10, plane=p_sock)
+    return rim.fuse(cone, shank).cut(socket).clean()
 
 
 def _bake_or_refresh_visuals(
@@ -194,7 +265,7 @@ def _make_m3_pin(
 
 
 # ---------------------------------------------------------------------------
-# 1. Chube Compact
+# 1. Chube Compact (Official SolidWorks STEP Geometry)
 # ---------------------------------------------------------------------------
 
 
@@ -203,136 +274,178 @@ def bake_chube_compact(
     assets_root: Path | None = None,
     visuals_only: bool = False,
 ) -> BakedAssetResult:
-    """Bake Luke's Lab Chube Compact (hollow Ti monocoque FEA + official STEP visual.glb)."""
-    step_path = cad_dir / "chube_official/extracted/chube_compact.step"
-    asm = b3d.import_step(str(step_path))
-    solids = asm.solids()
-
-    regions: list[MaterialRegion] = []
-    if not visuals_only:
-        # True hollow Ti-6Al-4V monocoque structural shell (Ø22.23 mm OD x 0.89 mm wall, 47.2 mm OAL)
-        ro = 11.115
-        ri = 10.225  # 0.89 mm wall
-        body_h = 41.68
-
-        outer_tube = b3d.Solid.make_cylinder(ro, body_h, plane=b3d.Plane(origin=(0.0, 0.0, -body_h)))
-        inner_bore = b3d.Solid.make_cylinder(ri, body_h - 6.8, plane=b3d.Plane(origin=(0.0, 0.0, -body_h + 3.6)))
-        shell = outer_tube.cut(inner_bore)
-
-        # Central filament/heatbreak bore (Ø5.5 mm) in top flange & bottom nozzle bore (Ø6.0 mm)
-        top_bore = b3d.Solid.make_cylinder(2.75, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -5.0)))
-        bot_bore = b3d.Solid.make_cylinder(3.0, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -body_h - 2.0)))
-        shell = shell.cut(top_bore, bot_bore)
-
-        # 4x M3 Dragon PCD Ø16 mm mounting holes in top flange (45, 135, 225, 315 deg)
-        m3_holes = [
-            b3d.Solid.make_cylinder(
-                1.45,
-                8.0,
-                plane=b3d.Plane(
-                    origin=(8.0 * math.cos(math.radians(a)), 8.0 * math.sin(math.radians(a)), -5.5)
-                ),
-            )
-            for a in (45.0, 135.0, 225.0, 315.0)
-        ]
-        shell = shell.cut(*m3_holes)
-
-        # 4 cooling cutout windows in upper cold section (z in [-22.5, -7.5]) along 45/135/225/315 deg
-        win_solids = []
-        for a in (45.0, 135.0, 225.0, 315.0):
-            ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
-            pln = b3d.Plane(origin=(10.0 * ca, 10.0 * sa, -15.0), x_dir=(ca, sa, 0.0), z_dir=(0.0, 0.0, 1.0))
-            box = b3d.Solid.make_box(8.0, 9.0, 14.5, plane=pln).translate((-4.0 * ca + 4.5 * sa, -4.0 * sa - 4.5 * ca, -7.25))
-            win_solids.append(box)
-        shell = shell.cut(*win_solids)
-
-        # Lower heater/wire access slot
-        wire_slot = b3d.Solid.make_box(12.0, 14.0, 10.0, plane=b3d.Plane(origin=(-6.0, -14.0, -34.0)))
-        shell = shell.cut(wire_slot)
-
-        # Internal Chalice Ti heatbreak connecting top flange to melt core
-        chalice = b3d.Solid.make_cylinder(
-            1.75, 11.5, plane=b3d.Plane(origin=(0.0, 0.0, -14.0))
-        ).cut(b3d.Solid.make_cylinder(1.0, 14.0, plane=b3d.Plane(origin=(0.0, 0.0, -15.0))))
-        ti_shell = shell.fuse(chalice).clean()
-
-        # Internal Copper C110 melt core (33 mm meltzone, seated inside bottom collar)
-        melt_upper = b3d.Solid.make_cylinder(4.8, 25.5, plane=b3d.Plane(origin=(0.0, 0.0, -38.5)))
-        melt_lower = b3d.Solid.make_cylinder(7.4, 16.5, plane=b3d.Plane(origin=(0.0, 0.0, -40.0)))
-        copper_core = melt_upper.fuse(melt_lower).cut(
-            b3d.Solid.make_cylinder(1.0, 32.0, plane=b3d.Plane(origin=(0.0, 0.0, -41.0)))
-        ).clean()
-
-        nozzle = _make_v6_nozzle_solid(tip_z_mm=-47.20, total_len_mm=12.5)
-
-        regions = _non_overlapping_regions(
-            [
-                (nozzle, "copper_c110", "v6_nozzle", COLOR_BRASS_NOZZLE, 0.90, 0.25),
-                (ti_shell, "titanium_grade5", "ti_monocoque_shell", COLOR_SATIN_TI, 0.85, 0.32),
-                (copper_core, "copper_c110", "copper_melt_core", COLOR_COPPER, 0.88, 0.28),
-            ]
-        )
-
-    # Photo-accurate Chube Compact visual assembly (gunmetal Ti shell w/ 4 round cooling windows,
-    # 2-fin bright CNC Al heatsink, Chalice Ti break, nickel-plated Cu melt core + official STEP sock/nozzle/screws)
-    vis_ro, vis_ri, vis_h = 11.115, 10.225, 41.68
-    vis_shell = b3d.Solid.make_cylinder(vis_ro, vis_h, plane=b3d.Plane(origin=(0.0, 0.0, -vis_h))).cut(
-        b3d.Solid.make_cylinder(vis_ri, vis_h + 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -vis_h - 1.0)))
+    """Bake Luke's Lab Chube Compact (exact Ø22.23 mm Ti monocoque cutouts + official STEP parts)."""
+    step_path = _resolve_cad_file(
+        cad_dir,
+        "chube_compact_integration.step",
+        "chube_official/extracted/chube_compact.step",
     )
-    # 4 crisp round cooling windows at 0/90/180/270 deg in upper heatsink zone (z = -12.5 mm)
-    comp_wins = []
-    for a in (0.0, 90.0, 180.0, 270.0):
-        ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
-        pln = b3d.Plane(origin=(0.0, 0.0, -12.5), z_dir=(ca, sa, 0.0))
-        comp_wins.append(b3d.Solid.make_cylinder(5.2, 16.0, plane=pln))
-    vis_shell = vis_shell.cut(*comp_wins).clean()
+    asm = b3d.import_step(str(step_path))
 
-    # Bright CNC aluminum 2-fin upper heatsink w/ 4x M3 Dragon PCD Ø16 mm top face
+    # Extract official STEP parts by label (robust across Onshape & SolidWorks exports)
+    step_nozzle = _find_child_by_substr(asm, "nozzle")
+    compact_sub = _find_child_by_substr(asm, "chube_compact_integration_cad")
+    step_sock = _find_child_by_substr(compact_sub, "sock")
+    step_chalice = _find_child_by_substr(compact_sub, "chalice")
+
+    # Exact Ø22.23 mm OD x 0.89 mm wall Ti-6Al-4V monocoque outer shell (41.68 mm bare, 47.20 mm OAL)
+    ro = 11.115
+    ri = 10.225
+    body_h = 41.68
+
+    outer_tube = b3d.Solid.make_cylinder(ro, body_h, plane=b3d.Plane(origin=(0.0, 0.0, -body_h)))
+    # Subtle stepped top flange register matching official STEP (z = 0..-1.30 mm)
+    top_step_ring = b3d.Solid.make_cylinder(ro + 0.5, 1.30, plane=b3d.Plane(origin=(0.0, 0.0, -1.30))).cut(
+        b3d.Solid.make_cylinder(ro - 0.18, 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -1.60)))
+    )
+    inner_bore = b3d.Solid.make_cylinder(ri, body_h + 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -body_h - 1.0)))
+    ti_tube_open = outer_tube.cut(inner_bore, top_step_ring)
+
+    # Exact 4x Ø12.50 mm circular cooling cutouts at z = -12.90 mm along 45/135/225/315 deg
+    # (extracted directly from faces 54, 56, 58, 60 of Chube_Compact_integration_assembly.step —
+    # staggered 45 deg cleanly away from the 4 upper radial screws at 0/90/180/270 deg!)
+    cooling_cuts = []
+    for a in (45.0, 135.0, 225.0, 315.0):
+        ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+        pln = b3d.Plane(origin=(0.0, 0.0, -12.90), z_dir=(ca, sa, 0.0))
+        cooling_cuts.append(b3d.Solid.make_cylinder(6.25, 16.0, plane=pln))
+
+    # Exact horizontal 6 mm heater & 3 mm thermistor bores through shell at z = -27.50 mm
+    heater_cut = b3d.Solid.make_cylinder(
+        3.15, 28.0, plane=b3d.Plane(origin=(-5.00, -14.0, -27.50), z_dir=(0.0, 1.0, 0.0))
+    )
+    therm_cut = b3d.Solid.make_cylinder(
+        1.65, 28.0, plane=b3d.Plane(origin=(5.70, -14.0, -27.50), z_dir=(0.0, 1.0, 0.0))
+    )
+    ti_tube_vis = ti_tube_open.cut(*cooling_cuts, heater_cut, therm_cut).clean()
+
+    # Exact 4x M3 Dragon PCD Ø16 mm top mounting holes (45/135/225/315 deg, depth 7.50 mm)
     comp_m3 = [
         b3d.Solid.make_cylinder(
-            1.45,
-            6.0,
+            1.48,
+            8.0,
             plane=b3d.Plane(
-                origin=(8.0 * math.cos(math.radians(a)), 8.0 * math.sin(math.radians(a)), -5.0)
+                origin=(8.0 * math.cos(math.radians(a)), 8.0 * math.sin(math.radians(a)), -7.5)
             ),
         )
         for a in (45.0, 135.0, 225.0, 315.0)
     ]
-    comp_hs_top = b3d.Solid.make_cylinder(vis_ri - 0.05, 3.6, plane=b3d.Plane(origin=(0.0, 0.0, -3.6)))
-    comp_hs_core = b3d.Solid.make_cylinder(5.0, 18.5, plane=b3d.Plane(origin=(0.0, 0.0, -18.5)))
-    comp_fin1 = b3d.Solid.make_cylinder(vis_ri - 0.1, 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -9.8)))
-    comp_fin2 = b3d.Solid.make_cylinder(vis_ri - 0.1, 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -15.2)))
+
+    # Bright CNC aluminum 3-fin upper heatsink (z = 0..-20.0 mm) visible through the 4x Ø12.50 mm cutouts
+    comp_hs_top = b3d.Solid.make_cylinder(ri - 0.03, 4.2, plane=b3d.Plane(origin=(0.0, 0.0, -4.2)))
+    comp_hs_core = b3d.Solid.make_cylinder(4.8, 19.6, plane=b3d.Plane(origin=(0.0, 0.0, -19.6)))
+    comp_fin1 = b3d.Solid.make_cylinder(ri - 0.06, 1.8, plane=b3d.Plane(origin=(0.0, 0.0, -8.8)))
+    comp_fin2 = b3d.Solid.make_cylinder(ri - 0.06, 1.8, plane=b3d.Plane(origin=(0.0, 0.0, -13.6)))
+    comp_fin3 = b3d.Solid.make_cylinder(ri - 0.06, 1.8, plane=b3d.Plane(origin=(0.0, 0.0, -18.4)))
     comp_heatsink = (
-        comp_hs_top.fuse(comp_hs_core, comp_fin1, comp_fin2)
-        .cut(b3d.Solid.make_cylinder(2.75, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -20.0))), *comp_m3)
+        comp_hs_top.fuse(comp_hs_core, comp_fin1, comp_fin2, comp_fin3)
+        .cut(b3d.Solid.make_cylinder(2.75, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -20.5))), *comp_m3)
         .clean()
     )
-    comp_chalice = b3d.Solid.make_cylinder(2.4, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -23.0))).cut(
-        b3d.Solid.make_cylinder(1.0, 10.0, plane=b3d.Plane(origin=(0.0, 0.0, -24.0)))
-    )
-    comp_melt = b3d.Solid.make_cylinder(7.6, 17.5, plane=b3d.Plane(origin=(0.0, 0.0, -39.5))).cut(
-        b3d.Solid.make_cylinder(1.0, 20.0, plane=b3d.Plane(origin=(0.0, 0.0, -40.5)))
+
+    # Chalice Ti heatbreak throat connecting top Chalice cup to 33 mm copper melt core
+    comp_chalice_throat = (
+        b3d.Solid.make_cylinder(2.2, 18.5, plane=b3d.Plane(origin=(0.0, 0.0, -22.0)))
+        .cut(b3d.Solid.make_cylinder(1.0, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -23.0))))
+        .clean()
     )
 
-    visual_parts = [
-        VisualPart(vis_shell, "chube_body", COLOR_CHUBE_TI, metallic=0.84, roughness=0.32),
-        VisualPart(comp_heatsink, "compact_heatsink_fins", COLOR_CNC_AL, metallic=0.88, roughness=0.22),
-        VisualPart(comp_chalice, "chalice_heatbreak", COLOR_DARK_TI, metallic=0.86, roughness=0.28),
-        VisualPart(comp_melt, "nickel_melt_core", COLOR_NICKEL_CU, metallic=0.88, roughness=0.24),
-        VisualPart(solids[0], "throat_bushing", COLOR_DARK_TI, metallic=0.85, roughness=0.32),
-        VisualPart(solids[1], "silicone_sock", COLOR_DARK_SOCK, metallic=0.05, roughness=0.85),
-        VisualPart(solids[3], "v6_nozzle", COLOR_BRASS_NOZZLE, metallic=0.92, roughness=0.22),
-        VisualPart(solids[4], "thermistor_cartridge", COLOR_STAINLESS, metallic=0.88, roughness=0.26),
-        VisualPart(solids[5], "heater_cartridge", COLOR_COPPER, metallic=0.88, roughness=0.24),
+    # Electroless-nickel-plated copper 33 mm melt core (z = -21.0..-41.60 mm) w/ horizontal cartridge bores
+    comp_melt_upper = b3d.Solid.make_cylinder(5.2, 10.0, plane=b3d.Plane(origin=(0.0, 0.0, -31.0)))
+    comp_melt_lower = b3d.Solid.make_cylinder(ri - 0.12, 19.2, plane=b3d.Plane(origin=(0.0, 0.0, -41.55)))
+    comp_melt = (
+        comp_melt_upper.fuse(comp_melt_lower)
+        .cut(
+            b3d.Solid.make_cylinder(1.0, 24.0, plane=b3d.Plane(origin=(0.0, 0.0, -42.5))),
+            heater_cut,
+            therm_cut,
+        )
+        .clean()
+    )
+
+    regions: list[MaterialRegion] = []
+    if not visuals_only:
+        # Conformal multi-material Tet4 FEA built directly from the exact cutout Ti shell + Al heatsink + Cu core
+        fea_ti_shell = (
+            ti_tube_vis.fuse(
+                b3d.Solid.make_cylinder(ro, 3.6, plane=b3d.Plane(origin=(0.0, 0.0, -3.6))).cut(
+                    b3d.Solid.make_cylinder(2.75, 5.0, plane=b3d.Plane(origin=(0.0, 0.0, -4.5))),
+                    *comp_m3,
+                ),
+                b3d.Solid.make_cylinder(ro, 3.4, plane=b3d.Plane(origin=(0.0, 0.0, -body_h))).cut(
+                    b3d.Solid.make_cylinder(3.0, 5.0, plane=b3d.Plane(origin=(0.0, 0.0, -body_h - 1.0)))
+                ),
+                comp_chalice_throat,
+            ).clean()
+        )
+        # 2x lower M3 lateral pins coupling Ti tube to copper melt core at z = -36.88 mm
+        pin_x = _make_m3_pin((-ro + 0.3, 0.0, -36.88), (ro - 0.3, 0.0, -36.88), radius_mm=1.55)
+        fea_copper = comp_melt.fuse(pin_x).clean()
+        fea_nozzle = _make_v6_nozzle_solid(tip_z_mm=-47.20, total_len_mm=12.5)
+
+        regions = _non_overlapping_regions(
+            [
+                (fea_nozzle, "copper_c110", "v6_nozzle", COLOR_BRASS_NOZZLE, 0.90, 0.25),
+                (fea_ti_shell, "titanium_grade5", "ti_monocoque_shell", COLOR_CHUBE_TI, 0.85, 0.32),
+                (comp_heatsink, "aluminum_6061_t6", "compact_heatsink", COLOR_CNC_AL, 0.88, 0.22),
+                (fea_copper, "copper_c110", "copper_melt_core", COLOR_NICKEL_CU, 0.88, 0.24),
+            ]
+        )
+
+    # Stainless 6x16 mm horizontal heater + 3x15 mm thermistor + tidy short insulated lead stubs
+    vis_heater_cart = b3d.Solid.make_cylinder(
+        2.95, 16.0, plane=b3d.Plane(origin=(-5.00, -10.2, -27.50), z_dir=(0.0, 1.0, 0.0))
+    )
+    vis_heater_leads = b3d.Solid.make_cylinder(
+        0.95, 4.5, plane=b3d.Plane(origin=(-5.95, -14.2, -27.50), z_dir=(0.0, 1.0, 0.0))
+    ).fuse(
+        b3d.Solid.make_cylinder(
+            0.95, 4.5, plane=b3d.Plane(origin=(-4.05, -14.2, -27.50), z_dir=(0.0, 1.0, 0.0))
+        )
+    )
+    vis_therm_cart = b3d.Solid.make_cylinder(
+        1.48, 15.0, plane=b3d.Plane(origin=(5.70, -9.8, -27.50), z_dir=(0.0, 1.0, 0.0))
+    )
+    vis_therm_leads = b3d.Solid.make_cylinder(
+        0.60, 4.2, plane=b3d.Plane(origin=(5.25, -13.6, -27.50), z_dir=(0.0, 1.0, 0.0))
+    ).fuse(
+        b3d.Solid.make_cylinder(
+            0.60, 4.2, plane=b3d.Plane(origin=(6.15, -13.6, -27.50), z_dir=(0.0, 1.0, 0.0))
+        )
+    )
+
+    # Flush-seated M3 countersunk Torx screws (4 upper radial @ z=-5.0, 2 bottom vertical @ z=-41.68)
+    screw_specs = [
+        ((ro + 0.16, 0.0, -5.00), (1.0, 0.0, 0.0)),
+        ((-ro - 0.16, 0.0, -5.00), (-1.0, 0.0, 0.0)),
+        ((0.0, ro + 0.16, -5.00), (0.0, 1.0, 0.0)),
+        ((0.0, -ro - 0.16, -5.00), (0.0, -1.0, 0.0)),
+        ((7.50, 0.0, -body_h - 0.16), (0.0, 0.0, -1.0)),
+        ((-7.50, 0.0, -body_h - 0.16), (0.0, 0.0, -1.0)),
     ]
-    for i, sc in enumerate(solids[6:]):
+
+    visual_parts: list[VisualPart] = [
+        VisualPart(ti_tube_vis, "chube_body", COLOR_CHUBE_TI, metallic=0.84, roughness=0.32),
+        VisualPart(comp_heatsink, "compact_heatsink_fins", COLOR_CNC_AL, metallic=0.88, roughness=0.22),
+        VisualPart(step_chalice, "chalice_top_cup", COLOR_DARK_TI, metallic=0.86, roughness=0.28),
+        VisualPart(comp_chalice_throat, "chalice_heatbreak", COLOR_DARK_TI, metallic=0.86, roughness=0.28),
+        VisualPart(comp_melt, "nickel_melt_core", COLOR_NICKEL_CU, metallic=0.88, roughness=0.24),
+        VisualPart(step_sock, "silicone_sock", COLOR_DARK_SOCK, metallic=0.05, roughness=0.85),
+        VisualPart(step_nozzle, "v6_nozzle", COLOR_BRASS_NOZZLE, metallic=0.92, roughness=0.22),
+        VisualPart(vis_heater_cart, "heater_cartridge", COLOR_STAINLESS, metallic=0.88, roughness=0.24),
+        VisualPart(vis_heater_leads, "heater_leads", COLOR_HEATER_LEAD, metallic=0.10, roughness=0.72),
+        VisualPart(vis_therm_cart, "thermistor_cartridge", COLOR_STAINLESS, metallic=0.88, roughness=0.24),
+        VisualPart(vis_therm_leads, "thermistor_leads", COLOR_THERM_LEAD, metallic=0.10, roughness=0.72),
+    ]
+    for i, (orig, nrm) in enumerate(screw_specs):
+        sc = _make_flush_torx_screw(orig, nrm, head_diam_mm=4.8, head_height_mm=1.3)
         visual_parts.append(VisualPart(sc, f"torx_screw_{i}", COLOR_STAINLESS, metallic=0.92, roughness=0.24))
 
     spec = BakedAssetSpec(
         category="hotends",
         asset_id="chube_compact",
         name="Luke's Lab Chube Compact (80W Ti Shell)",
-        source_cad="chube_compact.step",
+        source_cad="Chube_Compact_integration_assembly.step",
         source_url="https://www.chubehotends.com/",
         reference_material_id="titanium_grade5",
         cad_trust_pct=86,
@@ -354,6 +467,7 @@ def bake_chube_compact(
             "wall_thickness_mm": 0.89,
             "mount_pcd_mm": 16.0,
             "meltzone_length_mm": 33.0,
+            "cutouts": "4x Ø12.50 mm @ z=-12.90 mm (45/135/225/315 deg)",
         },
         visual_max_triangles=24000,
     )
@@ -363,7 +477,7 @@ def bake_chube_compact(
 
 
 # ---------------------------------------------------------------------------
-# 2 & 3. Chube Air & Chube Conduction (Rev A)
+# 2 & 3. Chube Air & Chube Conduction (Official Rev A STEP Geometry)
 # ---------------------------------------------------------------------------
 
 
@@ -372,276 +486,274 @@ def _build_chube_reva_geometry(
     variant: str,
     visuals_only: bool = False,
 ) -> tuple[list[MaterialRegion], list[VisualPart]]:
-    """Build watertight Rev A structural shell (Air vs Conduction) + official STEP hardware visuals."""
-    step_path = cad_dir / "chube_official/extracted/CHUBE_INTEGRATION_REVA.step"
+    """Build exact Rev A structural shell (Air vs Conduction) + photo-accurate STEP hardware visuals."""
+    step_path = _resolve_cad_file(
+        cad_dir,
+        "chube_integration_reva.step",
+        "chube_official/extracted/CHUBE_INTEGRATION_REVA.step",
+    )
     asm = b3d.import_step(str(step_path))
 
     # Align official STEP origin: axis center (-0.2634, -33.7764), top face z=282.2752 -> (0,0,0)
     shift = (0.2634, 33.7764, -282.2752)
 
-    common = [c for c in asm.children if c.label == "Common_Features"][0]
-    step_outer_shell = [c for c in common.children if c.label == "Outer_Shell"][0].translate(shift)
-    step_nozzle = [c for c in common.children if "Nozzle" in c.label][0].translate(shift)
-    step_shield = [c for c in common.children if "Sheild" in c.label or "Shield" in c.label][0].translate(shift)
-    step_fasteners = [c for c in common.children if c.label == "Fasteners"][0].translate(shift)
-
-    is_air = variant == "air"
-    regions: list[MaterialRegion] = []
-
-    if not visuals_only:
-        ro = 12.70  # Ø25.4 mm OD
-        ri = 11.80  # Ø23.6 mm ID (0.90 mm wall)
-        body_h = 60.00  # bare shell length (66.0 mm OAL w/ 6 mm V6 nozzle)
-
-        outer = b3d.Solid.make_cylinder(ro, body_h, plane=b3d.Plane(origin=(0.0, 0.0, -body_h)))
-        # Air has 3.2 mm top flange; Conduction has 8.0 mm thick solid top conduction heatsink ("8mm BOTTOM OF HEATSINK")
-        top_flange_t = 3.2 if is_air else 8.0
-        bot_collar_t = 4.2
-        cavity = b3d.Solid.make_cylinder(
-            ri,
-            body_h - top_flange_t - bot_collar_t,
-            plane=b3d.Plane(origin=(0.0, 0.0, -body_h + bot_collar_t)),
-        )
-        shell = outer.cut(cavity)
-
-        # Top center Chalice bore (Ø7.0 mm) & bottom nozzle clearance bore (Ø6.4 mm)
-        top_bore = b3d.Solid.make_cylinder(3.5, top_flange_t + 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -top_flange_t - 1.0)))
-        bot_bore = b3d.Solid.make_cylinder(3.2, bot_collar_t + 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -body_h - 1.0)))
-        shell = shell.cut(top_bore, bot_bore)
-
-        # 6x M3 mounting holes on Ø18.0 mm PCD (R = 9.0 mm)
-        m3_holes = [
-            b3d.Solid.make_cylinder(
-                1.5,
-                top_flange_t + 2.0,
-                plane=b3d.Plane(
-                    origin=(9.0 * math.cos(math.radians(a)), 9.0 * math.sin(math.radians(a)), -top_flange_t - 1.0)
-                ),
-            )
-            for a in (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
-        ]
-        shell = shell.cut(*m3_holes)
-
-        if is_air:
-            air_wins = []
-            for a in (30.0, 150.0, 210.0, 330.0):
-                ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
-                pln = b3d.Plane(
-                    origin=(10.5 * ca, 10.5 * sa, -14.75),
-                    x_dir=(ca, sa, 0.0),
-                    z_dir=(0.0, 0.0, 1.0),
-                )
-                box = b3d.Solid.make_box(8.0, 8.5, 13.0, plane=pln).translate(
-                    (-4.0 * ca + 4.25 * sa, -4.0 * sa - 4.25 * ca, -6.5)
-                )
-                air_wins.append(box)
-            wire_cut = b3d.Solid.make_box(9.0, 12.0, 12.0, plane=b3d.Plane(origin=(-4.5, -14.5, -54.0)))
-            shell = shell.cut(*air_wins, wire_cut)
-
-            baffle = b3d.Solid.make_cylinder(
-                ri + 0.1, 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -22.5))
-            ).cut(b3d.Solid.make_cylinder(4.8, 4.0, plane=b3d.Plane(origin=(0.0, 0.0, -23.5))))
-            shell = shell.fuse(baffle)
-
-            chalice = b3d.Solid.make_cylinder(
-                1.75, 15.0, plane=b3d.Plane(origin=(0.0, 0.0, -18.2))
-            ).cut(b3d.Solid.make_cylinder(1.0, 18.0, plane=b3d.Plane(origin=(0.0, 0.0, -19.5))))
-            ti_shell = shell.fuse(chalice).clean()
-
-            melt_top = b3d.Solid.make_cylinder(4.5, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -40.0)))
-            melt_bot = b3d.Solid.make_cylinder(7.4, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -60.0)))
-            heater_bore = b3d.Solid.make_cylinder(3.0, 22.0, plane=b3d.Plane(origin=(-4.6, 0.0, -60.5)))
-            therm_bore = b3d.Solid.make_cylinder(1.5, 16.0, plane=b3d.Plane(origin=(4.6, 0.0, -60.5)))
-            pin1 = _make_m3_pin((-12.6, 0.0, -52.0), (12.6, 0.0, -52.0), radius_mm=1.6)
-            pin2 = _make_m3_pin((0.0, -12.6, -52.0), (0.0, 12.6, -52.0), radius_mm=1.6)
-            copper_core = (
-                melt_top.fuse(melt_bot, pin1, pin2)
-                .cut(
-                    b3d.Solid.make_cylinder(1.0, 46.0, plane=b3d.Plane(origin=(0.0, 0.0, -61.0))),
-                    heater_bore,
-                    therm_bore,
-                )
-                .clean()
-            )
-        else:
-            wire_cut = b3d.Solid.make_box(7.0, 10.0, 10.0, plane=b3d.Plane(origin=(-3.5, -14.5, -54.0)))
-            shell = shell.cut(wire_cut)
-
-            chalice = b3d.Solid.make_cylinder(
-                1.8, 8.5, plane=b3d.Plane(origin=(0.0, 0.0, -12.0))
-            ).cut(b3d.Solid.make_cylinder(1.0, 12.0, plane=b3d.Plane(origin=(0.0, 0.0, -13.5))))
-            ti_shell = shell.fuse(chalice).clean()
-
-            melt_top = b3d.Solid.make_cylinder(4.8, 26.0, plane=b3d.Plane(origin=(0.0, 0.0, -34.0)))
-            melt_bot = b3d.Solid.make_cylinder(7.3, 28.0, plane=b3d.Plane(origin=(0.0, 0.0, -60.0)))
-            heater_bore = b3d.Solid.make_cylinder(3.0, 48.0, plane=b3d.Plane(origin=(-4.6, 0.0, -60.5)))
-            therm_bore = b3d.Solid.make_cylinder(1.5, 16.0, plane=b3d.Plane(origin=(4.6, 0.0, -60.5)))
-            pin1 = _make_m3_pin((-12.6, 0.0, -52.0), (12.6, 0.0, -52.0), radius_mm=1.6)
-            pin2 = _make_m3_pin((0.0, -12.6, -52.0), (0.0, 12.6, -52.0), radius_mm=1.6)
-            copper_core = (
-                melt_top.fuse(melt_bot, pin1, pin2)
-                .cut(
-                    b3d.Solid.make_cylinder(1.0, 56.0, plane=b3d.Plane(origin=(0.0, 0.0, -61.0))),
-                    heater_bore,
-                    therm_bore,
-                )
-                .clean()
-            )
-
-        nozzle = _make_v6_nozzle_solid(tip_z_mm=-66.00, total_len_mm=12.5)
-        regions = _non_overlapping_regions(
-            [
-                (nozzle, "copper_c110", "v6_nozzle", COLOR_BRASS_NOZZLE, 0.90, 0.25),
-                (ti_shell, "titanium_grade5", "ti_monocoque_shell", COLOR_SATIN_TI, 0.85, 0.32),
-                (copper_core, "copper_c110", "copper_melt_core", COLOR_COPPER, 0.88, 0.28),
-            ]
-        )
-
-    # Photo-accurate real Chube visual.glb matching official Luke's Lab hardware photos & Rev A dimensions:
-    # Thick-walled (0.90 mm) dark gunmetal-titanium tube w/ iconic circular/oval side cutouts,
-    # bright CNC aluminum 3-fin heatsink (Air) or solid 8 mm conduction block (Conduction),
-    # electroless-nickel-plated copper melt core + side heater clamp boss, Chalice Ti heatbreak,
-    # official curved brushed stainless heat shield (SM000092), V6 nozzle, and 9x T10 Torx screws.
-    v_ro, v_ri, v_h = 12.70, 11.80, 60.00
-    vis_tube = b3d.Solid.make_cylinder(v_ro, v_h, plane=b3d.Plane(origin=(0.0, 0.0, -v_h))).cut(
-        b3d.Solid.make_cylinder(v_ri, v_h + 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -v_h - 1.0)))
+    common = _find_child_by_substr(asm, "common_features")
+    step_nozzle = _find_child_by_substr(common, "nozzle").translate(shift)
+    step_shield_raw = _find_child_by_substr(common, "sheild", "shield").translate(shift)
+    # Offset curved stainless heat shield +0.12 mm radially outward from R=12.70 mm Ti tube to prevent Z-fighting
+    shield_center_z = -53.93
+    step_shield = (
+        step_shield_raw.translate((0.0, 0.0, -shield_center_z))
+        .scale(12.82 / 12.70)
+        .translate((0.0, 0.0, shield_center_z))
     )
 
-    def _radial_oval_cut(angle_deg: float, z_center: float, width_mm: float, height_mm: float) -> Any:
+    is_air = variant == "air"
+
+    # Exact official Luke's Lab Rev A Ø25.40 x 0.90 mm Titanium monocoque tube (60.00 mm bare)
+    ro = 12.70
+    ri = 11.80
+    body_h = 60.00
+
+    base_tube = b3d.Solid.make_cylinder(ro, body_h, plane=b3d.Plane(origin=(0.0, 0.0, -body_h))).cut(
+        b3d.Solid.make_cylinder(ri, body_h + 2.0, plane=b3d.Plane(origin=(0.0, 0.0, -body_h - 1.0)))
+    )
+
+    # Exact official Outer_Shell cutouts measured from CHUBE_INTEGRATION_REVA.step:
+    # - 3 upper Ø19.0 mm circular cutouts at z = -12.75 mm, angles 90 / -30 / -150 deg
+    # - 3 lower Ø19.0 mm circular cutouts at z = -32.75 mm, angles 30 / 150 / -90 deg
+    # - 2 Ø1.90 mm alignment pin holes at z = -51.00 mm, angles +90 / -90 deg
+    def _radial_hole(angle_deg: float, z_center: float, radius_mm: float) -> Any:
         ca, sa = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
-        r = 0.5 * width_mm
-        span = max(0.0, 0.5 * height_mm - r)
-        p_top = b3d.Plane(origin=(0.0, 0.0, z_center + span), z_dir=(ca, sa, 0.0))
-        p_bot = b3d.Plane(origin=(0.0, 0.0, z_center - span), z_dir=(ca, sa, 0.0))
-        c1 = b3d.Solid.make_cylinder(r, 18.0, plane=p_top)
-        if span <= 0.1:
-            return c1
-        c2 = b3d.Solid.make_cylinder(r, 18.0, plane=p_bot)
-        pln_mid = b3d.Plane(origin=(0.0, 0.0, z_center), x_dir=(ca, sa, 0.0), z_dir=(0.0, 0.0, 1.0))
-        mid_box = b3d.Solid.make_box(18.0, width_mm, 2.0 * span, plane=pln_mid).translate(
-            (0.0 + r * sa, 0.0 - r * ca, -span)
-        )
-        return c1.fuse(c2, mid_box).clean()
+        pln = b3d.Plane(origin=(0.0, 0.0, z_center), z_dir=(ca, sa, 0.0))
+        return b3d.Solid.make_cylinder(radius_mm, 18.0, plane=pln)
 
-    # Middle 3 large oval cutouts at 60/180/300 deg (rotated 60 deg from upper cooling windows, matching official photos)
-    mid_cuts = [
-        _radial_oval_cut(a, -33.0 if is_air else -34.5, width_mm=15.0, height_mm=17.5)
-        for a in (60.0, 180.0, 300.0)
-    ]
-    if is_air:
-        # Upper 3 large circular airflow cutouts at 0/120/240 deg exposing the 3-fin CNC Al heatsink
-        top_cuts = [
-            _radial_oval_cut(a, -12.5, width_mm=14.4, height_mm=15.2)
-            for a in (0.0, 120.0, 240.0)
-        ]
-        vis_tube = vis_tube.cut(*top_cuts, *mid_cuts).clean()
-    else:
-        # Conduction: solid upper titanium wrap over the 8 mm CNC Al conduction block, 3 large middle oval windows
-        vis_tube = vis_tube.cut(*mid_cuts).clean()
+    upper_cuts = [_radial_hole(a, -12.75, 9.50) for a in (90.0, -30.0, -150.0)]
+    lower_cuts = [_radial_hole(a, -32.75, 9.50) for a in (30.0, 150.0, -90.0)]
+    pin_holes = [_radial_hole(a, -51.00, 0.95) for a in (90.0, -90.0)]
+    ti_tube_vis = base_tube.cut(*upper_cuts, *lower_cuts, *pin_holes).clean()
 
+    # Exact 6x M3 Ø18.0 mm PCD top mounting holes (0/60/120/180/240/300 deg)
     m3_top_holes = [
         b3d.Solid.make_cylinder(
             1.5,
-            8.5,
+            9.0,
             plane=b3d.Plane(
-                origin=(9.0 * math.cos(math.radians(a)), 9.0 * math.sin(math.radians(a)), -8.25)
+                origin=(9.0 * math.cos(math.radians(a)), 9.0 * math.sin(math.radians(a)), -8.5)
             ),
         )
         for a in (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
     ]
 
-    visual_parts: list[VisualPart] = [
-        VisualPart(vis_tube, "ti_monocoque_shell", COLOR_CHUBE_TI, metallic=0.84, roughness=0.34),
-        VisualPart(step_nozzle, "e3d_v6_nozzle", COLOR_BRASS_NOZZLE, metallic=0.92, roughness=0.22),
-        VisualPart(step_shield, "heat_shield", COLOR_STAINLESS, metallic=0.90, roughness=0.22),
-    ]
+    # Helper for authentic Chube racetrack/stadium lower meltblock (13.6 mm wide in X, spanning ±Y
+    # between the heater & thermistor bores to meet the lower M3 side fasteners at z=-46/-56 mm;
+    # keeps exact ~69 g Air / ~74 g Conduction bare mass instead of over-filling the Ø23.6 bore!)
+    def _make_racetrack_block(z_bot: float, height: float, half_x: float = 6.6, r_clip: float = 11.74) -> Any:
+        cyl = b3d.Solid.make_cylinder(r_clip, height, plane=b3d.Plane(origin=(0.0, 0.0, z_bot)))
+        slab = b3d.Solid.make_box(
+            2.0 * half_x, 2.0 * (r_clip + 1.0), height,
+            plane=b3d.Plane(origin=(-half_x, -(r_clip + 1.0), z_bot)),
+        )
+        return cyl.intersect(slab).solids()[0].clean()
 
     if is_air:
-        # Real 3-fin bright machined CNC aluminum heatsink (z = 0..-22.5 mm) visible through the 3 circular windows
-        hs_top = b3d.Solid.make_cylinder(v_ri - 0.05, 4.0, plane=b3d.Plane(origin=(0.0, 0.0, -4.0)))
-        hs_core = b3d.Solid.make_cylinder(5.8, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -22.2)))
-        hs_fin1 = b3d.Solid.make_cylinder(v_ri - 0.1, 2.2, plane=b3d.Plane(origin=(0.0, 0.0, -9.2)))
-        hs_fin2 = b3d.Solid.make_cylinder(v_ri - 0.1, 2.2, plane=b3d.Plane(origin=(0.0, 0.0, -14.6)))
-        hs_fin3 = b3d.Solid.make_cylinder(v_ri - 0.1, 2.4, plane=b3d.Plane(origin=(0.0, 0.0, -20.2)))
-        vis_air_heatsink = (
-            hs_top.fuse(hs_core, hs_fin1, hs_fin2, hs_fin3)
+        # Chube Air: Bright machined CNC aluminum 4-fin heatsink (z = 0..-22.50 mm, exact STEP Air_Heatsink_Lower_Surface)
+        hs_top = b3d.Solid.make_cylinder(ri - 0.02, 3.8, plane=b3d.Plane(origin=(0.0, 0.0, -3.8)))
+        hs_core = b3d.Solid.make_cylinder(5.0, 22.4, plane=b3d.Plane(origin=(0.0, 0.0, -22.5)))
+        hs_fins = [
+            b3d.Solid.make_cylinder(ri - 0.05, 1.8, plane=b3d.Plane(origin=(0.0, 0.0, z_f)))
+            for z_f in (-8.2, -12.9, -17.6, -22.5)
+        ]
+        heatsink_solid = (
+            hs_top.fuse(hs_core, *hs_fins)
             .cut(b3d.Solid.make_cylinder(2.75, 24.0, plane=b3d.Plane(origin=(0.0, 0.0, -23.0))), *m3_top_holes)
             .clean()
         )
-        vis_chalice = (
-            b3d.Solid.make_cylinder(2.75, 4.0, plane=b3d.Plane(origin=(0.0, 0.0, -18.5)))
-            .fuse(b3d.Solid.make_cylinder(2.1, 9.0, plane=b3d.Plane(origin=(0.0, 0.0, -27.5))))
-            .cut(b3d.Solid.make_cylinder(1.0, 18.0, plane=b3d.Plane(origin=(0.0, 0.0, -28.5))))
+
+        # Chalice - Air Ti heatbreak (exact STEP z = -11.30..-14.80 cup + throat to -18.50)
+        chalice_solid = (
+            b3d.Solid.make_cylinder(2.75, 3.5, plane=b3d.Plane(origin=(0.0, 0.0, -14.80)))
+            .fuse(b3d.Solid.make_cylinder(1.85, 7.5, plane=b3d.Plane(origin=(0.0, 0.0, -21.50))))
+            .cut(b3d.Solid.make_cylinder(1.0, 14.0, plane=b3d.Plane(origin=(0.0, 0.0, -22.50))))
             .clean()
         )
-        # Electroless-nickel-plated copper melt core + side heater clamp boss visible inside middle oval windows
-        melt_stem = b3d.Solid.make_cylinder(4.8, 20.0, plane=b3d.Plane(origin=(0.0, 0.0, -42.0)))
-        melt_lower = b3d.Solid.make_cylinder(7.8, 22.5, plane=b3d.Plane(origin=(0.0, 0.0, -59.5)))
-        heater_boss = b3d.Solid.make_box(7.8, 10.5, 21.0, plane=b3d.Plane(origin=(-3.9, -11.3, -58.5)))
-        vis_melt = (
-            melt_stem.fuse(melt_lower, heater_boss)
-            .cut(b3d.Solid.make_cylinder(1.0, 44.0, plane=b3d.Plane(origin=(0.0, 0.0, -60.5))))
-            .clean()
-        )
-        vis_heater = b3d.Solid.make_cylinder(2.95, 21.0, plane=b3d.Plane(origin=(0.0, -7.2, -59.5)))
-        vis_therm = b3d.Solid.make_cylinder(1.48, 16.0, plane=b3d.Plane(origin=(0.0, 6.8, -59.5)))
-        visual_parts.extend(
-            [
-                VisualPart(vis_air_heatsink, "air_heatsink_fins", COLOR_CNC_AL, metallic=0.88, roughness=0.22),
-                VisualPart(vis_chalice, "chalice_heatbreak", COLOR_DARK_TI, metallic=0.86, roughness=0.28),
-                VisualPart(vis_melt, "copper_melt_core", COLOR_NICKEL_CU, metallic=0.88, roughness=0.24),
-                VisualPart(vis_heater, "heater_cartridge", COLOR_STAINLESS, metallic=0.88, roughness=0.26),
-                VisualPart(vis_therm, "thermistor_cartridge", COLOR_DARK_TI, metallic=0.85, roughness=0.30),
-            ]
-        )
-    else:
-        # Conduction: solid CNC aluminum upper heatsink (0..-8 mm w/ 6x M3 holes), Chalice hex,
-        # and full 52 mm electroless-nickel-plated copper melt core + tall Supervolcano heater clamp boss
-        vis_cond_heatsink = (
-            b3d.Solid.make_cylinder(v_ri - 0.05, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -8.0)))
+
+        # Electroless-nickel-plated copper 42 mm melt core (z = -18.0..-59.8 mm, Ø10.4 mm upper melt column
+        # + slim racetrack lower heater/thermistor block aligned along ±Y -> exact ~69 g bare mass!)
+        melt_upper = b3d.Solid.make_cylinder(5.0, 21.5, plane=b3d.Plane(origin=(0.0, 0.0, -39.5)))
+        melt_lower = _make_racetrack_block(-59.8, 20.8, half_x=4.7, r_clip=ri - 0.06)
+        heater_bore = b3d.Solid.make_cylinder(3.05, 22.0, plane=b3d.Plane(origin=(0.0, -6.80, -60.5)))
+        therm_bore = b3d.Solid.make_cylinder(1.55, 17.0, plane=b3d.Plane(origin=(0.0, 6.80, -60.5)))
+        melt_core = (
+            melt_upper.fuse(melt_lower)
             .cut(
-                b3d.Solid.make_cylinder(3.5, 9.0, plane=b3d.Plane(origin=(0.0, 0.0, -8.5))),
+                b3d.Solid.make_cylinder(1.0, 44.0, plane=b3d.Plane(origin=(0.0, 0.0, -61.0))),
+                heater_bore,
+                therm_bore,
+            )
+            .clean()
+        )
+        vis_heater = b3d.Solid.make_cylinder(2.95, 21.0, plane=b3d.Plane(origin=(0.0, -6.80, -60.0)))
+        vis_therm = b3d.Solid.make_cylinder(1.48, 16.0, plane=b3d.Plane(origin=(0.0, 6.80, -60.0)))
+        hs_label = "air_heatsink_fins"
+        heater_label = "heater_cartridge"
+    else:
+        # Chube Conduction: Solid 8.0 mm CNC aluminum conduction heatsink (z = 0..-8.0 mm, exact STEP Lower_Surface_of_Heatsink)
+        heatsink_solid = (
+            b3d.Solid.make_cylinder(ri - 0.02, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -8.0)))
+            .cut(
+                b3d.Solid.make_cylinder(2.75, 9.5, plane=b3d.Plane(origin=(0.0, 0.0, -8.8))),
                 *m3_top_holes,
             )
             .clean()
         )
+
+        # Chalice - Conduction upper cup (0..-3.70) + Chalice_Hex_Conduction (-7.45..-9.88)
         hex_pts = [
             (3.18 * math.cos(math.radians(60.0 * k)), 3.18 * math.sin(math.radians(60.0 * k)), -9.88)
             for k in range(6)
         ]
         hex_wire = b3d.Wire.make_polygon([b3d.Vector(*p) for p in hex_pts] + [b3d.Vector(*hex_pts[0])])
         chalice_hex = b3d.Solid.extrude(b3d.Face(hex_wire), (0.0, 0.0, 2.43))
-        vis_chalice = (
-            b3d.Solid.make_cylinder(2.75, 3.65, plane=b3d.Plane(origin=(0.0, 0.0, -3.70)))
+        chalice_solid = (
+            b3d.Solid.make_cylinder(2.75, 3.70, plane=b3d.Plane(origin=(0.0, 0.0, -3.70)))
             .fuse(
-                b3d.Solid.make_cylinder(1.95, 4.0, plane=b3d.Plane(origin=(0.0, 0.0, -7.5))),
+                b3d.Solid.make_cylinder(2.00, 7.0, plane=b3d.Plane(origin=(0.0, 0.0, -10.50))),
                 chalice_hex,
             )
-            .cut(b3d.Solid.make_cylinder(1.0, 11.0, plane=b3d.Plane(origin=(0.0, 0.0, -10.5))))
+            .cut(b3d.Solid.make_cylinder(1.0, 12.0, plane=b3d.Plane(origin=(0.0, 0.0, -11.20))))
             .clean()
         )
-        melt_stem = b3d.Solid.make_cylinder(5.5, 28.0, plane=b3d.Plane(origin=(0.0, 0.0, -36.5)))
-        melt_lower = b3d.Solid.make_cylinder(7.8, 26.0, plane=b3d.Plane(origin=(0.0, 0.0, -59.5)))
-        heater_boss = b3d.Solid.make_box(7.8, 10.5, 45.0, plane=b3d.Plane(origin=(-3.9, -11.3, -58.5)))
-        vis_melt = (
-            melt_stem.fuse(melt_lower, heater_boss)
-            .cut(b3d.Solid.make_cylinder(1.0, 56.0, plane=b3d.Plane(origin=(0.0, 0.0, -60.5))))
+
+        # Massive electroless-nickel-plated copper 52 mm melt core (z = -9.88..-59.8 mm) + Supervolcano heater lobe (~74 g bare!)
+        melt_upper = b3d.Solid.make_cylinder(5.0, 30.0, plane=b3d.Plane(origin=(0.0, 0.0, -39.9)))
+        heater_lobe = b3d.Solid.make_cylinder(3.95, 46.5, plane=b3d.Plane(origin=(0.0, 6.80, -59.8)))
+        melt_lower = _make_racetrack_block(-59.8, 20.8, half_x=4.7, r_clip=ri - 0.06)
+        heater_bore = b3d.Solid.make_cylinder(3.05, 47.0, plane=b3d.Plane(origin=(0.0, 6.80, -60.5)))
+        therm_bore = b3d.Solid.make_cylinder(1.55, 17.0, plane=b3d.Plane(origin=(0.0, -6.80, -60.5)))
+        melt_core = (
+            melt_upper.fuse(heater_lobe, melt_lower)
+            .cut(
+                b3d.Solid.make_cylinder(1.0, 52.0, plane=b3d.Plane(origin=(0.0, 0.0, -61.0))),
+                heater_bore,
+                therm_bore,
+            )
             .clean()
         )
-        vis_heater = b3d.Solid.make_cylinder(2.95, 46.5, plane=b3d.Plane(origin=(0.0, -7.2, -59.5)))
-        vis_therm = b3d.Solid.make_cylinder(1.48, 16.0, plane=b3d.Plane(origin=(0.0, 6.8, -59.5)))
-        visual_parts.extend(
+        vis_heater = b3d.Solid.make_cylinder(2.95, 46.5, plane=b3d.Plane(origin=(0.0, 6.80, -60.0)))
+        vis_therm = b3d.Solid.make_cylinder(1.48, 16.0, plane=b3d.Plane(origin=(0.0, -6.80, -60.0)))
+        hs_label = "conduction_heatsink"
+        heater_label = "supervolcano_heater"
+
+    regions: list[MaterialRegion] = []
+    if not visuals_only:
+        # Conformal multi-material Tet4 FEA using the EXACT official Rev A cutout shell!
+        top_pins = [
+            _make_m3_pin(
+                (ro * math.cos(math.radians(a)), ro * math.sin(math.radians(a)), -5.0),
+                (7.0 * math.cos(math.radians(a)), 7.0 * math.sin(math.radians(a)), -5.0),
+                radius_mm=1.60,
+            )
+            for a in (30.0, 150.0, -90.0)
+        ]
+        bot_pins = [
+            _make_m3_pin((0.0, -ro, z_p), (0.0, ro, z_p), radius_mm=1.60)
+            for z_p in (-46.0, -56.0)
+        ]
+        bot_collar = b3d.Solid.make_cylinder(ro, 2.6, plane=b3d.Plane(origin=(0.0, 0.0, -body_h))).cut(
+            b3d.Solid.make_cylinder(3.1, 4.0, plane=b3d.Plane(origin=(0.0, 0.0, -body_h - 0.5)))
+        )
+
+        if is_air:
+            fea_hs = (
+                b3d.Solid.make_cylinder(ri + 0.15, 6.2, plane=b3d.Plane(origin=(0.0, 0.0, -6.2)))
+                .fuse(b3d.Solid.make_cylinder(4.8, 22.0, plane=b3d.Plane(origin=(0.0, 0.0, -22.2))))
+                .cut(
+                    b3d.Solid.make_cylinder(2.75, 24.0, plane=b3d.Plane(origin=(0.0, 0.0, -23.0))),
+                    *m3_top_holes,
+                )
+                .clean()
+            )
+            fea_melt = (
+                b3d.Solid.make_cylinder(5.0, 21.5, plane=b3d.Plane(origin=(0.0, 0.0, -39.5)))
+                .fuse(_make_racetrack_block(-59.5, 19.5, half_x=4.7, r_clip=ri + 0.15))
+                .cut(
+                    b3d.Solid.make_cylinder(1.0, 44.0, plane=b3d.Plane(origin=(0.0, 0.0, -61.0))),
+                    b3d.Solid.make_cylinder(3.0, 21.5, plane=b3d.Plane(origin=(0.0, -6.80, -60.2))),
+                    b3d.Solid.make_cylinder(1.5, 16.5, plane=b3d.Plane(origin=(0.0, 6.80, -60.2))),
+                )
+                .clean()
+            )
+            fea_ti_shell = ti_tube_vis.fuse(bot_collar, chalice_solid, *top_pins, *bot_pins).clean()
+        else:
+            fea_hs = (
+                b3d.Solid.make_cylinder(ri + 0.15, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -8.0)))
+                .cut(
+                    b3d.Solid.make_cylinder(2.75, 9.5, plane=b3d.Plane(origin=(0.0, 0.0, -8.8))),
+                    *m3_top_holes,
+                )
+                .clean()
+            )
+            fea_melt = (
+                b3d.Solid.make_cylinder(5.0, 30.0, plane=b3d.Plane(origin=(0.0, 0.0, -39.9)))
+                .fuse(
+                    b3d.Solid.make_cylinder(3.95, 46.5, plane=b3d.Plane(origin=(0.0, 6.80, -59.8))),
+                    _make_racetrack_block(-59.5, 19.5, half_x=4.7, r_clip=ri + 0.15),
+                )
+                .cut(
+                    b3d.Solid.make_cylinder(1.0, 52.0, plane=b3d.Plane(origin=(0.0, 0.0, -61.0))),
+                    b3d.Solid.make_cylinder(3.0, 46.8, plane=b3d.Plane(origin=(0.0, 6.80, -60.2))),
+                    b3d.Solid.make_cylinder(1.5, 16.5, plane=b3d.Plane(origin=(0.0, -6.80, -60.2))),
+                )
+                .clean()
+            )
+            cond_top_ring = b3d.Solid.make_cylinder(ro, 8.0, plane=b3d.Plane(origin=(0.0, 0.0, -8.0))).cut(
+                b3d.Solid.make_cylinder(ri, 9.0, plane=b3d.Plane(origin=(0.0, 0.0, -8.5)))
+            )
+            fea_ti_shell = ti_tube_vis.fuse(cond_top_ring, bot_collar, chalice_solid, *top_pins, *bot_pins).clean()
+
+        fea_nozzle = _make_v6_nozzle_solid(tip_z_mm=-66.00, total_len_mm=12.5)
+        regions = _non_overlapping_regions(
             [
-                VisualPart(vis_cond_heatsink, "conduction_heatsink", COLOR_CNC_AL, metallic=0.88, roughness=0.22),
-                VisualPart(vis_chalice, "chalice_heatbreak", COLOR_DARK_TI, metallic=0.86, roughness=0.28),
-                VisualPart(vis_melt, "copper_melt_core", COLOR_NICKEL_CU, metallic=0.88, roughness=0.24),
-                VisualPart(vis_heater, "supervolcano_heater", COLOR_STAINLESS, metallic=0.88, roughness=0.26),
-                VisualPart(vis_therm, "thermistor_cartridge", COLOR_DARK_TI, metallic=0.85, roughness=0.30),
+                (fea_nozzle, "copper_c110", "v6_nozzle", COLOR_BRASS_NOZZLE, 0.90, 0.25),
+                (fea_ti_shell, "titanium_grade5", "ti_monocoque_shell", COLOR_CHUBE_TI, 0.85, 0.32),
+                (fea_hs, "aluminum_6061_t6", hs_label, COLOR_CNC_AL, 0.88, 0.22),
+                (fea_melt, "copper_c110", "copper_melt_core", COLOR_NICKEL_CU, 0.88, 0.24),
             ]
         )
 
-    for i, f_solid in enumerate(step_fasteners.solids()):
-        visual_parts.append(VisualPart(f_solid, f"torx_screw_{i}", COLOR_STAINLESS, metallic=0.92, roughness=0.24))
+    # Flush-seated M3 T10 Torx countersunk screws at exact CHUBE_INTEGRATION_REVA.step positions:
+    # 3 upper radial @ z=-5.0 (30/150/-90 deg), 4 lower radial @ z=-46/-56 (±90 deg), 2 bottom @ z=-60 (0, ±6.80)
+    r_screw_top = ro + 0.16
+    r_screw_bot = ro + 0.36  # sits flush on outer face of 0.24 mm stainless heat shield!
+    screw_specs = [
+        (
+            (r_screw_top * math.cos(math.radians(a)), r_screw_top * math.sin(math.radians(a)), -5.00),
+            (math.cos(math.radians(a)), math.sin(math.radians(a)), 0.0),
+        )
+        for a in (30.0, 150.0, -90.0)
+    ] + [
+        ((0.0, r_screw_bot, -46.00), (0.0, 1.0, 0.0)),
+        ((0.0, -r_screw_bot, -46.00), (0.0, -1.0, 0.0)),
+        ((0.0, r_screw_bot, -56.00), (0.0, 1.0, 0.0)),
+        ((0.0, -r_screw_bot, -56.00), (0.0, -1.0, 0.0)),
+        ((0.0, 6.80, -60.76 - 0.16), (0.0, 0.0, -1.0)),
+        ((0.0, -6.80, -60.76 - 0.16), (0.0, 0.0, -1.0)),
+    ]
+
+    visual_parts: list[VisualPart] = [
+        VisualPart(ti_tube_vis, "ti_monocoque_shell", COLOR_CHUBE_TI, metallic=0.84, roughness=0.32),
+        VisualPart(heatsink_solid, hs_label, COLOR_CNC_AL, metallic=0.88, roughness=0.22),
+        VisualPart(chalice_solid, "chalice_heatbreak", COLOR_DARK_TI, metallic=0.86, roughness=0.28),
+        VisualPart(melt_core, "copper_melt_core", COLOR_NICKEL_CU, metallic=0.88, roughness=0.24),
+        VisualPart(vis_heater, heater_label, COLOR_STAINLESS, metallic=0.88, roughness=0.24),
+        VisualPart(vis_therm, "thermistor_cartridge", COLOR_DARK_TI, metallic=0.85, roughness=0.30),
+        VisualPart(step_nozzle, "e3d_v6_nozzle", COLOR_BRASS_NOZZLE, metallic=0.92, roughness=0.22),
+        VisualPart(step_shield, "heat_shield", COLOR_STAINLESS, metallic=0.90, roughness=0.22),
+    ]
+    for i, (orig, nrm) in enumerate(screw_specs):
+        sc = _make_flush_torx_screw(orig, nrm, head_diam_mm=5.2, head_height_mm=1.35)
+        visual_parts.append(VisualPart(sc, f"torx_screw_{i}", COLOR_STAINLESS, metallic=0.92, roughness=0.24))
 
     return regions, visual_parts
 
@@ -662,7 +774,7 @@ def bake_chube_air(
         cad_trust_pct=86,
         port0=PortDefinition(
             (0.0, 0.0, 0.0),
-            select_z_annulus(0.0, r_min_mm=6.2, r_max_mm=11.0, tol_mm=0.45),
+            select_z_annulus(0.0, r_min_mm=5.5, r_max_mm=12.75, tol_mm=0.45),
         ),
         port1=PortDefinition(
             (0.0, 0.0, -66.0),
@@ -706,7 +818,7 @@ def bake_chube_conduction(
         cad_trust_pct=86,
         port0=PortDefinition(
             (0.0, 0.0, 0.0),
-            select_z_annulus(0.0, r_min_mm=6.2, r_max_mm=11.0, tol_mm=0.45),
+            select_z_annulus(0.0, r_min_mm=5.5, r_max_mm=12.75, tol_mm=0.45),
         ),
         port1=PortDefinition(
             (0.0, 0.0, -66.0),
@@ -940,6 +1052,142 @@ def bake_microwaved_bowden(
         []
         if visuals_only
         else [MaterialRegion(mbtcfd, "titanium_grade5", "mbt_slm_chassis", fdm_anisotropic=False, color_hex=COLOR_SATIN_TI)]
+    )
+    return _bake_or_refresh_visuals(
+        spec,
+        regions,
+        visual_parts=visual_parts,
+        assets_root=assets_root,
+        visuals_only=visuals_only,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6B. Microwaved Bowden Toolhead — Chube Edition (SLM AlSi10Mg / Ti-6Al-4V)
+# ---------------------------------------------------------------------------
+
+
+def bake_microwaved_bowden_chube(
+    cad_dir: Path,
+    assets_root: Path | None = None,
+    visuals_only: bool = False,
+) -> BakedAssetResult:
+    """Bake Microwaved Bowden Toolhead — Chube V1 SLM chassis from MBT_Chube_V1.STEP.
+
+    Excludes MGN12H carriage / Monolith belt clamp (drawn by viewport) and excludes the
+    embedded Chube integration reference (viewport attaches the live selected Chube Air /
+    Conduction hotend flush at Port 1 ``[0.0, -12.76, +27.50]`` mm).
+    """
+    step_path = _resolve_cad_file(cad_dir, "mbt_chube_v1.step", "MBT_Chube_V1.STEP")
+    asm = b3d.import_step(str(step_path))
+
+    def _to_printsim(shape: Any) -> Any:
+        # CAD frame: +X right, +Y up, +Z front (carriage rear bolt face at z=7.24)
+        # PrintSim canonical frame: +X right, +Y back (-z_cad), +Z up (+y_cad), Port 0 at [0,0,0]
+        return shape.translate((0.0, 0.0, -7.24)).rotate(b3d.Axis.X, 90.0)
+
+    main_body_raw = _find_child_by_substr(asm, "main_body")
+    main_body = _to_printsim(main_body_raw)
+
+    def _port0_mgn12_bolts(coords_mm: np.ndarray) -> np.ndarray:
+        on_face = np.abs(coords_mm[:, 1]) <= 0.65
+        near_bolt = np.zeros(len(coords_mm), dtype=bool)
+        for bx in (-10.0, 10.0):
+            for bz in (-10.0, 10.0):
+                near_bolt |= np.hypot(coords_mm[:, 0] - bx, coords_mm[:, 2] - bz) <= 4.2
+        return on_face & near_bolt
+
+    # Exact 6x M3 Ø18.0 mm PCD Chube mounting face at Z = +27.50 mm, centered at (0.0, -12.76)
+    chube_bolt_xy = [
+        (9.0 * math.cos(math.radians(a)), -12.76 + 9.0 * math.sin(math.radians(a)))
+        for a in (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
+    ]
+
+    def _port1_chube_6bolts(coords_mm: np.ndarray) -> np.ndarray:
+        on_flange = np.abs(coords_mm[:, 2] - 27.50) <= 0.65
+        near_bolt = np.zeros(len(coords_mm), dtype=bool)
+        for bx, by in chube_bolt_xy:
+            near_bolt |= np.hypot(coords_mm[:, 0] - bx, coords_mm[:, 1] - by) <= 4.0
+        return on_flange & near_bolt
+
+    # Build authentic multi-part visual.glb excluding MGN12H carriage, Monolith belt clamp,
+    # embedded Chube integration reference, and Beacon's Optimal_Spacing keep-out block.
+    visual_parts: list[VisualPart] = [
+        VisualPart(main_body, "mbt_chube_slm_chassis", COLOR_SLM_AL, metallic=0.86, roughness=0.30),
+    ]
+
+    def _collect_beacon_parts(node: Any) -> None:
+        lbl = getattr(node, "label", "") or ""
+        low = lbl.lower()
+        if "optimal_spacing" in low:
+            return
+        children = getattr(node, "children", None) or []
+        if children:
+            for sub in children:
+                _collect_beacon_parts(sub)
+        elif node.solids():
+            t_node = _to_printsim(node)
+            if "pcb" in low:
+                visual_parts.append(VisualPart(t_node, "beacon_pcb", COLOR_PCB_DARK, metallic=0.18, roughness=0.55))
+            elif "electronics" in low:
+                visual_parts.append(VisualPart(t_node, "beacon_electronics", "#334155", metallic=0.30, roughness=0.50))
+            else:
+                visual_parts.append(VisualPart(t_node, f"beacon_{len(visual_parts)}", "#475569", metallic=0.25, roughness=0.50))
+
+    for ch in asm.children:
+        lbl = getattr(ch, "label", "") or ""
+        low = lbl.lower()
+        if (
+            "main_body" in low
+            or "chube_integration" in low
+            or "slm_monolith" in low
+            or "mgn12" in low
+        ):
+            continue
+        if "beacon" in low:
+            _collect_beacon_parts(ch)
+            continue
+        t_ch = _to_printsim(ch)
+        if "ecas" in low:
+            visual_parts.append(VisualPart(t_ch, "ecas_fitting", COLOR_COPPER, metallic=0.88, roughness=0.26))
+        elif "m3" in low or "screw" in low or "fhcs" in low or "button_head" in low:
+            visual_parts.append(VisualPart(t_ch, f"fastener_{len(visual_parts)}", COLOR_STAINLESS, metallic=0.92, roughness=0.24))
+
+    spec = BakedAssetSpec(
+        category="toolheads",
+        asset_id="microwaved_bowden_chube",
+        name="Microwaved Bowden Chube V1 (SLM AlSi10Mg / Ti)",
+        source_cad="MBT_Chube_V1.STEP",
+        source_url="https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+        reference_material_id="aluminum_6061_t6",
+        cad_trust_pct=86,
+        port0=PortDefinition((0.0, 0.0, 0.0), _port0_mgn12_bolts),
+        port1=PortDefinition((0.0, -12.76, 27.50), _port1_chube_6bolts),
+        n_internal_modes=8,
+        mesh_size_mm=1.8,
+        is_multi_material=False,  # Scales across Al 6061 / AlSi10Mg / Ti-6Al-4V / polymers!
+        is_fdm_anisotropic=False,
+        part_recipe={
+            "chassis_part": "Main_Body^Microwaved_Bowden_Toolhead_-_Chube",
+            "carriage_bolt_pattern": "4x M3 (20x20 mm MGN12H)",
+            "hotend_mount_interface": "Chube 6-bolt M3 Ø18 mm PCD conduction boss",
+            "port1_offset_mm": [0.0, -12.76, 27.50],
+        },
+        visual_max_triangles=24000,
+        fea_surface_max_triangles=60000,
+    )
+    regions = (
+        []
+        if visuals_only
+        else [
+            MaterialRegion(
+                main_body,
+                "aluminum_6061_t6",
+                "mbt_chube_slm_chassis",
+                fdm_anisotropic=False,
+                color_hex=COLOR_SLM_AL,
+            )
+        ]
     )
     return _bake_or_refresh_visuals(
         spec,
@@ -1364,6 +1612,10 @@ def main() -> None:
         ("tricorn_short", lambda: _bake_tricorn_variant(args.cad_dir, "short", args.out_dir, visuals_only=vo)),
         ("tricorn_long", lambda: _bake_tricorn_variant(args.cad_dir, "long", args.out_dir, visuals_only=vo)),
         ("microwaved_bowden", lambda: bake_microwaved_bowden(args.cad_dir, args.out_dir, visuals_only=vo)),
+        (
+            "microwaved_bowden_chube",
+            lambda: bake_microwaved_bowden_chube(args.cad_dir, args.out_dir, visuals_only=vo),
+        ),
         (
             "microwaved_bowden__tricorn_long",
             lambda: bake_microwaved_bowden_tricorn_long(args.cad_dir, args.out_dir, visuals_only=vo),

@@ -527,13 +527,13 @@ def _series_combine_superelement_kbb(
     return K_12_eff, K_11_eff, C_eff
 
 
-# Pre-Tet4-calibration catalog defaults so legacy YAMLs load unscaled CAD hotend superelements
-_LEGACY_PRE_FEA_HOTEND_STIFFNESS: dict[str, float] = {
-    "tricorn_long": 1100.0,
-    "tricorn_short": 1650.0,
-    "chube_air": 2600.0,
-    "chube_compact": 2200.0,
-    "chube_conduction": 3600.0,
+# Pre-exact-cutout catalog defaults so legacy YAMLs load unscaled CAD hotend superelements
+_LEGACY_PRE_FEA_HOTEND_STIFFNESS: dict[str, tuple[float, ...]] = {
+    "tricorn_long": (1100.0,),
+    "tricorn_short": (1650.0,),
+    "chube_air": (2600.0, 2250.0),
+    "chube_compact": (2200.0, 2600.0),
+    "chube_conduction": (3600.0, 5670.0),
 }
 
 
@@ -717,9 +717,9 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
         if cat_he is not None:
             cat_k = float(cat_he["structural_stiffness_n_per_mm"])
             he_k = float(he.structural_stiffness_n_per_mm)
-            legacy_k = _LEGACY_PRE_FEA_HOTEND_STIFFNESS.get(he_pid)
-            is_catalog_default = (cat_k > 0.0 and abs(he_k - cat_k) / cat_k <= 1e-4) or (
-                legacy_k is not None and abs(he_k - legacy_k) / legacy_k <= 1e-4
+            legacy_ks = _LEGACY_PRE_FEA_HOTEND_STIFFNESS.get(he_pid, ())
+            is_catalog_default = (cat_k > 0.0 and abs(he_k - cat_k) / cat_k <= 1e-4) or any(
+                abs(he_k - lk) / lk <= 1e-4 for lk in legacy_ks
             )
             if cat_k > 0.0 and not is_catalog_default:
                 he_stiff_mult = max(he_k / cat_k, 1e-3)

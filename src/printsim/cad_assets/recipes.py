@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 import time
 from typing import Any, Literal
@@ -941,6 +942,54 @@ def parse_onshape_reference(
     return raw, str(workspace_id).strip(), str(element_id).strip()
 
 
+def _resolve_onshape_credentials() -> tuple[str, str]:
+    """Resolve Onshape API key pair from env vars or local ``~/.onshape-mcp`` / macOS Keychain."""
+    access_key = os.environ.get("ONSHAPE_ACCESS_KEY", "").strip()
+    secret_key = os.environ.get("ONSHAPE_SECRET_KEY", "").strip()
+    if access_key and secret_key:
+        return access_key, secret_key
+
+    try:
+        cred_path = Path.home() / ".onshape-mcp" / "credentials.json"
+        if cred_path.exists():
+            data = json.loads(cred_path.read_text(encoding="utf-8"))
+            ak = str(data.get("access_key") or data.get("accessKey") or "").strip()
+            sk = str(data.get("secret_key") or data.get("secretKey") or "").strip()
+            if ak and sk and "..." not in sk:
+                return ak, sk
+    except Exception:
+        pass
+
+    # Fallback: read API key pair stored by onshape-mcp in macOS Keychain
+    if sys.platform == "darwin":
+        import subprocess
+
+        for service in ("onshape-mcp", "com.onshape.mcp"):
+            try:
+                proc = subprocess.run(
+                    ["security", "find-generic-password", "-s", service, "-w"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    raw = proc.stdout.strip()
+                    if raw.startswith("{"):
+                        data = json.loads(raw)
+                        ak = str(data.get("access_key") or data.get("accessKey") or "").strip()
+                        sk = str(data.get("secret_key") or data.get("secretKey") or "").strip()
+                        if ak and sk:
+                            return ak, sk
+            except Exception:
+                continue
+
+    raise RuntimeError(
+        "Missing Onshape API credentials: set ONSHAPE_ACCESS_KEY and ONSHAPE_SECRET_KEY "
+        "environment variables, sign in via `onshape_login`, or export the STEP via `onshape_export`."
+    )
+
+
 def fetch_onshape_step(
     url_or_doc: str,
     out_path: str | Path,
@@ -948,27 +997,53 @@ def fetch_onshape_step(
     workspace_id: str | None = None,
     element_id: str | None = None,
     configuration: str | None = None,
+    kind: Literal["partstudios", "assemblies"] = "partstudios",
 ) -> Path:
-    """Download a STEP export directly from Onshape Part Studios REST API using Basic Auth."""
+    """Download a STEP export directly from Onshape REST API (Part Studio or Assembly)."""
     did, wid, eid = parse_onshape_reference(
         url_or_doc, workspace_id=workspace_id, element_id=element_id
     )
+    access_key, secret_key = _resolve_onshape_credentials()
 
-    access_key = os.environ.get("ONSHAPE_ACCESS_KEY", "").strip()
-    secret_key = os.environ.get("ONSHAPE_SECRET_KEY", "").strip()
-    if not access_key or not secret_key:
-        raise RuntimeError(
-            "Missing Onshape API credentials: set ONSHAPE_ACCESS_KEY and ONSHAPE_SECRET_KEY "
-            "environment variables, or export the STEP once via a single `onshape_export` call."
-        )
-
-    api_url = f"https://cad.onshape.com/api/v6/partstudios/d/{did}/w/{wid}/e/{eid}/step"
-    params = {"configuration": configuration} if configuration else None
-
-    with httpx.Client(follow_redirects=True, timeout=120.0) as client:
-        resp = client.get(api_url, params=params, auth=(access_key, secret_key))
-        resp.raise_for_status()
-        content = resp.content
+    with httpx.Client(follow_redirects=True, timeout=180.0) as client:
+        if kind == "assemblies":
+            trans_url = f"https://cad.onshape.com/api/v6/assemblies/d/{did}/w/{wid}/e/{eid}/translations"
+            payload: dict[str, Any] = {
+                "formatName": "STEP",
+                "storeInDocument": False,
+                "flattenAssemblies": False,
+            }
+            if configuration:
+                payload["configuration"] = configuration
+            resp = client.post(trans_url, json=payload, auth=(access_key, secret_key))
+            resp.raise_for_status()
+            job = resp.json()
+            tid = job["id"]
+            poll_url = f"https://cad.onshape.com/api/v6/translations/{tid}"
+            deadline = time.monotonic() + 180.0
+            while job.get("requestState") not in ("DONE", "FAILED"):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Onshape assembly STEP translation {tid} timed out")
+                time.sleep(1.5)
+                pr = client.get(poll_url, auth=(access_key, secret_key))
+                pr.raise_for_status()
+                job = pr.json()
+            if job.get("requestState") == "FAILED":
+                raise RuntimeError(f"Onshape assembly STEP translation failed: {job.get('failureReason')}")
+            ext_ids = job.get("resultExternalDataIds") or []
+            if not ext_ids:
+                raise RuntimeError(f"Onshape translation {tid} produced no external data IDs")
+            dl_url = f"https://cad.onshape.com/api/v6/documents/d/{did}/externaldata/{ext_ids[0]}"
+            dl = client.get(dl_url, auth=(access_key, secret_key))
+            dl.raise_for_status()
+            content = dl.content
+            api_url = dl_url
+        else:
+            api_url = f"https://cad.onshape.com/api/v6/partstudios/d/{did}/w/{wid}/e/{eid}/step"
+            params = {"configuration": configuration} if configuration else None
+            resp = client.get(api_url, params=params, auth=(access_key, secret_key))
+            resp.raise_for_status()
+            content = resp.content
 
     if not content:
         raise RuntimeError(f"Onshape returned empty STEP response from {api_url}")

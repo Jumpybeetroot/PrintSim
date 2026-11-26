@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "microwaved_bowden_chube",
+  "source_cad": "MBT_Chube_V1.STEP",
+  "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
+  "regions": [
+    {
+      "label": "mbt_chube_slm_chassis",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "chassis_part": "Main_Body^Microwaved_Bowden_Toolhead_-_Chube",
+  "carriage_bolt_pattern": "4x M3 (20x20 mm MGN12H)",
+  "hotend_mount_interface": "Chube 6-bolt M3 \u00d818 mm PCD conduction boss",
+  "port1_offset_mm": [
+    0.0,
+    -12.76,
+    27.5
+  ]
+}

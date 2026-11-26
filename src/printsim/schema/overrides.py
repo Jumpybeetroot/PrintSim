@@ -1584,9 +1584,10 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
     mot_sel = f"{_humanize_label(mot.name)} · {drive_label}"
     mot_vals = (
         f"T_hold = {mot.holding_torque_nm:.2f} N·m (eff. {mot.effective_holding_torque_nm:.2f} N·m), "
-        f"L = {mot.inductance_mh:.1f} mH, V = {mot.supply_voltage_v:.0f} V, "
-        f"I_run = {mot.run_current_a:.2f} A, "
-        f"k_EM = {mot.torsional_stiffness_nm_per_rad():.1f} N·m/rad"
+        f"R = {mot.phase_resistance_ohm:.2f} Ω, L = {mot.inductance_mh:.2f} mH, "
+        f"V = {mot.supply_voltage_v:.0f} V, I_run = {mot.run_current_a:.2f} A, "
+        f"k_EM = {mot.torsional_stiffness_nm_per_rad():.1f} N·m/rad, "
+        f"Class {mot.insulation_class} ({mot.max_winding_temp_c:.0f}°C)"
     )
 
     # 15. Toolhead Preset (Mass & CoG)
@@ -1797,22 +1798,19 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
         if isinstance(port_k_he, dict) and {"kx", "ky"}.issubset(port_k_he):
             he_k_scale = 1.0
             cat_he = _p.HOTEND_CATALOG.get(he_pid)
-            legacy_k_he = {
-                "tricorn_long": 1100.0,
-                "tricorn_short": 1650.0,
-                "chube_air": 2600.0,
-                "chube_compact": 2200.0,
-                "chube_conduction": 3600.0,
-            }.get(he_pid)
+            legacy_ks_he = {
+                "tricorn_long": (1100.0,),
+                "tricorn_short": (1650.0,),
+                "chube_air": (2600.0, 2250.0),
+                "chube_compact": (2200.0, 2600.0),
+                "chube_conduction": (3600.0, 5670.0),
+            }.get(he_pid, ())
             if cat_he is not None:
                 cat_k_he = float(cat_he["structural_stiffness_n_per_mm"])
                 he_k_val = float(he.structural_stiffness_n_per_mm)
                 is_def_he = (
                     cat_k_he > 0.0 and abs(he_k_val - cat_k_he) / cat_k_he <= 1e-4
-                ) or (
-                    legacy_k_he is not None
-                    and abs(he_k_val - legacy_k_he) / legacy_k_he <= 1e-4
-                )
+                ) or any(abs(he_k_val - lk) / lk <= 1e-4 for lk in legacy_ks_he)
                 if cat_k_he > 0.0 and not is_def_he:
                     he_k_scale = max(he_k_val / cat_k_he, 1e-3)
             kx_he = float(port_k_he["kx"]) * he_k_scale

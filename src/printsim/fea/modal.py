@@ -20,6 +20,10 @@ from printsim.fea.beam3d import (
     superelement_element_matrices,
     transformation_12x12,
 )
+from printsim.fea.components import (
+    belt_damping_ratio,
+    belt_flexural_rigidity_nm2,
+)
 from printsim.fea.klipper_shaper import (
     DEFAULT_SHAPER_DAMPING_RATIO,
     MAX_FREQ_HZ,
@@ -238,29 +242,103 @@ def _reflected_rotor_mass_kg(assembly: AssemblyModel) -> float:
     return m_rot_1
 
 
+def _solve_coupled_drive_2dof(
+    k_belt_n_m: float,
+    k_motor_raw_n_m: float,
+    k_bracket_n_m: float,
+    m_car_eff_kg: float,
+    m_rot_kg: float,
+) -> dict[str, float]:
+    """Exact closed-form 2-DOF eigenproblem for `ground --k_motor--> [m_rot] --(k_belt||series k_bkt)--> [m_car]`.
+
+    Replaces the 1-DOF Rayleigh rigid-body approximation (which underestimates drive frequency
+    by up to 11.5% on light AWD carriages where m_rot > m_car) with exact eigenvalues (w1, w2)
+    and exact mode-1 modal strain-energy compliance shares for belt, motor, and bracket.
+    """
+    kb = max(float(k_belt_n_m), 1.0)
+    km = max(float(k_motor_raw_n_m), 1.0)
+    kbkt = max(float(k_bracket_n_m), 1.0)
+    mc = max(float(m_car_eff_kg), 0.02)
+    mr = max(float(m_rot_kg), 0.0)
+    k_bb = 1.0 / (1.0 / kb + 1.0 / kbkt)
+
+    if mr <= 1e-12:
+        c_drv = 1.0 / kb + 1.0 / km + 1.0 / kbkt
+        w1_sq = 1.0 / (mc * c_drv)
+        return {
+            "w1_sq": w1_sq,
+            "w2_sq": 1e18,
+            "c_drive_n_inv": c_drv,
+            "k_drive_eff_n_m": 1.0 / c_drv,
+            "u_belt_frac": (1.0 / kb) / c_drv,
+            "u_motor_frac": (1.0 / km) / c_drv,
+            "u_bracket_frac": (1.0 / kbkt) / c_drv,
+            "mode2_car_part": 0.0,
+        }
+
+    # det([[km + k_bb - w^2*mr, -k_bb], [-k_bb, k_bb - w^2*mc]]) = 0
+    # => w^4 - b_q * w^2 + c_q = 0
+    b_q = (km + k_bb) / mr + k_bb / mc
+    c_q = (km * k_bb) / (mr * mc)
+    disc = math.sqrt(max(b_q * b_q - 4.0 * c_q, 0.0))
+    w1_sq = max(0.5 * (b_q - disc), 1e-6)
+    w2_sq = max(0.5 * (b_q + disc), w1_sq + 1.0)
+
+    c_drv = 1.0 / (mc * w1_sq)
+    # Mode-1 eigenvector normalized to carriage amplitude = 1: phi_1 = [alpha_1, 1]^T
+    alpha_1 = k_bb / max(km + k_bb - w1_sq * mr, 1e-9)
+    alpha_1 = max(0.0, min(1.0, alpha_1))
+    u_mot = 0.5 * km * (alpha_1**2)
+    u_bb = 0.5 * k_bb * ((1.0 - alpha_1) ** 2)
+    u_belt = u_bb * (k_bb / kb)
+    u_bkt = u_bb * (k_bb / kbkt)
+    u_tot = max(u_mot + u_belt + u_bkt, 1e-18)
+
+    # Mode-2 relative carriage acceleration-receptance weight vs mode-1 (for upper rotor-belt PSD bump)
+    # Force applied at carriage -> modal residue ratio R2/R1 = (m_gen_1 * w1^2) / (m_gen_2 * w2^2) * ...
+    # With phi_k = [alpha_k, 1]^T, m_gen_k = mr * alpha_k^2 + mc:
+    alpha_2 = k_bb / min(km + k_bb - w2_sq * mr, -1e-9)
+    m_gen_1 = mr * (alpha_1**2) + mc
+    m_gen_2 = mr * (alpha_2**2) + mc
+    # Static receptance residue ratio = (1 / (m_gen_2 * w2^2)) / (1 / (m_gen_1 * w1^2))
+    res_ratio = (m_gen_1 * w1_sq) / max(m_gen_2 * w2_sq, 1e-12)
+    mode2_part = math.sqrt(max(0.0, min(1.0, res_ratio)))
+
+    return {
+        "w1_sq": w1_sq,
+        "w2_sq": w2_sq,
+        "c_drive_n_inv": c_drv,
+        "k_drive_eff_n_m": 1.0 / c_drv,
+        "u_belt_frac": u_belt / u_tot,
+        "u_motor_frac": u_mot / u_tot,
+        "u_bracket_frac": u_bkt / u_tot,
+        "mode2_car_part": mode2_part,
+    }
+
+
 def _drive_axis_stiffness_n_per_m(
     assembly: AssemblyModel, axis: str
 ) -> tuple[float, float, float, float, float]:
-    """Return ``(k_belt, k_motor_eff, k_bracket, k_drive, m_moving_kg)`` in strict SI.
+    """Return ``(k_belt, k_motor_eff, k_bracket, k_drive, m_moving_eff_kg)`` in strict SI.
 
-    By Rayleigh's quotient on ``ground --(k_motor)--> [m_rot] --(k_belt, k_bracket)--> [m_car]``,
-    the motor magnetic spring accelerates ``m_car + m_rot``, so its carriage-normalized effective
-    stiffness is ``k_motor_eff = k_motor_axis * m_car / (m_car + m_rot)``.
+    Uses the exact 2-DOF `[m_rot, m_car + m_belt_eff]` coupled drive eigenproblem rather than
+    the 1-DOF Rayleigh approximation, and includes Rayleigh moving-belt inertia `(1/3)*mu*L`.
     """
-    k_belt, k_motor_axis, _ = compute_drive_stiffness_n_per_m(assembly, axis)
-    k_bracket = compute_bracket_stiffness_n_per_m(assembly)
+    details = compute_drive_stiffness_details_n_per_m(assembly, axis)
+    k_belt = float(details["k_belt_subsystem_n_m"])
+    k_motor_raw = float(details["k_motor_axis_n_m"])
+    k_bracket = float(details["k_bracket_n_m"])
     k_mult = _foc_motor_stiffness_multiplier(assembly)
     if k_mult != 1.0:
-        k_motor_axis = k_motor_axis * k_mult
-    mass = max(assembly.x_moving_mass_kg if axis == "X" else assembly.y_moving_mass_kg, 0.05)
+        k_motor_raw = k_motor_raw * k_mult
+    mass_base = max(assembly.x_moving_mass_kg if axis == "X" else assembly.y_moving_mass_kg, 0.05)
+    m_belt_eff = float(details.get("belt_moving_mass_kg", 0.0))
+    mass = mass_base + m_belt_eff
     m_rot = _reflected_rotor_mass_kg(assembly)
-    k_motor_eff = k_motor_axis * (mass / max(mass + m_rot, 1e-6))
-    k_drive = 1.0 / (
-        1.0 / max(k_belt, 1e-9)
-        + 1.0 / max(k_motor_eff, 1e-9)
-        + 1.0 / max(k_bracket, 1e-9)
-    )
-    return k_belt, k_motor_eff, k_bracket, k_drive, mass
+    sol = _solve_coupled_drive_2dof(k_belt, k_motor_raw, k_bracket, mass, m_rot)
+    # Expose rigid-belt rotor-adjusted motor stiffness for standalone motor_freq_hz readout
+    k_motor_eff = k_motor_raw * (mass / max(mass + m_rot, 1e-6))
+    return k_belt, k_motor_eff, k_bracket, float(sol["k_drive_eff_n_m"]), mass
 
 
 def _drive_axis_resonances_hz(assembly: AssemblyModel, axis: str) -> tuple[float, float, float, float]:
@@ -285,12 +363,21 @@ def _compute_compliance_shares(
     k_belt_n_m: float,
     k_motor_n_m: float,
     k_bracket_n_m: float,
+    c_drive_override: float | None = None,
+    drive_energy_fracs: tuple[float, float, float] | None = None,
 ) -> tuple[dict[str, float], str]:
-    """Exact series-spring compliance shares c_i / sum(c_j) on moving mass summing to 100.0% (B-01)."""
+    """Exact modal strain-energy compliance shares summing to 100.0% (B-01 + exact 2-DOF)."""
     c_frame = max(c_struct_m_per_n, 0.0)
-    c_belt = 1.0 / max(k_belt_n_m, 1.0)
-    c_motor = 1.0 / max(k_motor_n_m, 1.0)
-    c_bracket = 1.0 / max(k_bracket_n_m, 1.0)
+    if c_drive_override is not None and drive_energy_fracs is not None:
+        c_drv = max(float(c_drive_override), 1e-18)
+        fb, fm, fbkt = drive_energy_fracs
+        c_belt = c_drv * max(fb, 0.0)
+        c_motor = c_drv * max(fm, 0.0)
+        c_bracket = c_drv * max(fbkt, 0.0)
+    else:
+        c_belt = 1.0 / max(k_belt_n_m, 1.0)
+        c_motor = 1.0 / max(k_motor_n_m, 1.0)
+        c_bracket = 1.0 / max(k_bracket_n_m, 1.0)
     c_tot = max(c_frame + c_belt + c_motor + c_bracket, 1e-18)
     raw = {
         "frame": 100.0 * c_frame / c_tot,
@@ -326,26 +413,142 @@ def _recommend_shaper(
     psd_damping_ratio: float | None = None,
     assembly: AssemblyModel | None = None,
 ) -> tuple[InputShaperRecommendation, AxisShaperGraph]:
-    # B-01: Coupled series compliance on the same moving mass:
-    # c_total = c_struct + 1/k_drive, f_eff = 1 / (2*pi*sqrt(m_moving * c_total))
-    c_total = max(c_struct_m_per_n, 0.0) + 1.0 / max(k_drive_n_m, 1.0)
-    f_eff = 1.0 / (2.0 * math.pi * math.sqrt(max(m_moving_kg * c_total, 1e-15)))
-    shares_pct, primary_bn = _compute_compliance_shares(
-        c_struct_m_per_n, k_belt_n_m, k_motor_n_m, k_bracket_n_m
-    )
+    # Exact 2-DOF drive coupling + dynamic shaker slack-side unloading + strain-energy damping
+    c_struct = max(c_struct_m_per_n, 0.0)
+    k_belt_eff = max(float(k_belt_n_m), 1.0)
+    k_bracket_eff = max(float(k_bracket_n_m), 1.0)
+    m_eff = max(float(m_moving_kg), 0.05)
+    slack_margin_ratio = 1.0
+    extra_belt_modes: list[tuple[float, float]] = []
+
+    if assembly is not None:
+        spec = assembly.spec
+        belt = spec.gantry.belt
+        details = compute_drive_stiffness_details_n_per_m(assembly, axis)
+        k_motor_raw = float(details["k_motor_axis_n_m"]) * _foc_motor_stiffness_multiplier(assembly)
+        m_rot = _reflected_rotor_mass_kg(assembly)
+        sol = _solve_coupled_drive_2dof(k_belt_eff, k_motor_raw, k_bracket_eff, m_eff, m_rot)
+        c_drv = float(sol["c_drive_n_inv"])
+        f_eff_static = 1.0 / (2.0 * math.pi * math.sqrt(max(m_eff * (c_struct + c_drv), 1e-15)))
+
+        # Dynamic slack-side unloading during Klipper ADXL shaker sweep (accel_per_hz = 75 mm/s^2/Hz,
+        # effective sweep resonance envelope Q ~ 1.8). When slack tension approaches zero, bilinear
+        # spring unloading lowers cycle-averaged belt stiffness and broadens the PSD peak.
+        a_shaker_m_s2 = 0.075 * f_eff_static * 1.8
+        if spec.architecture == "corexy":
+            f_shaker_belt = 0.5 * m_eff * a_shaker_m_s2
+        elif spec.architecture == "delta":
+            from printsim.kinematics.solvers import _delta_center_j_norm
+
+            f_shaker_belt = (m_eff * a_shaker_m_s2) / max(_delta_center_j_norm(spec), 1.0)
+        else:
+            f_shaker_belt = m_eff * a_shaker_m_s2
+        slack_share = float(details.get("slack_load_share", 0.5))
+        dt_shaker = slack_share * f_shaker_belt
+        t0 = max(float(belt.pretension_n), 0.25)
+        slack_margin_ratio = (t0 - dt_shaker) / t0
+        if slack_margin_ratio < 0.45:
+            u_pen = max(0.0, min(1.0, (0.45 - slack_margin_ratio) / 0.85))
+            k_belt_eff = k_belt_eff * (1.0 - 0.42 * (u_pen**1.5))
+            sol = _solve_coupled_drive_2dof(k_belt_eff, k_motor_raw, k_bracket_eff, m_eff, m_rot)
+            c_drv = float(sol["c_drive_n_inv"])
+            belt_hz = math.sqrt(k_belt_eff / m_eff) / (2.0 * math.pi)
+            drive_hz = math.sqrt(float(sol["w1_sq"])) / (2.0 * math.pi)
+
+        c_total = c_struct + c_drv
+        f_eff = 1.0 / (2.0 * math.pi * math.sqrt(max(m_eff * c_total, 1e-15)))
+        shares_pct, primary_bn = _compute_compliance_shares(
+            c_struct,
+            k_belt_eff,
+            k_motor_n_m,
+            k_bracket_eff,
+            c_drive_override=c_drv,
+            drive_energy_fracs=(
+                float(sol["u_belt_frac"]),
+                float(sol["u_motor_frac"]),
+                float(sol["u_bracket_frac"]),
+            ),
+        )
+
+        # Upper 2-DOF rotor-belt antiphase mode if inside the shaper band with meaningful carriage weight
+        f2_hz = math.sqrt(float(sol["w2_sq"])) / (2.0 * math.pi)
+        m2_part = float(sol["mode2_car_part"])
+        if 10.0 <= f2_hz <= 215.0 and abs(f2_hz - f_eff) >= 3.0 and m2_part > 0.15:
+            extra_belt_modes.append((f2_hz, m2_part))
+
+        # Transverse free-span ("guitar string") belt whip & low-tension softening-shoulder coupling:
+        # 1) Geometric quadratic shortening couples the longest free span's transverse mode f_trans
+        #    into the longitudinal ADXL PSD (Beikmann-Perkins-Ulsoy 1996).
+        # 2) Below radial tooth-seating / slack-margin threshold (q0 < 2.2 N/mm or slack_margin < 0.45),
+        #    bilinear slack-side unloading + tooth unseating smears resonance downward (~0.82 * f_eff),
+        #    forcing Klipper off narrow ZV onto wider MZV / EI just like real under-tensioned ADXL plots.
+        l_free = max(float(details.get("longest_free_span_m", 0.35)), 0.10)
+        mu_belt = max(float(belt.linear_mass_kg_m), 1e-4)
+        ei_belt = belt_flexural_rigidity_nm2(belt, chamber_temp_c=spec.frame.chamber_temp_c)
+        f_trans = (1.0 / (2.0 * l_free)) * math.sqrt(t0 / mu_belt) * math.sqrt(
+            1.0 + (math.pi**2) * ei_belt / max(t0 * (l_free**2), 1e-9)
+        )
+        q0 = t0 / max(float(belt.width_mm), 1.0)
+        s_belt_frac = shares_pct["belt"] / 100.0
+        belt_weight = min(1.0, s_belt_frac / 0.35)
+        u_loose = max(0.0, min(1.0, (2.2 - q0) / 1.5))
+        u_slack = max(0.0, min(1.0, (0.45 - slack_margin_ratio) / 0.85))
+        whip_added = False
+        if (
+            12.0 <= f_trans <= 1.15 * f_eff
+            and abs(f_trans - f_eff) >= 3.0
+            and (q0 < 2.6 or slack_margin_ratio < 0.45)
+        ):
+            raw_whip = (0.30 + 0.85 * math.exp(-q0 / 1.4) + 0.35 * u_slack) * belt_weight
+            p_whip = min(1.25, raw_whip)
+            if p_whip > 0.15:
+                extra_belt_modes.append((f_trans, p_whip))
+                whip_added = True
+        if (u_loose > 0.05 or u_slack > 0.05) and s_belt_frac >= 0.25:
+            f_soft = max(12.0, 0.82 * f_eff)
+            if abs(f_soft - f_eff) >= 3.0 and (not whip_added or abs(f_soft - f_trans) >= 4.0):
+                p_soft = min(1.15, (0.55 * (u_loose**1.1) + 0.65 * u_slack) * belt_weight)
+                if p_soft > 0.20:
+                    extra_belt_modes.append((f_soft, p_soft))
+    else:
+        c_total = c_struct + 1.0 / max(k_drive_n_m, 1.0)
+        f_eff = 1.0 / (2.0 * math.pi * math.sqrt(max(m_eff * c_total, 1e-15)))
+        shares_pct, primary_bn = _compute_compliance_shares(
+            c_struct, k_belt_eff, k_motor_n_m, k_bracket_eff
+        )
 
     secondary_modes = [
         (mf, part_val)
-        for mf, part_val in (scanned_modes or [])
+        for mf, part_val in list(scanned_modes or []) + extra_belt_modes
         if abs(mf - f_eff) >= 3.0 and 10.0 <= mf <= 215.0 and part_val > 0.15
     ]
 
-    zeta_base = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
-    delta_zeta_awd = _awd_sync_damping_delta(assembly) if assembly is not None else 0.0
+    zeta_frame = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
     is_foc = (
         assembly is not None
         and assembly.spec.kinematics.drive_type in ("foc_servo", "closed_loop_stepper")
     )
+    if assembly is not None:
+        # Ross-Ungar-Kerwin modal strain-energy weighted damping across frame, belt, motor, & bracket
+        zeta_belt = belt_damping_ratio(
+            assembly.spec.gantry.belt,
+            chamber_temp_c=assembly.spec.frame.chamber_temp_c,
+            slack_margin_ratio=slack_margin_ratio,
+        )
+        zeta_motor = 0.080 if is_foc else 0.050
+        bkt_id = str(assembly.spec.gantry.bracket_material).lower()
+        zeta_bracket = 0.020 if any(tok in bkt_id for tok in ("al_", "steel", "cnc", "ti")) else 0.044
+        zeta_base = (
+            (shares_pct["frame"] / 100.0) * zeta_frame
+            + (shares_pct["belt"] / 100.0) * zeta_belt
+            + (shares_pct["motor"] / 100.0) * zeta_motor
+            + (shares_pct["bracket"] / 100.0) * zeta_bracket
+        )
+        zeta_base = float(min(0.18, max(0.025, zeta_base)))
+    else:
+        zeta_base = zeta_frame
+
+    delta_zeta_awd = _awd_sync_damping_delta(assembly) if assembly is not None else 0.0
     delta_zeta_active = (
         0.07
         if (is_foc and assembly is not None and assembly.spec.kinematics.toolhead_imu_active_damping)
@@ -377,6 +580,7 @@ def _recommend_shaper(
             shaper_choice=shaper_choice,
             damping_ratio=shaper_damping,
             psd_damping_ratio=zeta_eff,
+            psd_damping_secondary=zeta_frame,
         )
     else:
         freqs, psd_base = synthesize_axis_psd(
@@ -2314,6 +2518,7 @@ def solve_modal_fea(assembly: AssemblyModel, num_modes: int = 6) -> ModalResult:
             else:
                 primary_idx = 0
         modes[primary_idx].is_primary_limiting_mode = True
+        modes[primary_idx].is_limiting_axis_mode = True
         primary_mode = modes[primary_idx]
         primary_u_groups, primary_u_total, primary_t_groups, primary_t_total, _ = mode_energy_data[
             primary_idx

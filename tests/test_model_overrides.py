@@ -774,7 +774,7 @@ def test_item_confidence_registry_completeness_all_14_catalogs() -> None:
             assert isinstance(meta["basis"], str) and len(meta["basis"].strip()) > 10
             assert isinstance(meta["caveat"], str) and len(meta["caveat"].strip()) > 10
             total_options += 1
-    assert total_options == 98
+    assert total_options == 99
 
 
 def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
@@ -804,7 +804,7 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "belt": 13,
         "belt_routing": 2,
         "gantry_bracket": 7,
-        "toolhead_preset": 8,
+        "toolhead_preset": 9,
         "toolhead_construction": 6,
         "z_probe": 4,
         "hotend_clamp": 12,
@@ -840,16 +840,24 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
 
     # 1. toolhead_presets differentiation + custom fallback (65%)
     th_scores = {}
-    for pid in ("stealthburner", "microwaved_bowden", "xol_compact", "archetype_cpap", "heavy_uhf_long"):
+    for pid in (
+        "stealthburner",
+        "microwaved_bowden",
+        "microwaved_bowden_chube",
+        "xol_compact",
+        "archetype_cpap",
+        "heavy_uhf_long",
+    ):
         s = base.model_copy(deep=True)
         s.toolhead.preset_id = pid
         e = _by_id(s)["toolhead_preset"]
         th_scores[pid] = e["trust_pct"]
-        assert len(e["options_breakdown"]) == 8
+        assert len(e["options_breakdown"]) == 9
         assert [x["id"] for x in e["options_breakdown"] if x["active"]] == [pid]
     assert th_scores == {
         "stealthburner": 86,
         "microwaved_bowden": 85,  # elevated from 84 -> 85 by baked 75k-elem Tet4 CAD CMS superelement
+        "microwaved_bowden_chube": 86,  # elevated from 84 -> 86 by baked 75.3k-elem Tet4 CAD CMS superelement
         "xol_compact": 82,
         "archetype_cpap": 72,
         "heavy_uhf_long": 56,

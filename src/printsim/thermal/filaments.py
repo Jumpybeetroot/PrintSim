@@ -199,6 +199,10 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     ),
 }
 
+from printsim.schema.printdb_bridge import hydrate_filament_catalog as _hydrate_filament_catalog
+
+_hydrate_filament_catalog(FILAMENT_CATALOG)
+
 
 def get_filament(filament_id: str) -> FilamentSpec:
     if filament_id not in FILAMENT_CATALOG:

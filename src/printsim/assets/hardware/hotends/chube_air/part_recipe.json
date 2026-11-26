@@ -16,6 +16,11 @@
       "fdm_anisotropic": false
     },
     {
+      "label": "air_heatsink_fins",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
       "label": "copper_melt_core",
       "material_id": "copper_c110",
       "fdm_anisotropic": false

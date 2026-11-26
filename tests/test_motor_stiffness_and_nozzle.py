@@ -100,10 +100,17 @@ def test_stepper_electromagnetic_stiffness_analytical_and_current_sweep() -> Non
     cx[6 * bed_i + 5] += float(dr_noz[1])
     u_x = np.linalg.solve(K_ff, fx[free_dofs])
     c_struct_x = float(cx[free_dofs] @ u_x)
+    from printsim.kinematics.solvers import compute_drive_stiffness_details_n_per_m
+
+    det_x = compute_drive_stiffness_details_n_per_m(asm_check, "X")
     m_rot = 4.0 * (spec.kinematics.xy_stepper.rotor_inertia_kg_m2 / (r_p**2))
-    m_x = asm_check.x_moving_mass_kg
-    k_motor_eff = k_motor_axis * (m_x / (m_x + m_rot))
-    c_total_x = c_struct_x + 1.0 / k_belt + 1.0 / k_motor_eff + 1.0 / k_bracket
+    m_x = asm_check.x_moving_mass_kg + float(det_x["belt_moving_mass_kg"])
+    # Exact 2-DOF [m_rot, m_x] coupled drive eigenproblem
+    k_bb = 1.0 / (1.0 / k_belt + 1.0 / k_bracket)
+    b_q = (k_motor_axis + k_bb) / m_rot + k_bb / m_x
+    c_q = (k_motor_axis * k_bb) / (m_rot * m_x)
+    w1_sq = 0.5 * (b_q - math.sqrt(max(b_q * b_q - 4.0 * c_q, 0.0)))
+    c_total_x = c_struct_x + 1.0 / (m_x * w1_sq)
     expected_f_eff_x = 1.0 / (2.0 * math.pi * math.sqrt(m_x * c_total_x))
     assert mod.shaper_x.effective_freq_hz == pytest.approx(expected_f_eff_x, rel=1e-6)
 

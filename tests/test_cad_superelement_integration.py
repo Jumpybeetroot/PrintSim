@@ -1297,3 +1297,70 @@ def test_braced_microwaved_chassis_pitch_stiffness_nozzle_load_and_accessories()
     acc_short = resolve_toolhead_hardware_accessories(s_short)
     assert acc_short["nozzle_shield_options"] == ["microwaved", "stock", "none"]
     assert acc_short["body_delta_g"] == 0.0  # -1.67 g brace delta gated to tricorn_long only
+
+
+def test_microwaved_bowden_chube_and_exact_cutout_chube_superelements() -> None:
+    """Verify baked Microwaved Bowden Chube V1 + exact-cutout Chube Compact/Air/Conduction assets."""
+    from printsim.schema import TOOLHEAD_PRESETS
+
+    client = TestClient(app)
+    for url in (
+        "/api/assets/hardware/toolheads/microwaved_bowden_chube/visual.glb",
+        "/api/assets/hardware/hotends/chube_conduction/visual.glb",
+        "/api/assets/hardware/hotends/chube_air/visual.glb",
+        "/api/assets/hardware/hotends/chube_compact/visual.glb",
+    ):
+        resp = client.get(url)
+        assert resp.status_code == 200, url
+        assert resp.content[:4] == b"glTF", url
+
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
+    th_p = TOOLHEAD_PRESETS["microwaved_bowden_chube"]
+    base.use_cad_superelements = True
+    base.toolhead.preset_id = "microwaved_bowden_chube"
+    base.toolhead.name = str(th_p["name"])
+    base.toolhead.total_mass_g = float(th_p["total_mass_g"])
+    base.toolhead.cog_offset_mm = tuple(float(v) for v in th_p["cog_offset_mm"])
+    base.toolhead.nozzle_offset_mm = tuple(float(v) for v in th_p["nozzle_offset_mm"])
+    base.toolhead.mount_material = str(th_p["mount_material"])
+    base.toolhead.body_material = "aluminum_6061_t6"
+    base.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
+
+    asm_al = build_assembly(base)
+    se_th_al = next(se for se in asm_al.superelements if se.id == "toolhead_mount")
+    se_he_cond = next(se for se in asm_al.superelements if se.id == "nozzle_stem")
+    assert se_th_al.asset_id == "microwaved_bowden_chube"
+    assert se_he_cond.asset_id == "chube_conduction"
+    assert se_th_al.mass_kg == pytest.approx(0.0565, abs=0.002)
+
+    # Material scaling: aluminum_6061_t6 -> titanium_grade5 scales stiffness (~1.65x) and mass (~1.64x)
+    s_ti = base.model_copy(deep=True)
+    s_ti.toolhead.body_material = "titanium_grade5"
+    asm_ti = build_assembly(s_ti)
+    se_th_ti = next(se for se in asm_ti.superelements if se.id == "toolhead_mount")
+    assert se_th_ti.mass_kg > se_th_al.mass_kg * 1.55
+    assert (
+        se_th_ti.to_summary_dict()["port_stiffness_n_per_mm"]["kx"]
+        > se_th_al.to_summary_dict()["port_stiffness_n_per_mm"]["kx"] * 1.55
+    )
+
+    # Exact-cutout Chube stiffness ordering: Compact (~2975) > Conduction (~815) > Air (~560)
+    k_by_hotend: dict[str, float] = {}
+    for he_id in ("chube_compact", "chube_conduction", "chube_air"):
+        sp = base.model_copy(deep=True)
+        sp.toolhead.hotend = HotendSpec(preset_id=he_id)
+        asm = build_assembly(sp)
+        se_he = next(se for se in asm.superelements if se.id == "nozzle_stem")
+        pk = se_he.to_summary_dict()["port_stiffness_n_per_mm"]
+        k_by_hotend[he_id] = 0.5 * (float(pk["kx"]) + float(pk["ky"]))
+
+    assert 2500.0 <= k_by_hotend["chube_compact"] <= 3500.0
+    assert 700.0 <= k_by_hotend["chube_conduction"] <= 950.0
+    assert 480.0 <= k_by_hotend["chube_air"] <= 650.0
+    assert k_by_hotend["chube_compact"] > k_by_hotend["chube_conduction"] > k_by_hotend["chube_air"]
+
+    # Confidence audit elevates toolhead_preset and hotend_clamp to CAD CMS trust
+    audit = {e["id"]: e for e in build_model_confidence_audit(base)["entries"]}
+    assert audit["toolhead_preset"]["trust_pct"] >= 86
+    assert audit["hotend_clamp"]["cad_superelement_id"] == "chube_conduction"
+    assert audit["hotend_clamp"]["trust_pct"] >= 86

@@ -323,6 +323,13 @@ def _compute_scores_and_diagnostics(
             f"{spec.kinematics.xy_stepper.rated_current_a:.2f} A * 1.05, ~{kinematics.motor_heat_w_each:.1f} W/motor): "
             "main limit is continuous coil thermal dissipation and magnet demagnetization margin."
         )
+    elif kinematics.motor_thermal_risk:
+        diag.append(
+            f"Stepper winding thermal risk (est. {kinematics.motor_est_temp_c:.0f}°C in "
+            f"{spec.frame.chamber_temp_c:.0f}°C chamber vs Class {spec.kinematics.xy_stepper.insulation_class} "
+            f"{kinematics.motor_max_winding_temp_c:.0f}°C limit, ~{kinematics.motor_heat_w_each:.1f} W/motor): "
+            "lower run current or switch to a Class H (180°C) motor such as Excit3D Max or LDO AH."
+        )
     if kinematics.belt_slip_risk:
         diag.append(
             f"Belt slack-side slip risk at {spec.kinematics.max_accel_mm_s2:.0f} mm/s^2: "

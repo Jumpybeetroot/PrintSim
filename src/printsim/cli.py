@@ -1405,8 +1405,9 @@ def cad_fetch_onshape_cmd(
     workspace_id: Optional[str] = typer.Option(None, "--workspace-id", "-w", help="Workspace ID (if passing bare doc ID)"),
     element_id: Optional[str] = typer.Option(None, "--element-id", "-e", help="Element ID (if passing bare doc ID)"),
     configuration: Optional[str] = typer.Option(None, "--configuration", "-c", help="Optional encoded Onshape configuration"),
+    kind: str = typer.Option("partstudios", "--kind", "-k", help="Element kind: partstudios or assemblies"),
 ) -> None:
-    """Download a STEP B-Rep directly from Onshape REST API (requires ONSHAPE_ACCESS_KEY/SECRET_KEY)."""
+    """Download a STEP B-Rep directly from Onshape REST API (env vars or ~/.onshape-mcp Keychain)."""
     from printsim.cad_assets import fetch_onshape_step
 
     saved = fetch_onshape_step(
@@ -1415,6 +1416,7 @@ def cad_fetch_onshape_cmd(
         workspace_id=workspace_id,
         element_id=element_id,
         configuration=configuration,
+        kind="assemblies" if kind.lower().startswith("assem") else "partstudios",
     )
     console.print(f"[green]Exported Onshape STEP -> {saved}[/green]")
 

@@ -18,7 +18,9 @@ from .beam3d import (
 from .bed_plate_fem import BedPlateFEAResult, solve_bed_plate_fem
 from .components import (
     ThermalStructuralReport,
+    belt_damping_ratio,
     belt_effective_ea_n,
+    belt_flexural_rigidity_nm2,
     compute_thermal_structural_report,
     corner_joint_stiffness,
     gerbert_tooth_mesh_stiffness_n_m,
@@ -109,7 +111,9 @@ __all__ = [
     "local_beam_mass",
     "local_beam_stiffness",
     "ThermalStructuralReport",
+    "belt_damping_ratio",
     "belt_effective_ea_n",
+    "belt_flexural_rigidity_nm2",
     "compute_thermal_structural_report",
     "corner_joint_stiffness",
     "gerbert_tooth_mesh_stiffness_n_m",
