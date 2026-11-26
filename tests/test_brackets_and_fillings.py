@@ -279,8 +279,11 @@ def test_extrusion_filling_cavity_mass_cost_and_moving_gantry_exclusion() -> Non
         for m in asm_none.members
         if m.profile.shape == "extrusion" and m.role in ("frame", "rail", "tower")
     )
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    w_cl, d_cl, h_cl = corexy_frame_centerlines_m(spec_none)
     assert stationary_extr_len_m == pytest.approx(
-        4 * 0.46 + 4 * 0.50 + 4 * 0.46 + 2 * 0.46 + 0.46, rel=1e-6
+        4 * w_cl + 4 * h_cl + 4 * d_cl + 2 * d_cl + w_cl, rel=1e-6
     )
 
     for fill_id, fill_spec in EXTRUSION_FILLINGS.items():

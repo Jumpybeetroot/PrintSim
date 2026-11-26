@@ -63,12 +63,11 @@ def test_top_panel_toggle_removes_top_shells_reduces_mass_and_lowers_freq() -> N
     assert gd_on["panels"]["top_panel"] is True
     assert gd_off["panels"]["top_panel"] is False
 
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    w_cl, d_cl, _ = corexy_frame_centerlines_m(spec_on)
     al5052_rho = get_material("aluminum_5052_sheet").density_kg_m3
-    expected_top_mass = (
-        (spec_on.frame.width_mm * 1e-3)
-        * (spec_on.frame.depth_mm * 1e-3)
-        * (al5052_rho * 0.004)
-    )
+    expected_top_mass = w_cl * d_cl * (al5052_rho * 0.004)
     assert (asm_on.panel_mass_kg - asm_off.panel_mass_kg) == pytest.approx(
         expected_top_mass, rel=1e-6
     )
@@ -152,7 +151,9 @@ def test_expanded_bracing_modes_and_open_top_cross_stiffening() -> None:
     st_open_top = solve_static_fea(asm_open_top)
     st_top_cross = solve_static_fea(asm_top_cross)
 
-    assert mo_top_cross.fundamental_freq_hz > mo_open_top.fundamental_freq_hz + 10.0
+    # Top cross bracing raises open-top X-twist (79 -> 117.5 Hz) up to the ~84.4 Hz flying-gantry Z-belt ceiling
+    assert mo_top_cross.fundamental_freq_hz > mo_open_top.fundamental_freq_hz + 5.0
+    assert mo_top_cross.shaper_x.structural_freq_hz > mo_open_top.shaper_x.structural_freq_hz + 10.0
     assert st_top_cross.toolhead_stiffness_x_n_per_mm > st_open_top.toolhead_stiffness_x_n_per_mm
 
 

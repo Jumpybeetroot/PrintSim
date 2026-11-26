@@ -11,6 +11,7 @@ from printsim.schema import (
     PrinterSpec,
     ProfileSpec,
     get_material,
+    get_profile,
     resolve_gantry_bracket,
 )
 
@@ -29,9 +30,10 @@ def _build_delta(
     """Build a 3D FEA structural assembly for a 3-tower parallel-arm Delta printer."""
     from printsim.geometry import builder as _b
 
+    fr_prof = get_profile(spec.frame.profile)
     w = spec.frame.width_mm * 1e-3
     d = spec.frame.depth_mm * 1e-3
-    h = spec.frame.height_mm * 1e-3
+    h = max(spec.frame.height_mm * 1e-3 - fr_prof.height_m, 0.08)
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
     _, _, w_rel = np.clip(toolhead_rel_pos, 0.1, 0.8)
 

@@ -366,9 +366,9 @@ def test_panel_fastener_series_compliance_and_vertical_mass_distribution() -> No
     asm_fo = build_assembly(s_fly_open)
     asm_fb = build_assembly(s_fly_bolt)
 
-    w = s_fly_bolt.frame.width_mm * 1e-3
-    d = s_fly_bolt.frame.depth_mm * 1e-3
-    h = s_fly_bolt.frame.height_mm * 1e-3
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    w, d, h = corexy_frame_centerlines_m(s_fly_bolt)
     areal = panel_mechanical_properties(dibond, 0.004, w, h, "bolted_structural")["areal_mass_kg_m2"]
     m_rear = w * h * areal
     m_side = d * h * areal

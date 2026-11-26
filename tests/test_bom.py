@@ -42,7 +42,7 @@ class TestCoreXYBOM:
         assert bom.total_extrusion_length_m > 0
         assert bom.total_fasteners > 0
 
-        # 4 vertical columns merged to exact frame.height_mm (500.0 mm), NOT 8 split halves
+        # 4 vertical columns merged to exact outer frame.height_mm (480.0 mm on V2.4 300), NOT 8 split halves
         col_cuts = [
             c
             for c in bom.cut_list
@@ -53,21 +53,26 @@ class TestCoreXYBOM:
         assert len(col_cuts) == 1
         assert col_cuts[0].quantity == 4
 
-        # Ensure no split column halves (445 mm or 55 mm) appear in cut list
+        # Ensure no split column halves appear in cut list
         lengths = [c.length_mm for c in bom.cut_list]
         assert all(abs(L - 445.0) > 1.0 and abs(L - 55.0) > 1.0 for L in lengths)
 
-        # X gantry merged from x_gantry_l + x_gantry_r to exact frame.width_mm (460.0 mm)
+        # X gantry merged from x_gantry_l + x_gantry_r to exact centerline span (440 mm) & net 380 mm Voron 300 beam
+        from printsim.geometry.builder import corexy_frame_centerlines_m
+
+        w_cl_mm, d_cl_mm, _ = [v * 1000.0 for v in corexy_frame_centerlines_m(spec)]
         gantry_cuts = [c for c in bom.cut_list if c.role == "gantry"]
         assert len(gantry_cuts) == 1
         assert gantry_cuts[0].quantity == 1
-        assert gantry_cuts[0].length_mm == pytest.approx(spec.frame.width_mm, abs=0.1)
+        assert gantry_cuts[0].length_mm == pytest.approx(w_cl_mm, abs=0.1)
+        assert gantry_cuts[0].net_length_mm == pytest.approx(380.0, abs=0.1)
 
-        # Y rail support extrusions merged to exact frame.depth_mm (460.0 mm, qty=2)
+        # Y rail support extrusions merged to centerline span (440 mm, qty=2) & net 420 mm Voron 300 cut
         rail_cuts = [c for c in bom.cut_list if c.role == "rail"]
         assert len(rail_cuts) == 1
         assert rail_cuts[0].quantity == 2
-        assert rail_cuts[0].length_mm == pytest.approx(spec.frame.depth_mm, abs=0.1)
+        assert rail_cuts[0].length_mm == pytest.approx(d_cl_mm, abs=0.1)
+        assert rail_cuts[0].net_length_mm == pytest.approx(420.0, abs=0.1)
 
         # No virtual panel_shear_* beams leak into cut list:
         # corner_gussets uses corner joint stiffening (0 diagonal rods), while rear_cross adds 2 rear + 1 top diagonal
@@ -301,20 +306,24 @@ class TestCartesianAndDeltaBOM:
         assert len(z_uprights) == 1
         assert z_uprights[0].quantity == 2
 
-        # Base Y rails merged to frame.depth_mm (380 mm, qty=2)
+        # Base Y rails merged to centerline depth (frame.depth_mm - profile_width, qty=2)
+        from printsim.schema import get_profile
+
+        fr_w_mm = get_profile(spec.frame.profile).width_m * 1000.0
+        up_w_mm = get_profile(spec.frame.effective_upright_profile).width_m * 1000.0
         y_base = [
             c
             for c in bom.cut_list
-            if c.role == "frame" and c.length_mm == pytest.approx(spec.frame.depth_mm, abs=0.1)
+            if c.role == "frame" and c.length_mm == pytest.approx(spec.frame.depth_mm - fr_w_mm, abs=0.1)
         ]
         assert len(y_base) == 1
         assert y_base[0].quantity == 2
 
-        # X gantry merged to frame.width_mm (360 mm, qty=1)
+        # X gantry merged to centerline width (frame.width_mm - upright_width, qty=1)
         gantry = [c for c in bom.cut_list if c.role == "gantry"]
         assert len(gantry) == 1
         assert gantry[0].quantity == 1
-        assert gantry[0].length_mm == pytest.approx(spec.frame.width_mm, abs=0.1)
+        assert gantry[0].length_mm == pytest.approx(spec.frame.width_mm - up_w_mm, abs=0.1)
 
         # Belt length formula: (2*W + 150 + 2*D + 150) / 1000
         expected_belt_m = (2.0 * spec.frame.width_mm + 150.0 + 2.0 * spec.frame.depth_mm + 150.0) / 1000.0
@@ -402,10 +411,10 @@ class TestStockNestingMath:
 
     def test_kerf_effect_on_exact_half_cuts(self) -> None:
         spec = _load_example("corexy_voron_style.yaml")
-        # Make all frame dimensions exactly 500 mm: with 3 mm kerf, two 500 mm cuts
-        # require 1003 mm (> 1000 mm stock), whereas with 0 mm kerf they fit in 1 bar.
-        spec.frame.width_mm = 500.0
-        spec.frame.depth_mm = 500.0
+        # Make all 2020 cut lengths exactly 500 mm (520 mm outer W/D -> 500 mm centerlines, 500 mm outer H):
+        # with 3 mm kerf, two 500 mm cuts require 1003 mm (> 1000 mm stock), whereas with 0 mm kerf they fit in 1 bar.
+        spec.frame.width_mm = 520.0
+        spec.frame.depth_mm = 520.0
         spec.frame.height_mm = 500.0
         bom_kerf = generate_bom(spec, stock_length_mm=1000.0, kerf_mm=3.0)
         bom_nokerf = generate_bom(spec, stock_length_mm=1000.0, kerf_mm=0.0)
@@ -458,6 +467,37 @@ class TestSerializationAndConsistency:
         assert len(rows) == len(bom.cut_list) + len(bom.items)
         sections = {r["section"] for r in rows}
         assert sections == {"CUT_LIST", "BOM"}
+
+    def test_outer_frame_edge_to_edge_matches_real_voron_cut_lists(self) -> None:
+        """Outer frame.width/depth/height map cleanly to inset beam centerlines & real Voron/DoomCube BOM cuts."""
+        cases = [
+            # (yaml_file, outer_w_d_h, centerline_w_d_h, vert_cut_mm, horiz_net_mm, xbeam_net_mm)
+            ("corexy_voron_style.yaml", [460.0, 460.0, 480.0], [440.0, 440.0, 460.0], 480.0, 420.0, 380.0),
+            ("voron_trident_300.yaml", [460.0, 460.0, 500.0], [440.0, 440.0, 480.0], 500.0, 420.0, 380.0),
+            ("doomcube_4040.yaml", [500.0, 500.0, 500.0], [460.0, 460.0, 480.0], 500.0, 420.0, 380.0),
+        ]
+        for yaml_file, exp_outer, exp_cl, exp_vert, exp_horiz, exp_xbeam in cases:
+            spec = _load_example(yaml_file)
+            asm = build_assembly(spec)
+            gd = asm.to_geometry_dict()
+            assert gd["frame_outer_dims_mm"] == pytest.approx(exp_outer, abs=0.1)
+            assert gd["frame_dims_mm"] == pytest.approx(exp_cl, abs=0.1)
+
+            bom = generate_bom(spec, clip_corner_overlaps=True)
+            vert_cuts = [
+                c for c in bom.cut_list
+                if c.role == "frame" and c.profile_id == spec.frame.effective_upright_profile
+                and c.length_mm == pytest.approx(exp_vert, abs=0.1)
+            ]
+            assert len(vert_cuts) == 1 and vert_cuts[0].quantity == 4
+
+            rail_cuts = [c for c in bom.cut_list if c.role == "rail"]
+            assert len(rail_cuts) == 1
+            assert rail_cuts[0].length_mm == pytest.approx(exp_horiz, abs=0.1)
+
+            gantry_cuts = [c for c in bom.cut_list if c.role == "gantry"]
+            assert len(gantry_cuts) == 1
+            assert gantry_cuts[0].length_mm == pytest.approx(exp_xbeam, abs=0.1)
 
         # to_markdown() produces valid structured GFM report
         md_text = bom.to_markdown()

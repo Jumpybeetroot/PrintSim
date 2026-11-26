@@ -46,9 +46,9 @@ def test_equivalent_shear_panel_formula_and_geometry_dict() -> None:
     assert rear_shell.material.id == "aluminum_5052_sheet"
     assert rear_shell.thickness_m == pytest.approx(0.004, rel=1e-6)
 
-    b = spec.frame.width_mm * 1e-3
-    d = spec.frame.depth_mm * 1e-3
-    h = spec.frame.height_mm * 1e-3
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    b, d, h = corexy_frame_centerlines_m(spec)
     t = spec.frame.panel_thickness_mm * 1e-3
     props = panel_mechanical_properties(pmat, t, b, h, "bolted_structural")
 
@@ -133,10 +133,10 @@ def test_structural_panel_monotonicity_frequency_stiffness_and_mass() -> None:
     assert f_bolt_6acm > f_bolt_acr and f_bolt_6acm > f_open * 2.0
     assert f_bolt_4al > f_bolt_3acm and f_bolt_4al > f_bolt_6acm and f_bolt_4al > f_open * 2.15
 
-    # Thickness increase (3mm -> 6mm Dibond) adds 3mm LDPE core mass across the 4 bays
-    expected_core_delta = (2.0 * 0.46 * 0.50 + 0.46 * 0.50 + 0.46 * 0.46) * (0.003 * 920.0)
+    # Thickness increase (3mm -> 6mm Dibond) adds 3mm LDPE core mass across the 4 centerline bays
+    expected_core_delta = (2.0 * 0.44 * 0.48 + 0.44 * 0.48 + 0.44 * 0.44) * (0.003 * 920.0)
     assert (m_6 - m_3) == pytest.approx(expected_core_delta, rel=1e-3)
-    assert m_6 > m_3 + 2.4
+    assert m_6 > m_3 + 2.2
 
     # Even in clip_enclosure mode, thickness (3mm -> 6mm) and heavier material (PC -> Al 5052) increase mass
     clip_pc_3 = build_assembly(_panel_corexy_spec(True, "clip_enclosure", "polycarbonate", 3.0))
@@ -453,9 +453,9 @@ def test_zero_phantom_strut_mass_on_corexy(
     asm_open = build_assembly(spec_open)
     asm_enc = build_assembly(spec_enc)
 
-    w = spec_enc.frame.width_mm * 1e-3
-    d = spec_enc.frame.depth_mm * 1e-3
-    h = spec_enc.frame.height_mm * 1e-3
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    w, d, h = corexy_frame_centerlines_m(spec_enc)
     pmat = get_material(material)
     areal_mass = panel_mechanical_properties(pmat, thickness_mm * 1e-3, w, h, "bolted_structural")[
         "areal_mass_kg_m2"

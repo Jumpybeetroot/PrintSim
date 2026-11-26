@@ -472,6 +472,32 @@ class AssemblyModel:
             "cost_usd": round(self.front_brace_cost_usd, 2) if self.front_brace_active else 0.0,
         }
 
+    def _frame_centerline_dims_mm(self) -> list[float]:
+        """Return frame beam centerline spans [w_cl, d_cl, h_cl] (mm) matching node coordinates."""
+        if self.spec.architecture == "corexy":
+            w_cl, d_cl, h_cl = corexy_frame_centerlines_m(self.spec)
+            return [round(w_cl * 1000.0, 2), round(d_cl * 1000.0, 2), round(h_cl * 1000.0, 2)]
+        if self.spec.architecture == "cartesian_bedslinger":
+            up_prof = get_profile(self.spec.frame.effective_upright_profile)
+            fr_prof = get_profile(self.spec.frame.profile)
+            return [
+                round(max(self.spec.frame.width_mm - up_prof.width_m * 1000.0, 80.0), 2),
+                round(max(self.spec.frame.depth_mm - fr_prof.width_m * 1000.0, 80.0), 2),
+                round(max(self.spec.frame.height_mm - fr_prof.height_m * 1000.0, 80.0), 2),
+            ]
+        if self.spec.architecture == "delta":
+            fr_prof = get_profile(self.spec.frame.profile)
+            return [
+                round(float(self.spec.frame.width_mm), 2),
+                round(float(self.spec.frame.depth_mm), 2),
+                round(max(self.spec.frame.height_mm - fr_prof.height_m * 1000.0, 80.0), 2),
+            ]
+        return [
+            round(float(self.spec.frame.width_mm), 2),
+            round(float(self.spec.frame.depth_mm), 2),
+            round(float(self.spec.frame.height_mm), 2),
+        ]
+
     def to_geometry_dict(self) -> dict:
         """Serialize assembly geometry (mm) for the 3D web viewer and AI tools."""
         nmap = self.node_map
@@ -613,7 +639,8 @@ class AssemblyModel:
                 }
                 for s in self.shell_elements
             ],
-            "frame_dims_mm": [
+            "frame_dims_mm": self._frame_centerline_dims_mm(),
+            "frame_outer_dims_mm": [
                 self.spec.frame.width_mm,
                 self.spec.frame.depth_mm,
                 self.spec.frame.height_mm,
@@ -1231,14 +1258,29 @@ def _build_custom_assembly(spec: PrinterSpec) -> AssemblyModel:
     return model
 
 
+def corexy_frame_centerlines_m(spec: PrinterSpec) -> tuple[float, float, float]:
+    """Return CoreXY beam centerline spans (w_cl, d_cl, h_cl) in meters from outer edge-to-edge dims.
+
+    ``spec.frame.width_mm``, ``depth_mm``, and ``height_mm`` specify outer edge-to-edge
+    frame dimensions (e.g., 460 × 460 × 480 mm for Voron 2.4 300, 460 × 460 × 500 mm for
+    Voron Trident 300). Deducting one upright profile cross-section in X/Y and one
+    horizontal frame profile height in Z yields exact beam centerline spans so the FEA
+    model, 3D viewport outer faces, BOM cut lengths, and DXF panels agree to the millimeter.
+    """
+    up_prof = get_profile(spec.frame.effective_upright_profile)
+    fr_prof = get_profile(spec.frame.profile)
+    w_cl = max(spec.frame.width_mm * 1e-3 - up_prof.width_m, 0.08)
+    d_cl = max(spec.frame.depth_mm * 1e-3 - up_prof.height_m, 0.08)
+    h_cl = max(spec.frame.height_mm * 1e-3 - fr_prof.height_m, 0.08)
+    return w_cl, d_cl, h_cl
+
+
 def _build_corexy(
     spec: PrinterSpec,
     toolhead_rel_pos: tuple[float, float, float],
     panel_mesh_n: int = 2,
 ) -> AssemblyModel:
-    w = spec.frame.width_mm * 1e-3
-    d = spec.frame.depth_mm * 1e-3
-    h = spec.frame.height_mm * 1e-3
+    w, d, h = corexy_frame_centerlines_m(spec)
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
     u, v, w_rel = np.clip(toolhead_rel_pos, 0.05, 0.95)
 

@@ -25,9 +25,11 @@ def _build_cartesian_bedslinger(
     """Build a 3D FEA structural assembly for a Cartesian H-frame bedslinger printer."""
     from printsim.geometry import builder as _b
 
-    w = spec.frame.width_mm * 1e-3
-    d = spec.frame.depth_mm * 1e-3
-    h = spec.frame.height_mm * 1e-3
+    up_prof = get_profile(spec.frame.effective_upright_profile)
+    fr_prof = get_profile(spec.frame.profile)
+    w = max(spec.frame.width_mm * 1e-3 - up_prof.width_m, 0.08)
+    d = max(spec.frame.depth_mm * 1e-3 - fr_prof.width_m, 0.08)
+    h = max(spec.frame.height_mm * 1e-3 - fr_prof.height_m, 0.08)
     bx, by, bz = np.array(spec.kinematics.build_volume_mm) * 1e-3
     u, v_rel, w_rel = np.clip(toolhead_rel_pos, 0.05, 0.95)
 

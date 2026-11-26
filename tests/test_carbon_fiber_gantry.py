@@ -674,7 +674,8 @@ def test_cf_rail_mounting_auto_resolution_and_two_wall_insert_physics() -> None:
     bs_cf_bare.gantry.cf_rail_mounting = "single_wall_bare"
     asm_bs_ins = build_assembly(bs_cf)
     asm_bs_bare = build_assembly(bs_cf_bare)
-    exp_bs_ins_kg = (4.0 + 18.0 * (bs_cf.frame.width_mm * 1e-3)) * 1e-3
+    up_w_mm = get_profile(bs_cf.frame.effective_upright_profile).width_m * 1000.0
+    exp_bs_ins_kg = (4.0 + 18.0 * ((bs_cf.frame.width_mm - up_w_mm) * 1e-3)) * 1e-3
     assert asm_bs_ins.x_beam_insert_mass_kg == pytest.approx(exp_bs_ins_kg, rel=1e-12)
     assert asm_bs_ins.x_beam_mass_kg == pytest.approx(asm_bs_bare.x_beam_mass_kg, rel=1e-12)
     assert (asm_bs_ins.total_mass_kg - asm_bs_bare.total_mass_kg) == pytest.approx(

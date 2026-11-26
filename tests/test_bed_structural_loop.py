@@ -291,7 +291,7 @@ def test_cartesian_bedslinger_y_accel_flexes_bed_relative_to_nozzle() -> None:
     assert st_heavy.accel_deflection_y_um > st.accel_deflection_y_um
 
     # Fundamental mode remains the portal Y mode (~92 Hz on realistic unfixed base-rail portal), not hijacked by bed bounce
-    assert mo.fundamental_freq_hz == pytest.approx(92.4, abs=3.0)
+    assert mo.fundamental_freq_hz == pytest.approx(98.1, abs=3.0)
     assert any(
         abs(m.nodal_vectors["bed_surface"][1]) > 0.7 for m in mo.modes
     )

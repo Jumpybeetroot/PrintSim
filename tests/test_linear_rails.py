@@ -472,7 +472,9 @@ def test_zero_mass_cost_double_counting_with_cf_beam_and_epoxy_granite() -> None
 
     x_beam_span_m = corexy_x_beam_span_m(s_cf_none_front)
     x_rail_len_m = corexy_x_rail_len_m(s_cf_none_front)
-    d_m = s_cf_none_front.frame.depth_mm * 1e-3
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    _, d_m, h_m = corexy_frame_centerlines_m(s_cf_none_front)
     cf_prof = get_profile("cf_tube_20x20x2")
     cf_mat = get_material("carbon_fiber_tube")
     steel_mat = get_material("steel_4140")
@@ -482,7 +484,6 @@ def test_zero_mass_cost_double_counting_with_cf_beam_and_epoxy_granite() -> None
     bare_cf_kg = cf_prof.area_m2 * x_beam_span_m * cf_mat.density_kg_m3
     one_x_rail_kg = x_rail_prof.area_m2 * x_rail_len_m * steel_mat.density_kg_m3
     two_y_rails_kg = 2.0 * y_rail_prof.area_m2 * d_m * steel_mat.density_kg_m3
-    h_m = s_cf_none_front.frame.height_mm * 1e-3
     z_rail_prof = get_profile(s_cf_none_front.bed.z_rail_profile)
     four_z_rails_kg = 4.0 * z_rail_prof.area_m2 * h_m * steel_mat.density_kg_m3
 
@@ -820,10 +821,10 @@ def test_opposite_face_rail_backer_sandwich_neutral_axis_composite_ei() -> None:
         rail_prof = get_profile("mgn12_rail")
         rail_mat = get_material("steel_4140")
         beam_mat = get_material(x_mat)
-        from printsim.geometry.builder import _make_x_backer_profile
+        from printsim.geometry.builder import _make_x_backer_profile, corexy_frame_centerlines_m
 
         bk_prof = _make_x_backer_profile(base_prof, rail_prof, 3.0)
-        l_w = s_bk.frame.width_mm * 1e-3
+        l_w, _, _ = corexy_frame_centerlines_m(s_bk)
         sub_kind = "carbon_tube" if x_prof.startswith("cf_") else "extrusion"
         eta_r = newmark_rail_composite_gamma(
             rail_mat.youngs_modulus_pa,

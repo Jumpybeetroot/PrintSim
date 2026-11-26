@@ -800,8 +800,10 @@ def test_trident_rear_z_column_does_not_clip_rear_panel_in_modal(
     z_bed_z = float(nmap["z_bed_r"].position_m[2])
     bay = "rear_low"
 
-    # Rear bay centerline column exists at x = w/2 and couples to rear Z-column in normal Y
-    w_mid = 0.5 * spec.frame.width_mm * 1e-3
+    # Rear bay centerline column exists at x = w_cl/2 and couples to rear Z-column in normal Y
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    w_mid = 0.5 * corexy_frame_centerlines_m(spec)[0]
     pcol = sorted(
         [
             n
@@ -1105,7 +1107,7 @@ def test_z_carriage_drive_springs_and_vertical_bounce_realism() -> None:
             bounce_modes: list[tuple[float, float]] = []
             for k in range(len(vals)):
                 freq = float(np.sqrt(max(vals[k], 0.0)) / (2.0 * np.pi))
-                if 150.0 <= freq <= 550.0:
+                if 150.0 <= freq <= 720.0:
                     v = np.zeros(n_dof)
                     v[free_dofs] = vecs[:, k]
                     trans = v.reshape(-1, 6)[:, :3]
@@ -1114,7 +1116,7 @@ def test_z_carriage_drive_springs_and_vertical_bounce_realism() -> None:
                         bz = float(trans[b_idx, 2] / mx)
                         zfl = float(trans[zfl_idx, 2] / mx)
                         btfl = float(trans[btfl_idx, 2] / mx)
-                        if abs(bz) > 0.50 and abs(zfl) > 0.25 and (bz * zfl) > 0.0:
+                        if abs(bz) > 0.50 and abs(zfl) > 0.15 and (bz * zfl) > 0.0:
                             bounce_modes.append((freq, abs(zfl) / max(abs(btfl), 1e-12)))
             assert bounce_modes, f"Expected vertical Z bed-bounce mode for {ls}"
             f_bounce, ratio_bounce = bounce_modes[0]

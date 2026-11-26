@@ -981,15 +981,23 @@ export function buildAssemblyHardwareMeshes({
       if (geom.architecture === "corexy" && geom.panels?.enabled) {
         const panels = geom.panels;
         const [fw, fd, fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
-        const extrusionHalfMm = (frameMember?.width_mm ?? 20) * 0.5;
-        const extHalf = extrusionHalfMm * SCALE;
+        const frameMember = geom.members.find(
+          (m) => m.role === "frame" && !m.id.startsWith("col_")
+        ) ?? geom.members.find((m) => m.role === "frame");
+        const uprightMember =
+          geom.members.find((m) => m.id.startsWith("col_")) ?? frameMember;
+        const upHalfXMm = (uprightMember?.width_mm ?? frameMember?.width_mm ?? 20) * 0.5;
+        const upHalfYMm = (uprightMember?.height_mm ?? frameMember?.width_mm ?? 20) * 0.5;
+        const frameHalfZMm = (frameMember?.height_mm ?? frameMember?.width_mm ?? 20) * 0.5;
+        const extHalfX = upHalfXMm * SCALE;
+        const extHalfY = upHalfYMm * SCALE;
+        const extHalfZ = frameHalfZMm * SCALE;
         const tScene = Math.max((panels.thickness_mm || 3) * SCALE, 0.024);
 
-        // Full outer-perimeter panel dimensions covering the extrusion T-slot faces
-        const spanX = (fw + 2 * extrusionHalfMm) * SCALE;
-        const spanY = (fd + 2 * extrusionHalfMm) * SCALE;
-        const spanZ = (fh + 2 * extrusionHalfMm) * SCALE;
+        // Full outer-perimeter panel dimensions matching true outer edge-to-edge frame faces
+        const spanX = (fw + 2 * upHalfXMm) * SCALE;
+        const spanY = (fd + 2 * upHalfYMm) * SCALE;
+        const spanZ = (fh + 2 * frameHalfZMm) * SCALE;
 
         const isTransparentSheet =
           panels.material_id === "acrylic_pmma" || panels.material_id === "polycarbonate";
@@ -1029,10 +1037,10 @@ export function buildAssemblyHardwareMeshes({
         const rearCenter = toThree([fw * 0.5, fd, fh * 0.5], cx, cy);
         const topCenter = toThree([fw * 0.5, fd * 0.5, fh], cx, cy);
 
-        const leftPos = leftCenter.clone().add(new THREE.Vector3(-(extHalf + tScene * 0.5), 0, 0));
-        const rightPos = rightCenter.clone().add(new THREE.Vector3(extHalf + tScene * 0.5, 0, 0));
-        const rearPos = rearCenter.clone().add(new THREE.Vector3(0, 0, -(extHalf + tScene * 0.5)));
-        const topPos = topCenter.clone().add(new THREE.Vector3(0, extHalf + tScene * 0.5, 0));
+        const leftPos = leftCenter.clone().add(new THREE.Vector3(-(extHalfX + tScene * 0.5), 0, 0));
+        const rightPos = rightCenter.clone().add(new THREE.Vector3(extHalfX + tScene * 0.5, 0, 0));
+        const rearPos = rearCenter.clone().add(new THREE.Vector3(0, 0, -(extHalfY + tScene * 0.5)));
+        const topPos = topCenter.clone().add(new THREE.Vector3(0, extHalfZ + tScene * 0.5, 0));
 
         const leftBoltX = leftPos.x - tScene * 0.55;
         const rightBoltX = rightPos.x + tScene * 0.55;
@@ -1250,9 +1258,15 @@ export function buildAssemblyHardwareMeshes({
             sim.spec.bed.z_drive !== "belted_quad_z"));
       if (showTridentBackbone) {
         const [fw, fd] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
+        const frameMember =
+          geom.members.find((m) => m.role === "frame" && !m.id.startsWith("col_")) ??
+          geom.members.find((m) => m.role === "frame");
+        const uprightMember =
+          geom.members.find((m) => m.id.startsWith("col_")) ?? frameMember;
         const extWidthMm = frameMember?.width_mm ?? 20;
         const extHalfMm = extWidthMm * 0.5;
+        const upHalfXMm = (uprightMember?.width_mm ?? extWidthMm) * 0.5;
+        const upHalfYMm = (uprightMember?.height_mm ?? extWidthMm) * 0.5;
         const bbExtra = geom.trident_backbone as
           | (NonNullable<typeof geom.trident_backbone> & {
               cutout_w_mm?: number;
@@ -1262,10 +1276,10 @@ export function buildAssemblyHardwareMeshes({
         const plateThickMm = bbExtra?.thickness_mm ?? 3.18;
         const plateThickScene = Math.max(plateThickMm * SCALE, 0.026);
 
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
-        const yF = -extHalfMm;
-        const yB = fd + extHalfMm;
+        const xL = -upHalfXMm;
+        const xR = fw + upHalfXMm;
+        const yF = -upHalfYMm;
+        const yB = fd + upHalfYMm;
         const midX = fw * 0.5;
 
         // Outer contour features matching clee/TridentBackbone backbone-300.dxf
@@ -1656,16 +1670,22 @@ export function buildAssemblyHardwareMeshes({
         topBrace?.id === "cnc_halo_ring"
       ) {
         const [fw, fd, fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
+        const frameMember =
+          geom.members.find((m) => m.role === "frame" && !m.id.startsWith("col_")) ??
+          geom.members.find((m) => m.role === "frame");
+        const uprightMember =
+          geom.members.find((m) => m.id.startsWith("col_")) ?? frameMember;
         const extWidthMm = frameMember?.width_mm ?? 20;
         const extHalfMm = extWidthMm * 0.5;
+        const upHalfXMm = (uprightMember?.width_mm ?? extWidthMm) * 0.5;
+        const upHalfYMm = (uprightMember?.height_mm ?? extWidthMm) * 0.5;
         const plateThickMm = topBrace.thickness_mm > 0 ? topBrace.thickness_mm : 5.0;
         const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
 
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
-        const yF = -extHalfMm;
-        const yB = fd + extHalfMm;
+        const xL = -upHalfXMm;
+        const xR = fw + upHalfXMm;
+        const yF = -upHalfYMm;
+        const yB = fd + upHalfYMm;
         const sx = (cadX: number) => (cadX - cx) * SCALE;
         const sy = (cadY: number) => (cadY - cy) * SCALE;
 
@@ -1798,14 +1818,20 @@ export function buildAssemblyHardwareMeshes({
         frontBrace?.id === "cnc_portal_frame"
       ) {
         const [fw, , fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
+        const frameMember =
+          geom.members.find((m) => m.role === "frame" && !m.id.startsWith("col_")) ??
+          geom.members.find((m) => m.role === "frame");
+        const uprightMember =
+          geom.members.find((m) => m.id.startsWith("col_")) ?? frameMember;
         const extWidthMm = frameMember?.width_mm ?? 20;
         const extHalfMm = extWidthMm * 0.5;
+        const upHalfXMm = (uprightMember?.width_mm ?? extWidthMm) * 0.5;
+        const upHalfYMm = (uprightMember?.height_mm ?? extWidthMm) * 0.5;
         const plateThickMm = frontBrace.thickness_mm > 0 ? frontBrace.thickness_mm : 5.0;
         const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
 
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
+        const xL = -upHalfXMm;
+        const xR = fw + upHalfXMm;
         const zB = -extHalfMm;
         const zT = fh + extHalfMm;
         const sx = (cadX: number) => (cadX - cx) * SCALE;
@@ -1849,8 +1875,8 @@ export function buildAssemblyHardwareMeshes({
         });
         portalGeo.computeVertexNormals();
 
-        // Mount flush on front outer face CAD y = -extHalfMm (Three.js +Z outward)
-        const frontOuterZ = toThree([0, -extHalfMm, 0], cx, cy).z + 0.002;
+        // Mount flush on front outer face CAD y = -upHalfYMm (Three.js +Z outward)
+        const frontOuterZ = toThree([0, -upHalfYMm, 0], cx, cy).z + 0.002;
         const frontFaceZ = frontOuterZ + plateThickScene;
 
         const portalMat = new THREE.MeshStandardMaterial({
@@ -1936,14 +1962,20 @@ export function buildAssemblyHardwareMeshes({
         frontBrace?.id === "header_and_skirt"
       ) {
         const [fw, , fh] = geom.frame_dims_mm;
-        const frameMember = geom.members.find((m) => m.role === "frame");
+        const frameMember =
+          geom.members.find((m) => m.role === "frame" && !m.id.startsWith("col_")) ??
+          geom.members.find((m) => m.role === "frame");
+        const uprightMember =
+          geom.members.find((m) => m.id.startsWith("col_")) ?? frameMember;
         const extWidthMm = frameMember?.width_mm ?? 20;
         const extHalfMm = extWidthMm * 0.5;
+        const upHalfXMm = (uprightMember?.width_mm ?? extWidthMm) * 0.5;
+        const upHalfYMm = (uprightMember?.height_mm ?? extWidthMm) * 0.5;
         const plateThickMm = frontBrace.thickness_mm > 0 ? frontBrace.thickness_mm : 5.0;
         const plateThickScene = Math.max(plateThickMm * SCALE, 0.032);
 
-        const xL = -extHalfMm;
-        const xR = fw + extHalfMm;
+        const xL = -upHalfXMm;
+        const xR = fw + upHalfXMm;
         const sx = (cadX: number) => (cadX - cx) * SCALE;
         const sz = (cadZ: number) => cadZ * SCALE;
 
@@ -1959,7 +1991,7 @@ export function buildAssemblyHardwareMeshes({
         const zSkirtTop = Math.min(zHeaderBot - 20, Math.max(extWidthMm, skirtHeightMm));
         const clearDoorH = Math.max(0, zHeaderBot - zSkirtTop);
 
-        const frontOuterZ = toThree([0, -extHalfMm, 0], cx, cy).z + 0.002;
+        const frontOuterZ = toThree([0, -upHalfYMm, 0], cx, cy).z + 0.002;
         const frontFaceZ = frontOuterZ + plateThickScene;
 
         const hsMat = new THREE.MeshStandardMaterial({

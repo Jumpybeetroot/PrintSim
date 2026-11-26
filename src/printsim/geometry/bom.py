@@ -530,32 +530,58 @@ def _describe_cut_group(role: str, profile_id: str, member_ids: list[str]) -> st
     return f"Frame Member ({profile_name})"
 
 
+def _is_vertical_column_seg(seg: _MergedSegment) -> bool:
+    ids_lower = [mid.lower() for mid in seg.member_ids]
+    return seg.canonical_role == "tower" or all(
+        mid.startswith(("col_", "tower_", "z_col_")) for mid in ids_lower
+    )
+
+
 def _compute_net_cut_length_mm(
     assembly: AssemblyModel,
     seg: _MergedSegment,
     centerline_mm: float,
 ) -> float:
-    """Compute non-overlapping buildable butt-joint cut length (mm) for a merged member."""
+    """Compute non-overlapping buildable butt-joint cut length (mm) for a merged member.
+
+    Because frame corner nodes lie on beam centerlines (inset from outer edge-to-edge
+    dimensions by half a profile width/height on each side):
+    - Vertical corner columns/towers span full outer height: ``centerline_mm + frame_h_mm``.
+    - Horizontal butt-joint frame/rail members sit between vertical uprights:
+      ``centerline_mm - upright_span_mm`` (= ``outer_span_mm - 2 * upright_span_mm``).
+    - CoreXY X-gantry beams use ``corexy_x_beam_span_m`` (between XY-joint faces).
+    """
     spec = assembly.spec
     role = seg.canonical_role
     ids_lower = [mid.lower() for mid in seg.member_ids]
-    # Vertical columns/towers, diagonal braces, and delta arms keep full length
-    if (
-        role in ("brace", "tower")
-        or all(mid.startswith(("col_", "tower_", "z_col_", "arm_")) for mid in ids_lower)
-    ):
+
+    # Diagonal braces and delta arms keep exact node-to-node length
+    if role == "brace" or all(mid.startswith("arm_") for mid in ids_lower):
         return round(centerline_mm, 1)
+
+    # Vertical columns/towers run full outer frame height (flush with top & bottom outer faces)
+    if _is_vertical_column_seg(seg):
+        frame_h_mm = get_profile(spec.frame.profile).height_m * 1000.0
+        return round(centerline_mm + frame_h_mm, 1)
 
     upright_prof = get_profile(spec.frame.effective_upright_profile)
     upright_w_mm = upright_prof.width_m * 1000.0
+    upright_d_mm = upright_prof.height_m * 1000.0
     if spec.architecture == "corexy" and role == "gantry":
         from printsim.geometry._builder_gantry import corexy_x_beam_span_m
 
         return round(corexy_x_beam_span_m(spec) * 1000.0, 1)
     if spec.architecture == "corexy" and role in ("frame", "rail"):
-        return round(max(centerline_mm - 2.0 * upright_w_mm, 10.0), 1)
+        nmap = assembly.node_map
+        u_dir = (
+            _unit_direction(nmap[seg.start_id].position_m, nmap[seg.end_id].position_m)
+            if seg.start_id in nmap and seg.end_id in nmap
+            else None
+        )
+        deduct_mm = upright_d_mm if (u_dir is not None and abs(float(u_dir[1])) > 0.7) else upright_w_mm
+        return round(max(centerline_mm - deduct_mm, 10.0), 1)
     if spec.architecture == "cartesian_bedslinger" and role in ("gantry",):
-        return round(max(centerline_mm - 2.0 * upright_w_mm, 10.0), 1)
+        return round(max(centerline_mm - upright_w_mm, 10.0), 1)
     return round(centerline_mm, 1)
 
 
@@ -570,7 +596,11 @@ def _build_cut_list(
     for seg in merged_segments:
         centerline_mm = round(seg.length_m * 1000.0, 1)
         net_mm = _compute_net_cut_length_mm(assembly, seg, centerline_mm)
-        length_mm = net_mm if clip_corner_overlaps else centerline_mm
+        # Vertical columns always report full outer cut length (flush with top & bottom outer faces)
+        if _is_vertical_column_seg(seg):
+            length_mm = net_mm
+        else:
+            length_mm = net_mm if clip_corner_overlaps else centerline_mm
         key = (seg.profile_id, seg.material_id, length_mm, net_mm, seg.canonical_role)
         grouped[key].append(seg)
 

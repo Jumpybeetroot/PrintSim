@@ -32,29 +32,48 @@ interface FrameSizePreset {
   bed: [number, number];
 }
 
-const COREXY_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
-  { id: "250", label: "250 mm", frame: [440, 440, 450], build: [250, 250, 230], bed: [250, 250] },
-  { id: "300", label: "300 mm", frame: [490, 490, 500], build: [300, 300, 250], bed: [300, 300] },
-  { id: "350", label: "350 mm", frame: [540, 540, 550], build: [350, 350, 300], bed: [350, 350] },
-  { id: "400", label: "400 mm", frame: [590, 590, 600], build: [400, 400, 350], bed: [400, 400] },
+// Real Voron 2.4 R2 (flying gantry) outer edge-to-edge 2020 frame dimensions:
+// 250 -> 410×410×430 (370 horiz / 430 vert), 300 -> 460×460×480 (420 / 480),
+// 350 -> 510×510×530 (470 / 530), 400 -> 560×560×580 (520 / 580).
+const COREXY_V24_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
+  { id: "250", label: "250 mm", frame: [410, 410, 430], build: [250, 250, 250], bed: [250, 250] },
+  { id: "300", label: "300 mm", frame: [460, 460, 480], build: [300, 300, 300], bed: [300, 300] },
+  { id: "350", label: "350 mm", frame: [510, 510, 530], build: [350, 350, 350], bed: [350, 350] },
+  { id: "400", label: "400 mm", frame: [560, 560, 580], build: [400, 400, 400], bed: [400, 400] },
+];
+
+// Real Voron Trident (fixed gantry) outer edge-to-edge 2020 frame dimensions:
+// 250/300/350 share 500 mm verticals (250 mm Z travel); 400 scales to 550 mm (300 mm Z).
+const COREXY_TRIDENT_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
+  { id: "250", label: "250 mm", frame: [410, 410, 500], build: [250, 250, 250], bed: [250, 250] },
+  { id: "300", label: "300 mm", frame: [460, 460, 500], build: [300, 300, 250], bed: [300, 300] },
+  { id: "350", label: "350 mm", frame: [510, 510, 500], build: [350, 350, 250], bed: [350, 350] },
+  { id: "400", label: "400 mm", frame: [560, 560, 550], build: [400, 400, 300], bed: [400, 400] },
 ];
 
 const BEDSLINGER_FRAME_SIZE_PRESETS: FrameSizePreset[] = [
-  { id: "250", label: "250 mm", frame: [390, 410, 450], build: [250, 250, 260], bed: [250, 250] },
-  { id: "300", label: "300 mm", frame: [440, 460, 500], build: [300, 300, 300], bed: [300, 300] },
-  { id: "350", label: "350 mm", frame: [490, 510, 550], build: [350, 350, 350], bed: [350, 350] },
-  { id: "400", label: "400 mm", frame: [540, 560, 600], build: [400, 400, 400], bed: [400, 400] },
+  { id: "250", label: "250 mm", frame: [400, 420, 460], build: [250, 250, 260], bed: [250, 250] },
+  { id: "300", label: "300 mm", frame: [450, 470, 500], build: [300, 300, 300], bed: [300, 300] },
+  { id: "350", label: "350 mm", frame: [500, 520, 550], build: [350, 350, 350], bed: [350, 350] },
+  { id: "400", label: "400 mm", frame: [550, 570, 600], build: [400, 400, 400], bed: [400, 400] },
 ];
 
-function inferProfileOuterWidthMm(profileId: string, profiles: ProfileItem[]): number {
-  if (profileId.includes("4040")) return 40;
-  if (profileId.includes("3030")) return 30;
-  if (profileId.includes("2040") || profileId.includes("2020")) return 20;
+function inferProfileOuterDimsMm(profileId: string, profiles: ProfileItem[]): [number, number] {
   const found = profiles.find((p) => p.id === profileId);
-  if (found && Number.isFinite(found.width_m) && found.width_m > 0) {
-    return Math.round(found.width_m * 1000);
+  if (
+    found &&
+    Number.isFinite(found.width_m) &&
+    found.width_m > 0 &&
+    Number.isFinite(found.height_m) &&
+    found.height_m > 0
+  ) {
+    return [Math.round(found.width_m * 1000), Math.round(found.height_m * 1000)];
   }
-  return 20;
+  if (profileId.includes("4040")) return [40, 40];
+  if (profileId.includes("3030")) return [30, 30];
+  if (profileId.includes("2040")) return [20, 40];
+  if (profileId.includes("2020")) return [20, 20];
+  return [20, 20];
 }
 
 function shortProfileCode(profileId: string, profileLabelFn: (id: string) => string): string {
@@ -457,9 +476,27 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
     sim?.modal_fea.frame_damping_ratio ??
     0.042 + (selectedFilling?.damping_boost ?? 0);
 
+  const [, frameProfileHeightMm] = inferProfileOuterDimsMm(spec.frame.profile, catalog.profiles);
+  const uprightProfileId = spec.frame.upright_profile || spec.frame.profile;
+  const [uprightProfileWidthMm, uprightProfileDepthMm] = inferProfileOuterDimsMm(
+    uprightProfileId,
+    catalog.profiles
+  );
+  const extraUprightXMm = Math.max(0, 2 * (uprightProfileWidthMm - 20));
+  const extraUprightYMm = Math.max(0, 2 * (uprightProfileDepthMm - 20));
+
   const sizePresets: FrameSizePreset[] | null =
     spec.architecture === "corexy"
-      ? COREXY_FRAME_SIZE_PRESETS
+      ? (isFlyingGantry ? COREXY_V24_FRAME_SIZE_PRESETS : COREXY_TRIDENT_FRAME_SIZE_PRESETS).map(
+          (p) => ({
+            ...p,
+            frame: [p.frame[0] + extraUprightXMm, p.frame[1] + extraUprightYMm, p.frame[2]] as [
+              number,
+              number,
+              number,
+            ],
+          })
+        )
       : spec.architecture === "cartesian_bedslinger"
         ? BEDSLINGER_FRAME_SIZE_PRESETS
         : null;
@@ -567,9 +604,13 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
     const fw = parseOrCurrent(frameWidthDraft, spec.frame.width_mm);
     const fd = parseOrCurrent(frameDepthDraft, spec.frame.depth_mm);
     const fh = parseOrCurrent(frameHeightDraft, spec.frame.height_mm);
-    const bx = Math.max(120, fw - 190);
-    const by = Math.max(120, fd - 190);
-    const bz = Math.max(120, fh - 240);
+    const isBedslinger = spec.architecture === "cartesian_bedslinger";
+    const bx = Math.max(
+      120,
+      fw - (isBedslinger ? 110 + 2 * uprightProfileWidthMm : 120 + 2 * uprightProfileWidthMm)
+    );
+    const by = Math.max(120, fd - (isBedslinger ? 170 : 120 + 2 * uprightProfileDepthMm));
+    const bz = Math.max(120, fh - (isBedslinger ? 200 : isFlyingGantry ? 180 : 250));
     setFrameWidthDraft(String(fw));
     setFrameDepthDraft(String(fd));
     setFrameHeightDraft(String(fh));
@@ -588,18 +629,20 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
     );
   };
 
-  const frameProfileWidthMm = inferProfileOuterWidthMm(spec.frame.profile, catalog.profiles);
-  const uprightProfileId = spec.frame.upright_profile || spec.frame.profile;
-  const uprightProfileWidthMm = inferProfileOuterWidthMm(uprightProfileId, catalog.profiles);
-  const outerWidthMm = Math.round(spec.frame.width_mm) + uprightProfileWidthMm;
-  const outerDepthMm = Math.round(spec.frame.depth_mm) + uprightProfileWidthMm;
-  const outerHeightMm = Math.round(spec.frame.height_mm) + frameProfileWidthMm;
+  const outerWidthMm = Math.round(spec.frame.width_mm);
+  const outerDepthMm = Math.round(spec.frame.depth_mm);
+  const outerHeightMm = Math.round(spec.frame.height_mm);
+  const innerWidthMm = Math.max(0, outerWidthMm - 2 * uprightProfileWidthMm);
+  const innerDepthMm = Math.max(0, outerDepthMm - 2 * uprightProfileDepthMm);
+  const innerHeightMm = Math.max(0, outerHeightMm - 2 * frameProfileHeightMm);
   const frameProfileCode = shortProfileCode(spec.frame.profile, profileLabel);
   const uprightProfileCode = shortProfileCode(uprightProfileId, profileLabel);
   const footprintDetail =
-    uprightProfileWidthMm !== frameProfileWidthMm
-      ? `${uprightProfileCode} uprights + ${frameProfileCode} rails`
-      : `${frameProfileCode} centerlines + ${frameProfileWidthMm} mm`;
+    spec.architecture === "delta"
+      ? `${uprightProfileCode} 3-tower envelope`
+      : uprightProfileCode !== frameProfileCode
+        ? `inner clear ${innerWidthMm}×${innerDepthMm}×${innerHeightMm} mm · ${uprightProfileCode} uprights / ${frameProfileCode} rails`
+        : `inner clear ${innerWidthMm}×${innerDepthMm}×${innerHeightMm} mm · ${frameProfileCode} frame`;
 
   return (
     <div className="section-card" data-design-section="frame">
@@ -700,8 +743,8 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
             <button
               type="button"
               className={`frame-size-pill ${activeSizePresetId === null ? "active" : ""}`}
- aria-pressed={activeSizePresetId === null}
-              title="Enter custom frame centerline dimensions below"
+              aria-pressed={activeSizePresetId === null}
+              title="Enter custom outer edge-to-edge frame dimensions below"
               onClick={() => {
                 frameWidthInputRef.current?.focus();
                 frameWidthInputRef.current?.select();
@@ -799,7 +842,7 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
       </div>
 
       <div className="frame-footprint-note">
-        Outer footprint:{" "}
+        Outer edge-to-edge:{" "}
         <strong>
           {outerWidthMm} × {outerDepthMm} × {outerHeightMm} mm
         </strong>{" "}

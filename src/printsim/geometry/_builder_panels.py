@@ -447,7 +447,7 @@ def _add_corexy_shell_panels(
     """Generate MITC4 shell grids + Huth CBUSH fastener springs for CoreXY enclosure bays."""
     from printsim.geometry import builder as _b
 
-    h = spec.frame.height_mm * 1e-3
+    h = float(np.linalg.norm(nmap["t_fl"].position_m - nmap["b_fl"].position_m))
     frame_prof = get_profile(spec.frame.profile)
     d_c = 0.5 * frame_prof.width_m + 0.5 * panel_t_m
 
@@ -862,17 +862,21 @@ def _add_trident_backbone(
     bh = float(np.linalg.norm(p01 - p00))
 
     # Open-center 4x4 perimeter ring aligned to real ~80 mm flanges (skipping 4 center quads & center node)
-    x_cut0_m = 0.5 * (w - cutout_w_m)
-    x_cut1_m = 0.5 * (w + cutout_w_m)
-    y_cut0_m = min(flange_m, 0.5 * (d - cutout_d_m))
-    y_cut1_m = y_cut0_m + cutout_d_m
+    # Use frame centerline spans (bw, bh) for parametric interpolation across [p00..p11] while
+    # preserving outer physical flange & cutout dimensions in trident_backbone_dimensions_mm().
+    cutout_w_cl_m = min(cutout_w_m, max(bw - 0.04, 0.20 * bw))
+    cutout_d_cl_m = min(cutout_d_m, max(bh - 0.04, 0.20 * bh))
+    x_cut0_m = 0.5 * (bw - cutout_w_cl_m)
+    x_cut1_m = 0.5 * (bw + cutout_w_cl_m)
+    y_cut0_m = min(flange_m, 0.5 * (bh - cutout_d_cl_m))
+    y_cut1_m = y_cut0_m + cutout_d_cl_m
 
-    u1 = max(0.05, min(0.45, x_cut0_m / max(w, 1e-6)))
-    u3 = min(0.95, max(0.55, x_cut1_m / max(w, 1e-6)))
+    u1 = max(0.05, min(0.45, x_cut0_m / max(bw, 1e-6)))
+    u3 = min(0.95, max(0.55, x_cut1_m / max(bw, 1e-6)))
     u_stops = (0.0, u1, 0.5, u3, 1.0)
 
-    v1 = max(0.05, min(0.45, y_cut0_m / max(d, 1e-6)))
-    v3 = min(0.95, max(v1 + 0.10, y_cut1_m / max(d, 1e-6)))
+    v1 = max(0.05, min(0.45, y_cut0_m / max(bh, 1e-6)))
+    v3 = min(0.95, max(v1 + 0.10, y_cut1_m / max(bh, 1e-6)))
     v2 = 0.5 if (v1 + 0.05 < 0.5 < v3 - 0.05) else 0.5 * (v1 + v3)
     v_stops = (0.0, v1, v2, v3, 1.0)
 
@@ -1297,9 +1301,9 @@ def _add_top_and_front_braces(
     """Build CoreXY non-blocking open-center Top Braces and open-door Front Braces."""
     from printsim.geometry import builder as _b
 
-    w = spec.frame.width_mm * 1e-3
-    d = spec.frame.depth_mm * 1e-3
-    h = spec.frame.height_mm * 1e-3
+    w = float(np.linalg.norm(nmap["t_fr"].position_m - nmap["t_fl"].position_m))
+    d = float(np.linalg.norm(nmap["t_rl"].position_m - nmap["t_fl"].position_m))
+    h = float(np.linalg.norm(nmap["t_fl"].position_m - nmap["b_fl"].position_m))
     allow_gantry = not spec.is_flying_gantry
 
     shells: list[_b.ShellPanelElement] = []

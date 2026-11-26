@@ -1627,9 +1627,10 @@ def _eval_panel_drum_status(
     ke_panel = float(phi_p @ np.where(free_panel_mask, m_phi, 0.0)) / m_gen
     ke_th_total = max(0.0, float(phi[free_th_mask] @ m_phi[free_th_mask]) / m_gen)
     is_drum = (
-        (ke_panel > 0.55 and noz_norm_all < 0.12 and ke_th_total < 0.04)
+        (ke_panel > 0.52 and noz_norm_all < 0.12 and ke_th_total < 0.04)
         or (ke_panel > 0.58 and noz_norm_all < 0.25 and ke_th_total < 0.04)
         or (ke_panel > 0.68 and gantry_max < 0.35 and noz_norm_all < 0.28)
+        or (ke_panel > 0.80 and noz_norm_all < 0.28 and ke_th_total < 0.06)
         or (ke_panel > 0.85 and ke_th_total < 0.05)
         or (np_max < 0.25 and gantry_max < 0.20)
     )
@@ -2039,11 +2040,10 @@ def solve_modal_fea(
         part = (noz_rel / noz_norm).tolist() if noz_norm > 1e-9 else [0.0, 0.0, 0.0]
 
         dom_axis = ["X", "Y", "Z"][int(np.argmax(axis_energy))]
-        is_bed_z_mode = (
-            bed_idx is not None
-            and bed_z_amp > 0.60
-            and float(noz_rel[0]) < 0.20
-            and float(noz_rel[1]) < 0.20
+        is_bed_z_mode = bed_idx is not None and (
+            (bed_z_amp > 0.60 and float(noz_rel[0]) < 0.20 and float(noz_rel[1]) < 0.20)
+            or (dom_axis == "Z" and bed_z_amp > 0.70 and float(max(noz_rel[0], noz_rel[1])) < 0.40)
+            or (dom_axis == "Z" and bed_z_amp > 0.80)
         )
 
         # Exact signed modal compliance / receptance residue at the nozzle-to-bed interface (B-02):

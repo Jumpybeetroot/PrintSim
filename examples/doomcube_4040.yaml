@@ -4,7 +4,7 @@ architecture: corexy
 frame:
   width_mm: 500
   depth_mm: 500
-  height_mm: 520
+  height_mm: 500
   profile: extrusion_2020
   upright_profile: extrusion_4040
   material: aluminum_6063_t5

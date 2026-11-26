@@ -704,7 +704,12 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
     x_rail_prof = get_profile(spec.gantry.x_rail_profile)
     rail_mat = get_material(spec.gantry.rail_material)
 
-    l_x = max(spec.frame.width_mm * 1e-3, 0.15)
+    x_gantry_members = [m for m in assembly.members if m.id in ("x_gantry_l", "x_gantry_r")]
+    l_x = (
+        max(sum(m.length_m(assembly.node_map) for m in x_gantry_members), 0.15)
+        if x_gantry_members
+        else max(spec.frame.width_mm * 1e-3, 0.15)
+    )
     bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
     if x_beam_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):
         sub_kind = "carbon_tube"

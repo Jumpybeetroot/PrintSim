@@ -2,9 +2,9 @@ name: RatRig V-Core 3.1 300
 description: Official-spec RatRig V-Core 3.1 300 CoreXY (open 3030 Al frame with cast corner brackets & 4mm Al6061 motor/idler plates, double-shear pulleys, 2WD 9mm Gates 2GT belts, 2020 X-beam with top-mounted MGN12H rail, EVA 3 + Rapido 2 HF toolhead, triple leadscrew Z with 3-point kinematic cast aluminum bed)
 architecture: corexy
 frame:
-  width_mm: 500
-  depth_mm: 500
-  height_mm: 540
+  width_mm: 505
+  depth_mm: 505
+  height_mm: 510
   profile: extrusion_3030
   material: aluminum_6063_t5
   bracing: corner_gussets

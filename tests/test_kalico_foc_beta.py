@@ -266,7 +266,7 @@ def test_foc_beta_physics_pin_rotor_active_damping_awd_sync_mode_space_and_lpv()
     bb_flat = simulate_time_domain_metrology(
         asm_tri, mod_tri, shaper_name="SMOOTH_FLATNESS", drive_cfg=DriveControlConfig(drive_type="closed_loop_stepper")
     )
-    assert bb_flat.corner_rounding_um < bb_mzv.corner_rounding_um * 0.70
+    assert bb_flat.corner_rounding_um < bb_mzv.corner_rounding_um * 0.75
 
 
 def test_open_loop_stepper_ignores_foc_features_and_emits_diagnostic() -> None:

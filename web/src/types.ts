@@ -1488,6 +1488,7 @@ export interface GeometryData {
     cost_usd: number;
   };
   frame_dims_mm: [number, number, number];
+  frame_outer_dims_mm?: [number, number, number];
   build_volume_mm: [number, number, number];
   build_origin_mm: [number, number, number];
   bed_size_mm: [number, number];

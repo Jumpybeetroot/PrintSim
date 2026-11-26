@@ -228,9 +228,10 @@ def test_all_front_brace_variants_stiffen_bolted_al_trident_and_preserve_open_do
     assert fb_meta["mass_kg"] > 0.1
     assert fb_meta["cost_usd"] == pytest.approx(FRONT_BRACE_CATALOG[front_brace]["cost_usd"])
 
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
     nmap = asm.node_map
-    w_m = spec.frame.width_mm * 1e-3
-    h_m = spec.frame.height_mm * 1e-3
+    w_m, _, h_m = corexy_frame_centerlines_m(spec)
     if front_brace == "cnc_portal_frame":
         front_shells = [s for s in asm.shell_elements if s.bay == "front_brace"]
         assert len(front_shells) == 12

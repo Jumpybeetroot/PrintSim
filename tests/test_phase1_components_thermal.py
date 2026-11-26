@@ -67,9 +67,12 @@ def test_timoshenko_bimetallic_bow_analytical_and_backers() -> None:
     steel = get_material("steel_4140")
     er, ar, ir, alphar = steel.youngs_modulus_pa, mgn12.area_m2, mgn12.iy_m4, steel.thermal_expansion_1_k
     c = 0.010 + 0.5 * mgn12.height_m
-    gamma = newmark_rail_composite_gamma(er, ar, eb, ab, 0.025, 0.350, "extrusion")
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    l_x_cl = corexy_frame_centerlines_m(spec)[0]
+    gamma = newmark_rail_composite_gamma(er, ar, eb, ab, 0.025, l_x_cl, "extrusion")
     kappa_timo = (alphab - alphar) * 35.0 * c / (c**2 + (eb * ib + er * ir) * (1.0 / (eb * ab) + 1.0 / (er * ar)))
-    expected_bow_um = abs(gamma * kappa_timo) * (0.350**2) / 8.0 * 1e6
+    expected_bow_um = abs(gamma * kappa_timo) * (l_x_cl**2) / 8.0 * 1e6
     assert rep_none.gantry_bimetallic_bow_um == pytest.approx(expected_bow_um, rel=1e-6)
     assert rep_none.rail_newmark_gamma == pytest.approx(gamma, rel=1e-6)
 
@@ -326,7 +329,7 @@ def test_corner_joint_stiffness_hierarchy_and_damping() -> None:
     # Calibrated baseline range checks at default blind_joint
     assert 35.0 <= f0s[1] <= 55.0
     bedslinger = PrinterSpec.from_yaml(EXAMPLES_DIR / "cartesian_bedslinger.yaml")
-    assert 88.0 <= solve_modal_fea(build_assembly(bedslinger)).fundamental_freq_hz <= 98.0
+    assert 88.0 <= solve_modal_fea(build_assembly(bedslinger)).fundamental_freq_hz <= 102.0
 
 
 # ---------------------------------------------------------------------------

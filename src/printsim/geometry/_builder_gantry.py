@@ -508,7 +508,11 @@ def _apply_bedslinger_x_rail_backer_sandwich(model: AssemblyModel) -> None:
     )
     x_normals = _x_rail_mount_normals(spec.gantry.effective_x_rail_mount)
     bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
-    w = spec.frame.width_mm * 1e-3
+    w = (
+        float(np.linalg.norm(nmap["z_r"].position_m - nmap["z_l"].position_m))
+        if ("z_l" in nmap and "z_r" in nmap)
+        else spec.frame.width_mm * 1e-3
+    )
 
     x_boost_iy = 0.0
     x_boost_iz = 0.0
@@ -598,13 +602,18 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
             newmark_rail_composite_gamma,
         )
 
+        x_span_m = (
+            sum(m.length_m(model.node_map) for m in x_gantry_members)
+            if x_gantry_members
+            else spec.frame.width_mm * 1e-3
+        )
         model.x_rail_newmark_gamma = newmark_rail_composite_gamma(
             e_rail_pa=rail_mat.youngs_modulus_pa,
             a_rail_m2=x_rail_prof.area_m2,
             e_beam_pa=eb_eff,
             a_beam_m2=base_x_prof.area_m2,
             bolt_pitch_m=spec.gantry.rail_bolt_pitch_mm * 1e-3,
-            l_eff_m=max(spec.frame.width_mm * 1e-3, 0.15),
+            l_eff_m=max(x_span_m, 0.15),
             substrate_kind=sub_kind,
             wall_thickness_m=base_x_prof.wall_thickness_m,
             matrix_shear_retention=shear_ret,

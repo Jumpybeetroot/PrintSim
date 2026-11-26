@@ -38,8 +38,8 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 def test_a01_y_inertial_load_includes_hotend_mass() -> None:
     """Verify solver and sensitivity Y inertial load shares use toolhead_moving_mass_kg (with hotend)."""
     for yaml_name, expected_approx_um in (
-        ("corexy_voron_style.yaml", 25.92),  # D-04 Misumi HFS5-2020 + physical X-beam/rail cut-length + cog/nozzle split
-        ("vzbot_330_awd.yaml", 9.25),  # D-02 0/90 CF tube + physical X-beam/rail cut-length + cog/nozzle split
+        ("corexy_voron_style.yaml", 25.60),  # D-04 Misumi HFS5-2020 + outer-to-centerline inset + physical X-beam/rail + cog/nozzle split
+        ("vzbot_330_awd.yaml", 8.88),  # D-02 0/90 CF tube + outer-to-centerline inset + physical X-beam/rail + cog/nozzle split
     ):
         spec = PrinterSpec.from_yaml(EXAMPLES_DIR / yaml_name)
         asm = build_assembly(spec)
