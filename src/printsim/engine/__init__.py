@@ -1,6 +1,8 @@
-from .evaluator import ScoreBreakdown, SimulationReport, evaluate_printer
-from .optimizer import OptimizationCandidate, OptimizationResult, optimize_design
-from .pareto import ParetoPoint, ParetoResult, is_pymoo_available, optimize_pareto_front
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
 from .diagnostics import (
     PrinterComparison,
     PrinterDiagnosis,
@@ -8,7 +10,21 @@ from .diagnostics import (
     compare_printers,
     diagnose_printer,
 )
-from .sweep import SweepCaseResult, SweepReport, run_sweep
+from .evaluator import ScoreBreakdown, SimulationReport, evaluate_printer
+from .optimizer import OptimizationCandidate, OptimizationResult, optimize_design
+from .pareto import ParetoPoint, ParetoResult, is_pymoo_available, optimize_pareto_front
+
+_LAZY_SWEEP_EXPORTS = frozenset({"SweepCaseResult", "SweepReport", "run_sweep"})
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_SWEEP_EXPORTS:
+        mod = importlib.import_module(".sweep", __name__)
+        val = getattr(mod, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "PrinterComparison",

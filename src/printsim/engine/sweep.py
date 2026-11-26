@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-from concurrent.futures import ProcessPoolExecutor
 import copy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -412,6 +411,8 @@ def _run_printer_sweep(
                     if workers is not None
                     else min(len(uncached_tasks), os.cpu_count() or 1, 8)
                 )
+                from concurrent.futures import ProcessPoolExecutor
+
                 with ProcessPoolExecutor(max_workers=max_workers) as pool:
                     worker_outputs = list(pool.map(_eval_printer_case_worker, uncached_tasks))
             else:

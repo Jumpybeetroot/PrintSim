@@ -91,7 +91,11 @@ def test_wasm_dispatch_runs_without_optional_native_or_web_packages() -> None:
 
     probe = (
         "import json, sys\n"
-        "for pkg in ('trimesh', 'ezdxf', 'httpx', 'fastapi', 'uvicorn', 'typer', 'rich', 'gmsh', 'build123d'):\n"
+        "for pkg in (\n"
+        "    'trimesh', 'ezdxf', 'httpx', 'fastapi', 'uvicorn', 'typer', 'rich',\n"
+        "    'gmsh', 'build123d', 'pymoo',\n"
+        "    '_multiprocessing', 'multiprocessing', '_sqlite3', 'sqlite3', 'fcntl', 'termios',\n"
+        "):\n"
         "    sys.modules[pkg] = None\n"
         "from printsim.wasm_dispatch import dispatch_api_request\n"
         "p = json.loads(dispatch_api_request('GET', '/api/presets/voron_monolith_awd')['body_text'])\n"
@@ -100,6 +104,11 @@ def test_wasm_dispatch_runs_without_optional_native_or_web_packages() -> None:
         "sim = json.loads(s['body_text'])\n"
         "assert sim['modal_fea']['fundamental_freq_hz'] > 40.0\n"
         "assert dispatch_api_request('GET', '/api/assets/hardware')['status'] == 200\n"
+        "assert dispatch_api_request('POST', '/api/bom', json.dumps({'spec': p['spec']}))['status'] == 200\n"
+        "assert dispatch_api_request('POST', '/api/fea/solid-part', json.dumps({'preset': 'corner_gusset', 'material_id': 'abs_printed'}))['status'] == 200\n"
+        "assert dispatch_api_request('POST', '/api/optimize', json.dumps({'spec': p['spec'], 'iterations': 3, 'objective': 'balanced'}))['status'] == 200\n"
+        "assert dispatch_api_request('POST', '/api/optimize/pareto', json.dumps({'spec': p['spec'], 'population_size': 8, 'generations': 2}))['status'] == 200\n"
+        "assert dispatch_api_request('POST', '/api/verify/deep', json.dumps({'spec': p['spec'], 'deep_mesh_n': 4, 'deep_bed_mesh_n': 8}))['status'] == 200\n"
     )
     proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, f"Pyodide-minimal probe failed:\n{proc.stderr}"
