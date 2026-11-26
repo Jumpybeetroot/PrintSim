@@ -111,7 +111,7 @@ def test_voron_trident_pareto_front():
     payload = result.to_dict(include_specs=True)
     serialized = json.dumps(payload)
     parsed = json.loads(serialized)
-    assert parsed["backend"] == "pymoo (NSGA-II)"
+    assert parsed["backend"] == expected_backend
     assert len(parsed["pareto_front"]) == len(result.pareto_front)
     for item in parsed["pareto_front"]:
         assert "spec" in item
