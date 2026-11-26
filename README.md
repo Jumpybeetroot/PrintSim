@@ -1,5 +1,7 @@
 # PrintSim — Full-Featured Multiphysics 3D Printer Simulator
 
+[![Support on Ko-fi](https://img.shields.io/badge/Support%20on%20Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/jumpybeetroot)
+
 **PrintSim** is an engineering-grade 3D printer design, simulation, and AI optimization studio built for both **human mechanical engineers** and **AI design agents**. Design and test complete 3D printers — frames, trusses, bolted structural panels, extrusion fillings, composite linear rails, gantry brackets, belts, steppers, hotends, and custom CAD parts — before cutting a single aluminum extrusion or printing a bracket.
 
 ## What's New in v0.9.0
@@ -22,7 +24,7 @@
   - **Wilson–Taylor QM6-3D Solid Hex8 Continuum FEM (`solid_fem.py`)**, feature-aligned rectilinear bracket meshing (`bracket_designer.py` / `superelement.py`), and **3D SIMP Topology Optimization (`topology.py`)** with watertight printable STL export.
   - Coupled modal + drive receptance analysis (moving-mass-consistent series compliance + Rayleigh reflected stepper rotor inertia + feet-sprung receptance) and upstream Klipper multi-damping input shaper calibration (`ZV`, `ZVD`, `MZV`, `EI`, `2HUMP_EI`, `3HUMP_EI`).
 - **Manufacturable Cut-List, Stock Nesting & BOM (`printsim.geometry.bom`)**: Auto-merges split structural members into physical cut lengths (including net butt-joint lengths), runs 1D stock bar nesting (`1000mm`/`2000mm` bars + saw kerf & scrap `%`), calculates exact belt/rail/smooth-rod/motor/bracket/filling/panel/fastener counts and reconciled cost breakdowns, and exports to **JSON, CSV, or Markdown**.
-- **Kinematics & Clearance (`printsim.kinematics`)**: CoreXY, Cartesian, and Delta exact FK/IK + full Delta Jacobian torque/RPM/workspace & tower-height checks, peak/RMS-consistent stepper pull-out torque-speed curves & torque-balance max velocity, decomposed static/dynamic belt `EA` with exact pulley-to-pulley free-span lengths, exact 2WD/AWD worst-direction accel limits, and dynamic tight-side overtension / slack-side slip checks.
+- **Kinematics & Clearance (`printsim.kinematics`)**: CoreXY, Cartesian, and Delta exact FK/IK + full Delta Jacobian torque/RPM/workspace & tower-height checks, **17-motor datasheet-verified NEMA 17/23 catalog** (Excit3D Max, Isik's Tech Ouroboros 1000 PPR encoder, LDO, Kraken V2, MOONS', Leadshine, STEPPERONLINE) with peak/RMS-consistent stepper pull-out torque-speed curves, torque-balance max velocity, hot-copper TCR winding thermal equilibrium (Class B/F/H), decomposed static/dynamic belt `EA` with exact pulley-to-pulley free-span lengths, exact 2WD/AWD worst-direction accel limits, and dynamic tight-side overtension / slack-side slip checks.
 - **Hotend FVM Thermal, Multi-Filament Rheology & Cooling (`printsim.thermal`)**: 40-node 1D Finite-Volume axial temperature solver $T(z)$ honoring enclosure `chamber_temp_c`, melt-averaged DSC multi-filament database (`PLA`, `PETG`, `ABS`, `ASA`, `PA12-CF`, `TPU 95A`) with Arrhenius $K \cdot a_T^n$ shear-thinning viscosity & $T_g$ heat-creep thresholds, transient heat-up curves, and overhang/bridging cooling predictions.
 - **G-code Lookahead & Virtual Print (`printsim.gcode`)**: Parses Marlin/Klipper/OrcaSlicer G-code including `G2`/`G3` arcs, `M204 T`, `SET_VELOCITY_LIMIT`, and E-only retracts, computes lookahead trapezoidal motion timings, and tags every toolpath segment with physical defects (`ok`, `ringing` in µm, `smoothing`, `underextrusion`, `step_skip`, `belt_slip`).
 - **Interactive 3D Web Studio (`web/`)**: React + Three.js studio surfacing inertial nozzle flex vs. gravity sag, plane-removed bed plate flatness + tilt/settlement, dynamic belt tension breakdowns, live 3D modes (Assembly, Frame FEA heatmap, Animated Modal Vibration, Virtual Print toolpath scrubber, **Curved Tet10 / QM6-3D Hex8 Solid Part FEA** with `.step`/`.stl` upload, and **3D SIMP Topology Optimization**), **Klipper ADXL345 CSV Overlay & Auto-Fit**, **Klipper PSD & Pareto Trade-Off Frontier (`Flex @ 10k`)** charts, **BOM & Cut-List inspector**, **one-click Klipper `printer.cfg` export**, **`#spec=` shareable build URLs**, and STEP/STL/DXF/CSV downloads.
@@ -61,6 +63,9 @@ uv run printsim bom examples/voron_trident_300.yaml --csv trident_bom.csv
 # Machine-readable JSON output for AI agents
 uv run printsim evaluate examples/corexy_voron_style.yaml --json --no-segments
 
+# PrintDB Integration (optional install for shared hardware datasheets & physics constants)
+uv pip install "git+https://github.com/Jumpybeetroot/PrintDB.git"
+
 # Run evolutionary AI design optimization
 uv run printsim optimize examples/cartesian_bedslinger.yaml --iterations 30 --objective rigidity --out optimized.yaml
 
@@ -79,6 +84,7 @@ uv run printsim cad inspect path/to/part.step
 uv run printsim cad bake cad_recipes/my_part.yaml --fast   # cached Tet4 + 2x2 preview PNG + QA gate
 uv run printsim cad verify                                 # verify all baked assets against QA invariants
 uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --out cad_sources/part.step
+uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --kind assemblies --out cad_sources/asm.step
 
 # Zero-LLM diagnostics, A/B comparisons & parallel SQLite-cached sweeps
 uv run printsim diagnose examples/corexy_voron_style.yaml

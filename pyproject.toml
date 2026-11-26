@@ -7,6 +7,7 @@ name = "printsim"
 version = "0.9.0"
 description = "Full-featured multiphysics 3D printer simulator for humans and AI agents (FEA, modal analysis, kinematics, thermal/hotend, G-code virtual printing)"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -44,6 +45,11 @@ all = [
     "meshio>=5.3",
     "pymoo>=0.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Jumpybeetroot/PrintSim"
+Repository = "https://github.com/Jumpybeetroot/PrintSim"
+Issues = "https://github.com/Jumpybeetroot/PrintSim/issues"
 
 [project.scripts]
 printsim = "printsim.cli:app"

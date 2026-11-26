@@ -1,6 +1,6 @@
 ---
 name: discord-research
-description: Hands-off, read-only engineering research pipeline for 3D-printing Discord communities (Monolith, VzBoT, Klipper, Luke's Laboratory, Isik's Tech, ANNEX Engineering, Armchair Heavy Industries, Kalico). Use whenever searching for buried thread specs, toolhead/component weights, gantry/hotend measurements, or Klipper/Shake&Tune ADXL resonance data.
+description: Hands-off, read-only engineering research pipeline for 3D-printing Discord communities (Monolith, VzBoT, Klipper, Luke's Laboratory, Isik's Tech, ANNEX Engineering, Armchair Heavy Industries, Kalico, VORONDesign). Use whenever searching for buried thread specs, toolhead/component weights, gantry/hotend measurements, or Klipper/Shake&Tune ADXL resonance data.
 ---
 
 # Hands-Off Discord 3D-Printing Engineering Research
@@ -12,7 +12,7 @@ Use this workflow whenever you need real-world 3D printer hardware specs, scale-
 Never open Discord cold. Always run the zero-LLM router first:
 
 ```bash
-uv run python .agents/skills/discord-research/scripts/route_query.py "<query>" [--topic adxl|weights|toolheads|hotends|gantry|belts|frame|steppers|rails|cooling|probes|polymers] [--server monolith|vzbot|klipper|lukes_lab|isiks_tech|annex|ahi|kalico]
+uv run python .agents/skills/discord-research/scripts/route_query.py "<query>" [--topic adxl|weights|toolheads|hotends|gantry|belts|frame|steppers|rails|cooling|probes|polymers] [--server monolith|vzbot|klipper|lukes_lab|isiks_tech|annex|ahi|kalico|voron]
 ```
 
 This does two things in <1 second:
@@ -71,8 +71,8 @@ Never let a Discord lookup evaporate at the end of a session! After the browser 
    (Or run `uv run python .agents/skills/discord-research/scripts/route_query.py --ingest <file>`.)
 3. **If ADXL CSV files were downloaded**:
    - Copy them to `data/touchstones/adxl_csvs/`, run `uv run printsim kb ingest data/touchstones/adxl_csvs/<file>.csv --auto-approve`, and optionally run PrintSim's `calibrate_adxl_csv` MCP tool to extract exact $\omega_0$, $\zeta$, and Klipper shaper recommendations.
-4. **Promote major reference touchstones into tracked docs**:
-   - For high-confidence calibration data (e.g., scale-weighed toolhead/hotend masses, controlled before/after ADXL benchmarks, or polymer TDS), also append a cited row to `docs/community_touchstones.md` or `docs/monolith_discord_benchmarks.md` and run `uv run printsim kb seed`.
+4. **Promote major reference touchstones into tracked docs & PrintDB**:
+   - For high-confidence calibration data (e.g., scale-weighed toolhead/hotend masses, controlled before/after ADXL benchmarks, or polymer TDS), also append a cited row to `docs/community_touchstones.md` or `docs/monolith_discord_benchmarks.md`, run `uv run printsim kb seed`, and **add the verified hardware/material/reference record to PrintDB** (`/Users/jumpybeetroot/Projects/PrintDB`, via `printdb_add_local` MCP tool or `PrintDB/data/` + `printdb validate && printdb build`).
 
 ## 4. Adding More Discord Servers Later
 

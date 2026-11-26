@@ -216,7 +216,7 @@ print(bracket["stiffness_n_per_mm"], bracket["specific_stiffness_n_per_mm_per_g"
 
 To gather empirical 3D-printer hardware specs (toolhead/hotend weights, gantry masses, polymer tests, and Klipper/Shake&Tune ADXL resonance data) from public 3D-printing Discord communities without manual babysitting, PrintSim combines:
 
-- **Workspace Skill & Server Directory**: [`.agents/skills/discord-research/SKILL.md`](../.agents/skills/discord-research/SKILL.md) + [`.agents/skills/discord-research/servers.yaml`](../.agents/skills/discord-research/servers.yaml) (pre-mapped channel IDs for Monolith, VzBoT, Klipper, Luke's Laboratory, Isik's Tech, ANNEX Engineering, Armchair Heavy Industries, and Kalico).
+- **Workspace Skill & Server Directory**: [`.agents/skills/discord-research/SKILL.md`](../.agents/skills/discord-research/SKILL.md) + [`.agents/skills/discord-research/servers.yaml`](../.agents/skills/discord-research/servers.yaml) (pre-mapped channel IDs for Monolith, VzBoT, Klipper, Luke's Laboratory, Isik's Tech, ANNEX Engineering, Armchair Heavy Industries, Kalico, and VORONDesign).
 - **Zero-LLM Query Router + KB Cache Check**:
   ```bash
   uv run python .agents/skills/discord-research/scripts/route_query.py "vzbot 330 adxl" --topic adxl
@@ -226,7 +226,35 @@ To gather empirical 3D-printer hardware specs (toolhead/hotend weights, gantry m
 
 ---
 
-## 6. Zero-LLM Local CAD & FEA Batch CLI Workflow (Token-Efficient Mode)
+## 7. Hybrid Onshape CAD + Local `build123d` Workflow
+
+PrintSim agents can pair the **Onshape MCP server** (full cloud CAD REST access when connected) with local **`build123d` + `gmsh` + `scikit-fem`** (`printsim cad`) for an end-to-end CAD-to-FEA pipeline.
+
+### What Agents Can Do with Onshape MCP
+When the `onshape` MCP server is connected and authenticated (verify with `onshape_auth_status`):
+- **Discover & triage CAD documents:** Search the user's library and public community Onshape documents (`onshape_list_documents`, `onshape_search_documents`), inspect every workspace/tab (`onshape_get_document_summary`), render server-side shaded previews (`onshape_shaded_view`), and query mass properties, BOMs, measurements, and clearances (`onshape_get_bom`, `onshape_assembly_mass_properties`, `onshape_measure`, `onshape_clearance`).
+- **Configure & export STEP/STL/3MF:** Flip parametric Onshape Variables and Configurations (`onshape_get_variables`, `onshape_set_variable`, `onshape_get_configuration`, `onshape_encode_configuration`) and export both **Part Studios** and **Assemblies** straight into `cad_sources/` (`onshape_export` with `kind: "partstudios"` or `kind: "assemblies"`, `format: "STEP"`).
+- **Author & modify human-editable CAD:** Create or edit Part Studios, Feature Studios / FeatureScript, sketches, extrudes, revolves, fillets, booleans, assemblies, mates, and drawings directly in the user's Onshape workspace when the user wants a live interactive CAD document they can orbit, tweak, and share in their browser.
+
+### When to Use Onshape vs. Local `build123d`
+
+| Task | Best Tool | Why |
+| :--- | :--- | :--- |
+| Finding, configuring & exporting user/community assemblies (Monolith, Voron, toolheads, hotends) | **Onshape MCP** (`onshape_export` / `onshape_set_variable`) or `printsim cad fetch-onshape --kind assemblies` | Native Onshape Configurations/Variables, BOM/mass/clearance checks, and visual triage (`onshape_shaded_view`) before downloading large STEPs. |
+| Designing human-editable brackets/mounts the user wants to inspect or tweak in CAD | **Onshape MCP** (FeatureScript / Variables / Part Studios) | Produces a live browser-editable, versioned Onshape document instead of a script-only part. |
+| Preparing OEM "integration" STEPs for FEA (thickening surface-only shells, hollowing keep-out blocks, cleaning micro-overlaps) | **Local `build123d`** (`cad_recipes/*.yaml` + `printsim cad bake`) | Runs in ~1–2 s locally, stays version-controlled, and feeds straight into conformal `gmsh` Tet4/Tet10 + `scikit-fem` Craig–Bampton condensation. |
+| Automated parametric geometry/FEA optimization sweeps (10–100+ variants) | **Local `build123d` + `printsim sweep`** | Orders of magnitude faster than cloud API round-trips, with SHA-256 mesh caching in `.cache/cad_fea/`. |
+
+### Practical Onshape MCP & CLI Notes
+- **`onshape_list_documents`:** Keep `limit <= 20` (Onshape's API rejects `limit > 20` with HTTP 400).
+- **`onshape_shaded_view`:** Always pass an explicit writable `out` path (e.g., `/tmp/onshape_preview.png`), because the server's default output path can hit a read-only root directory.
+- **Assemblies vs. Part Studios:** Pass `kind: "assemblies"` on `onshape_export` / `onshape_shaded_view` (or `--kind assemblies` on `printsim cad fetch-onshape`) when targeting an Assembly tab.
+- **Units:** Onshape MCP tool parameters use **inches and degrees**; exported STEP files preserve exact physical geometry and are read in **mm** by `build123d` / `printsim cad`.
+- **Sandboxed agent sessions vs. host CLI:** Inside a sandboxed shell, `printsim cad fetch-onshape` cannot read `~/.onshape-mcp` or macOS Keychain unless `ONSHAPE_ACCESS_KEY`/`ONSHAPE_SECRET_KEY` are exported — use the MCP tool `onshape_export` directly instead. Outside the sandbox (user terminal), `printsim cad fetch-onshape` automatically resolves env vars, `~/.onshape-mcp/credentials.json`, or macOS Keychain.
+
+---
+
+## 8. Zero-LLM Local CAD & FEA Batch CLI Workflow (Token-Efficient Mode)
 
 To avoid burning LLM turns on interactive STEP geometry probing, Gmsh re-meshing, or multi-case 3D FEA calibration loops, offload heavy CAD and sweep work to PrintSim's local cached CLIs and feed only the compact Markdown/JSON summaries back to the agent:
 
@@ -238,8 +266,10 @@ uv run printsim cad inspect cad_sources/my_hotend.step
 uv run printsim cad bake cad_recipes/my_hotend.yaml --fast
 uv run printsim cad verify
 
-# 3. Export STEP directly from an existing Onshape document (requires ONSHAPE_ACCESS_KEY/SECRET_KEY)
+# 3. Export STEP directly from an existing Onshape Part Studio or Assembly
+#    (uses ONSHAPE_ACCESS_KEY/SECRET_KEY env vars or ~/.onshape-mcp / macOS Keychain)
 uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --out cad_sources/part.step
+uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --kind assemblies --out cad_sources/asm.step
 
 # 4. Run compact physics diagnostics, A/B override deltas, and parallel SQLite-cached sweeps
 uv run printsim diagnose examples/corexy_voron_style.yaml

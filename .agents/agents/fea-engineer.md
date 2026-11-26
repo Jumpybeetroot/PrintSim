@@ -22,3 +22,4 @@ You are the structural mechanics and Finite Element Analysis specialist for Prin
 3. Start by reading `docs/CODEBASE_MAP.md` (if present) and jump directly to target line ranges; use `grep -rn` (not `rg`).
 4. Batch independent reads/edits/checks; NEVER poll `manage_task(status)` in a loop (use `NotificationTimeoutSeconds` and wait reactively).
 5. Keep runs fast and compact: use `uv run pytest tests/test_<area>.py -q --tb=short` during iteration and report exact benchmark error margins.
+6. For CAD-backed superelements and STEP FEA, consult `docs/CAD_AND_FEA_PITFALLS.md` and use `uv run printsim cad inspect|bake|verify|preview` (local `build123d` for thickening/hollowing/cleaning OEM STEPs; request Onshape MCP export from the orchestrator or run `printsim cad fetch-onshape --kind assemblies|partstudios` when sourcing CAD from Onshape).

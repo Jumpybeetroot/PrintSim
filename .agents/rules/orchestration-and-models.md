@@ -64,7 +64,7 @@ In a **Swarm**, explicitly pass the `model` ID below on `swarm(action="add")` (u
 3. **Zero-LLM CAD & FEA First:**
    - Use `uv run printsim cad inspect <part.step>` instead of ad-hoc `python -c` STEP probing.
    - Use declarative `cad_recipes/*.yaml` + `uv run printsim cad bake` (with `--fast` preview contact-sheet PNG and `.cache/cad_fea/` mesh caching) instead of writing one-off baker scripts or taking repeated browser screenshots.
-   - Use `build123d` scripts locally for AI-authored CAD; use Onshape MCP only for exporting existing user assemblies (`printsim cad fetch-onshape`) or flipping Onshape Variables — never build complex parts via dozens of turn-by-turn Onshape MCP sketch/extrude calls.
+   - Use `build123d` for fast local parametric B-Rep generation and FEA meshing, and use **Onshape MCP** freely whenever inspecting, thickening, modifying, visually rendering (`onshape_shaded_view`), flipping Variables/FeatureScript, or exporting user/public Onshape Part Studios & Assemblies (`onshape_export` / `printsim cad fetch-onshape --kind assemblies`); avoid redundant turn-by-turn primitive sketching when a single FeatureScript or `build123d` script is faster and cleaner.
    - Use `uv run printsim sweep`, `printsim diagnose`, and `printsim compare` instead of ad-hoc `python -c` diagnostic scripts.
 4. **Fast Dev-Loop Defaults:**
    - Read `docs/CODEBASE_MAP.md` first to jump to exact line ranges instead of reading entire large files.

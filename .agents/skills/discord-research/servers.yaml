@@ -612,3 +612,132 @@ servers:
         type: "forum"
         pins_priority: false
         topics: ["kalico", "adxl", "shaper", "troubleshooting"]
+
+  voron:
+    name: "VORONDesign"
+    guild_id: "460117602945990666"
+    default_channel_id: "460172848565190667"
+    focus: ["voron", "trident", "v2.4", "v2", "v0", "switchwire", "stealthburner", "cw2", "tap", "adxl", "shaper", "resonance", "weights", "extruders", "hotends", "mods"]
+    notes: "Official Voron Design server — highest volume of baseline Voron Trident, V2.4, V0, and Switchwire ADXL/shaper logs (#voron_resonance_basic_help), StealthBurner/CW2/Tap/Chariot/Downdraft weights, and LDO/Phaetus/E3D vendor specs."
+    channels:
+      - id: "1308016330326413393"
+        name: "voron_resonance_basic_help"
+        type: "forum"
+        pins_priority: false
+        topics: ["adxl", "shaper", "resonance", "belts", "trident", "voron", "csv"]
+        notes: "Dedicated Voron input-shaper / Shake&Tune ADXL graph & CSV forum."
+      - id: "551488536256184331"
+        name: "voron_trident_questions"
+        type: "text"
+        pins_priority: true
+        topics: ["trident", "voron", "frame", "gantry", "adxl", "weights", "bed"]
+      - id: "472450547534921729"
+        name: "voron_2_discussion"
+        type: "text"
+        pins_priority: true
+        topics: ["voron", "v2", "gantry", "frame", "adxl", "weights", "belts"]
+      - id: "1169405960540917810"
+        name: "voron_2_help_forum_public"
+        type: "forum"
+        pins_priority: false
+        topics: ["voron", "v2", "adxl", "shaper", "troubleshooting", "belts"]
+      - id: "696930677161197640"
+        name: "voron_0_questions"
+        type: "text"
+        pins_priority: true
+        topics: ["voron", "v0", "small_frame", "toolheads", "adxl", "weights"]
+      - id: "741806179247980695"
+        name: "voron_switchwire_questions"
+        type: "text"
+        pins_priority: true
+        topics: ["voron", "switchwire", "bedslinger", "adxl", "belts"]
+      - id: "460172848565190667"
+        name: "klipper_kalico_discussion"
+        type: "text"
+        pins_priority: false
+        topics: ["klipper", "kalico", "adxl", "shaper", "tuning"]
+      - id: "1169407804386316288"
+        name: "klipper_kalico_help"
+        type: "forum"
+        pins_priority: false
+        topics: ["klipper", "kalico", "adxl", "shaper", "troubleshooting"]
+      - id: "658599170734686219"
+        name: "afterburner_and_stealthburner_questions"
+        type: "text"
+        pins_priority: true
+        topics: ["toolheads", "stealthburner", "weights", "hotends", "cooling", "cw2"]
+      - id: "1156062199014510654"
+        name: "voron_extruder_family_and_friends_forum"
+        type: "forum"
+        pins_priority: false
+        topics: ["extruders", "weights", "cw2", "galileo", "toolheads"]
+      - id: "1568771692686479410"
+        name: "voron_downdraft"
+        type: "text"
+        pins_priority: true
+        topics: ["toolheads", "weights", "cooling", "hotends", "adxl"]
+      - id: "1568772090562089090"
+        name: "voron_chariot"
+        type: "text"
+        pins_priority: true
+        topics: ["toolheads", "weights", "gantry", "adxl"]
+      - id: "1041007230239125574"
+        name: "voron_tap"
+        type: "text"
+        pins_priority: true
+        topics: ["probes", "tap", "weights", "stiffness", "adxl", "toolheads"]
+      - id: "1292208726970990644"
+        name: "klicky_and_magprobes"
+        type: "text"
+        pins_priority: true
+        topics: ["probes", "klicky", "weights"]
+      - id: "635687829254701107"
+        name: "voronuser_mods"
+        type: "text"
+        pins_priority: true
+        topics: ["mods", "toolheads", "gantry", "frame", "weights", "adxl"]
+      - id: "1456509063499223211"
+        name: "voronusers_mods_mixtape"
+        type: "forum"
+        pins_priority: false
+        topics: ["mods", "toolheads", "gantry", "weights", "adxl"]
+      - id: "1221643523741323274"
+        name: "voron_build_logs"
+        type: "forum"
+        pins_priority: false
+        topics: ["builds", "voron", "trident", "v2", "adxl", "weights"]
+      - id: "1076243803947667516"
+        name: "can_and_usb_toolhead_boards"
+        type: "text"
+        pins_priority: false
+        topics: ["electronics", "toolboards", "adxl", "weights"]
+      - id: "485141703284490250"
+        name: "cad"
+        type: "text"
+        pins_priority: false
+        topics: ["cad", "dimensions", "weights", "stiffness"]
+      - id: "710952853514223617"
+        name: "ldo_motors"
+        type: "text"
+        pins_priority: true
+        topics: ["steppers", "motors", "rails", "hardware", "weights"]
+      - id: "830395563094442044"
+        name: "phaetus"
+        type: "text"
+        pins_priority: false
+        topics: ["hotends", "dragon", "rapido", "weights", "flow"]
+      - id: "1507232616942669984"
+        name: "e3d-🇬🇧-🌐"
+        type: "text"
+        pins_priority: false
+        topics: ["hotends", "revo", "weights", "flow"]
+      - id: "935501992263036938"
+        name: "bondtech"
+        type: "text"
+        pins_priority: false
+        topics: ["extruders", "hotends", "weights"]
+      - id: "728478255463792650"
+        name: "mandala_roseworks-🇺🇸"
+        type: "text"
+        pins_priority: false
+        topics: ["bed", "frame", "hardware", "weights"]

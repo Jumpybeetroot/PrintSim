@@ -214,7 +214,7 @@ def ingest_capture(path: Path, auto_approve: bool = True, min_score: float = 0.1
 def main() -> int:
     parser = argparse.ArgumentParser(description="Route a 3D-printing query to local KB hits + exact Discord channels.")
     parser.add_argument("query", nargs="?", default="", help="Engineering question or keywords (e.g. 'chube compact weight')")
-    parser.add_argument("--server", "-s", default=None, help="Filter to one server slug/name (monolith, vzbot, klipper, lukes_lab, isiks_tech, annex, ahi, kalico)")
+    parser.add_argument("--server", "-s", default=None, help="Filter to one server slug/name (monolith, vzbot, klipper, lukes_lab, isiks_tech, annex, ahi, kalico, voron)")
     parser.add_argument("--topic", "-t", default=None, help="Optional topic boost (adxl, weights, toolheads, hotends, gantry, belts, frame, steppers, rails, cooling, probes, polymers)")
     parser.add_argument("--top", "-n", type=int, default=6, help="Number of Discord channels to return")
     parser.add_argument("--ingest", type=Path, default=None, help="Ingest a Discord capture JSON/CSV into data/touchstones/printsim_kb.db")
