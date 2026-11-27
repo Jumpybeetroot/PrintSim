@@ -2257,51 +2257,6 @@ export default function App() {
         }
       : sim;
 
-  const handleExportStl = async () => {
-    if (!spec) return;
-    const res = await fetch("/api/export/stl", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(spec),
-    });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${spec.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.stl`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleExportStep = async () => {
-    if (!spec) return;
-    setExportingStep(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/export/step", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(spec),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(errBody.detail || "STEP assembly export failed");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${spec.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.step`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setExportingStep(false);
-    }
-  };
-
   const handleExportDxf = async () => {
     if (!spec) return;
     setExportingDxf(true);
@@ -2458,7 +2413,7 @@ export default function App() {
   const exportTriggerLabel = shareCopied
     ? "Copied Link ✓"
     : exportingStep
-      ? "Exporting STEP…"
+      ? "Exporting STEP…" // per-part bracket STEP download (Part FEA)
       : exportingDxf
         ? "Exporting DXF…"
         : "Export ▾";
@@ -2663,41 +2618,12 @@ export default function App() {
               aria-expanded={openMenu === "export"}
               aria-haspopup="menu"
               onClick={() => setOpenMenu((m) => (m === "export" ? null : "export"))}
-              title="Export STL, STEP CAD, DXF Plates, BOM CSV, or copy a shareable link"
+              title="Export DXF Plates, BOM CSV, or copy a shareable link"
             >
               <span>{exportTriggerLabel}</span>
             </button>
             {openMenu === "export" && (
               <div className="topbar-menu-popover" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="topbar-menu-item"
-                  disabled={!spec}
-                  onClick={() => {
-                    setOpenMenu(null);
-                    void handleExportStl();
-                  }}
-                >
-                  <span className="topbar-menu-item-title">Export STL (.stl)</span>
-                  <span className="topbar-menu-item-sub">3D structural mesh assembly</span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="topbar-menu-item"
-                  disabled={!spec || exportingStep}
-                  onClick={() => {
-                    setOpenMenu(null);
-                    void handleExportStep();
-                  }}
-                  title="Export full OpenCASCADE B-Rep STEP CAD assembly"
-                >
-                  <span className="topbar-menu-item-title">
-                    {exportingStep ? "Exporting STEP..." : "Export STEP CAD (.step)"}
-                  </span>
-                  <span className="topbar-menu-item-sub">OpenCASCADE B-Rep CAD assembly</span>
-                </button>
                 <button
                   type="button"
                   role="menuitem"
