@@ -236,7 +236,13 @@ def compute_toolhead_link_props(
             b_face_m = max(x_beam_prof.width_m - 2.0 * t_wall_m, 0.004)
             e_axial_t = x_beam_mat.effective_modulus_pa(chamber_c)
             r_g_cf = x_beam_mat.shear_modulus_retention_at_temp(chamber_c)
-            e_trans_pa = max(0.25 * e_axial_t, 14.0e9 * r_g_cf)
+            is_cf_beam = (
+                spec.gantry.x_beam_profile.startswith("cf_")
+                or spec.gantry.x_beam_material.startswith("carbon_fiber")
+            )
+            e_trans_pa = (
+                max(0.25 * e_axial_t, 14.0e9 * r_g_cf) if is_cf_beam else e_axial_t
+            )
             l_eff_m = l_block_m + b_face_m
             b_eff_m = max(b_face_m - 0.68 * w_rail_m, 0.30 * b_face_m)
 
@@ -563,6 +569,23 @@ def resolve_toolhead_cad_asset_id(preset_id: str | None) -> str:
     return _TOOLHEAD_CAD_ASSET_ALIASES.get(pid, pid)
 
 
+def is_split_carriage_cad_manifest(manifest: dict[str, Any] | None) -> bool:
+    """Return True if a baked CAD toolhead has a distinct bolted X-carriage mount.
+
+    Multi-piece FDM or bolted-cage toolheads (StealthBurner, Dragon Burner, XOL, A4T,
+    Archetype, Vz-Printhead) bolt onto a separate X-carriage that users commonly upgrade
+    to CNC 6061-T6 aluminum independently of the toolhead body. Monolithic unibody
+    toolheads (Trinity 1.6, Microwaved Bowden, El Fuego) bolt directly to the MGN block.
+    """
+    if not isinstance(manifest, dict):
+        return False
+    if bool(manifest.get("is_unibody", False)):
+        return False
+    return bool(manifest.get("is_fdm_anisotropic", False)) or bool(
+        manifest.get("multi_piece_bolted", False)
+    )
+
+
 def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
     """Replace heuristic toolhead/hotend links with baked CAD superelements when enabled & available."""
     from printsim.geometry import builder as _b
@@ -652,21 +675,62 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             #   multi-piece bolted clamshell seam compliance (not a welded one-piece monoblock).
             eff_body_mat = get_material(spec.toolhead.effective_body_material)
             # Monolithic printed unibody toolheads (e.g. WV-Design Trinity 1.6, is_unibody=True) have
-            # zero split-clamshell seam: apply ONLY the 0.55x FDM infill/layer-line anisotropy knockdown
-            # for printed polymers (< 25 GPa) and 1.0x for CNC/SLM metal upgrades.
-            # Bolted multi-piece FDM/CNC cages (StealthBurner, Vz-Printhead) retain 0.32x / 0.58x.
-            is_unibody_cad = bool(asset_th.manifest.get("is_unibody", False))
-            if bool(asset_th.manifest.get("is_fdm_anisotropic", False)) or bool(
-                asset_th.manifest.get("multi_piece_bolted", False)
+            # zero split-clamshell seam and no separate X-carriage: apply ONLY the 0.55x FDM
+            # infill/layer-line anisotropy knockdown for printed polymers (< 25 GPa) and 1.0x for
+            # CNC/SLM metal upgrades.
+            # Split-carriage CAD toolheads (StealthBurner, Dragon Burner, XOL, A4T, Archetype,
+            # Vz-Printhead) bolt onto a distinct X-carriage (Port 0) in series with the forward
+            # toolhead body (Port 1). Model them as 35% X-carriage / 65% body compliance in series
+            # so upgrading the X-carriage alone (e.g. CNC 6061-T6 carriage + printed body) stiffens
+            # the carriage root without eliminating printed body compliance, while reducing
+            # identically to the uniform-material factor whenever carriage == body.
+            is_unibody_manifest = bool(asset_th.manifest.get("is_unibody", False))
+            is_compact_onepiece_body = (
+                getattr(spec.toolhead, "body_construction", None) == "compact_cage"
+                and not bool(asset_th.manifest.get("multi_piece_bolted", False))
+            )
+            is_split_carriage = is_split_carriage_cad_manifest(asset_th.manifest)
+            if is_split_carriage or (
+                is_unibody_manifest and bool(asset_th.manifest.get("is_fdm_anisotropic", False))
             ):
-                if is_unibody_cad:
+                if is_unibody_manifest:
                     clamshell_mult = (
                         0.55 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 1.0
                     )
                 else:
-                    clamshell_mult = (
-                        0.32 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 0.58
-                    )
+                    if is_compact_onepiece_body:
+                        body_clamshell_mult = (
+                            0.55 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 1.0
+                        )
+                    else:
+                        body_clamshell_mult = (
+                            0.32 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 0.58
+                        )
+                    car_mat_id = spec.toolhead.effective_carriage_mount_material
+                    body_mat_id = spec.toolhead.effective_body_material
+                    if car_mat_id != body_mat_id:
+                        eff_car_mat = get_material(car_mat_id)
+                        e_body_eff = max(
+                            float(eff_body_mat.youngs_modulus_pa)
+                            * eff_body_mat.modulus_retention_at_temp(chamber_c),
+                            1e6,
+                        )
+                        e_car_eff = max(
+                            float(eff_car_mat.youngs_modulus_pa)
+                            * eff_car_mat.modulus_retention_at_temp(chamber_c),
+                            1e6,
+                        )
+                        car_clamshell_mult = (
+                            0.32 if float(eff_car_mat.youngs_modulus_pa) < 25e9 else 0.58
+                        )
+                        # Series split: 35% X-carriage root compliance + 65% forward body/clamshell
+                        # compliance (CW2 + hotend mount), expressed relative to asset_th.K_bb
+                        # (already scaled to e_body_eff).
+                        s_car_rel = (e_car_eff / e_body_eff) * car_clamshell_mult
+                        s_body_rel = body_clamshell_mult
+                        clamshell_mult = 1.0 / (0.35 / max(s_car_rel, 1e-6) + 0.65 / max(s_body_rel, 1e-6))
+                    else:
+                        clamshell_mult = body_clamshell_mult
                 if abs(clamshell_mult - 1.0) > 1e-6:
                     asset_th.K_bb = asset_th.K_bb * clamshell_mult
                     asset_th.K_cb = asset_th.K_cb * clamshell_mult
@@ -732,7 +796,30 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             model.toolhead_stage_stiffnesses_n_per_mm["carriage_mount_n_per_mm"] = float(
                 props["k_rail_carriage_n_per_mm"]
             )
-            model.toolhead_stage_stiffnesses_n_per_mm["backplate_only_n_per_mm"] = 0.0
+            bp_cad_k_n_mm = 0.0
+            if (
+                is_split_carriage
+                and spec.architecture in ("corexy", "cartesian")
+                and spec.gantry.effective_x_rail_mount == "front"
+                and not bool(
+                    get_material(spec.toolhead.effective_carriage_mount_material).is_printed_polymer
+                )
+                and _has_cad_asset("gantry_brackets", "siboor_cnc_x_carriage")
+            ):
+                asset_car = _load_cad_superelement(
+                    "gantry_brackets",
+                    "siboor_cnc_x_carriage",
+                    material_id=spec.toolhead.effective_carriage_mount_material,
+                    chamber_temp_c=chamber_c,
+                )
+                if asset_car is not None:
+                    ps_car = asset_car.manifest.get("port_stiffness_n_per_mm") or {}
+                    car_scale_k = float(getattr(asset_car, "stiffness_scale_applied", 1.0))
+                    kx_c = float(ps_car.get("kx", 0.0)) * car_scale_k
+                    ky_c = float(ps_car.get("ky", 0.0)) * car_scale_k
+                    if kx_c > 1e-6 and ky_c > 1e-6:
+                        bp_cad_k_n_mm = 2.0 / (1.0 / kx_c + 1.0 / ky_c)
+            model.toolhead_stage_stiffnesses_n_per_mm["backplate_only_n_per_mm"] = bp_cad_k_n_mm
             model.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"] = k_body_n_m * 1e-3
             updated_stage = True
 
@@ -771,6 +858,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                     manifest=th_manifest,
                     visual_glb_url=f"/api/assets/hardware/toolheads/{th_asset_id}/visual.glb",
                     cad_trust_pct=int(asset_th.manifest.get("cad_trust_pct", 90)),
+                    subpart_recovery=getattr(asset_th, "subpart_recovery", None),
                 )
             )
 
@@ -930,6 +1018,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                     manifest=he_manifest,
                     visual_glb_url=se_visual_url,
                     cad_trust_pct=int(asset_he.manifest.get("cad_trust_pct", 92)),
+                    subpart_recovery=getattr(asset_he, "subpart_recovery", None),
                 )
             )
 

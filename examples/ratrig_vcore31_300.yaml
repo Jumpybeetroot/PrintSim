@@ -67,11 +67,12 @@ kinematics:
     rotor_inertia_kg_m2: 6.8e-6
     motor_mass_g: 340
 toolhead:
-  preset_id: custom
+  preset_id: eva3
   name: RatRig EVA 3 + Orbiter 2 + SuperPINDA
   total_mass_g: 390
   cog_offset_mm: [0, -14, -16]
   nozzle_offset_mm: [0, -16, -50]
+  offset_datum_rail_mount: top
   mount_material: pet_cf_printed
   body_construction: compact_cage
   internal_stiffness_n_per_mm: 550.0

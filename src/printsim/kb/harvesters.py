@@ -142,6 +142,7 @@ def seed_from_benchmark_docs(
     summary = {
         "files_processed": 0,
         "raw_items_added": 0,
+        "stale_snapshots_removed": 0,
         "builds_added": 0,
         "weights_added": 0,
         "material_tests_added": 0,
@@ -169,6 +170,13 @@ def seed_from_benchmark_docs(
         )
         if inserted:
             summary["raw_items_added"] += 1
+        # The doc is a living file: drop earlier snapshots (and their derived rows) so an
+        # edited value replaces the old one instead of sitting beside it.
+        summary["stale_snapshots_removed"] += kb.remove_superseded_snapshots(
+            source_type="benchmark_doc",
+            source_name=doc_path.name,
+            keep_item_id=raw_id,
+        )
 
         # A. Parse Markdown tables:
         #    - Build Shaper Baselines (Build | Frame | Drive & Belts | Gantry / Panels | Measured X | Measured Y)
@@ -505,6 +513,77 @@ def _extract_author_name(author_field: Any) -> str:
     return str(author_field or "")
 
 
+_EXPLICIT_RECORD_FIELDS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
+    # table: (required key, text fields, numeric fields)
+    "component_weights": ("component_name", ("category", "component_name", "details"), ("mass_g",)),
+    "builds": (
+        "build_name",
+        (
+            "build_name", "architecture", "printer_model", "frame_profile", "panel_spec", "drive_mode",
+            "belt_core", "motors", "toolhead", "hotend", "x_shaper_type", "y_shaper_type",
+            "preset_hint", "notes",
+        ),
+        (
+            "frame_size_mm", "belt_width_mm", "belt_pluck_hz", "voltage_v", "x_shaper_hz", "x_max_accel",
+            "y_shaper_hz", "y_max_accel", "x_moving_mass_g", "y_moving_mass_g",
+        ),
+    ),
+    "material_tests": (
+        "material_name",
+        ("material_name", "test_notes"),
+        ("modulus_gpa", "hdt_c", "creep_limit_n", "belt_pluck_hz", "shaper_hz"),
+    ),
+    "troubleshooting_cases": (
+        "symptom",
+        ("printer_class", "symptom", "measured_signature", "root_cause", "verified_fix"),
+        (),
+    ),
+}
+
+
+def _explicit_structured_records(rec: dict[str, Any]) -> dict[str, list[dict[str, Any]]] | None:
+    """Structured records stated outright by a curated JSON record (its ``records`` key).
+
+    A reader who verified a measurement can state it as data instead of leaving it to
+    the regex extractor, which only recognises a few phrasings. Shape::
+
+        "records": {"component_weights": [{"category": "hotend", "component_name": "...", "mass_g": 79.0}]}
+
+    Tables and fields follow ``insert_extracted_records``. Unknown tables and fields are
+    ignored, numbers are coerced, and a row without its required name (or a weight without
+    a positive ``mass_g``) is dropped. Returns ``None`` when nothing usable is present.
+    """
+    raw = rec.get("records")
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, list[dict[str, Any]]] = {table: [] for table in _EXPLICIT_RECORD_FIELDS}
+    for table, (required, text_fields, numeric_fields) in _EXPLICIT_RECORD_FIELDS.items():
+        rows = raw.get(table)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get(required) or "").strip():
+                continue
+            clean: dict[str, Any] = {}
+            for key in text_fields:
+                if row.get(key) is not None:
+                    clean[key] = str(row[key]).strip()
+            bad_number = False
+            for key in numeric_fields:
+                if row.get(key) is None or row.get(key) == "":
+                    continue
+                try:
+                    clean[key] = float(row[key])
+                except (TypeError, ValueError):
+                    bad_number = True
+            if bad_number:
+                continue
+            if table == "component_weights" and not clean.get("mass_g", 0.0) > 0.0:
+                continue
+            out[table].append(clean)
+    return out if any(out.values()) else None
+
+
 def _is_klipper_shaper_csv(path: Path) -> bool:
     if path.suffix.lower() != ".csv":
         return False
@@ -586,7 +665,12 @@ def ingest_local_path(
     min_score: float = 0.20,
     auto_approve: bool = False,
 ) -> dict[str, int]:
-    """Recursively ingest Discord export JSON, JSON/JSONL, Markdown/TXT, and Klipper shaper CSV files."""
+    """Recursively ingest Discord export JSON, JSON/JSONL, Markdown/TXT, and Klipper shaper CSV files.
+
+    JSON-list and JSONL records may state their data outright in a ``records`` object (see
+    ``_explicit_structured_records``); with ``auto_approve`` those rows are inserted as given
+    and the regex extractor is not run on that record.
+    """
     root = Path(path)
     if not root.exists():
         raise FileNotFoundError(f"Path does not exist: {root}")
@@ -736,6 +820,7 @@ def ingest_local_path(
                 author = _extract_author_name(rec.get("author"))
                 chan = str(rec.get("channel") or "")
                 title = str(rec.get("title") or (f"{author} #{chan}".strip() if author else f"{fpath.stem} #{idx}"))
+                explicit = _explicit_structured_records(rec)
                 _ingest_single_record(
                     kb,
                     source_type="local_export",
@@ -750,6 +835,11 @@ def ingest_local_path(
                     min_score=min_score,
                     auto_approve=auto_approve,
                     stats=stats,
+                    # A record that states its data outright is curated: keep it whatever the
+                    # regex scorer thinks of its wording, and use exactly the records it states.
+                    forced_score=0.9 if explicit else None,
+                    forced_tags=["curated"] if explicit else None,
+                    extra_extracted=explicit,
                 )
             continue
 
@@ -766,6 +856,7 @@ def ingest_local_path(
                     continue
                 content = str(rec.get("content") or rec.get("raw_text") or rec.get("body") or rec.get("text") or "")
                 atts = _normalize_discord_attachments(rec.get("attachments"))
+                explicit = _explicit_structured_records(rec)
                 _ingest_single_record(
                     kb,
                     source_type="local_export",
@@ -780,6 +871,9 @@ def ingest_local_path(
                     min_score=min_score,
                     auto_approve=auto_approve,
                     stats=stats,
+                    forced_score=0.9 if explicit else None,
+                    forced_tags=["curated"] if explicit else None,
+                    extra_extracted=explicit,
                 )
             continue
 

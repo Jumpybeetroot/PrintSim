@@ -52,6 +52,7 @@ class SensitivityReport:
     lumped_mass_sensitivities: dict[str, dict[str, Any]] = field(default_factory=dict)
     top_stiffen_targets: list[dict[str, Any]] = field(default_factory=list)
     top_lighten_targets: list[dict[str, Any]] = field(default_factory=list)
+    part_group_sensitivities: dict[str, dict[str, Any]] = field(default_factory=dict)
     subsystem_breakdown: dict[str, dict[str, Any]] = field(default_factory=dict)
     primary_problem_subsystem: str = "frame"
     summary_diagnosis: str = ""
@@ -68,6 +69,7 @@ class SensitivityReport:
             "lumped_mass_sensitivities": self.lumped_mass_sensitivities,
             "top_stiffen_targets": self.top_stiffen_targets,
             "top_lighten_targets": self.top_lighten_targets,
+            "part_group_sensitivities": self.part_group_sensitivities,
             "subsystem_breakdown": self.subsystem_breakdown,
             "primary_problem_subsystem": self.primary_problem_subsystem,
             "summary_diagnosis": self.summary_diagnosis,
@@ -363,13 +365,16 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
         return "Main limit: X-gantry beam & X-rail bending/torsional stiffness under toolhead acceleration."
 
     if group_id == "toolhead_mount" or role == "toolhead":
+        car_mat = spec.toolhead.effective_carriage_mount_material
+        body_mat = spec.toolhead.effective_body_material
+        mat_label = f"'{body_mat}'" if car_mat == body_mat else f"'{car_mat}' carriage / '{body_mat}' body"
         if spec.architecture == "delta":
             return (
-                f"Main limit: effector mount compliance ('{spec.toolhead.mount_material}'), "
+                f"Main limit: effector mount compliance ({mat_label}), "
                 "nozzle/CoG lever arm overhang, and effector mass."
             )
         return (
-            f"Main limit: toolhead mount stiffness ('{spec.toolhead.mount_material}'), "
+            f"Main limit: toolhead mount stiffness ({mat_label}), "
             "rail carriage pitch compliance, and CoG/nozzle lever arm."
         )
 
@@ -1368,6 +1373,7 @@ def compute_structural_sensitivities(
         g["mass_kg"] += float(b["mass_kg"])
 
     stiffen_pool: list[dict[str, Any]] = []
+    part_group_sensitivities: dict[str, dict[str, Any]] = {}
     for gid, g in group_acc.items():
         stiff_fund = float(g["stiffness_sens_hz"])
         mass_fund = float(g["mass_sens_hz"])
@@ -1397,8 +1403,6 @@ def compute_structural_sensitivities(
         eff_net_hz = max(net_fund, xy_net)
         comp_pct = float(g["compliance_share_pct"])
         cost_usd = max(float(g["cost_usd"]), 1.0)
-        if not ((eff_stiff_hz > 1e-4 and (eff_net_hz > 0.0 or comp_pct > 0.5)) or comp_pct > 1.0):
-            continue
         # Frozen-mode Rayleigh quotient gain for +50% stiffness:
         # Since df/d(ln E) = (f / 2) * s_e, 0.5 * s_e = eff_stiff_hz / f_ref_hz,
         # giving exact df = f * (sqrt(1 + 0.5 * s_e) - 1) = f * (sqrt(1 + eff_stiff_hz / f) - 1).
@@ -1408,6 +1412,19 @@ def compute_structural_sensitivities(
         )
         est_hz_gain = round(rayleigh_gain_hz, 1)
         hz_per_usd = eff_net_hz / cost_usd
+        part_group_sensitivities[gid] = {
+            "id": gid,
+            "role": g["role"],
+            "label": g["label"],
+            "hz_per_usd": round(hz_per_usd, 4),
+            "compliance_share_pct": round(comp_pct, 2),
+            "est_hz_gain": round(rayleigh_gain_hz, 2),
+            "mass_kg": round(float(g["mass_kg"]), 4),
+            "why_it_hurts": _stiffen_why(gid, comp_pct, est_hz_gain),
+            "action_hint": _stiffen_hint(gid, g["role"], spec),
+        }
+        if not ((eff_stiff_hz > 1e-4 and (eff_net_hz > 0.0 or comp_pct > 0.5)) or comp_pct > 1.0):
+            continue
         impact_score = comp_pct * 0.65 + est_hz_gain * (1.2 + comp_pct / 20.0)
         stiffen_pool.append(
             {
@@ -1600,6 +1617,7 @@ def compute_structural_sensitivities(
         lumped_mass_sensitivities=lumped_mass_sensitivities,
         top_stiffen_targets=top_stiffen_targets,
         top_lighten_targets=top_lighten_targets,
+        part_group_sensitivities=part_group_sensitivities,
         subsystem_breakdown=subsystem_breakdown,
         primary_problem_subsystem=primary_problem_subsystem,
         summary_diagnosis=summary_diagnosis,

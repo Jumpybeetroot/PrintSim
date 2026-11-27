@@ -21,6 +21,11 @@ from printsim.fea.beam3d import (
     superelement_element_matrices,
     transformation_12x12,
 )
+from printsim.fea.belt_micromechanics import cord_crimp_factor_micromechanics
+from printsim.fea.belt_nonlinear import (
+    NonlinearBeltDriveSpec,
+    solve_nonlinear_belt_shaker_response,
+)
 from printsim.fea.components import (
     belt_damping_ratio,
     belt_flexural_rigidity_nm2,
@@ -49,7 +54,12 @@ from printsim.kinematics.solvers import (
     compute_drive_stiffness_details_n_per_m,
     compute_drive_stiffness_n_per_m,
 )
-from printsim.schema import GANTRY_BRACKET_CATALOG, get_material, resolve_frame_feet
+from printsim.schema import (
+    GANTRY_BRACKET_CATALOG,
+    get_material,
+    resolve_belt,
+    resolve_frame_feet,
+)
 
 _G_ACC = 9.80665  # standard gravity (m/s^2)
 
@@ -103,6 +113,8 @@ class ModeShape:
     y_axis_share_pct: float = 0.0
     is_limiting_axis_mode: bool = False
     is_primary_limiting_mode: bool = False
+    toolhead_part_flex: list[dict] = field(default_factory=list)
+    toolhead_mode_fields: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -185,6 +197,8 @@ class ModalResult:
                     "y_axis_share_pct": m.y_axis_share_pct,
                     "is_limiting_axis_mode": m.is_limiting_axis_mode,
                     "is_primary_limiting_mode": m.is_primary_limiting_mode,
+                    "toolhead_part_flex": m.toolhead_part_flex,
+                    "toolhead_mode_fields": m.toolhead_mode_fields,
                 }
                 for m in self.modes
             ],
@@ -425,43 +439,103 @@ def _recommend_shaper(
     assembly: AssemblyModel | None = None,
     fast_diagnostic: bool = False,
 ) -> tuple[InputShaperRecommendation, AxisShaperGraph]:
-    # Exact 2-DOF drive coupling + dynamic shaker slack-side unloading + strain-energy damping
+    # Exact 2-DOF drive coupling + first-principles nonlinear belt shaker dynamics + strain-energy damping
     c_struct = max(c_struct_m_per_n, 0.0)
     k_belt_eff = max(float(k_belt_n_m), 1.0)
     k_bracket_eff = max(float(k_bracket_n_m), 1.0)
     m_eff = max(float(m_moving_kg), 0.05)
-    slack_margin_ratio = 1.0
+    nl_zeta_delta = 0.0
     extra_belt_modes: list[tuple[float, float]] = []
+
+    zeta_frame = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
+    is_foc = (
+        assembly is not None
+        and assembly.spec.kinematics.drive_type in ("foc_servo", "closed_loop_stepper")
+    )
 
     if assembly is not None:
         spec = assembly.spec
         belt = operating_belt(spec)
+        t_ch = float(spec.frame.chamber_temp_c)
+        belt_cfg = resolve_belt(spec)
+        ea_override_n = float(belt_cfg["stiffness_ea_n"])
+        belt_mu_kg_m = max(float(belt_cfg["linear_mass_kg_m"]), 1e-4)
+
         details = compute_drive_stiffness_details_n_per_m(assembly, axis)
         k_motor_raw = float(details["k_motor_axis_n_m"]) * _foc_motor_stiffness_multiplier(assembly)
         m_rot = _reflected_rotor_mass_kg(assembly)
         sol = _solve_coupled_drive_2dof(k_belt_eff, k_motor_raw, k_bracket_eff, m_eff, m_rot)
         c_drv = float(sol["c_drive_n_inv"])
-        f_eff_static = 1.0 / (2.0 * math.pi * math.sqrt(max(m_eff * (c_struct + c_drv), 1e-15)))
 
-        # Dynamic slack-side unloading during Klipper ADXL shaker sweep (accel_per_hz = 75 mm/s^2/Hz,
-        # effective sweep resonance envelope Q ~ 1.8). When slack tension approaches zero, bilinear
-        # spring unloading lowers cycle-averaged belt stiffness and broadens the PSD peak.
-        a_shaker_m_s2 = 0.075 * f_eff_static * 1.8
+        # First-principles coupled longitudinal-transverse nonlinear shaker dynamics
+        # (unilateral tension-only branches with Costello tangent EA(T) + Beikmann-Perkins-Ulsoy
+        # 1:1 sag/runout & 2:1 parametric Mathieu-Duffing transverse whip).
         if spec.architecture == "corexy":
-            f_shaker_belt = 0.5 * m_eff * a_shaker_m_s2
+            n_loops = 2.0
         elif spec.architecture == "delta":
             from printsim.kinematics.solvers import _delta_center_j_norm
 
-            f_shaker_belt = (m_eff * a_shaker_m_s2) / max(_delta_center_j_norm(spec), 1.0)
+            n_loops = max(float(_delta_center_j_norm(spec)), 1.0)
         else:
-            f_shaker_belt = m_eff * a_shaker_m_s2
+            n_loops = 1.0
         slack_share = float(details.get("slack_load_share", 0.5))
-        dt_shaker = slack_share * f_shaker_belt
         t0 = max(float(belt.pretension_n), 0.25)
-        slack_margin_ratio = (t0 - dt_shaker) / t0
-        if slack_margin_ratio < 0.45:
-            u_pen = max(0.0, min(1.0, (0.45 - slack_margin_ratio) / 0.85))
-            k_belt_eff = k_belt_eff * (1.0 - 0.42 * (u_pen**1.5))
+        l_free = max(float(details.get("longest_free_span_m", 0.35)), 0.10)
+        ei_belt = belt_flexural_rigidity_nm2(belt, chamber_temp_c=t_ch)
+        zeta_belt_lin = belt_damping_ratio(belt, chamber_temp_c=t_ch, slack_margin_ratio=1.0)
+        # Pure viscoelastic material + thermal damping (Ling et al. 2020 DMA tan delta ~ 0.06-0.08)
+        # without the empirical low-tension proxy, so NonlinearBeltDriveSpec captures low-tension
+        # slackening and transverse-whip broadening from first principles without double-damping.
+        ret_t = belt.tooth_modulus_retention(t_ch)
+        z_belt_base_mat = (
+            0.052 if belt.core == "aramid" else (0.036 if belt.body_material == "tpu" else 0.044)
+        )
+        zeta_belt_mat = z_belt_base_mat + 0.040 * max(0.0, 1.0 - ret_t)
+        zeta_motor_lin = 0.080 if is_foc else 0.050
+
+        profile_family = str(belt.catalog_entry.get("profile_family", "2gt"))
+        width_mm = float(belt.width_mm)
+        core = belt.core
+        e_seat = max(float(belt.elastomer_seating_factor), 0.1)
+
+        def _belt_ea_fn(tension_n: float) -> float:
+            c_t = cord_crimp_factor_micromechanics(
+                max(tension_n, 0.05),
+                profile_family=profile_family,
+                width_mm=width_mm,
+                core=core,
+                matrix_modulus_retention=ret_t,
+                elastomer_modulus_scale=e_seat,
+            )
+            return max(ea_override_n * c_t * e_seat, 100.0)
+
+        nl_drive = NonlinearBeltDriveSpec(
+            m_car_eff_kg=m_eff,
+            m_rot_kg=m_rot,
+            k_motor_raw_n_m=k_motor_raw,
+            k_bracket_n_m=k_bracket_eff,
+            c_struct_m_per_n=c_struct,
+            pretension_n=t0,
+            k_belt_linear_n_m=k_belt_eff,
+            n_loops=n_loops,
+            slack_load_share=slack_share,
+            ea_fn=_belt_ea_fn,
+            longest_free_span_m=l_free,
+            belt_linear_mass_kg_m=belt_mu_kg_m,
+            belt_ei_nm2=ei_belt,
+            transverse_damping_ratio=max(0.025, 0.75 * zeta_belt_mat),
+            pulley_eccentricity_m=0.0,
+            zeta_belt_base=zeta_belt_mat,
+            zeta_motor=zeta_motor_lin,
+            zeta_car=0.010,
+        )
+        nl_res = solve_nonlinear_belt_shaker_response(
+            nl_drive,
+            num_freq_bins=72 if fast_diagnostic else 108,
+        )
+        nl_zeta_delta = float(nl_res.zeta_nl_delta)
+        if nl_res.slack_duty_cycle > 0.0 or nl_res.stiffness_ratio < 0.995:
+            k_belt_eff = max(float(nl_res.k_belt_eff_n_m), 1.0)
             sol = _solve_coupled_drive_2dof(k_belt_eff, k_motor_raw, k_bracket_eff, m_eff, m_rot)
             c_drv = float(sol["c_drive_n_inv"])
             belt_hz = math.sqrt(k_belt_eff / m_eff) / (2.0 * math.pi)
@@ -488,40 +562,24 @@ def _recommend_shaper(
         if 10.0 <= f2_hz <= 215.0 and abs(f2_hz - f_eff) >= 3.0 and m2_part > 0.15:
             extra_belt_modes.append((f2_hz, m2_part))
 
-        # Transverse free-span ("guitar string") belt whip & low-tension softening-shoulder coupling:
-        # 1) Geometric quadratic shortening couples the longest free span's transverse mode f_trans
-        #    into the longitudinal ADXL PSD (Beikmann-Perkins-Ulsoy 1996).
-        # 2) Below radial tooth-seating / slack-margin threshold (q0 < 2.2 N/mm or slack_margin < 0.45),
-        #    bilinear slack-side unloading + tooth unseating smears resonance downward (~0.82 * f_eff),
-        #    forcing Klipper off narrow ZV onto wider MZV / EI just like real under-tensioned ADXL plots.
-        l_free = max(float(details.get("longest_free_span_m", 0.35)), 0.10)
-        mu_belt = max(float(belt.linear_mass_kg_m), 1e-4)
-        ei_belt = belt_flexural_rigidity_nm2(belt, chamber_temp_c=spec.frame.chamber_temp_c)
-        f_trans = (1.0 / (2.0 * l_free)) * math.sqrt(t0 / mu_belt) * math.sqrt(
-            1.0 + (math.pi**2) * ei_belt / max(t0 * (l_free**2), 1e-9)
-        )
-        q0 = t0 / max(float(belt.width_mm), 1.0)
+        # Add first-principles nonlinear softening-shoulder and Beikmann-Perkins-Ulsoy whip sidebands
+        for mf_nl, part_nl in nl_res.extra_modes:
+            if 10.0 <= mf_nl <= 215.0 and abs(mf_nl - f_eff) >= 3.0 and part_nl > 0.15:
+                extra_belt_modes.append((float(mf_nl), float(part_nl)))
+
+        # During deep intermittent slack-branch unloading (slack_duty_cycle > 0.28 with meaningful
+        # cycle-averaged stiffness loss), the belt spends duty fraction D in the unloaded branch
+        # stiffness k_belt * (1 - slack_share), radiating low-side spectral power at the exact
+        # slack-branch frequency f_slack (matching the time-domain ODE Welch PSD ZV -> MZV transition).
+        duty = float(nl_res.slack_duty_cycle)
         s_belt_frac = shares_pct["belt"] / 100.0
-        belt_weight = min(1.0, s_belt_frac / 0.35)
-        u_loose = max(0.0, min(1.0, (2.2 - q0) / 1.5))
-        u_slack = max(0.0, min(1.0, (0.45 - slack_margin_ratio) / 0.85))
-        whip_added = False
-        if (
-            12.0 <= f_trans <= 1.15 * f_eff
-            and abs(f_trans - f_eff) >= 3.0
-            and (q0 < 2.6 or slack_margin_ratio < 0.45)
-        ):
-            raw_whip = (0.30 + 0.85 * math.exp(-q0 / 1.4) + 0.35 * u_slack) * belt_weight
-            p_whip = min(1.25, raw_whip)
-            if p_whip > 0.15:
-                extra_belt_modes.append((f_trans, p_whip))
-                whip_added = True
-        if (u_loose > 0.05 or u_slack > 0.05) and s_belt_frac >= 0.25:
-            f_soft = max(12.0, 0.82 * f_eff)
-            if abs(f_soft - f_eff) >= 3.0 and (not whip_added or abs(f_soft - f_trans) >= 4.0):
-                p_soft = min(1.15, (0.55 * (u_loose**1.1) + 0.65 * u_slack) * belt_weight)
-                if p_soft > 0.20:
-                    extra_belt_modes.append((f_soft, p_soft))
+        if duty > 0.28 and nl_res.stiffness_ratio < 0.97 and s_belt_frac >= 0.20:
+            c_slack_ratio = s_belt_frac * (slack_share / max(1.0 - slack_share, 0.15))
+            f_slack = max(10.0, f_eff / math.sqrt(1.0 + c_slack_ratio))
+            # Convert duty-cycle PSD fraction into synthesize_axis_psd participation space (0.45 * p^2)
+            p_slack = min(1.15, math.sqrt((1.5 * duty) / 0.45))
+            if abs(f_slack - f_eff) >= 3.0 and p_slack > 0.15:
+                extra_belt_modes.append((f_slack, p_slack))
     else:
         c_total = c_struct + 1.0 / max(k_drive_n_m, 1.0)
         f_eff = 1.0 / (2.0 * math.pi * math.sqrt(max(m_eff * c_total, 1e-15)))
@@ -535,19 +593,8 @@ def _recommend_shaper(
         if abs(mf - f_eff) >= 3.0 and 10.0 <= mf <= 215.0 and part_val > 0.15
     ]
 
-    zeta_frame = 0.055 if psd_damping_ratio is None else float(psd_damping_ratio)
-    is_foc = (
-        assembly is not None
-        and assembly.spec.kinematics.drive_type in ("foc_servo", "closed_loop_stepper")
-    )
     if assembly is not None:
-        # Ross-Ungar-Kerwin modal strain-energy weighted damping across frame, belt, motor, & bracket
-        zeta_belt = belt_damping_ratio(
-            operating_belt(assembly.spec),
-            chamber_temp_c=assembly.spec.frame.chamber_temp_c,
-            slack_margin_ratio=slack_margin_ratio,
-        )
-        zeta_motor = 0.080 if is_foc else 0.050
+        # Ross-Ungar-Kerwin modal strain-energy weighted linear damping + first-principles nonlinear broadening
         bkt_mat = get_material(assembly.spec.gantry.bracket_material)
         if bkt_mat.is_printed_polymer:
             zeta_bracket = 0.044
@@ -555,13 +602,13 @@ def _recommend_shaper(
             zeta_bracket = 0.024
         else:
             zeta_bracket = 0.020
-        zeta_base = (
+        zeta_lin = (
             (shares_pct["frame"] / 100.0) * zeta_frame
-            + (shares_pct["belt"] / 100.0) * zeta_belt
-            + (shares_pct["motor"] / 100.0) * zeta_motor
+            + (shares_pct["belt"] / 100.0) * zeta_belt_lin
+            + (shares_pct["motor"] / 100.0) * zeta_motor_lin
             + (shares_pct["bracket"] / 100.0) * zeta_bracket
         )
-        zeta_base = float(min(0.18, max(0.025, zeta_base)))
+        zeta_base = float(min(0.22, max(0.025, zeta_lin + nl_zeta_delta)))
     else:
         zeta_base = zeta_frame
 
@@ -755,13 +802,16 @@ def _frame_mode_fix_hint(assembly: AssemblyModel) -> str:
 
 def _toolhead_mode_fix_hint(assembly: AssemblyModel) -> str:
     spec = assembly.spec
+    car_mat = spec.toolhead.effective_carriage_mount_material
+    body_mat = spec.toolhead.effective_body_material
+    mat_label = f"'{body_mat}'" if car_mat == body_mat else f"'{car_mat}' carriage / '{body_mat}' body"
     if spec.architecture == "delta":
         return (
-            f"Main limit: effector mount compliance ('{spec.toolhead.mount_material}'), "
+            f"Main limit: effector mount compliance ({mat_label}), "
             "nozzle/CoG lever arm overhang, and effector moving mass."
         )
     return (
-        f"Main limit: toolhead mount stiffness ('{spec.toolhead.mount_material}'), "
+        f"Main limit: toolhead mount stiffness ({mat_label}), "
         "rail carriage pitch/torsional compliance, CoG/nozzle lever arm, and toolhead mass."
     )
 
@@ -2254,9 +2304,21 @@ def solve_modal_fea(
     # Exact unit-load static nozzle-to-bed structural compliance c_struct [m/N] (zero mode-truncation drift, B-01/B-02).
     # For top-heavy toolheads (cog_z > 0, noz_z < 0), out-of-phase toolhead pitch swings the nozzle
     # opposite to the carriage (c_noz < c_car). In dynamic vibration / input shaping, opposite-phase
-    # pitch whip ADDS resonance compliance rather than stiffening the frame, so we form the exact
-    # zero-truncation non-collocated compliance c_eff = c_car + |c_noz - c_car| (bit-identical to
-    # c_noz whenever c_noz >= c_car, and linear in mount-mode residues r_eff = 2*r_car - r_noz).
+    # pitch whip ADDS resonance compliance rather than stiffening the frame, so we form the
+    # zero-truncation non-collocated compliance c_eff = c_car + w_th * |c_noz - c_car|.
+    # Weighting the relative nozzle-to-carriage pitch whip by the toolhead moving-mass share
+    # w_th = m_toolhead / m_axis (1.0 on X; ~0.35-0.50 on CoreXY Y) prevents a cantilevered nozzle
+    # tip from attributing 100% of its local pitch whip to the X-beam and Y-carriage mass, while
+    # staying exact and linear in mount-mode residues.
+    w_th_x = 1.0
+    if (
+        assembly.spec.architecture == "corexy"
+        and assembly.toolhead_moving_mass_kg > 0.0
+        and assembly.y_moving_mass_kg > 0.0
+    ):
+        w_th_y = min(1.0, max(0.15, assembly.toolhead_moving_mass_kg / assembly.y_moving_mass_kg))
+    else:
+        w_th_y = 1.0
     try:
         u_x_stat = lu_solver.solve(fx_exc[free_dofs]) if lu_solver is not None else np.linalg.solve(K_ff, fx_exc[free_dofs])
         u_y_stat = lu_solver.solve(fy_exc[free_dofs]) if lu_solver is not None else np.linalg.solve(K_ff, fy_exc[free_dofs])
@@ -2266,8 +2328,14 @@ def solve_modal_fea(
         c_car_y_raw = float(cy_car_rel[free_dofs] @ u_y_stat)
         flip_pitch_x = noz_idx != th_idx and c_noz_x_raw < c_car_x_raw
         flip_pitch_y = noz_idx != th_idx and c_noz_y_raw < c_car_y_raw
-        c_struct_fe_x = max(1e-12, (2.0 * c_car_x_raw - c_noz_x_raw) if flip_pitch_x else c_noz_x_raw)
-        c_struct_fe_y = max(1e-12, (2.0 * c_car_y_raw - c_noz_y_raw) if flip_pitch_y else c_noz_y_raw)
+        c_struct_fe_x = max(
+            1e-12,
+            c_car_x_raw + w_th_x * ((c_car_x_raw - c_noz_x_raw) if flip_pitch_x else (c_noz_x_raw - c_car_x_raw)),
+        )
+        c_struct_fe_y = max(
+            1e-12,
+            c_car_y_raw + w_th_y * ((c_car_y_raw - c_noz_y_raw) if flip_pitch_y else (c_noz_y_raw - c_car_y_raw)),
+        )
         c_struct_fe_car_x = max(1e-12, c_car_x_raw)
         c_struct_fe_car_y = max(1e-12, c_car_y_raw)
     except (np.linalg.LinAlgError, RuntimeError):
@@ -2475,8 +2543,8 @@ def solve_modal_fea(
                 mount_modes.append(
                     {
                         "freq_hz": freq_hz,
-                        "r_x": (2.0 * r_car_x_m - comp_x_noz) if flip_pitch_x else comp_x_noz,
-                        "r_y": (2.0 * r_car_y_m - comp_y_noz) if flip_pitch_y else comp_y_noz,
+                        "r_x": r_car_x_m + w_th_x * ((r_car_x_m - comp_x_noz) if flip_pitch_x else (comp_x_noz - r_car_x_m)),
+                        "r_y": r_car_y_m + w_th_y * ((r_car_y_m - comp_y_noz) if flip_pitch_y else (comp_y_noz - r_car_y_m)),
                         "r_car_x": r_car_x_m,
                         "r_car_y": r_car_y_m,
                         "a_x": (pf_x * pf_x) / m_gen,
@@ -2675,6 +2743,25 @@ def solve_modal_fea(
                 key=lambda kv: kv[1],
             )[0]
 
+        from printsim.fea.toolhead_parts import (
+            compute_modal_toolhead_parts,
+            compute_toolhead_part_fields,
+        )
+
+        phi_norm = np.hstack([np.asarray(trans, dtype=np.float64), np.asarray(rot, dtype=np.float64)]).ravel()
+        th_part_flex = compute_modal_toolhead_parts(
+            assembly=assembly,
+            node_idx=node_idx,
+            phi_vec=phi_norm,
+            max_node_disp=1.0,
+        )
+        th_mode_fields = compute_toolhead_part_fields(
+            assembly=assembly,
+            node_idx=node_idx,
+            u_vec=phi_norm,
+            normalized=True,
+        )
+
         c_k = (float(c["rec_x"]) + float(c["rec_y"])) / max(freq_hz**2, 1.0)
         ms = ModeShape(
             mode_number=mode_num,
@@ -2693,6 +2780,8 @@ def solve_modal_fea(
             toolhead_flop_pct=flop_pct,
             relative_nozzle_bed_amp=rel_noz_bed,
             dominant_problem_area=dom_area,
+            toolhead_part_flex=th_part_flex,
+            toolhead_mode_fields=th_mode_fields,
         )
         return ms, c_k
 

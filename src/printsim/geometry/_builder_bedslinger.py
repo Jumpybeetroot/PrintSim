@@ -335,6 +335,7 @@ def _build_cartesian_bedslinger(
         frame_brace_cost_usd=float(frame_brace_res["cost_usd"]),
         frame_brace_cad_count=int(frame_brace_res["cad_count"]),
         frame_brace_cad_asset_id=frame_brace_res["cad_asset_id"],
+        frame_brace_cad_meta=dict(frame_brace_res.get("cad_meta") or {}),
         frame_brace_visuals=list(frame_brace_res["visuals"]),
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",

@@ -969,7 +969,8 @@ def kb_seed_cmd(
     console.print(
         Panel.fit(
             f"Database: [bold cyan]{out['db_path']}[/bold cyan]\n"
-            f"Docs processed: {out['files_processed']} | Raw items added: {out['raw_items_added']}\n"
+            f"Docs processed: {out['files_processed']} | Raw items added: {out['raw_items_added']} | "
+            f"Superseded snapshots removed: {out.get('stale_snapshots_removed', 0)}\n"
             f"Builds: [bold green]+{out['builds_added']}[/bold green] | "
             f"Weights: +{out.get('weights_added', 0)} | "
             f"Material tests: +{out['material_tests_added']} | "
@@ -987,7 +988,13 @@ def kb_ingest_cmd(
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Approve kept items and insert structured records immediately"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
 ) -> None:
-    """Batch-ingest local Discord exports, Klipper shaper CSVs, JSON/JSONL, or Markdown notes."""
+    """Batch-ingest local Discord exports, Klipper shaper CSVs, JSON/JSONL, or Markdown notes.
+
+    A JSON-list or JSONL record may state verified data outright in a "records" object, e.g.
+    {"content": "...", "url": "...", "records": {"component_weights": [{"category": "hotend",
+    "component_name": "Chube Air", "mass_g": 79.0}]}}. Tables: component_weights, builds,
+    material_tests, troubleshooting_cases. With --auto-approve those rows are inserted as given.
+    """
     from printsim.kb import TouchstoneKB, ingest_local_path
 
     with TouchstoneKB(db) as kb:
@@ -1243,6 +1250,30 @@ def kb_search_cmd(
             str(h["snippet"])[:90],
         )
     console.print(tbl)
+
+
+@kb_app.command("forget")
+def kb_forget_cmd(
+    item_id: int = typer.Argument(..., help="raw_items id to remove (the #N shown by `kb search` for a raw_item)"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to SQLite KB file"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+) -> None:
+    """Remove one raw item and every structured record derived from it (to retract a wrong entry)."""
+    from printsim.kb import TouchstoneKB
+
+    with TouchstoneKB(db) as kb:
+        item = kb.get_raw_item(item_id)
+        if item is None:
+            console.print(f"[bold red]No raw item #{item_id}[/bold red]")
+            raise typer.Exit(code=1)
+        removed = kb.delete_raw_item(item_id)
+        out = {"db_path": str(kb.db_path), "item_id": item_id, "title": item.get("title", ""), "removed": removed}
+
+    if json_out:
+        print(json.dumps(out, indent=2))
+        return
+    derived = ", ".join(f"{n} {table}" for table, n in removed.items() if table != "raw_items" and n) or "no derived records"
+    console.print(f"Removed raw item #{item_id} ([cyan]{out['title']}[/cyan]) and {derived}.")
 
 
 @kb_app.command("stats")
@@ -1676,6 +1707,190 @@ def sweep_cmd(
         print(json.dumps(rep.to_dict(), indent=2))
         return
     print(rep.to_markdown())
+
+
+@app.command("shaper-benchmark")
+def shaper_benchmark_cmd(
+    manifest: Optional[Path] = typer.Option(
+        None, "--manifest", "-m", help="Path to curated shaper benchmark YAML manifest"
+    ),
+    tier: Optional[list[int]] = typer.Option(
+        None, "--tier", "-t", help="Filter to specific provenance tier(s) (1=measured, 2=community)"
+    ),
+    arch: Optional[list[str]] = typer.Option(
+        None, "--arch", "-a", help="Filter to architecture(s) (e.g. corexy, cartesian_bedslinger, delta)"
+    ),
+    machine: Optional[list[str]] = typer.Option(
+        None, "--machine", help="Filter to specific benchmark machine ID(s)"
+    ),
+    no_sweeps: bool = typer.Option(
+        False, "--no-sweeps", help="Skip controlled same-machine A/B sweep table"
+    ),
+    save: Optional[Path] = typer.Option(
+        None, "--save", help="Save JSON benchmark snapshot to this path for later before/after diffs"
+    ),
+    compare: Optional[Path] = typer.Option(
+        None, "--compare", exists=True, help="Compare current run against a saved baseline JSON snapshot"
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON benchmark report"),
+) -> None:
+    """Test PrintSim against the curated suite of known real machines with shaper data."""
+    from printsim.kb.shaper_benchmarks import (
+        compare_benchmark_reports,
+        run_shaper_benchmarks,
+        save_benchmark_report,
+    )
+
+    rep = run_shaper_benchmarks(
+        manifest_path=manifest,
+        tiers=tier or None,
+        architectures=arch or None,
+        machine_ids=machine or None,
+        include_sweeps=not no_sweeps,
+    )
+
+    if save is not None:
+        save_benchmark_report(rep, save)
+
+    diff_rep = None
+    if compare is not None:
+        baseline = json.loads(compare.read_text(encoding="utf-8"))
+        diff_rep = compare_benchmark_reports(baseline, rep)
+        rep["diff"] = diff_rep
+
+    if json_out:
+        print(json.dumps(rep, indent=2))
+        return
+
+    s_all = rep["summary"]["all"]
+    s_t1 = rep["summary"]["tier1"]
+    s_t2 = rep["summary"]["tier2"]
+    sw_eval = rep["summary"]["sweeps_evaluated"]
+    sw_dir = rep["summary"]["sweeps_direction_match"]
+    sw_mape = rep["summary"]["sweeps_ratio_mape_pct"]
+
+    summary_lines = [
+        f"All ({s_all['machines_evaluated']} machines, {s_all['axes_evaluated']} axes): "
+        f"Overall MAPE [bold cyan]{s_all['overall_mape_pct']}%[/bold cyan] "
+        f"(X: {s_all['x_mape_pct']}% [signed {s_all['x_mean_signed_error_pct']}%] | "
+        f"Y: {s_all['y_mape_pct']}% [signed {s_all['y_mean_signed_error_pct']}%]) | "
+        f"<=10%: {s_all['within_10pct']}/{s_all['axes_evaluated']} | "
+        f"<=15%: {s_all['within_15pct']}/{s_all['axes_evaluated']} | "
+        f"<=20%: {s_all['within_20pct']}/{s_all['axes_evaluated']}"
+    ]
+    if s_t1["machines_evaluated"] > 0:
+        summary_lines.append(
+            f"Tier 1 Measured ({s_t1['machines_evaluated']} machines): "
+            f"Overall MAPE [bold green]{s_t1['overall_mape_pct']}%[/bold green] "
+            f"(X: {s_t1['x_mape_pct']}% | Y: {s_t1['y_mape_pct']}%)"
+        )
+    if s_t2["machines_evaluated"] > 0:
+        summary_lines.append(
+            f"Tier 2 Community ({s_t2['machines_evaluated']} machines): "
+            f"Overall MAPE [bold yellow]{s_t2['overall_mape_pct']}%[/bold yellow] "
+            f"(X: {s_t2['x_mape_pct']}% | Y: {s_t2['y_mape_pct']}%)"
+        )
+    if sw_eval > 0:
+        summary_lines.append(
+            f"Controlled A/B Sweeps: {sw_dir}/{sw_eval} direction match | "
+            f"Ratio MAPE: [bold]{sw_mape}%[/bold]"
+        )
+    if save is not None:
+        summary_lines.append(f"Saved snapshot: [dim]{save}[/dim]")
+
+    console.print(Panel.fit("\n".join(summary_lines), title="Real-Machine Input-Shaper Benchmark"))
+
+    def _fmt_err(err: float | None) -> str:
+        if err is None:
+            return "-"
+        a = abs(err)
+        color = "green" if a <= 10.0 else ("yellow" if a <= 20.0 else "red")
+        return f"[{color}]{err:+.1f}%[/{color}]"
+
+    tbl = Table(show_header=True, header_style="bold magenta")
+    tbl.add_column("T", justify="center")
+    tbl.add_column("Machine")
+    tbl.add_column("Shaper X/Y")
+    tbl.add_column("Meas X", justify="right")
+    tbl.add_column("Pred X", justify="right")
+    tbl.add_column("X Err", justify="right")
+    tbl.add_column("Meas Y", justify="right")
+    tbl.add_column("Pred Y", justify="right")
+    tbl.add_column("Y Err", justify="right")
+
+    for r in rep["machines"]:
+        sx = r["x_shaper"] or "-"
+        sy = r["y_shaper"] or "-"
+        tbl.add_row(
+            str(r["tier"]),
+            str(r["name"]),
+            f"{sx}/{sy}",
+            f"{r['measured_x_hz']:.1f}" if r["measured_x_hz"] is not None else "-",
+            f"{r['predicted_x_hz']:.1f}" if r["measured_x_hz"] is not None else "-",
+            _fmt_err(r["x_error_pct"]),
+            f"{r['measured_y_hz']:.1f}" if r["measured_y_hz"] is not None else "-",
+            f"{r['predicted_y_hz']:.1f}" if r["measured_y_hz"] is not None else "-",
+            _fmt_err(r["y_error_pct"]),
+        )
+    console.print(tbl)
+
+    if rep["controlled_sweeps"]:
+        stbl = Table(title="Controlled Same-Machine A/B Sweeps", show_header=True, header_style="bold cyan")
+        stbl.add_column("Sweep")
+        stbl.add_column("Axis", justify="center")
+        stbl.add_column("Meas Ratio", justify="right")
+        stbl.add_column("Pred Ratio", justify="right")
+        stbl.add_column("Ratio Err", justify="right")
+        stbl.add_column("Dir", justify="center")
+        for s in rep["controlled_sweeps"]:
+            stbl.add_row(
+                s["name"],
+                s["axis"],
+                f"{s['measured_ratio']:.3f}x",
+                f"{s['predicted_ratio']:.3f}x",
+                _fmt_err(s["ratio_error_pct"]),
+                "[green]OK[/green]" if s["direction_match"] else "[red]FLIP[/red]",
+            )
+        console.print(stbl)
+
+    if diff_rep is not None:
+        dtbl = Table(
+            title=(
+                f"Diff vs Baseline ({compare.name}) — "
+                f"Overall MAPE {diff_rep['overall_mape_delta_pct']:+.2f}% | "
+                f"Improved: {diff_rep['improved_axes']} | "
+                f"Regressed: {diff_rep['regressed_axes']} | "
+                f"Unchanged: {diff_rep['unchanged_axes']}"
+            ),
+            show_header=True,
+            header_style="bold yellow",
+        )
+        dtbl.add_column("Machine")
+        dtbl.add_column("dX Hz", justify="right")
+        dtbl.add_column("X Err (old->new)", justify="right")
+        dtbl.add_column("dY Hz", justify="right")
+        dtbl.add_column("Y Err (old->new)", justify="right")
+        for d in diff_rep["machines"]:
+            if d["x_status"] in (None, "unchanged") and d["y_status"] in (None, "unchanged"):
+                continue
+            x_str = (
+                f"{d['baseline_x_err_pct']:+.1f}% -> {d['current_x_err_pct']:+.1f}%"
+                if d["current_x_err_pct"] is not None
+                else "-"
+            )
+            y_str = (
+                f"{d['baseline_y_err_pct']:+.1f}% -> {d['current_y_err_pct']:+.1f}%"
+                if d["current_y_err_pct"] is not None
+                else "-"
+            )
+            dtbl.add_row(
+                d["name"],
+                f"{d['delta_x_hz']:+.1f}" if d["delta_x_hz"] is not None else "-",
+                x_str,
+                f"{d['delta_y_hz']:+.1f}" if d["delta_y_hz"] is not None else "-",
+                y_str,
+            )
+        console.print(dtbl)
 
 
 if __name__ == "__main__":

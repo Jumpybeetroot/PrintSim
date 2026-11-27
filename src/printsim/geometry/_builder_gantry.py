@@ -104,6 +104,8 @@ def _compute_newmark_rail_gamma(
     shape = beam_shape or member.profile.shape
     if member.profile.id.startswith("cf_") or member.material.id.startswith("carbon_fiber"):
         sub_kind = "carbon_tube"
+    elif "_tube_" in member.profile.id:
+        sub_kind = "metal_tube"
     elif shape == "solid_bar":
         sub_kind = "solid_bar"
     else:
@@ -625,6 +627,8 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
             sub_kind = "solid_bar"
         elif base_x_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):
             sub_kind = "carbon_tube"
+        elif "_tube_" in base_x_prof.id:
+            sub_kind = "metal_tube"
         elif base_x_prof.shape == "solid_bar":
             sub_kind = "solid_bar"
         else:

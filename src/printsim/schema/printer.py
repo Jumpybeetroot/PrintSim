@@ -227,13 +227,13 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 16900.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0083,
         "max_working_tension_n": 58.0,
-        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,  # 3D Tet10 pitch-cell FEA k_t_full (data/touchstones/belt_pitch_cell_fea.json)
         "min_pulley_teeth": 16,
         "min_back_idler_mm": 12.0,
         "max_temp_c": 110.0,
         "cost_usd_per_m": 4.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Gates PowerGrip 2GT 6mm (16.9 kN quasi-static datasheet EA x 1.85 dynamic small-amplitude factor, exact pulley-to-pulley spans).",
+        "theoretical_summary": "Gates PowerGrip 2GT 6mm (16.9 kN quasi-static datasheet EA x 1.85 dynamic small-amplitude factor, Costello cord micromechanics & 3D Tet10 pitch-cell FEA).",
         "practical_issues": [],
     },
     "gt2_9mm": {
@@ -250,13 +250,13 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 25500.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.01245,
         "max_working_tension_n": 92.8,
-        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,
         "min_pulley_teeth": 16,
         "min_back_idler_mm": 12.0,
         "max_temp_c": 110.0,
         "cost_usd_per_m": 6.50,
         "validation_tier": "proven",
-        "theoretical_summary": "Gates PowerGrip 2GT 9mm (25.5 kN quasi-static datasheet EA x 1.85 dynamic factor, exact pulley-to-pulley spans).",
+        "theoretical_summary": "Gates PowerGrip 2GT 9mm (25.5 kN quasi-static datasheet EA x 1.85 dynamic factor, Costello cord micromechanics & 3D Tet10 pitch-cell FEA).",
         "practical_issues": [],
     },
     "gt2_10mm": {
@@ -273,7 +273,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 28300.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.01236,  # Scale-weighed Monolith 2x1658 mm = 41.0 g (12.36 g/m)
         "max_working_tension_n": 105.0,
-        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,
         "elastomer_seating_factor": 1.0,
         "rolling_drag_mult": 1.0,
         "min_pulley_teeth": 16,
@@ -298,7 +298,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 28300.0 * GT3_2MGT_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.01499,  # Scale-weighed Monolith 2x1658 mm = 49.7 g (14.99 g/m)
         "max_working_tension_n": 105.0,
-        "tooth_shear_k_n_per_m_mm": 4.9e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,  # 2GT Tet10 k_t_full; softer GT3 compound enters via elastomer_seating_factor=0.90
         "elastomer_seating_factor": 0.90,  # Softer elastomer needs more tension/elongation to reach cord stiffness
         "rolling_drag_mult": 1.18,  # Higher pulley-wrap hysteresis & rolling resistance (Monolith belt shootout)
         "min_pulley_teeth": 16,
@@ -325,7 +325,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 34000.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0166,
         "max_working_tension_n": 127.6,
-        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,
         "min_pulley_teeth": 16,
         "min_back_idler_mm": 12.0,
         "max_temp_c": 110.0,
@@ -350,7 +350,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 47250.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.02075,
         "max_working_tension_n": 162.0,
-        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,
         "min_pulley_teeth": 16,
         "min_back_idler_mm": 12.0,
         "max_temp_c": 110.0,
@@ -377,7 +377,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 51000.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0249,
         "max_working_tension_n": 185.6,
-        "tooth_shear_k_n_per_m_mm": 5.5e4,
+        "tooth_shear_k_n_per_m_mm": 32934.4,
         "min_pulley_teeth": 16,
         "min_back_idler_mm": 12.0,
         "max_temp_c": 110.0,
@@ -404,7 +404,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 39600.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0180,
         "max_working_tension_n": 180.0,
-        "tooth_shear_k_n_per_m_mm": 7.8e4,
+        "tooth_shear_k_n_per_m_mm": 41378.2,  # 3D Tet10 pitch-cell FEA k_t_full (3GT)
         "min_pulley_teeth": 14,
         "min_back_idler_mm": 20.0,
         "max_temp_c": 100.0,
@@ -432,7 +432,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 56500.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0240,
         "max_working_tension_n": 240.0,
-        "tooth_shear_k_n_per_m_mm": 7.8e4,
+        "tooth_shear_k_n_per_m_mm": 41378.2,
         "min_pulley_teeth": 14,
         "min_back_idler_mm": 20.0,
         "max_temp_c": 100.0,
@@ -460,7 +460,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 73400.0 * GATES_FIBERGLASS_DYNAMIC_STIFFENING,  # ea_static_n * dynamic_stiffening_factor
         "linear_mass_kg_m": 0.0300,
         "max_working_tension_n": 300.0,
-        "tooth_shear_k_n_per_m_mm": 7.8e4,
+        "tooth_shear_k_n_per_m_mm": 41378.2,
         "min_pulley_teeth": 14,
         "min_back_idler_mm": 20.0,
         "max_temp_c": 100.0,
@@ -487,7 +487,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 80000.0,
         "linear_mass_kg_m": 0.0220,
         "max_working_tension_n": 320.0,
-        "tooth_shear_k_n_per_m_mm": 9.5e4,
+        "tooth_shear_k_n_per_m_mm": 108743.3,  # 3D Tet10 pitch-cell FEA k_t_full (AT3 92 ShA TPU)
         "min_pulley_teeth": 20,
         "min_back_idler_mm": 20.0,
         "max_temp_c": 80.0,
@@ -513,7 +513,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 135000.0,
         "linear_mass_kg_m": 0.0352,
         "max_working_tension_n": 540.0,
-        "tooth_shear_k_n_per_m_mm": 9.5e4,
+        "tooth_shear_k_n_per_m_mm": 108743.3,
         "min_pulley_teeth": 20,
         "min_back_idler_mm": 20.0,
         "max_temp_c": 80.0,
@@ -539,7 +539,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 250000.0,
         "linear_mass_kg_m": 0.0420,
         "max_working_tension_n": 1002.0,
-        "tooth_shear_k_n_per_m_mm": 1.15e5,
+        "tooth_shear_k_n_per_m_mm": 119617.6,  # 1.10 x AT3 Tet10 k_t_full
         "min_pulley_teeth": 20,
         "min_back_idler_mm": 20.0,
         "max_temp_c": 80.0,
@@ -565,7 +565,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 127500.0,
         "linear_mass_kg_m": 0.0300,
         "max_working_tension_n": 510.0,
-        "tooth_shear_k_n_per_m_mm": 8.5e4,
+        "tooth_shear_k_n_per_m_mm": 95694.1,  # 0.88 x AT3 Tet10 k_t_full
         "min_pulley_teeth": 20,
         "min_back_idler_mm": 30.0,
         "max_temp_c": 80.0,
@@ -590,7 +590,7 @@ BELT_CATALOG: dict[str, dict[str, Any]] = {
         "ea_default_core_n": 280000.0,
         "linear_mass_kg_m": 0.0544,
         "max_working_tension_n": 1120.0,
-        "tooth_shear_k_n_per_m_mm": 1.30e5,
+        "tooth_shear_k_n_per_m_mm": 125054.8,  # 1.15 x AT3 Tet10 k_t_full
         "min_pulley_teeth": 20,
         "min_back_idler_mm": 60.0,
         "max_temp_c": 80.0,
@@ -2945,8 +2945,11 @@ class BeltSpec(BaseModel):
     def tooth_modulus_retention(self, chamber_temp_c: float = 25.0) -> float:
         """Elastomer tooth-shear & backing stiffness retention vs. chamber temperature.
 
-        EPDM / polychloroprene (Gates 2GT/3GT) stays stable past 100 C; 92 ShA TPU
-        (Breco/Elatech/ContiTech linear belts) softens significantly above 50-55 C.
+        EPDM / polychloroprene (Gates 2GT/3GT) stays stable through typical 60-80 C printer
+        chambers and declines above 80 C toward ~56% storage-modulus retention at 120 C
+        (Ling et al. 2020 DMA: EPDM/CSM timing-belt compound E' 24.8 -> 13.8 MPa at 120 C,
+        tan delta ~0.06-0.08 across 20-130 C). 92 ShA TPU (Breco/Elatech/ContiTech linear
+        belts) softens significantly above 45-55 C.
         """
         t = float(chamber_temp_c)
         if self.body_material == "tpu":
@@ -2954,10 +2957,10 @@ class BeltSpec(BaseModel):
                 return 1.0
             # ~0.72 at 65 C, ~0.50 at 80 C, floor 0.35
             return max(0.35, 1.0 - 0.014 * (t - 45.0))
-        # EPDM / polychloroprene
+        # EPDM / polychloroprene: rated plateau <= 80 C, then Ling et al. (2020) DMA slope (~0.56 @ 120 C)
         if t <= 80.0:
             return 1.0
-        return max(0.65, 1.0 - 0.006 * (t - 80.0))
+        return max(0.55, 1.0 - 0.011 * (t - 80.0))
 
     @property
     def static_stiffness_ea_n(self) -> float:
@@ -3106,9 +3109,9 @@ class GantrySpec(BaseModel):
     cf_rail_mounting: CFRailMountingType = Field(
         "auto",
         description=(
-            "Carbon-fiber X-beam linear rail mounting method: auto (2-wall clamped internal "
-            "inserts on Carbonara, single-wall bare on generic CF tubes), single_wall_bare, "
-            "or two_wall_clamped_inserts"
+            "Hollow-tube X-beam linear rail mounting method (CF, titanium, aluminum, or steel tubes): "
+            "auto (2-wall clamped internal inserts on Carbonara, single-wall bare on other tubes), "
+            "single_wall_bare, or two_wall_clamped_inserts"
         ),
     )
     dual_x_rails: bool = False
@@ -3160,14 +3163,20 @@ class GantrySpec(BaseModel):
         return self.dual_x_rails or self.x_rail_mount == "dual_top_bottom"
 
     @property
+    def is_hollow_tube_x_beam(self) -> bool:
+        """True when the X-beam is a hollow square/rectangular tube (CF, Ti, Al, or steel)."""
+        return (
+            "_tube_" in self.x_beam_profile
+            or self.x_beam_profile.startswith("cf_")
+            or self.x_beam_material.startswith("carbon_fiber")
+        )
+
+    @property
     def effective_cf_rail_mounting(
         self,
     ) -> Literal["none", "single_wall_bare", "two_wall_clamped_inserts"]:
-        """Resolve effective carbon-fiber X-beam rail mounting architecture."""
-        if not (
-            self.x_beam_profile.startswith("cf_")
-            or self.x_beam_material.startswith("carbon_fiber")
-        ):
+        """Resolve effective hollow-tube X-beam rail mounting architecture."""
+        if not self.is_hollow_tube_x_beam:
             return "none"
         if self.cf_rail_mounting == "auto":
             return (
@@ -4009,8 +4018,41 @@ class ToolheadSpec(BaseModel):
         le=40.0,
         description="Vertical offset from X-beam centerline to XY drive belt plane (mm); 0 mm = centered/coplanar",
     )
+    umbilical_type: Literal[
+        "standard", "can_umbilical", "cable_chain", "cpap_15mm", "cpap_18mm", "custom"
+    ] = Field(
+        "standard",
+        description=(
+            "Toolhead wiring/hose support architecture governing moving umbilical drag mass: "
+            "standard (40 g), can_umbilical (20 g), cable_chain (60 g), cpap_15mm (38 g), "
+            "cpap_18mm (55 g), or custom (uses umbilical_mass_g)."
+        ),
+    )
+    umbilical_mass_g: float | None = Field(
+        None,
+        ge=0.0,
+        le=250.0,
+        description=(
+            "Effective moving mass of umbilical harness, drag chains, CPAP hose, PTFE tube, and "
+            "belt clamps carried by the toolhead in X and Y (g). None = derive from umbilical_type."
+        ),
+    )
     hotend: HotendSpec = Field(default_factory=HotendSpec)
     extruder: ExtruderSpec = Field(default_factory=ExtruderSpec)
+
+    @property
+    def effective_umbilical_mass_g(self) -> float:
+        if self.umbilical_mass_g is not None:
+            return float(self.umbilical_mass_g)
+        defaults = {
+            "standard": 40.0,
+            "can_umbilical": 20.0,
+            "cable_chain": 60.0,
+            "cpap_15mm": 38.0,
+            "cpap_18mm": 55.0,
+            "custom": 40.0,
+        }
+        return float(defaults.get(self.umbilical_type, 40.0))
 
     @property
     def effective_carriage_mount_material(self) -> str:
@@ -4110,6 +4152,24 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
             "Official Dragon_Burner_v0.2_v8 STEP (27.7 cm³ core + ~18 cm³ MGN12H carriage = 37.5 g ABS) + "
             "Orbiter v2.0 (135 g) + 2×4010 blowers & 3010 fan (32 g) + HIWIN MGN12H carriage (54 g) + "
             "Beacon/hardware (~13.5 g) = 272 g on-rail excl. hotend (318 g w/ Dragon HF; ~264 g off-rail)."
+        ),
+    },
+    "eva3": {
+        "preset_id": "eva3",
+        "name": "RatRig EVA 3 + Orbiter 2 + SuperPINDA",
+        "total_mass_g": 370.0,
+        "cog_offset_mm": [0.0, -14.0, -16.0],
+        "nozzle_offset_mm": [0.0, -16.0, -50.0],
+        "offset_datum_rail_mount": "top",
+        "mount_material": "pet_cf_printed",
+        "body_construction": "compact_cage",
+        "internal_stiffness_n_per_mm": 550.0,
+        "z_probe_type": "klicky_inductive",
+        "envelope_mm": [70.0, 74.0, 92.0],
+        "default_hardware_summary": (
+            "Official EVA 3 Onshape CAD (113.7 cm³ printed core = 95.5 g ASA/PET-CF) + "
+            "Orbiter 2.0 (135 g) + 5015 blower (27 g) + HIWIN MGN12C top carriage (34 g) + "
+            "fasteners & probe (28.5 g) = 320 g excl. hotend (370 g dressed w/ Rapido 2 HF)."
         ),
     },
     "archetype_cpap": {

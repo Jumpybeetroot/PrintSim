@@ -276,6 +276,33 @@ def _resolve_bracing_mode(spec: PrinterSpec) -> str:
     return LEGACY_BRACING_ALIASES.get(raw, raw)
 
 
+def _compute_single_cad_brace_rot_stiffness(
+    loaded: LoadedHardwareAsset,
+    *,
+    kind: str,
+    ext_w_m: float,
+) -> tuple[float, float]:
+    """Return single-bracket bolted rotational stiffness ``(kr_inplane, kr_torsion)`` (N·m/rad)."""
+    K12_loc, _M12_loc, p_cad = _series_bolted_corner_superelement_local(
+        loaded, kind=kind, ext_w_m=ext_w_m
+    )
+    K11 = K12_loc[6:12, 6:12]
+    v_loc = (
+        np.array([0.0, 0.0, 0.0], dtype=float)
+        if kind == "cast_corner_bracket"
+        else np.array([0.5 * ext_w_m, 0.5 * ext_w_m, 0.0], dtype=float)
+    )
+    r1 = p_cad[1] - v_loc
+    ez = np.array([0.0, 0.0, 1.0], dtype=float)
+    qz = np.concatenate((np.cross(ez, r1), ez))
+    kr_in_single = max(0.0, float(qz @ K11 @ qz))
+
+    ex = np.array([1.0, 0.0, 0.0], dtype=float)
+    qx = np.concatenate((np.cross(ex, r1), ex))
+    kr_tor_single = max(0.0, float(qx @ K11 @ qx))
+    return kr_in_single, kr_tor_single
+
+
 def compute_cad_corner_brace_stiffness(spec: PrinterSpec) -> tuple[float, float]:
     """Return exact 3D CAD superelement corner rotational stiffness ``(kr_inplane, kr_torsion)`` (N·m/rad).
 
@@ -305,24 +332,9 @@ def compute_cad_corner_brace_stiffness(spec: PrinterSpec) -> tuple[float, float]
     if loaded is None:
         return 0.0, 0.0
 
-    K12_loc, _M12_loc, p_cad = _series_bolted_corner_superelement_local(
+    kr_in_single, kr_tor_single = _compute_single_cad_brace_rot_stiffness(
         loaded, kind=kind, ext_w_m=ext_w_m
     )
-    K11 = K12_loc[6:12, 6:12]
-    v_loc = (
-        np.array([0.0, 0.0, 0.0], dtype=float)
-        if kind == "cast_corner_bracket"
-        else np.array([0.5 * ext_w_m, 0.5 * ext_w_m, 0.0], dtype=float)
-    )
-    r1 = p_cad[1] - v_loc
-    ez = np.array([0.0, 0.0, 1.0], dtype=float)
-    qz = np.concatenate((np.cross(ez, r1), ez))
-    kr_in_single = max(0.0, float(qz @ K11 @ qz))
-
-    ex = np.array([1.0, 0.0, 0.0], dtype=float)
-    qx = np.concatenate((np.cross(ex, r1), ex))
-    kr_tor_single = max(0.0, float(qx @ K11 @ qx))
-
     return n_parallel * kr_in_single, n_parallel * kr_tor_single
 
 
@@ -335,7 +347,7 @@ def _attach_cad_corner_braces(
     members: list[StructuralMember],
     superelements: list[AttachedSuperelement],
     allow_gantry: bool,
-) -> tuple[list[dict[str, Any]], float, float]:
+) -> tuple[list[dict[str, Any]], float, float, dict[str, Any]]:
     """Place baked 3D CAD corner brackets or CNC gussets at all frame corners (exact mass + 3D GLBs).
 
     Their exact 3D solid-FEM Craig-Bampton rotational stiffness is coupled into the frame's
@@ -354,11 +366,25 @@ def _attach_cad_corner_braces(
         chamber_temp_c=float(spec.frame.chamber_temp_c),
     )
     if loaded is None:
-        return [], 0.0, 0.0
+        return [], 0.0, 0.0, {}
 
     recipe = loaded.manifest.get("part_recipe") or {}
     unit_mass_kg = float(loaded.manifest.get("mass_kg", 0.02)) * float(loaded.mass_scale_applied)
     unit_cost_usd = float(recipe.get("unit_cost_usd", 2.0))
+    kr_in_single, kr_tor_single = _compute_single_cad_brace_rot_stiffness(
+        loaded, kind=kind, ext_w_m=ext_w_m
+    )
+    cad_meta: dict[str, Any] = {
+        "cad_asset_name": str(loaded.manifest.get("name") or asset_id),
+        "unit_mass_g": round(unit_mass_kg * 1000.0, 2),
+        "unit_cost_usd": round(unit_cost_usd, 2),
+        "element_type": str(loaded.manifest.get("element_type") or "Tet4"),
+        "num_elements": int(loaded.manifest.get("num_elements") or 0),
+        "kr_inplane_nm_rad": round(kr_in_single, 1),
+        "kr_torsion_nm_rad": round(kr_tor_single, 1),
+        "corner_kr_inplane_nm_rad": round(2.0 * kr_in_single, 1),
+        "corner_kr_torsion_nm_rad": round(2.0 * kr_tor_single, 1),
+    }
     visual_url = str(
         loaded.manifest.get("visual_url")
         or f"/api/assets/hardware/frame_braces/{asset_id}/visual.glb"
@@ -378,8 +404,10 @@ def _attach_cad_corner_braces(
     total_mass_kg = 0.0
     total_cost_usd = 0.0
 
-    # Fast nearest-frame-node lookup for corner mass lumping
-    frame_nodes = [nd for nd in nodes if nd.role in ("frame", "tower")] or list(nodes)
+    # Fast nearest-frame-node lookup for corner mass lumping & modal/FEA anchoring.
+    # Include role=="foot" because CoreXY/Bedslinger/Delta bottom frame corners (b_fl, b_fr, ...)
+    # carry role="foot" (whereas ground anchor nodes below compliant feet carry role="ground").
+    frame_nodes = [nd for nd in nodes if nd.role in ("frame", "tower", "foot")] or list(nodes)
     for cdef in corner_defs:
         v = cdef["vertex"]
         ex = cdef["ex"]
@@ -417,7 +445,7 @@ def _attach_cad_corner_braces(
             }
         )
 
-    return visuals, total_mass_kg, total_cost_usd
+    return visuals, total_mass_kg, total_cost_usd, cad_meta
 
 
 def _add_bolted_flat_bar_diagonal(
@@ -670,16 +698,18 @@ def add_modeled_frame_bracing(
             "cost_usd": 0.0,
             "cad_count": 0,
             "cad_asset_id": None,
+            "cad_meta": {},
         }
 
     visuals: list[dict[str, Any]] = []
     cad_mass_kg = 0.0
     cad_cost_usd = 0.0
+    cad_meta: dict[str, Any] = {}
     flat_bar_mass_kg = 0.0
     flat_bar_cost_usd = 0.0
 
     if mode == "cast_corner_brackets":
-        visuals, cad_mass_kg, cad_cost_usd = _attach_cad_corner_braces(
+        visuals, cad_mass_kg, cad_cost_usd, cad_meta = _attach_cad_corner_braces(
             spec=spec,
             kind="cast_corner_bracket",
             nodes=nodes,
@@ -689,7 +719,7 @@ def add_modeled_frame_bracing(
             allow_gantry=allow_gantry,
         )
     elif mode in ("cnc_corner_gussets", "gussets_and_flat_bars"):
-        visuals, cad_mass_kg, cad_cost_usd = _attach_cad_corner_braces(
+        visuals, cad_mass_kg, cad_cost_usd, cad_meta = _attach_cad_corner_braces(
             spec=spec,
             kind="cnc_corner_gusset",
             nodes=nodes,
@@ -717,4 +747,5 @@ def add_modeled_frame_bracing(
         "cost_usd": cad_cost_usd + flat_bar_cost_usd,
         "cad_count": len(visuals),
         "cad_asset_id": visuals[0]["asset_id"] if visuals else None,
+        "cad_meta": cad_meta,
     }

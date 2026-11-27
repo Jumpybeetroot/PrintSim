@@ -217,6 +217,18 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "(±15 g mass / ±4 mm CoG uncertainty; 20 mm integrated-worm stepper adds ~15 g); awaits public STEP CMS."
             ),
         },
+        "eva3": {
+            "trust_pct": 84,
+            "basis": (
+                "Official RatRig EVA 3 Onshape CAD assembly (5af1985e8b5d6fb20ee622b9, 113.7 cm³ printed core = 95.5 g ASA/PET-CF) "
+                "+ Orbiter 2.0 (135 g) + 5015 blower (27 g) + HIWIN MGN12C top carriage (34 g) + SuperPINDA/hardware (28.5 g) = "
+                "320 g excl. hotend (370 g w/ Rapido 2 HF); baked 58,780-tet Tet4 CMS superelement."
+            ),
+            "caveat": (
+                "Printed rear-plate/faceplate heat-set insert preload, MGN12C vs MGN12H carriage variants, and different "
+                "fan-duct/extruder top options introduce ±15% stiffness and ±15 g mass variance."
+            ),
+        },
     },
     "toolhead_constructions": {
         "multi_piece_clamshell": {
@@ -532,144 +544,160 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
     },
     "belts": {
         "gt2_6mm": {
-            "trust_pct": 84,
+            "trust_pct": 87,
             "basis": (
-                "Gates PowerGrip 2GT 6 mm datasheet EA (16.9 kN × 1.85 dynamic factor) with width-normalized "
-                "crimp, Euler–Bernoulli pulley-wrap compliance, tooth seating, & exact 2-DOF shaper coupling "
-                "validated against Voron Trident/2.4 CoreXY ADXL resonance logs."
+                "Gates PowerGrip 2GT 6 mm Table 6 datasheet EA (16.9 kN × 1.85 dynamic factor) paired with "
+                "Costello helical-cord micromechanics (matched to Wang et al. 2018 0–100 N 11.7→22.6 kN), "
+                "3D Tet10 pitch-cell FEA tooth-mesh shear & seating (k_t=32,934 N/(m·mm), s0=0.76, q_s=5.85 N/mm) "
+                "and composite ABD bending (EI=0.001917 N·m²/m), Ling et al. (2020) EPDM DMA (tan δ≈0.06–0.08, "
+                "56% E' @ 120 °C), and first-principles nonlinear coupled shaker dynamics (solve_nonlinear_belt_shaker_response), "
+                "validated on Voron Trident/2.4 ADXL logs (jeff.k 6.2→9.8 N ratio within +2.7% X / -0.8% Y)."
             ),
             "caveat": (
-                "Actual belt peak shifts with tension gauge accuracy, wrap angle, and EPDM thermal soak; controlled multi-tension shaker curves will further refine wrap EI and dynamic factor."
+                "Actual belt peak shifts with tension gauge accuracy, pulley runout, and dynamic cord stiffening ratio (1.6–2.0× supported range)."
             ),
         },
         "gt2_9mm": {
-            "trust_pct": 82,
+            "trust_pct": 85,
             "basis": (
-                "Gates PowerGrip 2GT 9 mm datasheet EA (25.5 kN × 1.85 dynamic factor) with width-normalized "
-                "crimp, pulley-wrap seating, belt inertia/damping, & exact 2-DOF AWD shaper coupling "
-                "calibrated against RatRig, Monolith, and VzBot community ADXL logs."
+                "Gates PowerGrip 2GT 9 mm Table 6 datasheet EA (25.5 kN × 1.85 dynamic factor) with Costello "
+                "helical-cord micromechanics, 3D Tet10 pitch-cell FEA tooth-mesh/EI (32,934 N/(m·mm), 0.001917 N·m²/m), "
+                "Ling et al. (2020) EPDM DMA, and coupled nonlinear shaker solver calibrated against RatRig, Monolith, and VzBot ADXL logs."
             ),
             "caveat": (
                 "Real resonance depends on accurate tension balancing and stiffer double-shear idlers at >80 N preload."
             ),
         },
         "gt2_10mm": {
-            "trust_pct": 82,
+            "trust_pct": 86,
             "basis": (
-                "Gates PowerGrip 2GT 10 mm EPDM fiberglass (28.3 kN × 1.85 dynamic EA, scale-weighed "
-                "12.36 g/m across Monolith 2×1658 mm belts) calibrated against Monolith Road-to-50k "
-                "matched-tension AWD ADXL logs (113.8 Hz ZV @ 89 N)."
+                "Gates PowerGrip 2GT 10 mm EPDM fiberglass (28.3 kN × 1.85 dynamic EA, scale-weighed 12.36 g/m "
+                "across Monolith 2×1658 mm belts) with Costello cord micromechanics, 3D Tet10 pitch-cell FEA, and "
+                "coupled nonlinear shaker solver validated on CloakedWayne AWD/2WD, 1.0–2.8 A current sweep (+0.3% ratio err), "
+                "and matched-tension belt shootouts (113.8 Hz ZV @ 89 N)."
             ),
             "caveat": (
                 "Assumes 10 mm double-shear live-shaft idlers and balanced tension across A/B loops."
             ),
         },
         "gt3_10mm": {
-            "trust_pct": 80,
+            "trust_pct": 84,
             "basis": (
-                "Gates PowerGrip GT3 (2MGT) 10 mm fiberglass (scale-weighed 14.99 g/m, 0.90× elastomer "
-                "seating factor, 1.18× rolling drag) calibrated to Monolith matched-tension shootout "
-                "(110.6 Hz ZV vs 113.8 Hz for GT2 EPDM @ 89 N)."
+                "Gates PowerGrip GT3 (2MGT) 10 mm fiberglass (scale-weighed 14.99 g/m, 2GT Tet10 pitch-cell FEA "
+                "with 0.90× softer-compound seating factor & 1.18× rolling drag) validated on CloakedWayne 10 mm "
+                "GT3 vs GT2 EPDM matched-tension shootout (110.6 vs 113.8 Hz ZV, -1.1% ratio err) & 12 mm GT3 89→200 N capture."
             ),
             "caveat": (
-                "Softer base elastomer seating and rolling hysteresis vary with pulley tooth profile and chamber soak."
+                "Softer GT3 base elastomer approaches GT2 EPDM stiffness only at high tension (~200 N on 12 mm) and varies with chamber soak."
             ),
         },
         "gt2_12mm": {
-            "trust_pct": 76,
+            "trust_pct": 80,
             "basis": (
-                "Gates PowerGrip 2GT 12 mm EA (34.0 kN narrow-belt rule × 1.85 dynamic factor) benchmarked against "
-                "high-tension AWD builds (e.g. dderg)."
+                "Gates PowerGrip 2GT 12 mm EA (34.0 kN narrow-belt rule × 1.85 dynamic factor) with Costello "
+                "cord micromechanics, 3D Tet10 pitch-cell FEA (32,934 N/(m·mm), 0.001917 N·m²/m), and coupled "
+                "nonlinear shaker solver benchmarked against high-tension AWD builds (dderg, CloakedWayne 12 mm)."
             ),
             "caveat": (
-                "Fewer empirical ADXL datasets than 6/9 mm 2GT; assumes rigid double-shear 12 mm idler stacks."
+                "Fewer empirical ADXL datasets than 6/9/10 mm 2GT; assumes rigid double-shear 12 mm idler stacks."
             ),
         },
         "gt2_15mm": {
-            "trust_pct": 58,
+            "trust_pct": 62,
             "basis": (
-                "Gates 2M unit-strain modulus at 15 mm, no narrow-belt factor (47.25 kN × 1.85 dynamic factor)."
+                "Gates 2M unit-strain modulus at 15 mm (47.25 kN × 1.85) with Costello cord micromechanics "
+                "and 3D Tet10 2GT pitch-cell FEA tooth-mesh & ABD bending stiffness."
             ),
             "caveat": (
                 "Experimental custom wide-belt hardware; very sparse CoreXY ADXL data and extreme radial shaft/bearing loads."
             ),
         },
         "gt2_dual_9mm": {
-            "trust_pct": 52,
+            "trust_pct": 55,
             "basis": (
-                "Experimental parallel-belt concept modeled as ideal 2× Gates 2GT 9 mm (51.0 kN × 1.85)."
+                "Experimental parallel-belt concept modeled as ideal 2× Gates 2GT 9 mm (51.0 kN × 1.85) with "
+                "Costello cord micromechanics and 3D Tet10 2GT pitch-cell FEA."
             ),
             "caveat": (
                 "Assumes perfect tension equalization between two stacked loops; real mismatch and tracking error lower stiffness."
             ),
         },
         "3gt_9mm": {
-            "trust_pct": 44,
+            "trust_pct": 52,
             "basis": (
-                "Gates Table 6 3GT (3MGT) 9 mm datasheet EA (39.6 kN) × the 2GT-calibrated 1.85 dynamic factor."
+                "Gates Table 6 3GT (3MGT) 9 mm datasheet EA (39.6 kN × 1.85) paired with Costello 270-tex E-glass "
+                "cord micromechanics and 3D Tet10 3GT pitch-cell FEA (k_t=41,378 N/(m·mm), s0=0.32, EI=0.01289 N·m²/m)."
             ),
             "caveat": (
-                "Unproven on high-reversal CoreXY printers; 3 mm pitch VFA ripple, chordal action, and ≥20 mm idler fit are uncalibrated."
+                "Unproven on high-reversal CoreXY printers; 3 mm pitch VFA ripple, chordal action, and ≥20 mm idler fit lack ADXL validation."
             ),
         },
         "3gt_12mm": {
-            "trust_pct": 42,
+            "trust_pct": 50,
             "basis": (
-                "Gates 3GT 12 mm static EA between the Table 6 9 mm and 15 mm rows (56.5 kN × 1.85)."
+                "Gates 3GT 12 mm static EA (56.5 kN × 1.85) paired with Costello 270-tex cord micromechanics "
+                "and 3D Tet10 3GT pitch-cell FEA (k_t=41,378 N/(m·mm), EI=0.01289 N·m²/m)."
             ),
             "caveat": (
-                "No CoreXY ADXL validation; heavy bending stiffness and custom 12 mm 3GT pulley mechanics are untested."
+                "No CoreXY ADXL validation; heavy 2.41 mm backing bending stiffness and custom 12 mm 3GT pulley mechanics are untested."
             ),
         },
         "3gt_15mm": {
-            "trust_pct": 40,
+            "trust_pct": 48,
             "basis": (
-                "Gates Table 6 3GT 15 mm datasheet EA (73.4 kN) × the 2GT-calibrated 1.85 dynamic factor."
+                "Gates Table 6 3GT 15 mm datasheet EA (73.4 kN × 1.85) paired with Costello 270-tex cord micromechanics "
+                "and 3D Tet10 3GT pitch-cell FEA (k_t=41,378 N/(m·mm), EI=0.01289 N·m²/m)."
             ),
             "caveat": (
-                "Unproven on 3D printers; 30 g/m belt mass, bending drag, and custom CNC pulley stacks remain theoretical."
+                "Unproven on 3D printers; 30 g/m belt mass, high bending drag, and custom CNC pulley stacks remain theoretical."
             ),
         },
         "at3_10mm": {
-            "trust_pct": 40,
+            "trust_pct": 48,
             "basis": (
-                "Breco/Elatech AT3 10 mm industrial linear-actuator C_spez datasheet (80 kN Hookean steel/TPU)."
+                "Breco/Elatech AT3 10 mm industrial linear-actuator C_spez datasheet (80 kN Hookean steel/TPU) "
+                "paired with Costello 7×3 steel-cord micromechanics and 3D Tet10 AT3 pitch-cell FEA "
+                "(k_t=108,743 N/(m·mm), s0=0.05, q_s=2.40 N/mm, EI=0.006225 N·m²/m)."
             ),
             "caveat": (
-                "Unproven on serpentine CoreXY printers; steel-cord reverse-bend fatigue and 92 ShA TPU chamber softening (>55 °C) are uncalibrated."
+                "Unproven on serpentine CoreXY printers; steel-cord reverse-bend fatigue and 92 ShA TPU chamber softening (>55 °C) lack ADXL data."
             ),
         },
         "at3_16mm": {
-            "trust_pct": 38,
+            "trust_pct": 46,
             "basis": (
-                "Breco/Elatech AT3 16 mm industrial linear-actuator C_spez datasheet (135 kN steel/TPU)."
+                "Breco/Elatech AT3 16 mm industrial linear-actuator C_spez datasheet (135 kN steel/TPU) "
+                "paired with Costello 7×3 steel-cord micromechanics and 3D Tet10 AT3 pitch-cell FEA."
             ),
             "caveat": (
                 "Unproven on CoreXY printers; requires ≥20 mm back-idlers to avoid wire fatigue and suffers TPU stiffness loss in heated chambers."
             ),
         },
         "at3_gen3_16mm": {
-            "trust_pct": 38,
+            "trust_pct": 45,
             "basis": (
-                "ContiTech Synchroflex AT3 Gen III 16 mm industrial C_spez datasheet (250 kN HD steel/TPU)."
+                "ContiTech Synchroflex AT3 Gen III 16 mm industrial C_spez datasheet (250 kN HD steel/TPU) "
+                "paired with Costello steel-cord micromechanics and 3D Tet10 AT3 pitch-cell FEA (1.10× k_t)."
             ),
             "caveat": (
                 "Theoretical upper-bound only; zero CoreXY ADXL evidence, severe bending drag, and TPU cold-flow in heated chambers."
             ),
         },
         "htd3m_15mm": {
-            "trust_pct": 36,
+            "trust_pct": 42,
             "basis": (
-                "Elatech HTD 3M 15 mm industrial C_spez datasheet (127.5 kN steel/TPU)."
+                "Elatech HTD 3M 15 mm industrial C_spez datasheet (127.5 kN steel/TPU) paired with Costello "
+                "steel-cord micromechanics and 3D Tet10 AT3 pitch-cell FEA (0.88× HTD tooth-profile adjustment)."
             ),
             "caveat": (
                 "Theoretical only; ≥30 mm reverse-bend idler requirement and HTD semicircular tooth backlash are impractical on compact CoreXY frames."
             ),
         },
         "at5_16mm": {
-            "trust_pct": 34,
+            "trust_pct": 40,
             "basis": (
-                "Breco/Elatech AT5 16 mm heavy industrial C_spez datasheet (280 kN steel/TPU)."
+                "Breco/Elatech AT5 16 mm heavy industrial C_spez datasheet (280 kN steel/TPU) paired with "
+                "Costello steel-cord micromechanics and pitch-scaled 3D Tet10 AT3 FEA (1.15× k_t, 2.0× EI)."
             ),
             "caveat": (
                 "Purely theoretical industrial upper-bound; ≥60 mm back-idler minimum and 5 mm pitch are incompatible with Voron/VzBot-scale gantries."

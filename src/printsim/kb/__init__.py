@@ -18,6 +18,14 @@ from printsim.kb.harvesters import (
     ingest_local_path,
     seed_from_benchmark_docs,
 )
+from printsim.kb.shaper_benchmarks import (
+    build_benchmark_spec,
+    compare_benchmark_reports,
+    default_manifest_path,
+    load_shaper_benchmarks,
+    run_shaper_benchmarks,
+    save_benchmark_report,
+)
 from printsim.kb.store import TouchstoneKB, compute_content_hash, default_kb_path
 
 __all__ = [
@@ -26,17 +34,23 @@ __all__ = [
     "DEFAULT_PUBLIC_GITHUB_REPOS",
     "TouchstoneKB",
     "analyze_coverage_gaps",
+    "build_benchmark_spec",
+    "compare_benchmark_reports",
     "compute_content_hash",
     "default_kb_path",
+    "default_manifest_path",
     "extract_structured_records",
     "harvest_answer_overflow",
     "harvest_discourse",
     "harvest_github_issues",
     "infer_preset_hint",
     "ingest_local_path",
+    "load_shaper_benchmarks",
     "parse_klipper_shaper_csv",
     "resolve_bot_token",
     "run_kb_calibration",
+    "run_shaper_benchmarks",
+    "save_benchmark_report",
     "scan_discord_channel",
     "seed_from_benchmark_docs",
     "score_engineering_signal",

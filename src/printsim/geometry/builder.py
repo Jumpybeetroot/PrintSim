@@ -131,6 +131,7 @@ class AttachedSuperelement:
     manifest: dict[str, Any] = field(default_factory=dict)
     visual_glb_url: str | None = None
     cad_trust_pct: int | None = None
+    subpart_recovery: Any = None
 
     def to_summary_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable summary of this active CAD superelement."""
@@ -203,6 +204,7 @@ class AssemblyModel:
     frame_brace_cost_usd: float = 0.0
     frame_brace_cad_count: int = 0
     frame_brace_cad_asset_id: str | None = None
+    frame_brace_cad_meta: dict[str, Any] = field(default_factory=dict)
     frame_brace_visuals: list[dict[str, Any]] = field(default_factory=list)
     extrusion_fill_mass_kg: float = 0.0
     x_rail_ei_y_boost_pct: float = 0.0
@@ -700,6 +702,12 @@ class AssemblyModel:
                 "x_rail_height_mm": round(get_profile(self.spec.gantry.x_rail_profile).height_m * 1e3, 1),
                 "y_rail_width_mm": round(get_profile(self.spec.gantry.y_rail_profile).width_m * 1e3, 1),
                 "y_rail_height_mm": round(get_profile(self.spec.gantry.y_rail_profile).height_m * 1e3, 1),
+                "x_beam_span_mm": (
+                    round(corexy_x_beam_span_m(self.spec) * 1e3, 1)
+                    if self.spec.architecture == "corexy"
+                    and self.spec.gantry.x_beam_profile != "unsupported_rail"
+                    else None
+                ),
                 "x_beam_ei_y_boost_pct": round(self.x_rail_ei_y_boost_pct, 1),
                 "x_beam_ei_z_boost_pct": round(self.x_rail_ei_z_boost_pct, 1),
                 "x_beam_gj_boost_pct": round(self.x_rail_gj_boost_pct, 1),
@@ -919,6 +927,12 @@ class AssemblyModel:
                 "cad_includes_backplate": bool(
                     any(se.category == "toolheads" for se in self.superelements)
                 ),
+                "cad_split_carriage_compatible": bool(
+                    any(
+                        se.category == "toolheads" and is_split_carriage_cad_manifest(se.manifest)
+                        for se in self.superelements
+                    )
+                ),
                 "cad_superelements_active": [
                     se.to_summary_dict()
                     for se in self.superelements
@@ -934,6 +948,30 @@ class AssemblyModel:
                     if (tid_vis and _has_cad_visual("toolheads", tid_vis))
                     else None
                 ),
+                "carriage_mount_visual_glb_url": (
+                    "/api/assets/hardware/gantry_brackets/siboor_cnc_x_carriage/visual.glb"
+                    if (
+                        self.spec.architecture in ("corexy", "cartesian")
+                        and self.spec.gantry.effective_x_rail_mount == "front"
+                        and (
+                            not bool(any(se.category == "toolheads" for se in self.superelements))
+                            or bool(
+                                any(
+                                    se.category == "toolheads"
+                                    and is_split_carriage_cad_manifest(se.manifest)
+                                    for se in self.superelements
+                                )
+                            )
+                        )
+                        and not bool(
+                            get_material(
+                                self.spec.toolhead.effective_carriage_mount_material
+                            ).is_printed_polymer
+                        )
+                        and _has_cad_visual("gantry_brackets", "siboor_cnc_x_carriage")
+                    )
+                    else None
+                ),
                 # Port 0 / Port 1 datums of visual-only CAD toolheads (no structural superelement),
                 # e.g. the printed-geometry VzBot Vz-Printhead on a top-mounted MGN9H
                 "toolhead_visual_ports_mm": _cad_visual_ports_mm("toolheads", tid_vis),
@@ -943,6 +981,7 @@ class AssemblyModel:
                 "active": self.spec.frame.bracing != "none",
                 "cad_count": int(self.frame_brace_cad_count),
                 "cad_asset_id": self.frame_brace_cad_asset_id,
+                **self.frame_brace_cad_meta,
                 "cad_mass_kg": round(float(self.frame_brace_cad_mass_kg), 4),
                 "flat_bar_mass_kg": round(float(self.frame_brace_flat_bar_mass_kg), 4),
                 "total_mass_kg": round(
@@ -1098,6 +1137,7 @@ from printsim.geometry._builder_toolhead import (  # noqa: E402
     _load_cad_superelement,
     _series_combine_superelement_kbb,
     _skew_3x3,
+    is_split_carriage_cad_manifest,
     compute_toolhead_link_props,
     resolve_toolhead_cad_asset_id,
     resolve_toolhead_hardware_accessories,
@@ -2356,10 +2396,14 @@ def _build_corexy(
         if spec.gantry.effective_dual_x_rails:
             x_rail_mass *= 2.0
 
-    # In CoreXY, X moves toolhead; Y moves toolhead + X beam + X rail + backer + CF inserts + Y carriages + gantry bracket delta
-    x_moving = toolhead_kg + 0.04  # plus belt segment
+    # In CoreXY, X moves toolhead + effective umbilical/cable-chain/CPAP-hose/PTFE drag mass
+    # (Rayleigh moving-belt inertia is added separately via belt_moving_mass_kg).
+    # Y moves that same toolhead + umbilical + X beam + X rail + backer + CF inserts + Y carriages.
+    umbilical_drag_kg = float(spec.toolhead.effective_umbilical_mass_g) * 1e-3
+    x_moving = toolhead_kg + umbilical_drag_kg
     y_moving = (
         toolhead_kg
+        + umbilical_drag_kg
         + x_beam_mass
         + x_rail_mass
         + x_backer_mass
@@ -2411,6 +2455,7 @@ def _build_corexy(
         frame_brace_cost_usd=float(frame_brace_res["cost_usd"]),
         frame_brace_cad_count=int(frame_brace_res["cad_count"]),
         frame_brace_cad_asset_id=frame_brace_res["cad_asset_id"],
+        frame_brace_cad_meta=dict(frame_brace_res.get("cad_meta") or {}),
         frame_brace_visuals=list(frame_brace_res["visuals"]),
         x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
         x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,

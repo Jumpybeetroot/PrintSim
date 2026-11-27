@@ -1,0 +1,1126 @@
+# Real-World Machine Input-Shaper Calibration & Regression Benchmark Suite
+#
+# Curated machine configurations paired with verified real-world Klipper
+# SHAPER_CALIBRATE / Shake&Tune ADXL345 measurements. Used by
+# `uv run printsim shaper-benchmark` and `tests/test_shaper_benchmarks.py`
+# to verify physics accuracy and catch regressions after solver/model edits.
+#
+# Provenance tiers:
+#   tier: 1  Individual measured machine or controlled same-machine A/B experiment
+#            with cited ADXL/Klipper shaper logs and known hardware specs.
+#   tier: 2  Community multi-build consensus reference spanning diverse printer
+#            architectures (3030 CoreXY, Cartesian bedslinger, Delta).
+#
+# Shaper matching convention:
+#   `x_shaper` / `y_shaper` records the exact Klipper shaper reported by the
+#   measurement (`ZV`, `MZV`, `EI`, `2HUMP_EI`, `3HUMP_EI`, or `RAW` for raw
+#   PSD peak). The runner compares against PrintSim's fitted candidate frequency
+#   for that same shaper (or `effective_freq_hz` for `RAW`).
+
+version: 1
+
+machines:
+  # =========================================================================
+  # TIER 1: Individually Measured Machines & Controlled Experiments
+  # =========================================================================
+
+  - id: voron_trident_300_jeffk_hot
+    name: Voron Trident 300 (jeff.k, Hot Chamber)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_trident_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 55.0
+      gantry:
+        belt:
+          pretension_n: 9.8  # 2.2 lb on PFMakes meter
+      kinematics:
+        xy_stepper:
+          holding_torque_nm: 0.45  # LDO 2004MAH
+          rated_current_a: 2.0
+          run_current_a: 1.0
+    measured:
+      x_freq_hz: 62.7
+      x_shaper: MZV
+      x_range_hz: [61.4, 64.0]
+      x_max_accel_mm_s2: 11500
+      y_freq_hz: 41.5
+      y_shaper: MZV
+      y_range_hz: [40.8, 42.2]
+      y_max_accel_mm_s2: 4975
+    source: "VORONDesign Discord #resonance (jeff.k, 2026-10-20; 20261126_adxl_benchmarks.json)"
+    notes: "Stock 300 Trident, LDO 2004MAH, EBB36 Gen2 LIS2DW, hot chamber @ 2.2 lb PFMakes (~9.8 N)."
+
+  - id: voron_trident_300_jeffk_cold
+    name: Voron Trident 300 (jeff.k, Cold 26 C)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_trident_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 26.0
+      gantry:
+        belt:
+          pretension_n: 6.2  # 1.4 lb on PFMakes meter
+      kinematics:
+        xy_stepper:
+          holding_torque_nm: 0.45
+          rated_current_a: 2.0
+          run_current_a: 1.0
+    measured:
+      x_freq_hz: 55.4
+      x_shaper: MZV
+      x_max_accel_mm_s2: 9000
+      y_freq_hz: 34.4
+      y_shaper: MZV
+      y_max_accel_mm_s2: 3470
+    source: "VORONDesign Discord #resonance (jeff.k, 2026-10-20; 20261126_adxl_benchmarks.json)"
+    notes: "Same machine as jeffk_hot at 26 C cold chamber, 1.4 lb PFMakes (~6.2 N)."
+
+  - id: voron_trident_r2_tap_achilles
+    name: Formbot Voron Trident R2 300 + Voron Tap (AchillesUltimate)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_trident_300.yaml
+    overrides:
+      toolhead:
+        total_mass_g: 455.0  # StealthBurner + CW2 + Voron Tap (~+57 g)
+        z_probe_type: printed_tap
+    measured:
+      x_freq_hz: 50.3
+      x_shaper: RAW
+      y_freq_hz: 36.9
+      y_shaper: RAW
+      y_range_hz: [36.1, 37.7]
+    source: "VORONDesign Discord (AchillesUltimate, raw CSVs in data/touchstones/adxl_csvs/)"
+    notes: "Formbot Trident R2 300 + Voron Tap, EBBCan ADXL345 raw PSD peaks."
+
+  - id: voron_24_250_cnc_xol_technocratic
+    name: Voron 2.4 250 CNC + XOL + LW Gantry (TechnocraticBlight)
+    tier: 1
+    architecture: corexy
+    base_preset: corexy_voron_style.yaml
+    overrides:
+      frame:
+        width_mm: 410
+        depth_mm: 410
+        height_mm: 430
+      gantry:
+        bracket_material: aluminum_6061_t6
+        x_beam_profile: cnc_al_truss_voron24_lw
+        carriage_mass_g: 165.0
+        belt:
+          pretension_n: 9.3  # 2.1 PFMakes
+      kinematics:
+        build_volume_mm: [250, 250, 230]
+        xy_stepper:
+          run_current_a: 1.4
+      toolhead:
+        preset_id: xol2
+        name: XOL 2 + Revo Voron HF + CNC Carriage
+        total_mass_g: 255.0
+        mount_material: aluminum_6061_t6
+        hotend:
+          preset_id: e3d_revo_voron
+          mass_g: 40.0
+    measured:
+      x_freq_hz: 87.6
+      x_shaper: MZV
+      y_freq_hz: 59.8
+      y_shaper: MZV
+    source: "VORONDesign Discord #resonance (TechnocraticBlight, 2026-10-01; 20261126_adxl_benchmarks.json)"
+    notes: "V2.4 250, 2WD 6 mm @ 2.1 PFMakes, XOL + Revo HF, Vitalii CNC carriage/XY-joints, Fysetc LW gantry."
+
+  - id: voron_trident_250_monolith_hanarius
+    name: Voron Trident 250 Printed Monolith (Hanarius)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_trident_300.yaml
+    overrides:
+      frame:
+        width_mm: 410
+        depth_mm: 410
+        height_mm: 430
+      gantry:
+        belt_routing: monolith_short
+        double_shear_pulleys: true
+        bracket_material: pet_cf_printed
+        belt:
+          pretension_n: 25.0
+      kinematics:
+        build_volume_mm: [250, 250, 230]
+      toolhead:
+        total_mass_g: 250.0
+    measured:
+      x_freq_hz: 86.8
+      x_shaper: MZV
+      x_max_accel_mm_s2: 22000
+      y_freq_hz: 56.8
+      y_shaper: MZV
+      y_max_accel_mm_s2: 9400
+    source: "Monolith Discord #monolith-builds (Hanarius; docs/monolith_discord_benchmarks.md)"
+    notes: "2020 Trident 250, 2WD 6 mm printed Monolith gantry."
+
+  - id: cw_monolith_300_awd_20250710
+    name: CloakedWayne Monolith 300 Testbed AWD (LDO CNC MGN9H, 2.5A)
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0  # Measured at room temperature
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0  # LDO CNC XY-joints + MGN9H dressed pair (202.2 g + 8 g fasteners)
+        belt:
+          type: gt2_10mm
+          pretension_n: 89.0  # 20 lbf
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: 178.4
+      x_shaper: MZV
+      x_max_accel_mm_s2: 93800
+      y_freq_hz: 117.4
+      y_shaper: MZV
+      y_max_accel_mm_s2: 40600
+    source: "Monolith Discord #updates (CloakedWayne, 2025-07-10; 20261126_cw_belt_awd_2wd_current_sweep.json)"
+    notes: "Controlled same-day AWD vs 2WD testbed: 300 mm, 4040/2040, 3 mm Al panels, Carbonara, 10 mm EPDM @ 89 N, LDO 2504 @ 2.5 A / 36 V."
+
+  - id: cw_monolith_300_2wd_20250710
+    name: CloakedWayne Monolith 300 Testbed 2WD (Same Machine, 2.5A)
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: 2wd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0
+        belt:
+          type: gt2_10mm
+          pretension_n: 89.0
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: 127.8
+      x_shaper: MZV
+      x_max_accel_mm_s2: 48100
+      y_freq_hz: 84.6
+      y_shaper: MZV
+      y_max_accel_mm_s2: 21100
+    source: "Monolith Discord #updates (CloakedWayne, 2025-07-10; 20261126_cw_belt_awd_2wd_current_sweep.json)"
+    notes: "Exact same testbed as cw_monolith_300_awd_20250710 reconfigured in 2WD."
+
+  - id: cw_monolith_300_awd_1p0a
+    name: CloakedWayne Monolith 300 AWD Current Sweep @ 1.0 A
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0
+        belt:
+          type: gt2_10mm
+          pretension_n: 89.0
+      kinematics:
+        xy_stepper:
+          run_current_a: 1.0
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: 98.8
+      y_shaper: MZV
+    source: "Monolith Discord #updates (CloakedWayne, 2025-08-12; 20261126_cw_belt_awd_2wd_current_sweep.json)"
+    notes: "Controlled stepper run-current sweep Y-axis point at 1.0 A."
+
+  - id: cw_monolith_300_awd_2p8a
+    name: CloakedWayne Monolith 300 AWD Current Sweep @ 2.8 A
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0
+        belt:
+          type: gt2_10mm
+          pretension_n: 89.0
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.8
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: 115.6
+      y_shaper: MZV
+    source: "Monolith Discord #updates (CloakedWayne, 2025-08-12; 20261126_cw_belt_awd_2wd_current_sweep.json)"
+    notes: "Controlled stepper run-current sweep Y-axis point at 2.8 A."
+
+  - id: monolith_zero_m0_awd_zruncho
+    name: Monolith Zero (M0) 120 AWD (zruncho, 4x 2504 @ 2.5A)
+    tier: 1
+    architecture: corexy
+    base_preset: monolith_zero_m0.yaml
+    overrides:
+      gantry:
+        drive_mode: awd
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+    measured:
+      x_freq_hz: 185.2
+      x_shaper: MZV
+      x_max_accel_mm_s2: 101000
+      y_freq_hz: 132.0
+      y_shaper: MZV
+      y_max_accel_mm_s2: 51300
+    source: "Monolith Discord (zruncho, 2025-10-04; 20261126_cw_fixed_gantry_conversion.json)"
+    notes: "Monolith Zero 120 AWD with 4x 2504 @ 2.5 A."
+
+  - id: monolith_zero_m0_2wd_zruncho
+    name: Monolith Zero (M0) 120 2WD (zruncho, OMC 2504 @ 3.3A)
+    tier: 1
+    architecture: corexy
+    base_preset: monolith_zero_m0.yaml
+    overrides:
+      gantry:
+        drive_mode: 2wd
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+    measured:
+      x_freq_hz: 142.2
+      x_shaper: MZV
+      x_max_accel_mm_s2: 59600
+      y_freq_hz: 104.0
+      y_shaper: MZV
+      y_max_accel_mm_s2: 31900
+    source: "Monolith Discord (zruncho, 2026-05-25; 20261126_cw_fixed_gantry_conversion.json)"
+    notes: "Monolith Zero 120 2WD baseline pre-Simpla feet."
+
+  - id: vzbot_330_awd_travis90x
+    name: VzBot 330 AWD Mellow CNC (Travis90x)
+    tier: 1
+    architecture: corexy
+    base_preset: vzbot_330_awd.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 118.0
+      x_shaper: ZV
+      y_freq_hz: 77.0
+      y_shaper: MZV
+    source: "GitHub Travis90x/Klipper-configuration (VzBot_330_Mellow_printer.cfg)"
+    notes: "Official-spec VzBot 330 AWD Mellow CNC kit, 6 mm GT2, 20x20x1 CF tube + MGN9H."
+
+  - id: vzbot_330_awd_techyg
+    name: VzBot 330 AWD Beacon (techyg)
+    tier: 1
+    architecture: corexy
+    base_preset: vzbot_330_awd.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 107.4
+      x_shaper: MZV
+      y_freq_hz: 76.0
+      y_shaper: MZV
+    source: "GitHub techyg/VzBot (Config/printer.cfg)"
+    notes: "VzBot 330 AWD, CF tube + MGN9H, Vz-Printhead + Beacon."
+
+  - id: vzbot_330_2wd_community
+    name: VzBot 330 2WD (FlashSavage / ckvsoft)
+    tier: 1
+    architecture: corexy
+    base_preset: vzbot_330_awd.yaml
+    overrides:
+      gantry:
+        drive_mode: 2wd
+    measured:
+      x_freq_hz: 83.1
+      x_shaper: MZV
+      x_range_hz: [82.4, 83.8]
+      y_freq_hz: 63.0
+      y_shaper: MZV
+      y_range_hz: [58.2, 67.8]
+    source: "GitHub FlashSavage/VZbot-config & ckvsoft/KlipperConfigs (docs/community_touchstones.md)"
+    notes: "VzBot 330 in 2WD configuration with 6 mm GT2 and CF tube."
+
+  - id: vzbot_235_awd_andersevenrud
+    name: VzBot 235 AWD (andersevenrud)
+    tier: 1
+    architecture: corexy
+    base_preset: vzbot_330_awd.yaml
+    overrides:
+      frame:
+        width_mm: 410
+        depth_mm: 410
+        height_mm: 470
+      kinematics:
+        build_volume_mm: [235, 235, 300]
+      bed:
+        size_mm: [235, 235]
+        mass_g: 1800
+    measured:
+      x_freq_hz: 110.0
+      x_shaper: MZV
+      y_freq_hz: 84.8
+      y_shaper: MZV
+    source: "GitHub andersevenrud/my-vz235 (docs/community_touchstones.md)"
+    notes: "VzBot 235 AWD, 6 mm GT2, CF tube + MGN9H, Vz-Printhead."
+
+  - id: doomcube_onewayne_awd
+    name: Doomish 4040+2020 Trident AWD (onewayne)
+    tier: 1
+    architecture: corexy
+    base_preset: doomcube_4040.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 100.4
+      x_shaper: MZV
+      x_max_accel_mm_s2: 29700
+      y_freq_hz: 67.6
+      y_shaper: MZV
+      y_max_accel_mm_s2: 13500
+    source: "Monolith Discord #monolith-builds (onewayne; docs/monolith_discord_benchmarks.md)"
+    notes: "4040+2020 Doomish Trident, AWD 9 mm, 4 mm Al + PIR panels."
+
+  - id: dderg_vt300_awd_12mm
+    name: dderg VT 300 AWD (4040, 12mm, K3Z SLM)
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        profile: extrusion_4040
+        upright_profile: extrusion_4040
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        carriage_mass_g: 134.6  # dderg lightweight milled + MGN9H + Ti hardware
+        belt:
+          type: gt2_12mm
+          pretension_n: 105.0
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 48.0
+    measured:
+      x_freq_hz: 186.0
+      x_shaper: MZV
+      x_max_accel_mm_s2: 50000
+      y_freq_hz: 122.0
+      y_shaper: ZV
+      y_max_accel_mm_s2: 50000
+    source: "Monolith Discord #monolith-builds (dderg; docs/monolith_discord_benchmarks.md)"
+    notes: "4040 Trident 300 AWD, 12 mm belts, 48 V TMC5160Plus, K3Z SLM milled gantry."
+
+  - id: hvf_siboor_2020_before
+    name: Siboor CoreXY 2020 X-Beam Baseline (HVFDesigns)
+    tier: 1
+    architecture: corexy
+    base_preset: siboor_voron_trident_awd_300.yaml
+    overrides:
+      gantry:
+        x_beam_profile: extrusion_2020
+        x_beam_material: aluminum_6063_t5
+    measured:
+      x_freq_hz: 85.8
+      x_shaper: MZV
+      x_max_accel_mm_s2: 21480
+      y_freq_hz: 62.2
+      y_shaper: MZV
+      y_max_accel_mm_s2: 11300
+    source: "Monolith Discord #user-projects Carbonara thread (HVFDesigns, 2026-09-06)"
+    notes: "Controlled before-swap baseline on Siboor CoreXY with 2020 aluminum X-beam + milled joints."
+
+  - id: hvf_siboor_carbonara_after
+    name: Siboor CoreXY Carbonara CF X-Beam (HVFDesigns)
+    tier: 1
+    architecture: corexy
+    base_preset: siboor_voron_trident_awd_300.yaml
+    overrides:
+      gantry:
+        x_beam_profile: cf_tube_20x20_carbonara
+        x_beam_material: carbon_fiber_torsional_45
+        cf_rail_mounting: two_wall_clamped_inserts
+    measured:
+      x_freq_hz: 89.4
+      x_shaper: MZV
+      x_max_accel_mm_s2: 23330
+      y_freq_hz: 65.0
+      y_shaper: MZV
+      y_max_accel_mm_s2: 12360
+    source: "Monolith Discord #user-projects Carbonara thread (HVFDesigns, 2026-09-08)"
+    notes: "Exact same Siboor CoreXY after swapping 2020 Al X-beam to Carbonara CF X-beam."
+
+  - id: voron_24_300_a4t_yamisam
+    name: Voron 2.4 300 Formbot Flying Gantry + A4T (yami_sam)
+    tier: 1
+    architecture: corexy
+    base_preset: corexy_voron_style.yaml
+    overrides:
+      gantry:
+        belt:
+          pretension_n: 9.8  # 2.2 PFMakes
+      toolhead:
+        preset_id: a4t_beacon
+        name: A4T + WW-BMG + CNC XOL Carriage + Beacon RevH
+        total_mass_g: 270.0
+        mount_material: aluminum_6061_t6
+        z_probe_type: static_eddy
+    measured:
+      x_freq_hz: 102.2
+      x_shaper: EI
+      x_max_accel_mm_s2: 19000
+      y_freq_hz: 54.4
+      y_shaper: EI
+      y_max_accel_mm_s2: 5500
+    source: "VORONDesign Discord #resonance (yami_sam, 2026-10-15; 20261126_adxl_benchmarks.json)"
+    notes: "Formbot V2.4 300 flying gantry, 2WD 6 mm Gates @ 2.2 PFMakes, CNC XOL carriage + A4T + Beacon."
+
+  - id: voron_24_300_tap_turtdev
+    name: Voron 2.4 300 Flying Gantry + Tap (TurtDev V2-2891)
+    tier: 1
+    architecture: corexy
+    base_preset: corexy_voron_style.yaml
+    overrides:
+      toolhead:
+        total_mass_g: 455.0  # StealthBurner + CW2 + Voron Tap
+        z_probe_type: printed_tap
+    measured:
+      x_freq_hz: 49.6
+      x_shaper: MZV
+      y_freq_hz: 39.0
+      y_shaper: MZV
+    source: "GitHub MakerBogans/KlipperConfig (TurtDev/V2-2891/printer.cfg)"
+    notes: "Serialized Voron 2.4 300 flying gantry with StealthBurner + Voron Tap, 2WD 6 mm belts."
+
+  - id: voron_24_250_tap_richardjm
+    name: Voron 2.4 250 Flying Gantry + Tap (richardjm)
+    tier: 1
+    architecture: corexy
+    base_preset: corexy_voron_style.yaml
+    overrides:
+      frame:
+        width_mm: 410
+        depth_mm: 410
+        height_mm: 430
+      kinematics:
+        build_volume_mm: [250, 250, 210]
+        xy_stepper:
+          holding_torque_nm: 0.59  # OMC 17HS19-2004S1
+          rated_current_a: 2.0
+          run_current_a: 1.1
+      toolhead:
+        total_mass_g: 455.0  # StealthBurner + Voron Tap + SHT36v3
+        z_probe_type: printed_tap
+      bed:
+        size_mm: [250, 250]
+        mass_g: 2100
+    measured:
+      x_freq_hz: 65.8
+      x_shaper: MZV
+      y_freq_hz: 46.8
+      y_shaper: MZV
+    source: "GitHub richardjm/voronpi-klipper-backup (printer.cfg)"
+    notes: "Voron 2.4 250 flying gantry, OMC 17HS19-2004S1 @ 1.1 A, Voron Tap + Fly SHT36v3."
+
+  - id: voron_24_350_derholgi
+    name: Voron 2.4 350 Flying Gantry + Cartographer (DerHolgi)
+    tier: 1
+    architecture: corexy
+    base_preset: corexy_voron_style.yaml
+    overrides:
+      frame:
+        width_mm: 510
+        depth_mm: 510
+        height_mm: 530
+      kinematics:
+        build_volume_mm: [350, 350, 330]
+      toolhead:
+        z_probe_type: static_eddy
+      bed:
+        size_mm: [350, 350]
+        mass_g: 3600
+    measured:
+      x_freq_hz: 44.2
+      x_shaper: MZV
+      y_freq_hz: 29.8
+      y_shaper: MZV
+    source: "GitHub DerHolgi/Voron24-Klipper-Backup (printer_data/config/printer.cfg.rori)"
+    notes: "Voron 2.4 350 flying gantry, StealthBurner + Cartographer eddy probe, 2WD 6 mm belts."
+
+  - id: voron_24_350_squiidz
+    name: Voron 2.4 350 Flying Gantry 0.9deg (squiidz)
+    tier: 1
+    architecture: corexy
+    base_preset: corexy_voron_style.yaml
+    overrides:
+      frame:
+        width_mm: 510
+        depth_mm: 510
+        height_mm: 530
+      kinematics:
+        build_volume_mm: [350, 350, 330]
+        xy_stepper:
+          steps_per_rev: 400
+          run_current_a: 0.8
+      bed:
+        size_mm: [350, 350]
+        mass_g: 3600
+    measured:
+      x_freq_hz: 62.2
+      x_shaper: MZV
+      y_freq_hz: 45.0
+      y_shaper: MZV
+    source: "GitHub squiidz/voron_conf (printer.cfg.00)"
+    notes: "Voron 2.4 350 flying gantry, 0.9 deg steppers @ 0.8 A, Klicky/inductive probe, 2WD 6 mm belts."
+
+  - id: voron_trident_350_alex3dlabs
+    name: Voron Trident 350 + Beacon + EBB36 CAN (Alex3DLabs)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_trident_300.yaml
+    overrides:
+      frame:
+        width_mm: 510
+        depth_mm: 510
+        height_mm: 530
+      kinematics:
+        build_volume_mm: [350, 350, 250]
+        xy_stepper:
+          run_current_a: 1.0
+      toolhead:
+        z_probe_type: static_eddy
+        umbilical_type: can_umbilical
+      bed:
+        size_mm: [350, 350]
+        mass_g: 3600
+    measured:
+      x_freq_hz: 56.2
+      x_shaper: MZV
+      y_freq_hz: 68.2
+      y_shaper: 2HUMP_EI
+    source: "GitHub Alex3DLabs/Klipper_Configs (Voron/Trident/350/printer.cfg)"
+    notes: "Voron Trident 350 fixed gantry, StealthBurner + Beacon RevD + EBB36 CAN, 2WD 6 mm belts @ 1.0 A."
+
+  - id: ratrig_vcore31_200_pmarinov
+    name: RatRig V-Core 3.1 200 (PMarinov1994)
+    tier: 1
+    architecture: corexy
+    base_preset: ratrig_vcore31_300.yaml
+    overrides:
+      frame:
+        width_mm: 405
+        depth_mm: 405
+        height_mm: 410
+      kinematics:
+        build_volume_mm: [200, 200, 200]
+        xy_stepper:
+          run_current_a: 1.6
+      bed:
+        size_mm: [200, 200]
+        mass_g: 1500
+    measured:
+      x_freq_hz: 77.0
+      x_shaper: MZV
+      y_freq_hz: 51.6
+      y_shaper: MZV
+    source: "GitHub PMarinov1994/KlipperConfigs (RatRig_VCore_3_1_printer.cfg)"
+    notes: "RatRig V-Core 3.1 200, 3030 frame, 2WD 9 mm belts, LDO 2504AC @ 1.6 A / 24 V."
+
+  - id: ratrig_vcore3_500_heschlie
+    name: RatRig V-Core 3 500 48V (heschlie)
+    tier: 1
+    architecture: corexy
+    base_preset: ratrig_vcore31_300.yaml
+    overrides:
+      frame:
+        width_mm: 705
+        depth_mm: 705
+        height_mm: 710
+      kinematics:
+        build_volume_mm: [500, 500, 500]
+        xy_stepper:
+          run_current_a: 1.77
+          supply_voltage_v: 48.0
+      bed:
+        size_mm: [500, 500]
+        mass_g: 6800
+    measured:
+      x_freq_hz: 73.0
+      x_shaper: ZV
+      y_freq_hz: 40.6
+      y_shaper: MZV
+    source: "GitHub heschlie/vc3-klipper-configs (printer.cfg)"
+    notes: "RatRig V-Core 3 500, 3030 frame, 2WD 9 mm belts, LDO 2504AC @ 1.77 A / 48-50 V TMC5160."
+
+  - id: cw_monolith_v24_flying_9mm_awd
+    name: Monolith V2.4 300 Flying Gantry 9mm AWD (CloakedWayne)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_monolith_awd.yaml
+    overrides:
+      gantry:
+        drive_mode: awd
+        belt:
+          type: gt2_9mm
+          pretension_n: 75.0
+      bed:
+        z_drive: belted_quad_z
+    measured:
+      x_freq_hz: 140.8
+      x_shaper: MZV
+      x_max_accel_mm_s2: 66100
+      y_freq_hz: 110.8
+      y_shaper: MZV
+      y_max_accel_mm_s2: 36100
+    source: "Monolith Discord (CloakedWayne, 2025-05-01; 20261126_adxl_benchmarks.json)"
+    notes: "Monolith V2.4 300 flying gantry (laser-cut, 9 mm AWD)."
+
+  - id: cw_monolith_300_awd_slm_mgn12h
+    name: CloakedWayne Monolith 300 AWD SLM MGN12H XY-Joints
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn12_rail
+        carriage_mass_g: 200.4  # SLM Al MGN12H XY-joints + MGN12H (192.4 g + 8 g fasteners)
+        belt:
+          type: gt2_10mm
+          pretension_n: 89.0
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: 182.2
+      x_shaper: MZV
+      y_freq_hz: 117.4
+      y_shaper: MZV
+    source: "Monolith Discord #updates (CloakedWayne, 2025-07-05; 20261126_cw_belt_awd_2wd_current_sweep.json)"
+    notes: "Same 300 mm Monolith AWD testbed with SLM MGN12H XY-joints vs LDO CNC MGN9H."
+
+  - id: cw_belt_shootout_epdm_fg
+    name: CloakedWayne 10mm Belt Shootout — Gates GT2 EPDM Fiberglass
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0
+        belt:
+          type: gt2_10mm
+          core: fiberglass
+          pretension_n: 89.0  # ~20 lbf (283 Hz pluck / 150 mm)
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: 113.8
+      y_shaper: ZV
+    source: "Monolith Discord Road to 50k belt shootout (CloakedWayne; docs/monolith_discord_benchmarks.md)"
+    notes: "Matched ~20 lbf (89 N) 10 mm belt core shootout — Gates GT2 EPDM fiberglass baseline."
+
+  - id: cw_belt_shootout_rubber_aramid
+    name: CloakedWayne 10mm Belt Shootout — Rubber + Aramid (Kevlar)
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0
+        belt:
+          type: gt2_10mm
+          core: aramid
+          pretension_n: 89.0  # ~20 lbf (266 Hz pluck / 150 mm)
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: 119.4
+      y_shaper: ZV
+    source: "Monolith Discord Road to 50k belt shootout (CloakedWayne; docs/monolith_discord_benchmarks.md)"
+    notes: "Matched ~20 lbf (89 N) 10 mm belt core shootout — Rubber + Aramid (+4.9% over fiberglass)."
+
+  - id: cw_belt_shootout_gt3_10mm
+    name: CloakedWayne 10mm Belt Shootout — Gates GT3 (2MGT) Fiberglass
+    tier: 1
+    architecture: corexy
+    base_preset: cw_fixed_gantry_300.yaml
+    overrides:
+      frame:
+        chamber_temp_c: 25.0
+      gantry:
+        drive_mode: awd
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 210.0
+        belt:
+          type: gt3_10mm
+          core: fiberglass
+          pretension_n: 89.0  # ~20 lbf (257 Hz pluck / 150 mm)
+      kinematics:
+        xy_stepper:
+          run_current_a: 2.5
+          supply_voltage_v: 36.0
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: 110.6
+      y_shaper: ZV
+      y_max_accel_mm_s2: 47700
+    source: "Monolith #updates Potentially Stiffer Belts pt.3 (CloakedWayne, measured 2026-08-05)"
+    notes: "Matched ~20 lbf (89 N) 10 mm belt core shootout — Gates GT3 2MGT fiberglass (14.99 g/m; MZV 114.6 Hz, EI 136.8 Hz; -2.8% ZV vs GT2 EPDM fiberglass)."
+
+  - id: voron_02_gabriel
+    name: Voron 0.2 120 (Gabriel Mermer)
+    tier: 1
+    architecture: corexy
+    base_preset: monolith_zero_m0.yaml
+    overrides:
+      frame:
+        bracing: none
+        corner_joint_type: blind_joint
+        enclosed_panels: true
+        panel_mounting: clip_enclosure
+        panel_material: acrylic_pmma
+        panel_thickness_mm: 3.0
+        chamber_temp_c: 35.0
+      gantry:
+        drive_mode: 2wd
+        belt_routing: stock_corexy
+        double_shear_pulleys: false
+        bracket_material: abs_printed
+        x_beam_profile: extrusion_1515
+        x_beam_material: aluminum_6063_t5
+        x_rail_profile: mgn9_rail
+        y_rail_profile: mgn9_rail
+        carriage_mass_g: 85.0
+        belt:
+          type: gt2_6mm
+          pretension_n: 9.0
+      kinematics:
+        xy_stepper:
+          holding_torque_nm: 0.36
+          rated_current_a: 1.5
+          run_current_a: 0.9
+          supply_voltage_v: 24.0
+      toolhead:
+        preset_id: stealthburner
+        name: Mini StealthBurner + Dragon
+        total_mass_g: 210.0
+        mount_material: abs_printed
+        internal_stiffness_n_per_mm: 350.0
+    measured:
+      x_freq_hz: 74.0
+      x_shaper: MZV
+      y_freq_hz: 75.4
+      y_shaper: MZV
+    source: "VORONDesign Discord #resonance (Gabriel Mermer, 2026-10-10; 20261126_adxl_benchmarks.json)"
+    notes: "Stock 1515 Voron 0.2, 2WD 6 mm belts."
+
+  - id: yak_monolith_bare_frame
+    name: Yak Monolith Frame — Bare Frame (Panels Off)
+    tier: 1
+    architecture: corexy
+    base_preset: voron_monolith_awd.yaml
+    overrides:
+      frame:
+        enclosed_panels: false
+        panel_mounting: none
+        top_panel: false
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: null
+      y_shaper: null
+    source: "Monolith Discord #panels-and-frame pinned (Yak; docs/monolith_discord_benchmarks.md)"
+    notes: "Baseline bare frame for Yak's controlled structural panel A/B sweep (+19% IS gain with bolted Al panels)."
+
+  - id: yak_monolith_full_al_panels
+    name: Yak Monolith Frame — Full 4mm Bolted Al Panels
+    tier: 1
+    architecture: corexy
+    base_preset: voron_monolith_awd.yaml
+    overrides:
+      frame:
+        enclosed_panels: true
+        panel_mounting: bolted_structural
+        panel_material: aluminum_5052_sheet
+        panel_thickness_mm: 4.0
+        top_panel: true
+    measured:
+      x_freq_hz: null
+      x_shaper: null
+      y_freq_hz: null
+      y_shaper: null
+    source: "Monolith Discord #panels-and-frame pinned (Yak; docs/monolith_discord_benchmarks.md)"
+    notes: "Full 4 mm bolted Al panels variant for Yak's controlled panel A/B sweep (+19% Y-axis IS gain)."
+
+  # =========================================================================
+  # TIER 2: Community Multi-Build Consensus References
+  # =========================================================================
+
+  - id: ratrig_vcore31_300
+    name: RatRig V-Core 3.1 300 (Community Reference)
+    tier: 2
+    architecture: corexy
+    base_preset: ratrig_vcore31_300.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 74.0
+      x_shaper: MZV
+      x_max_accel_mm_s2: 16100
+      y_freq_hz: 54.0
+      y_shaper: MZV
+      y_max_accel_mm_s2: 8600
+    source: "RatRig community docs & Shake&Tune archives (docs/community_touchstones.md)"
+    notes: "3030 frame, 2WD 9 mm Gates 2GT, EVA 3 toolhead."
+
+  - id: ratrig_vcore31_400
+    name: RatRig V-Core 3.1 400 (Community Reference)
+    tier: 2
+    architecture: corexy
+    base_preset: ratrig_vcore31_300.yaml
+    overrides:
+      frame:
+        width_mm: 605
+        depth_mm: 605
+        height_mm: 610
+      kinematics:
+        build_volume_mm: [400, 400, 400]
+      bed:
+        size_mm: [400, 400]
+        mass_g: 4600
+    measured:
+      x_freq_hz: 64.0
+      x_shaper: MZV
+      x_max_accel_mm_s2: 12000
+      y_freq_hz: 46.5
+      y_shaper: MZV
+      y_max_accel_mm_s2: 6400
+    source: "RatRig community docs & Shake&Tune archives (docs/community_touchstones.md)"
+    notes: "400 mm span variant of RatRig V-Core 3.1 (3030, 2WD 9 mm)."
+
+  - id: ender3_v2_bedslinger
+    name: Ender 3 V2 Klipper Bedslinger (Community Reference)
+    tier: 2
+    architecture: cartesian_bedslinger
+    base_preset: cartesian_bedslinger.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 56.0
+      x_shaper: MZV
+      x_max_accel_mm_s2: 9200
+      y_freq_hz: 37.5
+      y_shaper: EI
+      y_max_accel_mm_s2: 3400
+    source: "Klipper Discourse SHAPER_CALIBRATE threads (docs/community_touchstones.md)"
+    notes: "2020/4020 V-Slot bedslinger, 6 mm GT2, moving glass/PEI Y bed."
+
+  - id: flsun_v400_delta
+    name: FLSUN V400 Klipper Delta (Community Reference)
+    tier: 2
+    architecture: delta
+    base_preset: flsun_v400_delta.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 68.0
+      x_shaper: MZV
+      x_max_accel_mm_s2: 13600
+      y_freq_hz: 67.0
+      y_shaper: MZV
+      y_max_accel_mm_s2: 13200
+    source: "FLSUN V400 Klipper community logs (docs/community_touchstones.md)"
+    notes: "3-column aluminum delta, ~400 g direct-drive effector, carbon arms."
+
+  - id: doron_velta_delta
+    name: Doron Velta Lightweight Delta (Community Reference)
+    tier: 2
+    architecture: delta
+    base_preset: delta_racer.yaml
+    overrides: {}
+    measured:
+      x_freq_hz: 88.0
+      x_shaper: MZV
+      x_max_accel_mm_s2: 22800
+      y_freq_hz: 86.0
+      y_shaper: MZV
+      y_max_accel_mm_s2: 21800
+    source: "Doron Velta open-source delta benchmarks (docs/community_touchstones.md)"
+    notes: "2020 3-tower lightweight delta with compact effector."
+
+# ===========================================================================
+# CONTROLLED SAME-MACHINE A/B SWEEPS (Physics Trend & Sensitivity Checks)
+# ===========================================================================
+controlled_sweeps:
+  - id: cw_awd_vs_2wd_x
+    name: "CloakedWayne Monolith 300: AWD vs 2WD (X-axis)"
+    baseline_machine: cw_monolith_300_2wd_20250710
+    variant_machine: cw_monolith_300_awd_20250710
+    axis: X
+    measured_ratio: 1.396  # 178.4 / 127.8 MZV (ZV: 178.6 / 129.0 = 1.384)
+    source: "CloakedWayne 2025-07-10 same-day AWD/2WD test"
+
+  - id: cw_awd_vs_2wd_y
+    name: "CloakedWayne Monolith 300: AWD vs 2WD (Y-axis)"
+    baseline_machine: cw_monolith_300_2wd_20250710
+    variant_machine: cw_monolith_300_awd_20250710
+    axis: Y
+    measured_ratio: 1.388  # 117.4 / 84.6 MZV (ZV: 114.4 / 83.2 = 1.375)
+    source: "CloakedWayne 2025-07-10 same-day AWD/2WD test"
+
+  - id: cw_current_1p0_to_2p8_y
+    name: "CloakedWayne Monolith 300 AWD: Stepper Current 1.0A -> 2.8A (Y-axis)"
+    baseline_machine: cw_monolith_300_awd_1p0a
+    variant_machine: cw_monolith_300_awd_2p8a
+    axis: Y
+    measured_ratio: 1.170  # 115.6 / 98.8 MZV
+    source: "CloakedWayne 2025-08-12 stepper run-current sweep"
+
+  - id: jeffk_hot_vs_cold_x
+    name: "jeff.k Trident 300: Cold (6.2 N) -> Hot (9.8 N) (X-axis)"
+    baseline_machine: voron_trident_300_jeffk_cold
+    variant_machine: voron_trident_300_jeffk_hot
+    axis: X
+    measured_ratio: 1.132  # 62.7 / 55.4 MZV
+    source: "jeff.k 2026-10-20 hot vs cold Trident 300"
+
+  - id: jeffk_hot_vs_cold_y
+    name: "jeff.k Trident 300: Cold (6.2 N) -> Hot (9.8 N) (Y-axis)"
+    baseline_machine: voron_trident_300_jeffk_cold
+    variant_machine: voron_trident_300_jeffk_hot
+    axis: Y
+    measured_ratio: 1.206  # 41.5 / 34.4 MZV
+    source: "jeff.k 2026-10-20 hot vs cold Trident 300"
+
+  - id: hvf_2020_to_carbonara_x
+    name: "HVFDesigns Siboor: 2020 Al -> Carbonara CF X-beam (X-axis)"
+    baseline_machine: hvf_siboor_2020_before
+    variant_machine: hvf_siboor_carbonara_after
+    axis: X
+    measured_ratio: 1.042  # 89.4 / 85.8 MZV
+    source: "HVFDesigns 2026-09-06 -> 2026-09-08 Carbonara swap"
+
+  - id: hvf_2020_to_carbonara_y
+    name: "HVFDesigns Siboor: 2020 Al -> Carbonara CF X-beam (Y-axis)"
+    baseline_machine: hvf_siboor_2020_before
+    variant_machine: hvf_siboor_carbonara_after
+    axis: Y
+    measured_ratio: 1.045  # 65.0 / 62.2 MZV
+    source: "HVFDesigns 2026-09-06 -> 2026-09-08 Carbonara swap"
+
+  - id: zruncho_m0_awd_vs_2wd_x
+    name: "zruncho Monolith Zero M0: AWD vs 2WD (X-axis)"
+    baseline_machine: monolith_zero_m0_2wd_zruncho
+    variant_machine: monolith_zero_m0_awd_zruncho
+    axis: X
+    measured_ratio: 1.302  # 185.2 / 142.2 MZV
+    source: "zruncho M0 AWD (2025-10-04) vs 2WD (2026-05-25)"
+
+  - id: zruncho_m0_awd_vs_2wd_y
+    name: "zruncho Monolith Zero M0: AWD vs 2WD (Y-axis)"
+    baseline_machine: monolith_zero_m0_2wd_zruncho
+    variant_machine: monolith_zero_m0_awd_zruncho
+    axis: Y
+    measured_ratio: 1.269  # 132.0 / 104.0 MZV
+    source: "zruncho M0 AWD (2025-10-04) vs 2WD (2026-05-25)"
+
+  - id: vzbot_330_awd_vs_2wd_x
+    name: "VzBot 330: AWD (techyg) vs 2WD (X-axis)"
+    baseline_machine: vzbot_330_2wd_community
+    variant_machine: vzbot_330_awd_techyg
+    axis: X
+    measured_ratio: 1.292  # 107.4 / 83.1 MZV
+    source: "VzBot 330 community Klipper configs"
+
+  - id: vzbot_330_awd_vs_2wd_y
+    name: "VzBot 330: AWD (techyg) vs 2WD (Y-axis)"
+    baseline_machine: vzbot_330_2wd_community
+    variant_machine: vzbot_330_awd_techyg
+    axis: Y
+    measured_ratio: 1.206  # 76.0 / 63.0 MZV
+    source: "VzBot 330 community Klipper configs"
+
+  - id: ratrig_300_vs_400_x
+    name: "RatRig V-Core 3.1: 300 mm vs 400 mm span (X-axis)"
+    baseline_machine: ratrig_vcore31_400
+    variant_machine: ratrig_vcore31_300
+    axis: X
+    measured_ratio: 1.156  # 74.0 / 64.0 MZV
+    source: "RatRig V-Core 3.1 community benchmarks"
+
+  - id: ratrig_300_vs_400_y
+    name: "RatRig V-Core 3.1: 300 mm vs 400 mm span (Y-axis)"
+    baseline_machine: ratrig_vcore31_400
+    variant_machine: ratrig_vcore31_300
+    axis: Y
+    measured_ratio: 1.161  # 54.0 / 46.5 MZV
+    source: "RatRig V-Core 3.1 community benchmarks"
+
+  - id: cw_belt_aramid_vs_fiberglass_y
+    name: "CloakedWayne 10mm Shootout: Aramid vs Fiberglass Core (Y-axis)"
+    baseline_machine: cw_belt_shootout_epdm_fg
+    variant_machine: cw_belt_shootout_rubber_aramid
+    axis: Y
+    measured_ratio: 1.049  # 119.4 / 113.8 ZV
+    source: "CloakedWayne matched-tension 10 mm belt core shootout"
+
+  - id: cw_belt_gt3_vs_epdm_10mm_y
+    name: "CloakedWayne 10mm Shootout: Gates GT3 2MGT vs GT2 EPDM Fiberglass (Y-axis)"
+    baseline_machine: cw_belt_shootout_epdm_fg
+    variant_machine: cw_belt_shootout_gt3_10mm
+    axis: Y
+    measured_ratio: 0.972  # 110.6 / 113.8 ZV (MZV: 114.6 / 118.4 = 0.968)
+    source: "CloakedWayne 2026-08-05 matched ~20 lbf (89 N) 10 mm belt shootout"
+
+  - id: cw_slm_mgn12h_vs_ldo_mgn9h_x
+    name: "CloakedWayne AWD: SLM MGN12H vs LDO CNC MGN9H XY-Joints (X-axis)"
+    baseline_machine: cw_monolith_300_awd_20250710
+    variant_machine: cw_monolith_300_awd_slm_mgn12h
+    axis: X
+    measured_ratio: 1.021  # 182.2 / 178.4 MZV
+    source: "CloakedWayne 2025-07-05 vs 2025-07-10 XY-joint comparison"
+
+  - id: yak_panels_bare_to_full_y
+    name: "Yak Monolith: Bare Frame -> Bolted 4mm Al Panels (Y-axis)"
+    baseline_machine: yak_monolith_bare_frame
+    variant_machine: yak_monolith_full_al_panels
+    axis: Y
+    measured_ratio: 1.190  # +19% measured IS frequency gain
+    source: "Yak pinned #panels-and-frame before/after panel test"

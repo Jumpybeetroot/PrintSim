@@ -1008,11 +1008,19 @@ def generate_bom(
             else (4.0 + 18.0 * x_span_m),
             1,
         )
+        is_cf_x_beam = (
+            spec.gantry.x_beam_profile.startswith("cf_")
+            or spec.gantry.x_beam_material.startswith("carbon_fiber")
+        )
         _add_bom_item(
             items,
             sku="GNT-CF-INSERTS",
             category="gantry",
-            name="Carbonara 2-Wall CF X-Beam Internal Insert & Ti Bolt Kit",
+            name=(
+                "Carbonara 2-Wall CF X-Beam Internal Insert & Ti Bolt Kit"
+                if is_cf_x_beam
+                else "2-Wall Tube X-Beam Internal Insert & Ti Bolt Kit"
+            ),
             specification=(
                 f"100%-infill annealed CF/GF internal rail inserts + XY-joint end inserts, "
                 f"M5 hex standoffs & Grade 5 Ti M3x28 clamped hardware (L={x_span_m * 1000.0:.0f} mm)"

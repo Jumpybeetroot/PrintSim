@@ -1,0 +1,551 @@
+{
+  "schema_version": 1,
+  "description": "First-principles 3D Tet10 continuum FEA calibration of single-pitch timing-belt unit cells (build123d OpenCASCADE B-Rep + conformal Gmsh Tet10 + scikit-fem elasticity).",
+  "analytical_bar_benchmark": {
+    "ei_fea_nm2_per_m": 0.0026123301985371333,
+    "ei_exact_nm2_per_m": 0.0026123301985370956,
+    "rel_error_pct": 1.4443134188635296e-12,
+    "n_tets": 771,
+    "n_dofs": 4548
+  },
+  "profiles": {
+    "2gt": {
+      "profile_id": "2gt",
+      "label": "Gates PowerGrip 2GT (2 mm pitch, EPDM + E-glass 135 tex)",
+      "spec": {
+        "profile_id": "2gt",
+        "label": "Gates PowerGrip 2GT (2 mm pitch, EPDM + E-glass 135 tex)",
+        "tooth_shape": "curvilinear",
+        "pitch_mm": 2.0,
+        "total_height_mm": 1.38,
+        "tooth_height_mm": 0.75,
+        "pld_mm": 0.254,
+        "tooth_root_width_mm": 1.36,
+        "tooth_tip_width_mm": 0.62,
+        "cord_pitch_mm": 0.82,
+        "cord_diameter_mm": 0.3,
+        "cord_material": "fiberglass",
+        "matrix_material": "epdm",
+        "e_matrix_25c_pa": 12000000.0,
+        "nu_matrix": 0.47,
+        "facing_shear_boost": 1.12,
+        "e_filament_pa": 72000000000.0,
+        "nu_filament": 0.22,
+        "filament_diameter_mm": 0.009,
+        "n_filaments_per_cord": 830,
+        "helix_angle_deg": 16.0,
+        "interfilament_g_pa": 45000000.0,
+        "interfilament_softens_with_matrix": false,
+        "nominal_pulley_teeth": 20,
+        "flank_clearance_max_mm": 0.028,
+        "land_clearance_mm": 0.014,
+        "flank_friction_mu": 0.35,
+        "h_coarse_mm": 0.3,
+        "h_fine_mm": 0.21
+      },
+      "mesh_convergence": {
+        "coarse_h_mm": 0.3,
+        "coarse_n_tets": 2092,
+        "coarse_n_dofs": 10596,
+        "fine_h_mm": 0.21,
+        "fine_n_tets": 4371,
+        "fine_n_dofs": 20337,
+        "k_t_full_coarse_n_per_m_mm": 33445.9,
+        "k_t_full_fine_n_per_m_mm": 32934.4,
+        "k_t_full_diff_pct": 1.553,
+        "k_t_q4_coarse_n_per_m_mm": 30138.2,
+        "k_t_q4_fine_n_per_m_mm": 29780.8,
+        "k_t_q4_diff_pct": 1.2,
+        "ei_coarse_nm2_per_m": 0.0019149,
+        "ei_fine_nm2_per_m": 0.0019167,
+        "ei_diff_pct": 0.094
+      },
+      "calibrated_summary": {
+        "k_t_full_n_per_m_mm": 32934.4,
+        "k_t_at_4n_mm_n_per_m_mm": 29780.8,
+        "seating_floor_s0": 0.76,
+        "seating_scale_q_n_per_mm": 5.85,
+        "seating_fit_rmse": 0.03816,
+        "ei_25c_nm2_per_m": 0.0019167,
+        "cord_bending_fraction_25c": 0.7061,
+        "elastomer_bending_fraction_25c": 0.2939,
+        "ei_matrix_retention_slope": 0.3629,
+        "neutral_axis_y_25c_mm": 1.0046
+      },
+      "tooth_seating_sweep": [
+        {
+          "q0_n_per_mm": 0.5,
+          "radial_pressure_kpa": 78.53981633974482,
+          "k_t_n_per_m_mm": 23684.05655217892,
+          "flank_contact_fraction": 0.33761421867199726,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 14.477659201967462,
+          "seating_ratio": 0.719129177578738,
+          "k_t_full_n_per_m_mm": 32934.35628897944
+        },
+        {
+          "q0_n_per_mm": 1.0,
+          "radial_pressure_kpa": 157.07963267948963,
+          "k_t_n_per_m_mm": 27230.039528357975,
+          "flank_contact_fraction": 0.33761421867199726,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 15.636597500285845,
+          "seating_ratio": 0.8267973811126147,
+          "k_t_full_n_per_m_mm": 32934.35628897944
+        },
+        {
+          "q0_n_per_mm": 2.0,
+          "radial_pressure_kpa": 314.15926535897927,
+          "k_t_n_per_m_mm": 28441.686886651012,
+          "flank_contact_fraction": 0.20410352770201748,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 17.750783186089933,
+          "seating_ratio": 0.8635871500597152,
+          "k_t_full_n_per_m_mm": 32934.35628897944
+        },
+        {
+          "q0_n_per_mm": 4.0,
+          "radial_pressure_kpa": 628.3185307179585,
+          "k_t_n_per_m_mm": 29780.750042643132,
+          "flank_contact_fraction": 0.3474798531733083,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 22.156763726725927,
+          "seating_ratio": 0.9042456995769013,
+          "k_t_full_n_per_m_mm": 32934.35628897944
+        },
+        {
+          "q0_n_per_mm": 7.0,
+          "radial_pressure_kpa": 1099.5574287564275,
+          "k_t_n_per_m_mm": 30208.23637040132,
+          "flank_contact_fraction": 0.42832984346897945,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 28.430912553061365,
+          "seating_ratio": 0.9172256504830992,
+          "k_t_full_n_per_m_mm": 32934.35628897944
+        },
+        {
+          "q0_n_per_mm": 12.0,
+          "radial_pressure_kpa": 1884.9555921538756,
+          "k_t_n_per_m_mm": 30333.74383395425,
+          "flank_contact_fraction": 0.5965062083853936,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 38.860883752794315,
+          "seating_ratio": 0.9210364874841834,
+          "k_t_full_n_per_m_mm": 32934.35628897944
+        }
+      ],
+      "bending_retention_sweep": [
+        {
+          "matrix_modulus_retention": 1.0,
+          "e_matrix_mpa": 12.0,
+          "e_cord_bend_mpa": 2766.5157141993127,
+          "ei_per_m_nm2_per_m": 0.0019167346079480905,
+          "ei_cord_analytical_per_m": 0.0013414491252768893,
+          "neutral_axis_y_mm": 1.0045584575442736,
+          "cord_bending_fraction": 0.7060726540310296,
+          "elastomer_bending_fraction": 0.2939273459689704
+        },
+        {
+          "matrix_modulus_retention": 0.8,
+          "e_matrix_mpa": 9.6,
+          "e_cord_bend_mpa": 2715.1509275870026,
+          "ei_per_m_nm2_per_m": 0.001778585743885617,
+          "ei_cord_analytical_per_m": 0.0013165429779098358,
+          "neutral_axis_y_mm": 1.0044449353635494,
+          "cord_bending_fraction": 0.7448540759869088,
+          "elastomer_bending_fraction": 0.2551459240130912
+        },
+        {
+          "matrix_modulus_retention": 0.6,
+          "e_matrix_mpa": 7.199999999999999,
+          "e_cord_bend_mpa": 2663.6687630022598,
+          "ei_per_m_nm2_per_m": 0.001639615210025392,
+          "ei_cord_analytical_per_m": 0.0012915799154211227,
+          "neutral_axis_y_mm": 1.0043311263981887,
+          "cord_bending_fraction": 0.7908052658659461,
+          "elastomer_bending_fraction": 0.20919473413405387
+        },
+        {
+          "matrix_modulus_retention": 0.4,
+          "e_matrix_mpa": 4.8,
+          "e_cord_bend_mpa": 2612.068817639503,
+          "ei_per_m_nm2_per_m": 0.001499694128111112,
+          "ei_cord_analytical_per_m": 0.0012665597424953243,
+          "neutral_axis_y_mm": 1.0042180286541769,
+          "cord_bending_fraction": 0.846168929970225,
+          "elastomer_bending_fraction": 0.15383107002977503
+        },
+        {
+          "matrix_modulus_retention": 0.25,
+          "e_matrix_mpa": 3.0,
+          "e_cord_bend_mpa": 2573.291321628809,
+          "ei_per_m_nm2_per_m": 0.0013940345202650929,
+          "ei_cord_analytical_per_m": 0.0012477570160777632,
+          "neutral_axis_y_mm": 1.0041344823539806,
+          "cord_bending_fraction": 0.8957894771744209,
+          "elastomer_bending_fraction": 0.10421052282557908
+        }
+      ],
+      "solve_time_s": 84.06
+    },
+    "3gt": {
+      "profile_id": "3gt",
+      "label": "Gates PowerGrip 3GT (3 mm pitch, EPDM + E-glass 270 tex)",
+      "spec": {
+        "profile_id": "3gt",
+        "label": "Gates PowerGrip 3GT (3 mm pitch, EPDM + E-glass 270 tex)",
+        "tooth_shape": "curvilinear",
+        "pitch_mm": 3.0,
+        "total_height_mm": 2.41,
+        "tooth_height_mm": 1.14,
+        "pld_mm": 0.381,
+        "tooth_root_width_mm": 2.04,
+        "tooth_tip_width_mm": 0.94,
+        "cord_pitch_mm": 1.0,
+        "cord_diameter_mm": 0.44,
+        "cord_material": "fiberglass",
+        "matrix_material": "epdm",
+        "e_matrix_25c_pa": 14000000.0,
+        "nu_matrix": 0.47,
+        "facing_shear_boost": 1.12,
+        "e_filament_pa": 72000000000.0,
+        "nu_filament": 0.22,
+        "filament_diameter_mm": 0.009,
+        "n_filaments_per_cord": 1500,
+        "helix_angle_deg": 16.0,
+        "interfilament_g_pa": 50000000.0,
+        "interfilament_softens_with_matrix": false,
+        "nominal_pulley_teeth": 20,
+        "flank_clearance_max_mm": 0.04,
+        "land_clearance_mm": 0.02,
+        "flank_friction_mu": 0.35,
+        "h_coarse_mm": 0.45,
+        "h_fine_mm": 0.31
+      },
+      "mesh_convergence": {
+        "coarse_h_mm": 0.45,
+        "coarse_n_tets": 2187,
+        "coarse_n_dofs": 11115,
+        "fine_h_mm": 0.31,
+        "fine_n_tets": 4693,
+        "fine_n_dofs": 21939,
+        "k_t_full_coarse_n_per_m_mm": 42253.7,
+        "k_t_full_fine_n_per_m_mm": 41378.2,
+        "k_t_full_diff_pct": 2.116,
+        "k_t_q4_coarse_n_per_m_mm": 36959.2,
+        "k_t_q4_fine_n_per_m_mm": 36283.1,
+        "k_t_q4_diff_pct": 1.863,
+        "ei_coarse_nm2_per_m": 0.0128947,
+        "ei_fine_nm2_per_m": 0.0128903,
+        "ei_diff_pct": 0.034
+      },
+      "calibrated_summary": {
+        "k_t_full_n_per_m_mm": 41378.2,
+        "k_t_at_4n_mm_n_per_m_mm": 36283.1,
+        "seating_floor_s0": 0.32,
+        "seating_scale_q_n_per_mm": 1.5,
+        "seating_fit_rmse": 0.07207,
+        "ei_25c_nm2_per_m": 0.0128903,
+        "cord_bending_fraction_25c": 0.5864,
+        "elastomer_bending_fraction_25c": 0.4136,
+        "ei_matrix_retention_slope": 0.4693,
+        "neutral_axis_y_25c_mm": 1.5281
+      },
+      "tooth_seating_sweep": [
+        {
+          "q0_n_per_mm": 0.5,
+          "radial_pressure_kpa": 52.35987755982989,
+          "k_t_n_per_m_mm": 19379.45020311063,
+          "flank_contact_fraction": 0.17179659672592432,
+          "land_contact_fraction": 0.9631423545320513,
+          "radial_seating_um": 20.067268019013735,
+          "seating_ratio": 0.4683496282136046,
+          "k_t_full_n_per_m_mm": 41378.16928995631
+        },
+        {
+          "q0_n_per_mm": 1.0,
+          "radial_pressure_kpa": 104.71975511965978,
+          "k_t_n_per_m_mm": 29706.669841576233,
+          "flank_contact_fraction": 0.1551236874341968,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 20.918181718774864,
+          "seating_ratio": 0.7179309851387482,
+          "k_t_full_n_per_m_mm": 41378.16928995631
+        },
+        {
+          "q0_n_per_mm": 2.0,
+          "radial_pressure_kpa": 209.43951023931956,
+          "k_t_n_per_m_mm": 34847.49945833564,
+          "flank_contact_fraction": 0.3444687241190714,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 22.657734306763487,
+          "seating_ratio": 0.8421711268602243,
+          "k_t_full_n_per_m_mm": 41378.16928995631
+        },
+        {
+          "q0_n_per_mm": 4.0,
+          "radial_pressure_kpa": 418.8790204786391,
+          "k_t_n_per_m_mm": 36283.1017793167,
+          "flank_contact_fraction": 0.32139750038192916,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 25.985375631399936,
+          "seating_ratio": 0.8768658063401481,
+          "k_t_full_n_per_m_mm": 41378.16928995631
+        },
+        {
+          "q0_n_per_mm": 7.0,
+          "radial_pressure_kpa": 733.0382858376186,
+          "k_t_n_per_m_mm": 37090.43627152675,
+          "flank_contact_fraction": 0.352125681130448,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 30.930680058007294,
+          "seating_ratio": 0.8963769279306825,
+          "k_t_full_n_per_m_mm": 41378.16928995631
+        },
+        {
+          "q0_n_per_mm": 12.0,
+          "radial_pressure_kpa": 1256.6370614359175,
+          "k_t_n_per_m_mm": 37438.06215737299,
+          "flank_contact_fraction": 0.4617232419679599,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 38.668568981240945,
+          "seating_ratio": 0.9047781185056029,
+          "k_t_full_n_per_m_mm": 41378.16928995631
+        }
+      ],
+      "bending_retention_sweep": [
+        {
+          "matrix_modulus_retention": 1.0,
+          "e_matrix_mpa": 14.0,
+          "e_cord_bend_mpa": 4070.6802660668336,
+          "ei_per_m_nm2_per_m": 0.012890299866101122,
+          "ei_cord_analytical_per_m": 0.0074894098314084315,
+          "neutral_axis_y_mm": 1.5281282918478916,
+          "cord_bending_fraction": 0.5863789976526148,
+          "elastomer_bending_fraction": 0.4136210023473852
+        },
+        {
+          "matrix_modulus_retention": 0.8,
+          "e_matrix_mpa": 11.2,
+          "e_cord_bend_mpa": 3997.667569360451,
+          "ei_per_m_nm2_per_m": 0.011686231476169238,
+          "ei_cord_analytical_per_m": 0.007355077981990356,
+          "neutral_axis_y_mm": 1.5268361718758703,
+          "cord_bending_fraction": 0.6333746654321128,
+          "elastomer_bending_fraction": 0.36662533456788715
+        },
+        {
+          "matrix_modulus_retention": 0.6,
+          "e_matrix_mpa": 8.4,
+          "e_cord_bend_mpa": 3924.3586464267814,
+          "ei_per_m_nm2_per_m": 0.010476981534779481,
+          "ei_cord_analytical_per_m": 0.007220201123022535,
+          "neutral_axis_y_mm": 1.5254819784773013,
+          "cord_bending_fraction": 0.6917969460797887,
+          "elastomer_bending_fraction": 0.3082030539202113
+        },
+        {
+          "matrix_modulus_retention": 0.4,
+          "e_matrix_mpa": 5.6,
+          "e_cord_bend_mpa": 3850.751690833126,
+          "ei_per_m_nm2_per_m": 0.009262001337016436,
+          "ei_cord_analytical_per_m": 0.007084775930953638,
+          "neutral_axis_y_mm": 1.524061188824357,
+          "cord_bending_fraction": 0.7663348567423861,
+          "elastomer_bending_fraction": 0.2336651432576139
+        },
+        {
+          "matrix_modulus_retention": 0.25,
+          "e_matrix_mpa": 3.5,
+          "e_cord_bend_mpa": 3795.349795226506,
+          "ei_per_m_nm2_per_m": 0.008346616951189236,
+          "ei_cord_analytical_per_m": 0.0069828451787170365,
+          "neutral_axis_y_mm": 1.5229489761635837,
+          "cord_bending_fraction": 0.8372355112537296,
+          "elastomer_bending_fraction": 0.16276448874627036
+        }
+      ],
+      "solve_time_s": 102.98
+    },
+    "at3": {
+      "profile_id": "at3",
+      "label": "Breco/Elatech AT3 (3 mm pitch, 92 ShA TPU + Steel 7x3 cord)",
+      "spec": {
+        "profile_id": "at3",
+        "label": "Breco/Elatech AT3 (3 mm pitch, 92 ShA TPU + Steel 7x3 cord)",
+        "tooth_shape": "trapezoidal",
+        "pitch_mm": 3.0,
+        "total_height_mm": 1.9,
+        "tooth_height_mm": 1.1,
+        "pld_mm": 0.3,
+        "tooth_root_width_mm": 1.95,
+        "tooth_tip_width_mm": 0.92,
+        "cord_pitch_mm": 1.0,
+        "cord_diameter_mm": 0.3,
+        "cord_material": "steel",
+        "matrix_material": "tpu_92a",
+        "e_matrix_25c_pa": 42000000.0,
+        "nu_matrix": 0.45,
+        "facing_shear_boost": 1.0,
+        "e_filament_pa": 205000000000.0,
+        "nu_filament": 0.29,
+        "filament_diameter_mm": 0.053,
+        "n_filaments_per_cord": 21,
+        "helix_angle_deg": 11.0,
+        "interfilament_g_pa": 14500000.0,
+        "interfilament_softens_with_matrix": true,
+        "nominal_pulley_teeth": 20,
+        "flank_clearance_max_mm": 0.032,
+        "land_clearance_mm": 0.016,
+        "flank_friction_mu": 0.45,
+        "h_coarse_mm": 0.43,
+        "h_fine_mm": 0.3
+      },
+      "mesh_convergence": {
+        "coarse_h_mm": 0.43,
+        "coarse_n_tets": 1691,
+        "coarse_n_dofs": 8646,
+        "fine_h_mm": 0.3,
+        "fine_n_tets": 2899,
+        "fine_n_dofs": 14454,
+        "k_t_full_coarse_n_per_m_mm": 111051.6,
+        "k_t_full_fine_n_per_m_mm": 108743.3,
+        "k_t_full_diff_pct": 2.123,
+        "k_t_q4_coarse_n_per_m_mm": 93753.8,
+        "k_t_q4_fine_n_per_m_mm": 92345.5,
+        "k_t_q4_diff_pct": 1.525,
+        "ei_coarse_nm2_per_m": 0.0062473,
+        "ei_fine_nm2_per_m": 0.0062248,
+        "ei_diff_pct": 0.362
+      },
+      "calibrated_summary": {
+        "k_t_full_n_per_m_mm": 108743.3,
+        "k_t_at_4n_mm_n_per_m_mm": 92345.5,
+        "seating_floor_s0": 0.05,
+        "seating_scale_q_n_per_mm": 2.4,
+        "seating_fit_rmse": 0.06139,
+        "ei_25c_nm2_per_m": 0.0062248,
+        "cord_bending_fraction_25c": 0.4023,
+        "elastomer_bending_fraction_25c": 0.5977,
+        "ei_matrix_retention_slope": 0.7273,
+        "neutral_axis_y_25c_mm": 1.4046
+      },
+      "tooth_seating_sweep": [
+        {
+          "q0_n_per_mm": 0.5,
+          "radial_pressure_kpa": 52.35987755982989,
+          "k_t_n_per_m_mm": 22663.045301848426,
+          "flank_contact_fraction": 0.13745055761269834,
+          "land_contact_fraction": 0.0,
+          "radial_seating_um": 6.62026811138988,
+          "seating_ratio": 0.2084086242824445,
+          "k_t_full_n_per_m_mm": 108743.31798829243
+        },
+        {
+          "q0_n_per_mm": 1.0,
+          "radial_pressure_kpa": 104.71975511965978,
+          "k_t_n_per_m_mm": 30620.01999026825,
+          "flank_contact_fraction": 0.32536803117163926,
+          "land_contact_fraction": 0.0,
+          "radial_seating_um": 12.866491450570495,
+          "seating_ratio": 0.281580703593805,
+          "k_t_full_n_per_m_mm": 108743.31798829243
+        },
+        {
+          "q0_n_per_mm": 2.0,
+          "radial_pressure_kpa": 209.43951023931956,
+          "k_t_n_per_m_mm": 73453.52151080362,
+          "flank_contact_fraction": 0.2993494057936393,
+          "land_contact_fraction": 0.9807525872571475,
+          "radial_seating_um": 16.159852464355787,
+          "seating_ratio": 0.6754761843731106,
+          "k_t_full_n_per_m_mm": 108743.31798829243
+        },
+        {
+          "q0_n_per_mm": 4.0,
+          "radial_pressure_kpa": 418.8790204786391,
+          "k_t_n_per_m_mm": 92345.46525043929,
+          "flank_contact_fraction": 0.2840408213270799,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 17.63759485299719,
+          "seating_ratio": 0.8492058818766356,
+          "k_t_full_n_per_m_mm": 108743.31798829243
+        },
+        {
+          "q0_n_per_mm": 7.0,
+          "radial_pressure_kpa": 733.0382858376186,
+          "k_t_n_per_m_mm": 98035.99270628089,
+          "flank_contact_fraction": 0.37652208165786827,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 19.881282582334677,
+          "seating_ratio": 0.9015357864732036,
+          "k_t_full_n_per_m_mm": 108743.31798829243
+        },
+        {
+          "q0_n_per_mm": 12.0,
+          "radial_pressure_kpa": 1256.6370614359175,
+          "k_t_n_per_m_mm": 102215.02754621205,
+          "flank_contact_fraction": 0.44332572818751625,
+          "land_contact_fraction": 1.0,
+          "radial_seating_um": 23.374977813837518,
+          "seating_ratio": 0.9399660543484315,
+          "k_t_full_n_per_m_mm": 108743.31798829243
+        }
+      ],
+      "bending_retention_sweep": [
+        {
+          "matrix_modulus_retention": 1.0,
+          "e_matrix_mpa": 42.0,
+          "e_cord_bend_mpa": 5894.766050720463,
+          "ei_per_m_nm2_per_m": 0.006224758767105795,
+          "ei_cord_analytical_per_m": 0.002343805080133574,
+          "neutral_axis_y_mm": 1.4045785862016733,
+          "cord_bending_fraction": 0.40233209998340635,
+          "elastomer_bending_fraction": 0.5976679000165936
+        },
+        {
+          "matrix_modulus_retention": 0.8,
+          "e_matrix_mpa": 33.6,
+          "e_cord_bend_mpa": 5539.034392903361,
+          "ei_per_m_nm2_per_m": 0.005327565636879205,
+          "ei_cord_analytical_per_m": 0.0022023633910856844,
+          "neutral_axis_y_mm": 1.4038848145217764,
+          "cord_bending_fraction": 0.4369205448148631,
+          "elastomer_bending_fraction": 0.5630794551851369
+        },
+        {
+          "matrix_modulus_retention": 0.6,
+          "e_matrix_mpa": 25.2,
+          "e_cord_bend_mpa": 5181.208358327478,
+          "ei_per_m_nm2_per_m": 0.0044242695502241325,
+          "ei_cord_analytical_per_m": 0.002060088961460016,
+          "neutral_axis_y_mm": 1.403090910305179,
+          "cord_bending_fraction": 0.48582067662845957,
+          "elastomer_bending_fraction": 0.5141793233715404
+        },
+        {
+          "matrix_modulus_retention": 0.4,
+          "e_matrix_mpa": 16.8,
+          "e_cord_bend_mpa": 4821.269396360977,
+          "ei_per_m_nm2_per_m": 0.003511916070043972,
+          "ei_cord_analytical_per_m": 0.001916974415380281,
+          "neutral_axis_y_mm": 1.4021795548283607,
+          "cord_bending_fraction": 0.5609525541591541,
+          "elastomer_bending_fraction": 0.4390474458408459
+        },
+        {
+          "matrix_modulus_retention": 0.25,
+          "e_matrix_mpa": 10.5,
+          "e_cord_bend_mpa": 4549.917283094325,
+          "ei_per_m_nm2_per_m": 0.0028183551600308534,
+          "ei_cord_analytical_per_m": 0.0018090826931122486,
+          "neutral_axis_y_mm": 1.40141165442176,
+          "cord_bending_fraction": 0.6515047823435732,
+          "elastomer_bending_fraction": 0.34849521765642677
+        }
+      ],
+      "solve_time_s": 31.33
+    }
+  },
+  "total_runtime_s": 219.97
+}

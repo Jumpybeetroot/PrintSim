@@ -2521,7 +2521,11 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
             active_values=solver_vals,
             trust_pct=96,
             override_group=None,
-            basis="Exact generalized matrix eigensolver (K·φ = ω²·M·φ) & upstream Klipper shaper_defs.py convolution math.",
+            basis=(
+                "Exact generalized matrix eigensolver (K·φ = ω²·M·φ), coupled nonlinear belt-drive harmonic-balance "
+                "shaker dynamics (unilateral tension-only branches + Beikmann–Perkins–Ulsoy transverse whip), & "
+                "upstream Klipper shaper_defs.py convolution math."
+            ),
             caveat="Solver & shaper math are exact for the assembled model; real print ringing inherits upstream structural/belt estimates.",
         ),
     ]

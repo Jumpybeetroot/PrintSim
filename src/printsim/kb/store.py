@@ -289,6 +289,60 @@ class TouchstoneKB:
         self.conn.commit()
         return (item_id, True)
 
+    def delete_raw_item(self, item_id: int) -> dict[str, int]:
+        """Delete a raw item, every structured record derived from it, and their FTS rows.
+
+        Returns the number of rows removed per table.
+        """
+        removed: dict[str, int] = {}
+        for item_type, table in _ITEM_TYPE_TO_TABLE.items():
+            if table == "raw_items":
+                continue
+            child_ids = [
+                int(row["id"])
+                for row in self.conn.execute(f"SELECT id FROM {table} WHERE raw_item_id = ?", (item_id,))
+            ]
+            for child_id in child_ids:
+                self.conn.execute(
+                    "DELETE FROM kb_fts WHERE item_type = ? AND ref_id = ?",
+                    (item_type, str(child_id)),
+                )
+            self.conn.execute(f"DELETE FROM {table} WHERE raw_item_id = ?", (item_id,))
+            removed[table] = len(child_ids)
+        self.conn.execute(
+            "DELETE FROM kb_fts WHERE item_type = 'raw_item' AND ref_id = ?",
+            (str(item_id),),
+        )
+        cur = self.conn.execute("DELETE FROM raw_items WHERE id = ?", (item_id,))
+        removed["raw_items"] = int(cur.rowcount)
+        self.conn.commit()
+        return removed
+
+    def remove_superseded_snapshots(
+        self,
+        *,
+        source_type: str,
+        source_name: str,
+        keep_item_id: int,
+    ) -> int:
+        """Remove earlier snapshots of one living document, keeping ``keep_item_id``.
+
+        A document that is re-read after an edit hashes differently, so without this each
+        edit would leave the previous text and all of its derived records behind as
+        duplicates (and as contradictions wherever a value was corrected).
+        Returns the number of superseded raw items removed.
+        """
+        stale = [
+            int(row["id"])
+            for row in self.conn.execute(
+                "SELECT id FROM raw_items WHERE source_type = ? AND source_name = ? AND id != ?",
+                (source_type, source_name, keep_item_id),
+            )
+        ]
+        for stale_id in stale:
+            self.delete_raw_item(stale_id)
+        return len(stale)
+
     def get_raw_item(self, item_id: int) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM raw_items WHERE id = ?", (item_id,)).fetchone()
         if row is None:

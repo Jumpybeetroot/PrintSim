@@ -234,11 +234,18 @@ def _compute_scores_and_diagnostics(
             f"{inertial_defl_ref_um:.1f} um @ 10k mm/s^2; static gravity sag {static_fea.gravity_sag_toolhead_um:.1f} um): "
             "main limit is gantry/toolhead dynamic structural stiffness relative to moving inertial load."
         )
+    car_mat_id = spec.toolhead.effective_carriage_mount_material
+    body_mat_id = spec.toolhead.effective_body_material
+    th_mat_label = (
+        f"'{body_mat_id}'"
+        if car_mat_id == body_mat_id
+        else f"'{car_mat_id}' carriage / '{body_mat_id}' body"
+    )
     if static_fea.nozzle_twist_amplification_pct > 45.0:
         diag.append(
             f"High nozzle-tip lever-arm twist amplification (+{static_fea.nozzle_twist_amplification_pct:.1f}% vs X-beam center, "
             f"{static_fea.nozzle_twist_angle_mrad:.2f} mrad): main limit is toolhead mount compliance "
-            f"('{spec.toolhead.mount_material}') and CoG/nozzle lever arm overhang."
+            f"({th_mat_label}) and CoG/nozzle lever arm overhang."
         )
     if spec.toolhead.z_probe_type in ("printed_tap", "cnc_tap"):
         max_th_share = max(
@@ -411,12 +418,12 @@ def _compute_scores_and_diagnostics(
         )
     if (
         spec.gantry.belt.pretension_n > 50.0
-        and spec.toolhead.mount_material == "abs_printed"
+        and car_mat_id == "abs_printed"
         and not (kinematics.bracket_creep_risk and spec.gantry.bracket_material == "abs_printed")
     ):
         diag.append(
             f"High-tension printed mount creep warning ({spec.gantry.belt.pretension_n:.0f} N with "
-            f"'{spec.toolhead.mount_material}' toolhead mount): sustained belt preload exceeds long-term "
+            f"'{car_mat_id}' toolhead carriage): sustained belt preload exceeds long-term "
             "viscoelastic creep margin of unfilled polymer."
         )
     if kinematics.shaft_bending_risk:
@@ -446,7 +453,7 @@ def _compute_scores_and_diagnostics(
         diag.append(
             f"Nozzle-to-sensor whip risk ({rcsa.nozzle_to_sensor_amp_ratio:.2f}x > 1.35x at "
             f"{rcsa.nozzle_tip_peak_freq_hz:.1f} Hz): main limit is toolhead mount bending stiffness "
-            f"('{spec.toolhead.mount_material}') and CoG/nozzle lever arm."
+            f"({th_mat_label}) and CoG/nozzle lever arm."
         )
 
     kin_spec = spec.kinematics

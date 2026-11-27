@@ -29,7 +29,8 @@ gantry:
   rail_material: steel_4140
   x_rail_mount: front
   y_rail_mount: inner
-  carriage_mass_g: 134.6
+  # Scale-weighed dderg milled XY-joints + MGN9H (134.6 g dressed = 180.6 g MGN12H-base - 46 g MGN9H/SLM delta)
+  carriage_mass_g: 180.6
   stepper_thermal_gasket: ptfe_2mm
   idler_axial_preload: disc_spring_m5
   belt:

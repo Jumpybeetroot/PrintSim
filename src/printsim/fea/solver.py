@@ -17,6 +17,7 @@ from printsim.fea.beam3d import (
     element_internal_forces,
 )
 from printsim.fea.shell_mitc4 import mitc4_shell_von_mises_mpa
+from printsim.fea.toolhead_parts import compute_static_toolhead_parts, compute_toolhead_part_fields
 from printsim.geometry.builder import (
     AssemblyModel,
     StructuralMember,
@@ -157,9 +158,12 @@ class StaticFEAResult:
     nodal_displacements_xy_mm: dict[str, list[float]] = field(default_factory=dict)
     member_stresses: list[MemberStressResult] = field(default_factory=list)
     shell_panel_stresses: list[ShellStressResult] = field(default_factory=list)
+    superelement_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
     peak_stress_part_label: str = ""
     top_flex_explanation: str = ""
     toolhead_flex_breakdown: dict[str, Any] = field(default_factory=dict)
+    toolhead_parts: list[dict[str, Any]] = field(default_factory=list)
+    toolhead_part_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -183,6 +187,8 @@ class StaticFEAResult:
             "peak_stress_part_label": self.peak_stress_part_label,
             "top_flex_explanation": self.top_flex_explanation,
             "toolhead_flex_breakdown": self.toolhead_flex_breakdown,
+            "toolhead_parts": self.toolhead_parts,
+            "toolhead_part_fields": self.toolhead_part_fields,
             "nodal_displacements_mm": self.nodal_displacements_mm,
             "nodal_displacements_x_mm": self.nodal_displacements_x_mm,
             "nodal_displacements_y_mm": self.nodal_displacements_y_mm,
@@ -209,6 +215,7 @@ class StaticFEAResult:
                 }
                 for s in self.shell_panel_stresses
             ],
+            "superelement_metrics": self.superelement_metrics,
         }
 
 
@@ -884,6 +891,45 @@ def solve_static_fea(
             )
         )
 
+    # 2-port Craig-Bampton superelement elastic flex, twist & transmitted load recovery per load case
+    superelement_metrics: dict[str, dict[str, Any]] = {}
+    se_cases = (
+        ("xy", u_xy_comb),
+        ("x", u_x),
+        ("y", u_y),
+        ("gravity", u_comb),
+    )
+    for se_i, se in enumerate(getattr(assembly, "superelements", ())):
+        if len(se.port_node_ids) != 2:
+            continue
+        p0_id, p1_id = se.port_node_ids[0], se.port_node_ids[1]
+        if p0_id not in node_idx or p1_id not in node_idx:
+            continue
+        i0 = node_idx[p0_id]
+        i1 = node_idx[p1_id]
+        p0 = np.asarray(assembly.nodes[i0].position_m, dtype=float)
+        p1 = np.asarray(assembly.nodes[i1].position_m, dtype=float)
+        dp = p1 - p0
+        dofs_se, Ke_se, _ = system.superelement_blocks[se_i]
+        entry: dict[str, Any] = {
+            "id": se.id,
+            "part_group_id": getattr(se, "part_group_id", "") or "",
+            "mass_g": round(float(getattr(se, "mass_kg", 0.0)) * 1e3, 1),
+        }
+        for case_key, u_vec in se_cases:
+            u0 = u_vec[6 * i0 : 6 * i0 + 3]
+            th0 = u_vec[6 * i0 + 3 : 6 * i0 + 6]
+            u1 = u_vec[6 * i1 : 6 * i1 + 3]
+            th1 = u_vec[6 * i1 + 3 : 6 * i1 + 6]
+            du_el = u1 - (u0 + np.cross(th0, dp))
+            dth_el = th1 - th0
+            f_se = Ke_se @ u_vec[dofs_se]
+            entry[f"flex_{case_key}_um"] = round(float(np.linalg.norm(du_el)) * 1e6, 2)
+            entry[f"twist_{case_key}_mrad"] = round(float(np.linalg.norm(dth_el)) * 1e3, 3)
+            entry[f"force_{case_key}_n"] = round(float(np.linalg.norm(f_se[6:9])), 2)
+            entry[f"moment_{case_key}_nm"] = round(float(np.linalg.norm(f_se[9:12])), 3)
+        superelement_metrics[se.id] = entry
+
     if not real_member_stresses and not shell_panel_stresses and member_stresses:
         # Fallback if a minimal synthetic assembly contains only virtual members
         max_vm = max(m.von_mises_mpa for m in member_stresses)
@@ -927,6 +973,21 @@ def solve_static_fea(
             f" Toolhead pitch adds +{nozzle_twist_amp_pct:.0f}% lever-arm twist at the nozzle tip."
         )
 
+    member_stress_map = {m.member_id: m for m in member_stresses}
+    toolhead_parts = compute_static_toolhead_parts(
+        assembly=assembly,
+        node_idx=node_idx,
+        u_peak_vec=u_xy_comb,
+        toolhead_flex_breakdown=toolhead_flex_breakdown,
+        member_stress_map=member_stress_map,
+    )
+    toolhead_part_fields = compute_toolhead_part_fields(
+        assembly=assembly,
+        node_idx=node_idx,
+        u_vec=u_xy_comb,
+        normalized=False,
+    )
+
     return StaticFEAResult(
         gravity_sag_toolhead_um=grav_sag_um,
         accel_deflection_x_um=defl_x_um,
@@ -951,7 +1012,10 @@ def solve_static_fea(
         nodal_displacements_xy_mm=nodal_disp_xy_mm,
         member_stresses=member_stresses,
         shell_panel_stresses=shell_panel_stresses,
+        superelement_metrics=superelement_metrics,
         peak_stress_part_label=peak_stress_label,
         top_flex_explanation=top_flex_explanation,
         toolhead_flex_breakdown=toolhead_flex_breakdown,
+        toolhead_parts=toolhead_parts,
+        toolhead_part_fields=toolhead_part_fields,
     )
