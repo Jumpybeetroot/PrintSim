@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "vz_printhead_printed",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "regions": [
+    {
+      "label": "vz_printhead_printed",
+      "material_id": "abs_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "structural": [
+    "carriage/Top_plate_MGN9H",
+    "carriage/back_plate",
+    "carriage/bottom_plate",
+    "carriage/Front",
+    "Hotend_universal_adapter_plate/SOLID",
+    "hardware__7_/M3__30mm_round_standoffs"
+  ],
+  "cage": "official printed v24 MGN9 cage (exact CAD)"
+}

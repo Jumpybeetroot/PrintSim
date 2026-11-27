@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "vz_printhead_cnc",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "regions": [
+    {
+      "label": "vz_printhead_cnc",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "cage": "official v24 cage layout & datums; CNC plate thickness/windows fitted to Mellow 27 g (6061) & 22 g (CF hybrid)",
+  "top_bottom_t_mm": 1.5,
+  "side_t_mm": 2.5,
+  "part_volumes_cm3": {
+    "top_plate": 3.187,
+    "front_piece": 2.545,
+    "back_piece": 2.978,
+    "bottom_plate": 1.438,
+    "hotend_adapter": 4.153
+  }
+}

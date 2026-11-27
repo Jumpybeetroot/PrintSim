@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "vz_printhead_printed",
+  "name": "VzBot Vz-Printhead Printed v24 (ABS/ASA, MGN9H top carriage)",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-27T00:20:55Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 102368,
+  "num_elements": 401880,
+  "num_dofs": 307104,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005354,
+  "mass_kg": 0.035265,
+  "com_mm": [
+    0.124,
+    1.0222,
+    -10.7041
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -0.06,
+    -22.36,
+    -5.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 2849.968,
+    "ky": 1373.299,
+    "kz": 428.849
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 70.813,
+    "kry": 205.271,
+    "krz": 882.589
+  },
+  "fixed_interface_freqs_hz": [
+    359.43,
+    510.51,
+    536.98,
+    772.76,
+    1005.32,
+    1119.31,
+    1741.56,
+    1999.9
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23961,
+  "visual_bytes": 1217964,
+  "cad_trust_pct": 80,
+  "source_hash": "d8edf64ace1ad70e6f08ebff231fe94f6e36e12f41a742ffd7796488f7bfc78b",
+  "multi_piece_bolted": true,
+  "x_rail_mount": "top",
+  "datum": "Port 0 = MGN9H block top face center; Port 1 = Goliath top mounting face",
+  "construction_note": "4 printed plates + adapter bolted at 8 corners with 4x M3 standoffs"
+}

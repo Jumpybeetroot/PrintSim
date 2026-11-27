@@ -780,7 +780,7 @@ def test_item_confidence_registry_completeness_all_14_catalogs() -> None:
             assert isinstance(meta["basis"], str) and len(meta["basis"].strip()) > 10
             assert isinstance(meta["caveat"], str) and len(meta["caveat"].strip()) > 10
             total_options += 1
-    assert total_options == 115
+    assert total_options == 116
 
 
 def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
@@ -811,7 +811,7 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "belt": 15,
         "belt_routing": 2,
         "gantry_bracket": 14,
-        "toolhead_preset": 12,
+        "toolhead_preset": 13,
         "toolhead_construction": 6,
         "z_probe": 4,
         "hotend_clamp": 13,

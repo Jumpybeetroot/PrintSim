@@ -229,8 +229,10 @@ print(bracket["stiffness_n_per_mm"], bracket["specific_stiffness_n_per_mm_per_g"
 | `frame.gantry_on_top_frame` | `true` / `false` (fixed-gantry CoreXY only) | Y rails bolt to the top-ring Y extrusions: the gantry plane is the top ring, no separate gantry ring or stub columns; `gantry_top_clearance_mm` is ignored and Z clearance uses the explicit bed/nozzle stack |
 | `frame.side_panel_material` | material id or null | Left/right panel sheet when it differs from `panel_material` (e.g. 3 mm Al rear + polycarbonate sides) |
 | `gantry.hardware_kit` | `vzbot_330_awd`, `vzbot_330_2wd` (+ Voron/Siboor/Monolith kits) | CAD-baked VzBot rear motor mounts, front AWD/2WD mounts and XY joints, plus kit settings (MGN9H top X, inner MGN12H Y, 6 mm GT2 at 22 N) |
+| `geometry.toolhead_structure.toolhead_visual_ports_mm` | `{port0_mm, port1_mm}` or null | Datums of visual-only CAD toolheads (e.g. `vz_printhead_cnc`); structural CAD toolheads report ports through `cad_superelements_active` |
 | `toolhead.offset_datum_rail_mount` | `front` (default), `top` | X-rail mounting the CoG / nozzle offsets were measured on; the builder's top/bottom-mount datum shift is skipped when it matches `gantry.x_rail_mount` |
-| `toolhead.preset_id` | `vz_printhead_cnc` | CAD-measured Vz-Printhead CNC + HextrudORT Low + Goliath (343 g dressed, nozzle −54.2 mm below the tube axis) |
+| `toolhead.preset_id` | `vz_printhead_cnc`, `vz_printhead_printed` | CNC 6061 (fitted to Mellow 27 g / 22 g) or exact printed v24 Vz-Printhead, both Tet4 CMS on the top-mounted MGN9H (340 / 344 g dressed, nozzle −54.2 mm) |
+| `gantry.x_rail_bolt_pitch_mm`, `gantry.y_rail_bolt_pitch_mm` | mm or null | Spacing of the rail screws actually installed (VzBot 80 / 50 mm); null = `rail_bolt_pitch_mm` |
 
 Reference build: `examples/vzbot_330_awd.yaml` (official VzBoT3D BOM + `Vz-330_v1.2` STEP), also a Studio base machine (`/api/catalog` preset `vzbot_330_awd`, DIY / Self-Sourced Build group).
 

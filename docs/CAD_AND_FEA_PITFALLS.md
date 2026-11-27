@@ -109,6 +109,16 @@ This playbook captures the hard-won engineering pitfalls, mathematical invariant
 
 ---
 
+### Pitfall 4D: Top-Mounted Rails, Visual-Only CAD Toolheads & Raceway-Offset Carriage Nodes
+- **Symptom**: CAD toolheads were only seated on front-carriage rails (`isCadSelfContainedToolhead` requires `x_rail_mount === "front"`), so a VzBot Vz-Printhead on a top MGN9H fell back to the procedural box; and once inner-rail `y_car_*` nodes moved onto the raceway, XY-joint GLBs anchored at `y_car` would shift 14.8 mm inboard of their CAD datum.
+- **Invariant**:
+  1. Top-mount CAD toolheads (`isCadTopMountToolhead`) seat Port 0 on the carriage block top face, `cadPort0LocalInTh = (0, beamHalfY + carTotalH, 0)`; Stage 2 = `baseTh + cadPort0LocalInTh + cadPort1Three`, and the FEA-stress pivot uses the same Port 0.
+  2. Visual-only toolhead bundles (no `superelement.npz`) publish their datums through `toolhead_structure.toolhead_visual_ports_mm`; never infer Port 1 from GLB bounds.
+  4. Multi-plate CNC cages fused into one solid for meshing (VzBot `vz_printhead_cnc`) set `multi_piece_bolted: true` in the manifest so `_builder_toolhead.py` still applies the 0.58× bolted-seam knockdown (otherwise they behave like a welded monoblock).
+  3. Station GLBs baked about a frame datum pass `cadOriginNodeId` (`y_rail_car_*` for XY joints) so the mesh is shifted back onto that datum while elastic deformation still follows the FEA anchor node.
+
+---
+
 ## 5. Studio Sidebar CSS & Flex-Direction Traps (`styles.css`, `DesignPanel.tsx`)
 
 ### Pitfall 5A: `flex: 1 0 100%` Inside `flex-direction: column` Containers

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "vz_printhead_cnc",
+  "name": "VzBot Vz-Printhead CNC 6061 (Mellow, MGN9H top carriage)",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-27T00:22:03Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 22276,
+  "num_elements": 78589,
+  "num_dofs": 66828,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.01081,
+  "mass_kg": 0.03748,
+  "com_mm": [
+    -0.0014,
+    -7.0414,
+    -7.9019
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -0.06,
+    -22.36,
+    -5.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 20515.135,
+    "ky": 8944.071,
+    "kz": 1406.05
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 286.613,
+    "kry": 1119.728,
+    "krz": 8631.996
+  },
+  "fixed_interface_freqs_hz": [
+    759.57,
+    1339.45,
+    1369.16,
+    2066.9,
+    2724.35,
+    2770.07,
+    3184.5,
+    3302.4
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23938,
+  "visual_bytes": 1199196,
+  "cad_trust_pct": 62,
+  "source_hash": "9bab9586988125bf6c4ace17b4482e12f733e8b58f3c51165bc116e04269835b",
+  "multi_piece_bolted": true,
+  "x_rail_mount": "top",
+  "datum": "Port 0 = MGN9H block top face center; Port 1 = Goliath top mounting face",
+  "construction_note": "4 CNC plates + adapter bolted at 8 corners (Mellow kit)"
+}

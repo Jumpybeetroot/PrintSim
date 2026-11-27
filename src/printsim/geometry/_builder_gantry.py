@@ -531,7 +531,7 @@ def _apply_bedslinger_x_rail_backer_sandwich(model: AssemblyModel) -> None:
         base_x_prof, x_rail_prof, spec.gantry.rail_backer_thickness_mm
     )
     x_normals = _x_rail_mount_normals(spec.gantry.effective_x_rail_mount)
-    bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
+    bolt_pitch_m = spec.gantry.effective_x_rail_bolt_pitch_mm * 1e-3
     w = (
         float(np.linalg.norm(nmap["z_r"].position_m - nmap["z_l"].position_m))
         if ("z_l" in nmap and "z_r" in nmap)
@@ -656,7 +656,7 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
                     a_rail_m2=backer_prof_tel.area_m2,
                     e_beam_pa=rail_mat.youngs_modulus_pa,
                     a_beam_m2=x_rail_prof.area_m2,
-                    bolt_pitch_m=spec.gantry.rail_bolt_pitch_mm * 1e-3,
+                    bolt_pitch_m=spec.gantry.effective_x_rail_bolt_pitch_mm * 1e-3,
                     l_eff_m=max(x_span_m, 0.15),
                     substrate_kind="solid_bar",
                 )
@@ -666,7 +666,7 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
                 a_rail_m2=x_rail_prof.area_m2,
                 e_beam_pa=eb_eff,
                 a_beam_m2=base_x_prof.area_m2,
-                bolt_pitch_m=spec.gantry.rail_bolt_pitch_mm * 1e-3,
+                bolt_pitch_m=spec.gantry.effective_x_rail_bolt_pitch_mm * 1e-3,
                 l_eff_m=max(x_span_m, 0.15),
                 substrate_kind=sub_kind,
                 wall_thickness_m=base_x_prof.wall_thickness_m,
@@ -720,7 +720,8 @@ def _apply_corexy_gantry_rails(
     y_mount = spec.gantry.y_rail_mount
     x_mount = spec.gantry.effective_x_rail_mount
     x_normals = _x_rail_mount_normals(x_mount)
-    bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
+    bolt_pitch_m = spec.gantry.effective_x_rail_bolt_pitch_mm * 1e-3
+    y_bolt_pitch_m = spec.gantry.effective_y_rail_bolt_pitch_mm * 1e-3
     member_by_id = {m.id: m for m in members}
 
     from printsim.fea.components import hertzian_rail_carriage_stiffness
@@ -749,7 +750,7 @@ def _apply_corexy_gantry_rails(
                 rail_mat,
                 _y_rail_mount_normals(y_mount, side),
                 beam_shape=base_y_prof.shape,
-                bolt_pitch_m=bolt_pitch_m,
+                bolt_pitch_m=y_bolt_pitch_m,
                 l_eff_m=d,
                 chamber_temp_c=chamber_c,
             )
@@ -1159,6 +1160,7 @@ def _build_y_carriage_bearing_superelement(
     port_node_ids: tuple[str, str],
     y_car: dict[str, float],
     spec: PrinterSpec,
+    rail_and_car_pos_m: tuple[np.ndarray, np.ndarray] | None = None,
 ):
     """Build a 12x12 Hertzian linear-rail carriage contact superelement for ``y_rail_car_* -> y_car_*``.
 
@@ -1175,6 +1177,11 @@ def _build_y_carriage_bearing_superelement(
     y_mount = spec.gantry.y_rail_mount
     side = "l" if se_id.endswith("_l") else "r"
     lever_arm = y_carriage_lever_arm_m(spec.gantry.y_rail_profile, y_mount, side)
+    if y_mount == "inner" and rail_and_car_pos_m is not None:
+        # Carriage node already sits on the raceway: rigid arm back to the Y-extrusion axis
+        # (p_shell - p_frame = y_rail_car - y_car), Hertzian contact acting at the raceway.
+        p_rail, p_car = rail_and_car_pos_m
+        lever_arm = tuple(float(v) for v in (np.asarray(p_rail) - np.asarray(p_car)))
     k_yy_lock = 1.0e9
     k_ry_roll = max(float(y_car["k_rx_nm_rad"]), 1.0)
     if y_mount == "inner":

@@ -390,8 +390,8 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
   },
   {
     preset_id: "vz_printhead_cnc",
-    name: "VzBot Vz-Printhead CNC (HextrudORT Low + CPAP + Beacon)",
-    total_mass_g: 275,
+    name: "VzBot Vz-Printhead CNC 6061 (HextrudORT Low + CPAP + Beacon)",
+    total_mass_g: 272,
     cog_offset_mm: [1.9, -10.3, 13.4],
     nozzle_offset_mm: [-0.1, -22.4, -54.2],
     offset_datum_rail_mount: "top",
@@ -403,7 +403,24 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     cpap_hose_id_mm: 15,
     extruder_type: "direct_drive",
     default_hardware_summary:
-      "Official Vz-330_v1.2 CAD printhead (CNC Vz-Printhead cage around the CF tube, top-mounted MGN9H) + Vz-HextrudORT Low + Moons NEMA14 + CPAP duct + Beacon = 247 g on-rail with the real MGN9H (275 g in the MGN12H-baseline convention) excl. hotend; nozzle 54.2 mm below the tube axis.",
+      "Mellow CNC Vz-Printhead on the official v24 cage layout (1.5 mm top/bottom, 2.5 mm side 6061 plates fitted to the published 27 g / 22 g masses) + HextrudORT Low + Moons NEMA14 + CPAP + Beacon = 244 g on-rail with the MGN9H (272 g MGN12H-convention) excl. hotend.",
+  },
+  {
+    preset_id: "vz_printhead_printed",
+    name: "VzBot Vz-Printhead Printed v24 (ABS/ASA, HextrudORT Low + CPAP + Beacon)",
+    total_mass_g: 276,
+    cog_offset_mm: [1.9, -10.3, 13.4],
+    nozzle_offset_mm: [-0.1, -22.4, -54.2],
+    offset_datum_rail_mount: "top",
+    mount_material: "abs_printed",
+    body_construction: "plate_sandwich_cf",
+    internal_stiffness_n_per_mm: 450,
+    z_probe_type: "static_eddy",
+    cpap_blower_id: "ws7040_24v",
+    cpap_hose_id_mm: 15,
+    extruder_type: "direct_drive",
+    default_hardware_summary:
+      "Exact official printed v24 Vz-Printhead cage (27.4 g ABS/ASA at 4 walls / 40-50% infill) + aluminium standoffs + HextrudORT Low + Moons NEMA14 + CPAP + Beacon = 248 g on-rail with the MGN9H (276 g MGN12H-convention) excl. hotend.",
   },
   {
     preset_id: "heavy_uhf_long",

@@ -169,8 +169,8 @@ def test_vzbot_toolhead_cad_datums(vz_spec: PrinterSpec) -> None:
     # Extruder above the top-mounted MGN9H: assembled CoG above the tube axis (T-branch chassis)
     assert cog[2] == pytest.approx(13.4, abs=0.2) and cog[1] == pytest.approx(-10.3, abs=0.2)
     assert "toolhead_chassis" in nmap
-    # 247 g on-rail with the real 26 g MGN9H + 96 g Goliath Air = 343 g moving toolhead
-    assert asm.toolhead_moving_mass_kg * 1e3 == pytest.approx(343.0, abs=6.0)
+    # 244 g on-rail with the real 26 g MGN9H + 96 g Goliath Air = 340 g moving toolhead
+    assert asm.toolhead_moving_mass_kg * 1e3 == pytest.approx(340.0, abs=2.0)
 
 
 def test_vzbot_cad_gantry_superelements_active(vz_spec: PrinterSpec) -> None:
@@ -233,3 +233,106 @@ def test_offset_datum_rail_mount_only_shifts_when_mount_differs(vz_spec: Printer
     legacy.toolhead.offset_datum_rail_mount = "front"
     n_legacy = noz(legacy)
     assert n_legacy[2] == pytest.approx(top_native[2] - 6.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# 6. Full Y-rail attachment & CAD toolhead visuals
+# ---------------------------------------------------------------------------
+
+
+def test_inner_rail_carriage_rides_raceway_with_rigid_arm(vz_spec: PrinterSpec) -> None:
+    """Inner-face MGN12 on 2020: raceway = 10 mm half extrusion + 4.8 mm raceway height inboard."""
+    from printsim.fea.components import y_carriage_raceway_offset_m
+
+    assert y_carriage_raceway_offset_m("mgn12_rail", 0.010) == pytest.approx(0.0148)
+    asm = build_assembly(vz_spec)
+    nm = asm.node_map
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        rail = nm[f"y_rail_car_{side}"].position_m
+        car = nm[f"y_car_{side}"].position_m
+        assert (car - rail)[0] == pytest.approx(sign * 0.0148, abs=1e-9)
+        assert car[1:] == pytest.approx(rail[1:])
+        sp = next(s for s in asm.fastener_springs if s.id == f"y_car_bearing_{side}")
+        # Rigid arm from the raceway (frame node = carriage) back to the extrusion axis (shell = rail)
+        assert np.asarray(sp.offset_m) == pytest.approx(rail - car)
+        # XY-joint superelement now spans raceway -> CF-tube clamp (43.5 - 14.8 = 28.7 mm)
+        xb = nm[f"x_beam_{side}"].position_m
+        assert abs(xb[0] - car[0]) == pytest.approx(0.0435 - 0.0148, abs=2e-4)
+
+
+def test_vzbot_cad_toolhead_and_goliath_visuals_match_fea_datums(vz_spec: PrinterSpec) -> None:
+    from printsim.cad_assets.registry import get_hardware_asset_manifest
+
+    th = build_assembly(vz_spec).to_geometry_dict()["toolhead_structure"]
+    assert th["toolhead_visual_glb_url"].endswith("toolheads/vz_printhead_cnc/visual.glb")
+    assert th["hotend_visual_glb_url"].endswith("hotends/mellow_goliath_air/visual.glb")
+    se = next(x for x in th["cad_superelements_active"] if x["category"] == "toolheads")
+    assert se["asset_id"] == "vz_printhead_cnc" and th["cad_toolhead_self_contained"]
+    port1 = se["port1_mm"]
+    goliath = get_hardware_asset_manifest("hotends", "mellow_goliath_air")
+    assert goliath is not None and goliath["has_superelement"] is False  # visual-only hotend
+    l_goliath = -goliath["port1_mm"][2]
+    assert l_goliath == pytest.approx(vz_spec.toolhead.hotend.overall_length_mm, abs=0.1)
+    # Drawn nozzle = MGN9H top face (10 mm tube half + 10 mm MGN9H) + CAD Port 1 - Goliath length
+    assert 20.0 + port1[2] - l_goliath == pytest.approx(vz_spec.toolhead.nozzle_offset_mm[2], abs=0.1)
+    assert port1[1] == pytest.approx(vz_spec.toolhead.nozzle_offset_mm[1], abs=0.1)
+
+
+def test_printed_and_cnc_vz_printheads_are_structural_and_ordered(vz_spec: PrinterSpec) -> None:
+    """Exact printed v24 cage (ABS) vs fitted CNC 6061 cage on the same datums: CNC is stiffer."""
+    from printsim.cad_assets.registry import get_hardware_asset_manifest
+
+    cnc = get_hardware_asset_manifest("toolheads", "vz_printhead_cnc")
+    pr = get_hardware_asset_manifest("toolheads", "vz_printhead_printed")
+    assert cnc["has_superelement"] and pr["has_superelement"]
+    assert cnc["multi_piece_bolted"] and pr["multi_piece_bolted"]
+    assert cnc["port1_mm"] == pytest.approx(pr["port1_mm"])  # identical hotend datum
+    assert cnc["rigid_body_max_freq_hz"] < 0.1 and pr["rigid_body_max_freq_hz"] < 0.1
+    # Fitted CNC plates reproduce Mellow's 27 g full-alu figure (cage + 6061 adapter box)
+    vols = json_recipe_th("vz_printhead_cnc")["part_volumes_cm3"]
+    cage_g = 2.7 * sum(v for k, v in vols.items() if k != "hotend_adapter")
+    assert cage_g == pytest.approx(27.0, abs=1.0)
+    hybrid_g = 1.55 * (vols["top_plate"] + vols["bottom_plate"]) + 2.7 * (vols["front_piece"] + vols["back_piece"])
+    assert hybrid_g == pytest.approx(22.0, abs=1.0)
+
+    printed = vz_spec.model_copy(deep=True)
+    for k, v in TOOLHEAD_PRESETS["vz_printhead_printed"].items():
+        if k in type(printed.toolhead).model_fields:
+            setattr(printed.toolhead, k, v)
+    s_cnc = solve_static(vz_spec)
+    s_pr = solve_static(printed)
+    assert s_cnc > s_pr  # 6061 cage stiffer at the nozzle than the bolted ABS cage
+    assert build_assembly(printed).toolhead_moving_mass_kg * 1e3 == pytest.approx(344.0, abs=1.0)
+    assert build_assembly(vz_spec).toolhead_moving_mass_kg * 1e3 == pytest.approx(340.0, abs=1.0)
+
+
+def solve_static(spec: PrinterSpec) -> float:
+    from printsim.fea.solver import solve_static_fea
+
+    return float(solve_static_fea(build_assembly(spec)).toolhead_stiffness_x_n_per_mm)
+
+
+def json_recipe_th(asset_id: str) -> dict:
+    import json
+
+    from printsim.cad_assets.registry import ASSETS_ROOT
+
+    return json.loads((ASSETS_ROOT / "toolheads" / asset_id / "part_recipe.json").read_text())
+
+
+def test_vzbot_xy_joint_visual_includes_y_carriage_block() -> None:
+    from printsim.cad_assets.registry import get_hardware_asset_manifest
+
+    for side in ("left", "right"):
+        man = get_hardware_asset_manifest("gantry_brackets", f"vzbot_330_xy_{side}")
+        assert man is not None and man["has_superelement"] is True
+        recipe = json_recipe(f"vzbot_330_xy_{side}")
+        assert recipe.get("visual_includes") == "MGN12H Y carriage block"
+
+
+def json_recipe(asset_id: str) -> dict:
+    import json
+
+    from printsim.cad_assets.registry import ASSETS_ROOT
+
+    return json.loads((ASSETS_ROOT / "gantry_brackets" / asset_id / "part_recipe.json").read_text())

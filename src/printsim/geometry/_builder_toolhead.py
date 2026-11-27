@@ -645,7 +645,11 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             # - CNC/SLM metals (>= 25 GPa): drop the FDM infill penalty but retain the 0.58x
             #   multi-piece bolted clamshell seam compliance (not a welded one-piece monoblock).
             eff_body_mat = get_material(spec.toolhead.effective_body_material)
-            if bool(asset_th.manifest.get("is_fdm_anisotropic", False)):
+            # Bolted multi-plate CNC cages baked as one fused solid (VzBot Vz-Printhead CNC) keep
+            # the same 0.58x bolted-seam compliance even though they were not FDM-printed.
+            if bool(asset_th.manifest.get("is_fdm_anisotropic", False)) or bool(
+                asset_th.manifest.get("multi_piece_bolted", False)
+            ):
                 clamshell_mult = (
                     0.32 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 0.58
                 )

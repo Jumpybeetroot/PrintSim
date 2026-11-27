@@ -131,7 +131,7 @@ def _build_cartesian_bedslinger(
     x_rail_prof = get_profile(spec.gantry.x_rail_profile)
     base_x_prof = get_profile(xp)
     x_normals = _b._x_rail_mount_normals(spec.gantry.effective_x_rail_mount)
-    bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
+    bolt_pitch_m = spec.gantry.effective_x_rail_bolt_pitch_mm * 1e-3
     member_by_id = {m.id: m for m in members}
     chamber_c = float(spec.frame.chamber_temp_c)
     x_beam_mat = get_material(xm)
@@ -208,7 +208,7 @@ def _build_cartesian_bedslinger(
             for mid in (f"z_col_{side}_low", f"z_col_{side}_top"):
                 if mid in member_by_id:
                     _b._apply_z_guideway(
-                        member_by_id[mid], nmap, z_rail_id, rail_mat, n_z, bolt_pitch_m, h
+                        member_by_id[mid], nmap, z_rail_id, rail_mat, n_z, spec.gantry.rail_bolt_pitch_mm * 1e-3, h
                     )
 
     _b._apply_corner_joint_compliance(members, spec, col_length_m=h)

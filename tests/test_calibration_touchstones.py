@@ -104,9 +104,9 @@ def test_structural_calibration_bugfixes_preserved() -> None:
         vz_spec.toolhead.total_mass_g + vz_spec.toolhead.hotend.mass_g + vz_block_delta_g
     )
     assert vz_asm.toolhead_moving_mass_kg * 1000.0 == pytest.approx(expected_vz_th_g, rel=1e-6)
-    # Vz-Printhead CNC: 275 g (54 g MGN12H convention) - 28 g MGN9H delta + 96 g Goliath = 343 g
+    # Vz-Printhead CNC: 272 g (54 g MGN12H convention) - 28 g MGN9H delta + 96 g Goliath = 340 g
     assert vz_block_delta_g == pytest.approx(-28.0, abs=1.0)
-    assert expected_vz_th_g == pytest.approx(343.0, abs=1.0)
+    assert expected_vz_th_g == pytest.approx(340.0, abs=1.0)
 
     # 4. Bedslinger Y moving mass uses carriage_mass_g directly rather than hardcoded 350 g
     bs_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "cartesian_bedslinger.yaml")

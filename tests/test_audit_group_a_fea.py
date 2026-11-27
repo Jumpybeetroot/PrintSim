@@ -39,7 +39,7 @@ def test_a01_y_inertial_load_includes_hotend_mass() -> None:
     """Verify solver and sensitivity Y inertial load shares use toolhead_moving_mass_kg (with hotend)."""
     for yaml_name, expected_approx_um, expect_larger in (
         ("corexy_voron_style.yaml", 5.68, False),  # CAD StealthBurner CW2 + 3D CAD Voron Stock ABS XY-joint CMS + Huth/VDI bolted seams + lever-arm Y-carriage bearings + hotend mass
-        ("vzbot_330_awd.yaml", 10.84, True),  # Official VzBot: CAD Vz-Printhead (+13.4 mm CoG T-branch, -54.2 mm nozzle) on top MGN9H / 20x20x1 CF tube + CAD VzBot CNC XY-joint & corner-mount CMS + 6 mm belts at 20k accel
+        ("vzbot_330_awd.yaml", 26.26, True),  # Official VzBot: CAD CNC Vz-Printhead CMS (+13.4 mm CoG T-branch, -54.2 mm nozzle) on top MGN9H / 20x20x1 CF tube + CAD VzBot CNC XY-joint & corner-mount CMS + raceway-pivot inner MGN12H Y carriages + 6 mm belts at 20k accel
     ):
         spec = PrinterSpec.from_yaml(EXAMPLES_DIR / yaml_name)
         asm = build_assembly(spec)
