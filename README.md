@@ -23,9 +23,9 @@
 ## What's New in v0.9.0
 
 <details>
-<summary><strong>Expand full v0.9.0 release notes (21-tool MCP, ADXL auto-fit, 50 CAD superelements, VzBot 330 AWD, chamber thermal…)</strong></summary>
+<summary><strong>Expand full v0.9.0 release notes (22-tool MCP, ADXL auto-fit, 50 CAD superelements, VzBot 330 AWD, chamber thermal…)</strong></summary>
 
-- **21-Tool AI Agent MCP Server & Live Studio Bridge (`printsim.mcp_server`)**: Zero-setup stdio JSON-RPC 2.0 MCP server (`printsim mcp`) for **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, and **Gemini CLI**, expanded to **21 engineering tools** including `calibrate_adxl_csv`, `fit_printer_adxl`, `analyze_sensitivity_hotspots`, `condense_bracket_superelement`, `run_deep_frame_verify`, `export_printer_dxf`, `mutate_and_compare_printer`, `design_and_test_bracket`, and live 3D Studio inspection/update tools (`get_live_studio_state`, `update_live_studio`, `capture_studio_viewport`). See **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** and [`examples/agent_discovery_loop.py`](examples/agent_discovery_loop.py).
+- **22-Tool AI Agent MCP Server & Live Studio Bridge (`printsim.mcp_server`)**: Zero-setup stdio JSON-RPC 2.0 MCP server (`printsim mcp`) for **Claude Desktop**, **Cursor**, **Antigravity / Windsurf**, and **Gemini CLI**, expanded to **22 engineering tools** including `run_signoff_verification` (fine-mesh convergence + true multi-position 3D FEA workspace sweep + 90% parametric uncertainty bands), `calibrate_adxl_csv`, `fit_printer_adxl`, `analyze_sensitivity_hotspots`, `condense_bracket_superelement`, `run_deep_frame_verify`, `export_printer_dxf`, `mutate_and_compare_printer`, `design_and_test_bracket`, and live 3D Studio inspection/update tools (`get_live_studio_state`, `update_live_studio`, `capture_studio_viewport`). See **[docs/AI_AGENT_INTEGRATION.md](docs/AI_AGENT_INTEGRATION.md)** and [`examples/agent_discovery_loop.py`](examples/agent_discovery_loop.py).
 - **Klipper ADXL345 CSV Measured-vs-Simulated Calibration & Digital-Twin Auto-Fit (`printsim calibrate-adxl --fit`)**: Upload or pass real Klipper `resonances_*.csv` / raw ADXL345 accelerometer logs to overlay measured vs. FEA PSD curves, quantify peak-frequency & damping deltas, and automatically fit belt pretension and rail/joint stiffness parameters to match your physical machine.
 - **Industrial Belt Catalog with Theoretical/Experimental Caveats (`BELT_CATALOG`)**: Expanded belt database covering `GT2` (6–15 mm & dual 9 mm), `3GT`, `AT3` / `AT3 Gen3`, `HTD 3M`, and `AT5` with datasheet tensile stiffness, minimum pulley-tooth & back-idler bend-fatigue checks, chamber-temperature modulus retention, and explicit **Validated / Theoretical / Experimental** engineering caveats.
 - **Official-Spec VzBot 330 AWD Full Build (`examples/vzbot_330_awd.yaml`, `gantry.hardware_kit: vzbot_330_awd`)**: Rebuilt from the official VzBoT3D BOM, `Vz-330_v1.2` full-printer STEP and Klipper config — 530×500×570 mm frame with `2040` uprights, Y rails bolted to the inner faces of the top-ring Y extrusions (new `frame.gantry_on_top_frame` topology: no phantom gantry ring), 3 mm Al rear + polycarbonate sides (new `frame.side_panel_material`), CAD-baked Tet4 Craig–Bampton rear motor mounts, AWD/2WD front mounts and XY joints (`scripts/bake_vzbot_kit.py`), 20×20×1 CF tube with top MGN9H, 6 mm GT2 at ~171 Hz/150 mm (22 N), 4× LDO 2804AC @ 48 V, the CAD-measured `vz_printhead_cnc` toolhead (343 g dressed, nozzle −54.2 mm), 8 mm cast bed on bolted silicone spacers, and belt-synced dual TR8x8 Z. Simulates X ≈ 104 Hz / Y ≈ 62 Hz with the CNC head (X ≈ 80 / Y ≈ 50 Hz with the printed head), inside the cited community Klipper band (X 75–118, Y 47–80 Hz). Selectable in the Studio **Base Machine** picker as *VzBot 330 AWD (Mellow CNC)*, rendered with the CAD Vz-Printhead + Goliath on its top MGN9H (structural printed v24 and CNC 6061 Vz-Printhead presets, real rail-screw pitches) and XY joints riding CAD MGN12H blocks on the inner-face Y rails (raceway-pivot carriage FEA).
@@ -73,7 +73,7 @@ uv run printsim belt-identify examples/voron_trident_300.yaml --axis X -p 0.5,0.
 # Run pymoo NSGA-II multi-objective Pareto optimization (Cost vs Safe Accel vs Nozzle Flex)
 uv run printsim pareto examples/voron_trident_300.yaml --pop 16 --gen 6
 
-# Run native 21-tool stdio MCP server for Claude Desktop, Cursor, Antigravity & Gemini CLI
+# Run native 22-tool stdio MCP server for Claude Desktop, Cursor, Antigravity & Gemini CLI
 uv run printsim mcp
 
 # Run autonomous 2-stage AI agent discovery & parametric bracket FEA demo
@@ -118,7 +118,7 @@ uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wi
 
 # Zero-LLM diagnostics, A/B comparisons & parallel SQLite-cached sweeps
 uv run printsim diagnose examples/corexy_voron_style.yaml
-uv run printsim compare examples/corexy_voron_style.yaml -O frame.bracing=full_truss
+uv run printsim compare examples/corexy_voron_style.yaml -O frame.bracing=gussets_and_flat_bars
 uv run printsim sweep sweeps/example_parametric_sweep.yaml --workers 4
 ```
 

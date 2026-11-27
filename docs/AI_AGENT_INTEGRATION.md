@@ -77,7 +77,7 @@ Add to `~/.gemini/settings.json`:
 
 ---
 
-## 2. Complete MCP Tool Reference (13 Tools)
+## 2. MCP Tool Reference (14 of 22 Tools Documented)
 
 | # | Tool Name | Key Inputs | When to Use |
 | :--- | :--- | :--- | :--- |
@@ -94,6 +94,7 @@ Add to `~/.gemini/settings.json`:
 | 11 | `optimize_part_topology` | `preset?`, `material_id?`, `target_volume_fraction?`, `iterations?`, `force_n?`, `preserve_boundaries?`, `output_stl_path?` | Run 3D SIMP topology optimization to carve weight out of a bracket/mount while preserving stiffness and boundary faces, with optional watertight STL export. |
 | 12 | `export_printer_stl` | `yaml_text`, `output_path` | Export a 3D solid STL/OBJ/GLB assembly mesh of the full printer. |
 | 13 | `export_printer_step` | `yaml_text`, `output_path` | Export an exact OpenCASCADE ISO-10303-21 B-Rep STEP CAD assembly (via `build123d`) for FreeCAD/Fusion 360/SolidWorks. |
+| 14 | `run_signoff_verification` | `yaml_text`, `filament_id?`, `deep_mesh_n?`, `deep_bed_mesh_n?`, `workspace_grid_n?`, `include_z_extremes?` | Final check before recommending a design: fine-mesh convergence, real multi-position workspace FEA (worst-case resonance and safe accel with their positions), 90% parametric uncertainty bands with ranked drivers (lumped stiffness + toolhead mass; a lower bound on total error), and five pass/caution/fail readiness gates. Returns `verdict`, `checks`, `workspace_fea`, `uncertainty`; see `docs/PHYSICS_AND_MATH.md` § Sign-Off Verification for the gate limits. |
 
 ---
 
@@ -231,7 +232,7 @@ print(bracket["stiffness_n_per_mm"], bracket["specific_stiffness_n_per_mm_per_g"
 | `gantry.hardware_kit` | `vzbot_330_awd`, `vzbot_330_2wd` (+ Voron/Siboor/Monolith kits) | CAD-baked VzBot rear motor mounts, front AWD/2WD mounts and XY joints, plus kit settings (MGN9H top X, inner MGN12H Y, 6 mm GT2 at 22 N) |
 | `geometry.toolhead_structure.toolhead_visual_ports_mm` | `{port0_mm, port1_mm}` or null | Datums of visual-only CAD toolheads (e.g. `vz_printhead_cnc`); structural CAD toolheads report ports through `cad_superelements_active` |
 | `toolhead.offset_datum_rail_mount` | `front` (default), `top` | X-rail mounting the CoG / nozzle offsets were measured on; the builder's top/bottom-mount datum shift is skipped when it matches `gantry.x_rail_mount` |
-| `toolhead.preset_id` | `vz_printhead_cnc`, `vz_printhead_printed` | CNC 6061 (fitted to Mellow 27 g / 22 g) or exact printed v24 Vz-Printhead, both Tet4 CMS on the top-mounted MGN9H (340 / 344 g dressed, nozzle −54.2 mm) |
+| `toolhead.preset_id` | `vz_printhead_cnc`, `vz_printhead_printed`, `trinity_1_6_dav`, `trinity_1_6_chube` | CNC 6061 / printed v24 Vz-Printhead (top MGN9H, 340 / 344 g dressed) or WV-Design Trinity 1.6 monolithic unibody dual-3628 toolheads (front MGN12H, Sherpa Mini v3 6.25:1, coupled unibody heatsink/shell brace with `trianglelab_dragon_ace_volcano` / `chube_compact`) |
 | `gantry.x_rail_bolt_pitch_mm`, `gantry.y_rail_bolt_pitch_mm` | mm or null | Spacing of the rail screws actually installed (VzBot 80 / 50 mm); null = `rail_bolt_pitch_mm` |
 
 Reference build: `examples/vzbot_330_awd.yaml` (official VzBoT3D BOM + `Vz-330_v1.2` STEP), also a Studio base machine (`/api/catalog` preset `vzbot_330_awd`, DIY / Self-Sourced Build group).

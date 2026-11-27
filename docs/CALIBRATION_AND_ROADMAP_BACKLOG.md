@@ -15,118 +15,63 @@
 
 ### Tier 1 — Critical Gaps (`34% – 48%`)
 
-- [ ] **CAL-01 · Heavy / Industrial Belts (`34% – 58%`)** — *Gantry (`belt`)*
+- [ ] **CAL-01 · Heavy / Industrial Belts (`34% – 58%`)** *(Partial — PrintDB/KB datasheets & analytical double-shear pin stiffness persisted; awaits live Hub-window Discord A/B sweeps)* — *Gantry (`belt`)*
   - **Current scores:** `at5_16mm` (`34%`), `htd3m_15mm` (`36%`), `at3_16mm` / `at3_gen3_16mm` (`38%`), `3gt_15mm` / `at3_10mm` (`40%`), `3gt_12mm` (`42%`), `3gt_9mm` (`44%`), `gt2_dual_9mm` (`52%`), `gt2_15mm` (`58%`), `gt2_12mm` (`76%`).
-  - **Target:** `75–85%` (for `3GT` / `AT3` / `GT2 12–15 mm` / `Dual 9 mm`).
-  - **Files:** `src/printsim/schema/catalogs.py` (`BELT_CATALOG`), `src/printsim/kinematics/belts.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer` + `research` (`discord-research` skill).
-  - **What to do:** Gather real Monolith / VzBoT / Annex community ADXL shaker sweeps comparing 6 mm vs. 9 mm vs. 12 mm GT2, 3GT, and AT3 on the same frame; validate dynamic $EA$ multiplier, steel-cord vs. fiberglass wrap $EI_b$ bend loss over 20T–30T pulleys, and double-shear idler stiffness at `> 80 N` tension; persist verified curves to PrintDB.
+  - **Completed so far:** Persisted `components/belts/contitech-at3-10mm` (`C_spez = 80 kN`, `z_min = 20` reverse-bend) to PrintDB and verified Monolith `D5×24` double-shear shaft stiffness (`21.8 kN/mm` vs `3.2 kN/mm` single-shear) + `beta_dyn = 1.85` (range `1.6–2.0`).
+  - **Remaining gap:** Live Hub-window Discord A/B ADXL shaker sweeps swapping `6 mm → 9 mm → 12 mm` GT2, 3GT, and AT3 on a single Monolith / VzBoT / Annex testbed.
 
-- [ ] **CAL-02 · Non-STEP-Baked Toolhead Bodies (`40% – 50%`) & VzBot CNC Proxy (`62%`)** — *Toolhead (`toolhead_construction`)*
-  - **Current scores:** `extruder_as_chassis` / Monolith CPAP (`40%`), `cnc_monoblock` (`42%`), `cantilever_bowden` / `plate_sandwich_cf` (`44%`), `compact_cage` / `archetype_cpap` / XOL / Dragon Burner / A4T (`48%`), `clamshell` unbaked fallback (`50%`), `vz_printhead_cnc` (`62%` — printed STEP scaled to 6061).
-  - **Target:** `80–88%` via CAD Craig–Bampton `.npz` + `.glb` baking.
-  - **Files:** `cad_recipes/`, `src/printsim/assets/hardware/toolheads/`, `src/printsim/cad_assets/registry.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer` (using `uv run printsim cad bake`).
-  - **What to do:** Source official `.STEP` assemblies for **Archetype CPAP**, **XOL**, **Dragon Burner**, **A4T**, and **Monolith Toolhead** (once public on `monolith3d.xyz`) and bake Tet4 Craig–Bampton `.npz` superelements + `visual.glb` meshes. Note: switching `voron_monolith_awd.yaml` to `microwaved_bowden` + `tricorn_long` already achieves `85–89%` (`86%` overall).
+- [x] **CAL-02 · Official STEP-Baked Toolhead Bodies (`48%` → `82% – 86%` CAD CMS)** — *Toolhead (`toolhead_construction`)*
+  - **New scores:** `xol_compact` (**`86%`**, 27.9k Tet4), `a4t_beacon` (**`84%`**, 52.8k Tet4), `dragon_burner` (**`83%`**, 30.4k Tet4), `archetype_cpap` (**`82%`**, 55.3k Tet4); all 4 pass `11/11` `printsim cad verify` QA (`rb_max <= 0.0034 Hz`, `<= 30.2k` GLB tris) via `cad_recipes/bake_toolheads_cal02.py`.
+  - **Future follow-up:** Bake `monolith_toolhead_cpap` once its STEP is public on `monolith3d.xyz` and measure `vz_printhead_cnc` plates (`66%`) with calipers.
 
-- [ ] **CAL-03 · Voron Tap Z-Probe Carriage Compliance (`48% – 56%`)** — *Toolhead (`z_probe`)*
+- [ ] **CAL-03 · Voron Tap Z-Probe Carriage Compliance (`48% – 56%`)** *(Partial — PrintDB/KB specs & Shake&Tune `~125 Hz` rail mode persisted; awaits live Hub-window Discord A/B ADXL swap)* — *Toolhead (`z_probe`)*
   - **Current scores:** Printed Voron Tap (`48%`), CNC Voron Tap / ChaoticLab (`56%`).
-  - **Target:** `78–84%`.
-  - **Files:** `src/printsim/fea/components.py`, `src/printsim/schema/catalogs.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer` + `research` (`discord-research` skill).
-  - **What to do:** Pull same-printer before/after Klipper ADXL logs (Tap vs. Beacon/Cartographer/Klicky) from Voron/Monolith Discord to calibrate the Tap MGN9 rail + magnet preload pitch/yaw compliance knockdown; optionally bake official Voron Tap R8 STEP into a 2-port carriage superelement.
+  - **Completed so far:** Documented ChaoticLab CNC Tap V2 (`59.8 g` bare / `62–65 g` assembled, internal `MGN7H` rail), Printed Tap (`+50 g` net, `50 mm` `MGN9H`), Klippain Shake&Tune `~125 Hz` decoupled internal rail peak, and Formbot Trident R2 + Tap KB CSV (`51.8 Hz` Y-to-Z peak).
+  - **Remaining gap:** Controlled same-printer before/after Klipper ADXL CSV swaps (Printed Tap vs CNC Tap vs Beacon/Cartographer) from VORONDesign Discord `#voron_tap`.
 
-- [ ] **CAL-04 · Benchtop Feet, Anti-Vibration Pads & Concrete Paver (`48% – 62%`)** — *Frame (`frame_feet`)*
-  - **Current scores:** `anti_vib_pads` HULA / Sorbothane (`48%`), `paver_foam` (`55%`), `rubber_feet` (`58%`), `suspended_lines` (`62%`).
-  - **Target:** `75–82%`.
-  - **Files:** `src/printsim/fea/components.py`, `src/printsim/fea/modal.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer` + `research`.
-  - **What to do:** Calibrate HULA / Sorbothane / TPU foot axial & lateral spring rates and loss factors against published HULA / Klipper accelerometer isolation tests (including sub-30 Hz desk rocking modes) and persist shore-durometer / stiffness data to PrintDB.
+- [x] **CAL-04 · Benchtop Feet, Anti-Vibration Pads & Concrete Paver (`48% – 58%` → `77% – 79%`)** — *Frame (`frame_feet`)*
+  - **New scores:** `rubber_feet` (**`79%`**, `380/148 N/mm`, `η=0.12`), `anti_vib_pads` (**`78%`**, `65/22 N/mm`, `η=0.56` Sorbothane 50D / HULA), `paver_on_foam` (**`77%`**, `215/78 N/mm`, `η=0.28`, `18 kg`); `suspended_lines` unchanged at `62%`. Persisted `references/dynamics/benchtop-isolator-feet-stiffness` to PrintDB.
 
-- [ ] **CAL-05 · Linear Rail Grade / Clone Preload Multipliers (`48% – 68%`)** — *Gantry (`rail_quality`)*
-  - **Current scores:** `budget_generic` clone (`48%`), `precision_ground` THK/NSK Grade P (`60%`), `matched` LDO/HoneyBadger/Fysetc (`68%`).
-  - **Target:** `80–85%`.
-  - **Files:** `src/printsim/fea/components.py`, `src/printsim/schema/catalogs.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer` + `research`.
-  - **What to do:** Incorporate HIWIN Z0/Z1/ZA and THK/NSK radial clearance / preload tables from official catalogs into Hertzian contact stiffness scaling (replacing flat scalar multipliers), and cross-check against community rail-swap ADXL data.
+- [x] **CAL-05 · Linear Rail Grade / Clone Preload Multipliers (`48% – 86%` → `80% – 88%`)** — *Gantry (`rail_quality`)*
+  - **New scores:** `budget_generic` (**`80%`**), `midgrade_matched` (**`82%`**), `precision_thk_nsk` (**`84%`**), `hiwin_genuine` (**`88%`**). Replaced flat scalar multipliers with first-principles HIWIN (`GW-11-7-EN-2401-K`), THK (`SRS/HSR`), NSK (`E728`) radial-clearance, conformity ($f=r_g/d_b$), and ISO 3290 ball-scatter active-ball Hertzian contact integration; persisted `references/materials_mechanics/rail-grade-clearance-and-ball-sharing` to PrintDB.
 
 ---
 
 ### Tier 2 — High-Impact Structural & Motion Calibration (`52% – 68%`)
 
-- [ ] **CAL-06 · Extrusion Cavity Fillings (`52% – 64%`)** — *Frame (`extrusion_filling`)*
-  - **Current scores:** PU Foam (`52%`), Lead Shot / UHPC Grout (`58%`), Epoxy Granite (`62%`), Silica Sand (`64%`).
-  - **Target:** `78–82%`.
-  - **Files:** `src/printsim/schema/catalogs.py`, `src/printsim/fea/beam3d.py`, `src/printsim/fea/modal.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Calibrate composite bending stiffness $EI_{\text{eff}}$ and granular/viscoelastic modal damping $\zeta$ against published 2020/4040 sand-filled & epoxy-granite bar tap-test / ring-down literature.
+- [x] **CAL-06 · Extrusion Cavity Fillings (`52% – 64%` → `78% – 82%`)** — *Frame (`extrusion_filling`)*
+  - **New scores:** `pu_foam` (**`78%`**, `Δζ=0.008`), `lead_shot` (**`79%`**, `Δζ=0.038`), `silica_sand` (**`80%`**, `Δζ=0.022`), `uhpc_grout` (**`80%`**, `η_bond=0.80`, `E=42 GPa`, `Δζ=0.025`), `epoxy_granite` (**`82%`**, `η_bond=0.95`, `E=30 GPa`, `Δζ=0.030`). Persisted `references/materials_mechanics/extrusion-cavity-fillings-composite-damping` to PrintDB.
 
-- [ ] **CAL-07 · Lumped Gantry Brackets & VzBot CNC 6061 Proxy (`52% – 72%`)** — *Gantry (`gantry_bracket`)*
-  - **Current scores:** Non-kit lumped printed brackets (`52–58%`: PA12-CF15, PET-CF15, PPS-CF, PC-PBT-GF, PPA-CF, ABS/ASA), lumped CNC 6061 (`66%`), CAD VzBot 330 AWD (`72%` — official printed STEP scaled to 6061-T6; also 4 VzBot brackets have minor `0.051–0.091 Hz` rigid-body residual vs `<0.05 Hz` QA gate).
-  - **Target:** `82–90%`.
-  - **Files:** `scripts/bake_vzbot_kit.py`, `src/printsim/assets/hardware/gantry_brackets/vzbot_*`, `src/printsim/fea/components.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Re-bake the 4 VzBot brackets with tighter solver tolerance to clear the `< 0.05 Hz` rigid-body QA gate; if public Mellow CNC 6061 STEPs or measured wall-thickness specs become available, bake true CNC geometry; calibrate lumped printed-bracket creep/modulus knockdown against PrintDB polymer HDT/creep records.
+- [x] **CAL-07 · Lumped Gantry Brackets & VzBot QA Re-Bake (`52% – 72%` → `82% – 84%`)** — *Gantry (`gantry_bracket`)*
+  - **New scores:** All 8 VzBot 330 gantry brackets re-baked with mirror-symmetric stratified RBE3 sampling (`rb_max` cut `5–9×` to `0.0085–0.0107 Hz`, 11/11 QA pass → **`84%`**); PrintDB-hydrated `gantry_bracket_polymer_knockdown()` (FDM orthotropic + moisture + HDT + belt-tension creep) elevates printed brackets to **`82–84%`** (`abs 82`, `pa12_cf 82`, `pet_cf 83`, `pc_pbt_gf 83`, `ppa_cf 84`, `pps_cf 84`).
 
-- [ ] **CAL-08 · Bed Mount Hardware (`52% – 78%`)** — *Bed / Z (`bed_mount`)*
-  - **Current scores:** Yellow die springs (`52%`), VzBot torqued silicone spacers (`54%`), 70A silicone spacers (`56%`), CNC magnetic Kelvin kinematic (`64%`), 4-pt floating tabs (`66%`), 3-pt Maxwell kinematic (`70%`), Trident Bakelite + GE5C (`74%`), 4-pt rigid standoffs (`78%`).
-  - **Target:** `80–86%`.
-  - **Files:** `src/printsim/fea/bed_plate.py`, `src/printsim/fea/components.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer` + `research`.
-  - **What to do:** Calibrate thermal restraint stiffness $k_{\text{therm}}$ and bimetallic bed warp against real Klipper `BED_MESH_OUTPUT` cold-vs-110 °C deltas (Trident Bakelite, Voron 2.4r2 standoffs, VzBot silicone, kinematic mounts).
+- [x] **CAL-08 · Bed Mount Hardware (`52% – 78%` → `80% – 86%`)** — *Bed / Z (`bed_mount`)*
+  - **New scores:** `springs_4pt` (**`80%`**), `silicone_4pt` (**`80%`**), `silicone_4pt_clamped` (**`82%`**), `spherical_3pt_ratrig` (**`82%`**), `floating_4pt` (**`84%`**), `cnc_kelvin_magnetic` / `captive_belleville_kinematic` / `dual_leaf_ti_kinematic` / `craz_kinematic_ge5c` (**`84%`**), `kinematic_3pt` / `whopping_pochard_kinematic` / `trident_3pt_standoffs` (**`85%`**), `rigid_4pt` (**`86%`**). Added Volkersen/Timoshenko bimetallic magnetic-PEI stack + MITC4 eccentric thermal-restraint bending with M3/M4 bolt-preload slip caps calibrated to Klipper `BED_MESH_OUTPUT` cold→110 °C bands.
 
-- [ ] **CAL-09 · Frame Corner Joints (`54% – 64%`)** — *Frame (`corner_joint`)*
-  - **Current scores:** 3-way corner cube (`54%`), internal L-bracket (`56%`), external CNC gusset (`58%`), Voron blind joint (`64%`).
-  - **Target:** `80–85%`.
-  - **Files:** `src/printsim/fea/components.py`, `src/printsim/fea/beam3d.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Run 3D contact/Tet10 submodel FEA (`scikit-fem` / `gmsh`) on 2020 blind joint vs. 5-hole CNC gusset vs. cast L-bracket vs. 3-way cube (with realistic M5 bolt preload & T-slot bearing area) to replace lumped joint rotational springs with FEA-derived $K_\theta, K_t$ curves.
+- [x] **CAL-09 · Frame Corner Joints (`54% – 64%` → `80% – 84%`)** — *Frame (`corner_joint`)*
+  - **New scores:** `l_bracket` (**`80%`**), `corner_cube` (**`82%`**), `gusset_plate` (**`83%`**), `blind_joint` (**`84%`**) via 126k–184k-DOF 3D Tet10 submodel FEA (`scripts/calibrate_corner_joints_fea.py`) on OpenCASCADE Misumi HFS5-2020 geometry with VDI-2230 preloaded bolted contact pads vs welded controls; persisted `references/materials_mechanics/corner-joint-tet10-stiffness` to PrintDB.
 
-- [ ] **CAL-10 · Z-Drive Mechanisms (`54% – 74%`)** — *Bed / Z (`z_drive_mechanism`)*
-  - **Current scores:** 9 mm belted-Z worm (`54%`), KevinAkaSam belted-Z (`58%`), SFU1204 + WobbleX (`60%`), 9 mm belted quad-Z (`68%`), SFU1204 + BK10 (`72%`), 6 mm belted quad-Z / VzBot belt-sync dual-Z (`74%`).
-  - **Target:** `80–85%`.
-  - **Files:** `src/printsim/fea/components.py`, `src/printsim/geometry/_builder_z.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Wire baked `voron_24_z_drive_*` and `voron_trident_z_mount_*` superelements directly into the Z-drive vertical stiffness chain (currently displayed as 3D CAD stations while vertical compliance uses catalog springs), and calibrate POM nut backlash / Z-belt elasticity against nozzle-tap vertical deflection tests.
+- [x] **CAL-10 · Z-Drive Mechanisms (`54% – 74%` → `80% – 85%`)** — *Bed / Z (`z_drive_mechanism`)*
+  - **New scores:** `gt2_9mm_worm_z` (**`80%`**), `gt2_9mm_planetary_z` (**`81%`**), `kevinakasam_belted_z` / `sfu1204_wobblex` (**`82%`**), `tr8x8_pom` / `tr8x8_brass` / `tr8x4_wobblex` (**`83%`**), `gt2_9mm_z_belt` (**`84%`**), `tr8x4_pom` / `gt2_6mm_z_belt` / `sfu1204_bk10` / `sfu1605_fk12` (**`85%`**). Wired baked `voron_24_z_drive_*` & `voron_trident_z_mount_*` CAD CMS in series + height-dependent two-span Z-belt elasticity + POM thermal softening + `compute_nozzle_tap_z_deflection_um`.
 
-- [ ] **CAL-11 · Generic Toolhead Presets — Mass & CoG (`56% – 66%`)** — *Toolhead (`toolhead_preset`)*
-  - **Current scores:** Generic/custom presets (`56–65%`, e.g., EVA 3 + Orbiter 2, FLSUN V400 effector, generic CPAP/direct-drive toolheads).
-  - **Target:** `80–88%`.
-  - **Files:** `src/printsim/schema/catalogs.py`, `src/printsim/schema/printdb_bridge.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `research` (`discord-research` skill) + PrintDB ingestion.
-  - **What to do:** Replace estimated masses and nozzle-to-CoG offsets with scale-weighed community teardown measurements stored in PrintDB (with cited sources & verification tier).
+- [x] **CAL-11 · Generic Toolhead Presets — Mass & CoG (PrintDB & Onshape CAD CoG Persistence)** — *Toolhead (`toolhead_preset`)*
+  - **Completed:** Persisted CAD-measured Onshape volumes/CoG & teardowns to PrintDB: `eva3-orbiter2-rapido-hf` (`113.74 cm³`, `370 g` dressed, CoG `[-0.1, -9.6, +17.5] mm`), `flsun-v400-stock-effector` (`400 g`, Onshape plate `20.42 cm³`, CoG `[0, -3.3, -18.0] mm`), `voron-stealthburner-cw2-rapido-uhf-tap` (`495 g` empirical heavy-UHF counterpart), and verified `monolith-toolhead-cpap-baseline` (`270 g` dressed, CoG `[0, -11.5, -1.5] mm`).
 
-- [ ] **CAL-12 · Analytical Hotend Structural Clamps & Goliath Air (`58% – 70%`)** — *Hotend (`hotend_clamp`)*
-  - **Current scores:** `mellow_goliath_air` (`58%` — visual-only GLB, no `.npz`), generic high-flow / Volcano (`58%`), `e3d_revo_voron` (`64%`), `e3d_v6` (`68%`), `dragon_hf` (`70%`).
-  - **Target:** `82–88%` (matching CAD-baked Chube / Tricorn at `86–89%`).
-  - **Files:** `cad_recipes/`, `src/printsim/assets/hardware/hotends/`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Bake Tet4 Craig–Bampton `.npz` superelements from official STEPs for **Phaetus Dragon HF**, **E3D Revo Voron**, **Phaetus Rapido 2**, and **Mellow Goliath Air** (rebuilding a watertight solid heatsink/heatbreak/block for Goliath Air so it upgrades from visual-only GLB to full CAD CMS).
+- [x] **CAL-12 · Hotend Structural CAD CMS (`58% – 70%` → `85% – 86%`)** — *Hotend (`hotend_clamp`)*
+  - **New scores:** `mellow_goliath_air` (**`85%`**, 51.8k Tet4, upgraded from visual-only GLB), `e3d_revo_voron` (**`86%`**, 28.0k Tet4), `phaetus_rapido_2_hf` (**`86%`**, 43.9k Tet4), `phaetus_dragon_hf` (**`86%`**, 46.9k Tet4); all pass 11/11 QA (`rb_max <= 0.0075 Hz`) via `scripts/bake_hotends_cal12.py`.
 
-- [ ] **CAL-13 · Belt Path & Idler Routing (`62% – 74%`)** — *Gantry (`belt_routing`)*
-  - **Current scores:** `monolith_short` (`62%`), `stock_corexy` (`74%`).
-  - **Target:** `85–90%`.
-  - **Files:** `src/printsim/kinematics/belts.py`, `src/printsim/geometry/_builder_gantry.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Replace the scalar `0.86×` Monolith span factor and lumped belt-plane Z-offset approximation with an explicit 3D pulley-coordinate belt graph (exact pulley `(x, y, z)` centers from each hardware kit's CAD stations, stacked upper/lower belt plane lever arms, and per-idler bolt cantilever compliance).
+- [x] **CAL-13 · 3D Pulley-Coordinate Belt Path & Idler Routing Graph (`62% – 74%` → `86% – 87%`)** — *Gantry (`belt_routing`)*
+  - **New scores:** `monolith_short` (**`86%`**), `stock_corexy` (**`87%`**). Replaced scalar `0.86×`/`1.45×` factors with explicit 3D pulley coordinates (`build_corexy_belt_routing_graph_3d`), stacked belt planes (`dz = w + 3 mm`), and per-idler Euler–Bernoulli + Castigliano compliance validated against CloakedWayne & Stock Voron Trident ADXL logs.
 
-- [ ] **CAL-14 · Clip-In Enclosure Panels (`68%`)** — *Frame (`enclosure_panels`)*
-  - **Current scores:** Clip-in PMMA / Polycarbonate (`68%`; bolted panels are already `86%`).
-  - **Target:** `80%`.
-  - **Files:** `src/printsim/fea/panels.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `fea-engineer`.
-  - **What to do:** Validate clip-in foam-tape shear stiffness against same-printer panels-on vs. panels-off Klipper ADXL logs on stock Voron 2.4r2 / Trident.
+- [x] **CAL-14 · Clip-In Enclosure Panels (`68%` → `80%`)** — *Frame (`enclosure_panels`)*
+  - **New score:** Clip-in PMMA / Polycarbonate (**`80%`**). Calibrated ASTM D1056 closed-cell EPDM foam tape + ABS quarter-turn clip perimeter stiffness density (`clip_gasket_stiffness_per_m`) against same-printer panels-OFF vs clip-in 3 mm PMMA Voron 2.4r2 / Trident ADXL logs.
 
 ---
 
 ### Tier 3 — Final Polish to 80%+ (`76%`)
 
-- [ ] **CAL-15 · Hotend Thermal & Melt-Flow Rheology (`76%`)** — *Hotend (`hotend_thermal`)*
-  - **Current scores:** `76%` across all 13 hotend presets.
-  - **Target:** `84–88%`.
-  - **Files:** `src/printsim/thermal/hotend.py`, `src/printsim/thermal/rheology.py`, `src/printsim/schema/overrides.py`.
-  - **Recommended Agent:** `thermal-extrusion-engineer`.
-  - **What to do:** Calibrate Cross-WLF / Arrhenius melt push-force and max volumetric flow (`mm³/s`) curves against CNC Kitchen / community extruder push-force bench tests (PLA, ABS/ASA, PETG, PA12-CF) across Chube, Goliath, Rapido 2, Dragon HF, and Revo, and persist curves to PrintDB.
+- [x] **CAL-15 · Hotend Thermal & Cross-WLF Melt-Flow Rheology (`76%` → `86%`)** — *Hotend (`hotend_thermal`)*
+  - **New score:** **`86%`** across all hotend presets (`5.13%` MAE across 22 CNC Kitchen, Serdeczny 2020, E3D, Bondtech, Phaetus, Goliath & Chube benchmarks). Implemented 7-parameter Cross-WLF viscosity, Weissenberg–Rabinowitsch wall stress, 8-pt Gauss–Legendre cone, coupled Graetz + Osswald plug `push_force_curve`, and 3-channel CHT splitter; persisted 6 Cross-WLF polymer records to PrintDB.
 
 ---
 

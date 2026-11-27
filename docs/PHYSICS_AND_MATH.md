@@ -47,7 +47,7 @@ Every critical finding below was verified mathematically and numerically (via pa
 | ID | Status | File & Line | Bug Summary | Implemented Fix |
 | :--- | :---: | :--- | :--- | :--- |
 | **H1** | Fixed | `src/printsim/geometry/builder.py` | Voron 2.4 flying gantry (`belted_quad_z`) welded gantry corners straight to outer columns at fixed Z. | Decoupled `g_*` from `col_g_*` via 4× 6-DOF `z_joint_*` Z-belt/rail CBUSH springs, moved gantry dynamically with $Z(w_{\text{rel}})$, and anchored bed to twin base rails. |
-| **H2** | Fixed | `src/printsim/geometry/builder.py` | `bracing: corner_gussets` inserted a phantom Ø10 mm full-face rear diagonal rod. | Removed diagonal rod from `corner_gussets` (retaining corner joint stiffening), reserving diagonal rods for `rear_cross` / `full_truss`. |
+| **H2** | Fixed | `src/printsim/geometry/_builder_bracing.py` | Legacy `bracing: corner_gussets` used a scalar multiplier / phantom Ø10 mm diagonal rod. | Replaced legacy bracing options with modeled 3D CAD Craig–Bampton superelements (`cast_corner_brackets`, `cnc_corner_gussets`) + Huth T-slot bolt compliance and exterior bolted 25×5 mm Al 6061 flat-bar X-braces (`rear_flat_bar_x`, `side_flat_bar_x`, `rear_and_side_flat_bars`, `gussets_and_flat_bars`). |
 | **H3** | Fixed | `src/printsim/geometry/builder.py` | Delta modeled 3 single rods instead of 3 parallelogram pairs and ignored `delta_radius_mm`. | Modeled 6-rod parallelogram effector linkages honoring `delta_radius_mm` directly. |
 | **H4** | Fixed | `src/printsim/geometry/builder.py` | Cartesian bedslinger clamped Z-portal base nodes directly to ground (`fixed=True`). | Anchored Z-portal uprights to flexible base extrusions (leaving only corner feet grounded) and moved Y-bed dynamically with `v_rel`. |
 
@@ -73,6 +73,27 @@ Every critical finding below was verified mathematically and numerically (via pa
 - **Solid FEM & Craig–Bampton CMS (`solid_fem.py`, `tet_fem.py`, `superelement.py`)**: All 23 materials SPD, Tet10 cantilever `-0.9%` vs. Timoshenko, VPT left-inverse `2.1e-14`, RBE3 wrench conservation `1.5e-14`, Guyan static condensation exact (`6.6e-20 m`), CB modal parity `≤ 0.41%` across 5 modes, SIMP sensitivity vs. FD `6.9e-5`.
 
 ---
+
+## Sign-Off Verification (`engine/signoff.py`, 2026-11-27)
+
+`run_signoff_verification()` (`printsim signoff`, `POST /api/verify/signoff`, MCP `run_signoff_verification`, Studio **Sign-Off Verify**) layers four checks on top of `evaluate_printer`:
+
+1. **Mesh convergence** — fast 3×3 / 8×8 vs fine 8×8 / 16×16 MITC4 shell and bed-plate solves (`verify_printer_deep`).
+2. **Workspace sweep** — real K/M re-assembly at an XY grid (mid-Z) plus a centre-column Z sweep. The centre is always solved and always competes for the worst case. When the softest XY cell is not the centre it is re-solved at the bottom and top Z stations too (`workspace_fea.worst_xy_z_sweep`), so a corner-at-top-Z worst case is not missed. The delta builder ignores XY, so deltas solve the centre once, sweep Z at 0.1 / 0.5 / 0.8 (the range the builder accepts), and report `xy_position_modeled = false`.
+3. **Parametric uncertainty (90% band)** — every uncertain lumped-stiffness override group and the toolhead moving mass (`toolhead.total_mass_g`) is perturbed by $\pm 1\sigma$ and re-solved (central difference). The relative $1\sigma$ comes from the Model Confidence trust score $t$: $\sigma = \mathrm{clip}(0.45\,(1 - t/100),\ 0.02,\ 0.32)$; a user override halves it (3% floor, never above the un-overridden value); inputs at $t \ge 94\%$ are skipped. Responses are combined by root-sum-square and reported as $\pm 1.645\,\sigma_\text{tot}$ around the fine-mesh nominal. Each driver reports its share of resonance variance (`variance_share_pct`) and of nozzle–bed flex variance (`deflection_variance_share_pct`); drivers are ranked by the larger of the two.
+   - **Safe accel** is not differenced directly, because the recommendation is quantized (100 mm/s² steps, 0.25 Hz shaper grid) and jumps when the recommended shaper type flips. For a fixed shaper the acceleration that reaches the target smoothing scales with shaper frequency squared, so each perturbation is propagated through $a_\pm = \min\!\big(a_x (1 \pm r_x)^2,\ a_y (1 \pm r_y)^2\big)$ with $r$ the signed relative $1\sigma$ shaper-frequency response; when one axis limits, $\sigma_a / a = 2\,|r|$ exactly.
+   - **Coverage** — damping, panel fastener compliance, and model-form error are **not** propagated; the band is a lower bound on total prediction error (`uncertainty.coverage_note`). `max_uncertainty_groups` is optional; inputs it drops are listed in `uncertainty.skipped_groups` and the gate cannot pass.
+4. **Readiness gates** — the verdict is the worst of five gates:
+
+| Gate | Pass | Caution | Fail |
+| :--- | :--- | :--- | :--- |
+| Mesh convergence ($\Delta f_1$, $\Delta$flex) | ≤ 5%, ≤ 8% | ≤ 15%, ≤ 15% | above |
+| Workspace uniformity (larger of resonance drop and safe-accel drop vs centre) | ≤ 10% | ≤ 20% | above |
+| Parametric band on the limiting shaper frequency | ≤ 5% | ≤ 10% | above |
+| Structural safety (no collision, static SF) | SF ≥ 2.0 | SF ≥ 1.25 | collision or below |
+| Bed flatness & belt margin (rated working tension / peak tension) | ≤ 50 µm and SF ≥ 1.25 | ≤ 120 µm and SF ≥ 1.0 | above, or SF < 1.0 (the solver's `belt_overtension_risk` condition) |
+
+The 5% / 10% band limits equal ±10% / ±20% on safe accel, matching the workspace gate. The engine clamps the fine-mesh densities to 4–10 (shell) and 8–20 (bed) for every entry point. `printsim signoff --json` omits the full fine-mesh report (`--full-json` includes it); `--no-z-extremes` skips the Z stations. Verified by `tests/test_signoff.py` (closed-form $2r$ accel law, heavier-toolhead-lowers-resonance sanity check, even-grid centre, delta Z-only sweep, gate limits).
 
 ## VzBot 330 AWD Full Build: Gantry-on-Top-Frame Topology & Bolted Bed Spacers (2026-11-26)
 
