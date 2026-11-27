@@ -263,43 +263,47 @@ def hydrate_rail_catalog(
             carriage_catalog[key] = (d_b, r_y, n_rows, l1_c, c_c, l1_h, c_h, seal_drag)
 
 
+MATERIAL_PRINTDB_MAP: dict[str, str] = {
+    "aluminum_6063_t5": "materials/aluminum-6063-t5",
+    "aluminum_6061_t6": "materials/aluminum-6061-t6",
+    "aluminum_7075_t6": "materials/aluminum-7075-t6",
+    "mic6_aluminum": "materials/alcoa-mic6-cast-aluminum",
+    "atp5_aluminum": "materials/vista-atp5-cast-aluminum",
+    "carbon_fiber_3k_twill": "materials/carbon-fiber-3k-twill-tube",
+    "carbon_fiber_tube": "materials/carbon-fiber-ud-std-epoxy",
+    "carbon_fiber_high_tg": "materials/carbon-fiber-ud-high-tg",
+    "carbon_fiber_torsional_45": "materials/carbon-fiber-torsional-45-high-tg",
+    "carbon_fiber_m40j_hm": "materials/carbon-fiber-m40j-high-modulus",
+    "steel_4140": "materials/steel-4140",
+    "sheet_metal_steel": "materials/structural-sheet-steel-a36",
+    "stainless_304": "materials/stainless-steel-304",
+    "titanium_grade5": "materials/titanium-grade5-ti6al4v",
+    "brass_c360": "materials/brass-c360",
+    "copper_c110": "materials/copper-c110",
+    "hardened_steel": "materials/hardened-tool-steel",
+    "abs_printed": "materials/generic-abs",
+    "pa12_cf_printed": "materials/generic-pa12-cf15",
+    "pet_cf_printed": "materials/generic-pet-cf15-annealed",
+    "ppa_cf_printed": "materials/generic-ppa-cf-annealed",
+    "pps_cf_printed": "materials/generic-pps-cf-annealed",
+    "pc_pbt_gf_printed": "materials/treed-pc-pbt-gf",
+    "slm_aluminum": "materials/slm-alsi10mg-aluminum",
+    "slm_ti6al4v": "materials/slm-ti6al4v-titanium",
+    "slm_316l_steel": "materials/slm-316l-stainless",
+    "slm_17_4ph_steel": "materials/slm-17-4ph-stainless",
+    "slm_maraging_steel": "materials/slm-maraging-steel-ms1",
+    "slm_cucrzr": "materials/slm-cucrzr-copper",
+    "acrylic_pmma": "materials/acrylic-pmma-sheet",
+    "polycarbonate": "materials/polycarbonate-sheet",
+    "acm_dibond": "materials/acm-dibond-panel",
+    "aluminum_5052_sheet": "materials/aluminum-5052-h32",
+    "carbon_fiber_plate": "materials/carbon-fiber-3k-plate",
+}
+
+
 def hydrate_material_catalog(catalog: dict[str, Any]) -> None:
     """Overlay PrintDB structural material SI properties onto all matching ``MATERIAL_CATALOG`` entries."""
-    mapping: dict[str, str] = {
-        "aluminum_6063_t5": "materials/aluminum-6063-t5",
-        "aluminum_6061_t6": "materials/aluminum-6061-t6",
-        "aluminum_7075_t6": "materials/aluminum-7075-t6",
-        "mic6_aluminum": "materials/alcoa-mic6-cast-aluminum",
-        "atp5_aluminum": "materials/vista-atp5-cast-aluminum",
-        "carbon_fiber_3k_twill": "materials/carbon-fiber-3k-twill-tube",
-        "carbon_fiber_tube": "materials/carbon-fiber-ud-std-epoxy",
-        "carbon_fiber_high_tg": "materials/carbon-fiber-ud-high-tg",
-        "carbon_fiber_torsional_45": "materials/carbon-fiber-torsional-45-high-tg",
-        "carbon_fiber_m40j_hm": "materials/carbon-fiber-m40j-high-modulus",
-        "steel_4140": "materials/steel-4140",
-        "stainless_304": "materials/stainless-steel-304",
-        "titanium_grade5": "materials/titanium-grade5-ti6al4v",
-        "brass_c360": "materials/brass-c360",
-        "copper_c110": "materials/copper-c110",
-        "hardened_steel": "materials/hardened-tool-steel",
-        "abs_printed": "materials/generic-abs",
-        "pa12_cf_printed": "materials/generic-pa12-cf15",
-        "pet_cf_printed": "materials/generic-pet-cf15-annealed",
-        "ppa_cf_printed": "materials/generic-ppa-cf-annealed",
-        "pps_cf_printed": "materials/generic-pps-cf-annealed",
-        "pc_pbt_gf_printed": "materials/treed-pc-pbt-gf",
-        "slm_aluminum": "materials/slm-alsi10mg-aluminum",
-        "slm_ti6al4v": "materials/slm-ti6al4v-titanium",
-        "slm_316l_steel": "materials/slm-316l-stainless",
-        "slm_17_4ph_steel": "materials/slm-17-4ph-stainless",
-        "slm_maraging_steel": "materials/slm-maraging-steel-ms1",
-        "slm_cucrzr": "materials/slm-cucrzr-copper",
-        "acrylic_pmma": "materials/acrylic-pmma-sheet",
-        "polycarbonate": "materials/polycarbonate-sheet",
-        "acm_dibond": "materials/acm-dibond-panel",
-        "aluminum_5052_sheet": "materials/aluminum-5052-h32",
-        "carbon_fiber_plate": "materials/carbon-fiber-3k-plate",
-    }
+    mapping = MATERIAL_PRINTDB_MAP
     for key, rid in mapping.items():
         if key not in catalog:
             continue
@@ -326,16 +330,19 @@ def hydrate_material_catalog(catalog: dict[str, Any]) -> None:
                 mat.damping_ratio = float(si["damping_ratio"])
 
 
+FILAMENT_PRINTDB_MAP: dict[str, str] = {
+    "pla": "materials/generic-pla",
+    "petg": "materials/generic-petg",
+    "abs": "materials/generic-abs",
+    "asa": "materials/generic-asa",
+    "pa12_cf": "materials/generic-pa12-cf15",
+    "tpu_95a": "materials/generic-tpu-95a",
+}
+
+
 def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
     """Overlay PrintDB polymer density onto all matching ``FILAMENT_CATALOG`` entries."""
-    mapping: dict[str, str] = {
-        "pla": "materials/generic-pla",
-        "petg": "materials/generic-petg",
-        "abs": "materials/generic-abs",
-        "asa": "materials/generic-asa",
-        "pa12_cf": "materials/generic-pa12-cf15",
-        "tpu_95a": "materials/generic-tpu-95a",
-    }
+    mapping = FILAMENT_PRINTDB_MAP
     for key, rid in mapping.items():
         if key not in catalog:
             continue
@@ -349,43 +356,46 @@ def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
         # (e.g. PLA Tg=58 C, ABS/ASA k=0.18 W/mK) used by Graetz flow benchmarks.
 
 
+PROFILE_PRINTDB_MAP: dict[str, str] = {
+    "extrusion_1515": "components/profiles/makerbeam-1515-extrusion",
+    "extrusion_2020": "components/profiles/misumi-hfs5-2020",
+    "extrusion_2040": "components/profiles/misumi-hfs5-2040",
+    "extrusion_3030": "components/profiles/misumi-hfs6-3030",
+    "extrusion_4040": "components/profiles/misumi-hfs8-4040",
+    "extrusion_3060": "components/profiles/misumi-hfs6-3060",
+    "cnc_al_beam_20x20": "components/profiles/cnc-al-beam-20x20",
+    "cnc_al_monocoque_20x20": "components/profiles/cnc-al-monocoque-20x20",
+    "cnc_al_truss_voron24_lw": "components/profiles/cnc-al-truss-voron24-lw",
+    "cnc_al_fysetc_v0_15x15": "components/profiles/cnc-al-fysetc-v0-15x15",
+    "cf_tube_20x20x1": "components/profiles/cf-tube-20x20x1",
+    "cf_tube_20x20x1_5": "components/profiles/cf-tube-20x20x1-5",
+    "cf_tube_20x20_carbonara": "components/profiles/carbonara-20x20-cf-xbeam",
+    "cf_tube_20x20_carbonara_2_5": "components/profiles/carbonara-20x20x2-5-cf-xbeam",
+    "cf_tube_20x20x2": "components/profiles/cf-tube-20x20x2",
+    "cf_tube_30x20x2": "components/profiles/cf-tube-30x20x2",
+    "cf_tube_25x25x2": "components/profiles/cf-tube-25x25x2",
+    "ti_tube_20x20x1_2": "components/profiles/ti-tube-20x20x1-2",
+    "ti_tube_20x20x2": "components/profiles/ti-tube-20x20x2",
+    "al_tube_12x12x1": "components/profiles/al-tube-12x12x1",
+    "al_tube_20x20x2": "components/profiles/al-tube-20x20x2",
+    "al_tube_20x20x3": "components/profiles/al-tube-20x20x3",
+    "al_tube_30x30x3": "components/profiles/al-tube-30x30x3",
+    "steel_tube_25x25x2": "components/profiles/steel-tube-25x25x2",
+    "mgn9_rail": "components/profiles/profile-mgn9-rail",
+    "mgn12_rail": "components/profiles/profile-mgn12-rail",
+    "mgn12_hollow_rail": "components/profiles/profile-hollow-mgn12-rail",
+    "mgn15_rail": "components/profiles/profile-mgn15-rail",
+    "steel_rod_8mm": "components/profiles/profile-steel-rod-8mm",
+    "steel_rod_10mm": "components/profiles/profile-steel-rod-10mm",
+    "steel_rod_12mm": "components/profiles/profile-steel-rod-12mm",
+    "brace_rod_10mm": "components/profiles/profile-brace-rod-10mm",
+    "al_flat_bar_25x5": "components/profiles/al-flat-bar-25x5",
+}
+
+
 def hydrate_profile_catalog(catalog: dict[str, Any]) -> None:
     """Overlay PrintDB cross-section SI geometry onto all matching ``PROFILE_CATALOG`` entries."""
-    mapping: dict[str, str] = {
-        "extrusion_1515": "components/profiles/makerbeam-1515-extrusion",
-        "extrusion_2020": "components/profiles/misumi-hfs5-2020",
-        "extrusion_2040": "components/profiles/misumi-hfs5-2040",
-        "extrusion_3030": "components/profiles/misumi-hfs6-3030",
-        "extrusion_4040": "components/profiles/misumi-hfs8-4040",
-        "extrusion_3060": "components/profiles/misumi-hfs6-3060",
-        "cnc_al_beam_20x20": "components/profiles/cnc-al-beam-20x20",
-        "cnc_al_monocoque_20x20": "components/profiles/cnc-al-monocoque-20x20",
-        "cnc_al_truss_voron24_lw": "components/profiles/cnc-al-truss-voron24-lw",
-        "cnc_al_fysetc_v0_15x15": "components/profiles/cnc-al-fysetc-v0-15x15",
-        "cf_tube_20x20x1": "components/profiles/cf-tube-20x20x1",
-        "cf_tube_20x20x1_5": "components/profiles/cf-tube-20x20x1-5",
-        "cf_tube_20x20_carbonara": "components/profiles/carbonara-20x20-cf-xbeam",
-        "cf_tube_20x20_carbonara_2_5": "components/profiles/carbonara-20x20x2-5-cf-xbeam",
-        "cf_tube_20x20x2": "components/profiles/cf-tube-20x20x2",
-        "cf_tube_30x20x2": "components/profiles/cf-tube-30x20x2",
-        "cf_tube_25x25x2": "components/profiles/cf-tube-25x25x2",
-        "ti_tube_20x20x1_2": "components/profiles/ti-tube-20x20x1-2",
-        "ti_tube_20x20x2": "components/profiles/ti-tube-20x20x2",
-        "al_tube_12x12x1": "components/profiles/al-tube-12x12x1",
-        "al_tube_20x20x2": "components/profiles/al-tube-20x20x2",
-        "al_tube_20x20x3": "components/profiles/al-tube-20x20x3",
-        "al_tube_30x30x3": "components/profiles/al-tube-30x30x3",
-        "steel_tube_25x25x2": "components/profiles/steel-tube-25x25x2",
-        "mgn9_rail": "components/profiles/profile-mgn9-rail",
-        "mgn12_rail": "components/profiles/profile-mgn12-rail",
-        "mgn12_hollow_rail": "components/profiles/profile-hollow-mgn12-rail",
-        "mgn15_rail": "components/profiles/profile-mgn15-rail",
-        "steel_rod_8mm": "components/profiles/profile-steel-rod-8mm",
-        "steel_rod_10mm": "components/profiles/profile-steel-rod-10mm",
-        "steel_rod_12mm": "components/profiles/profile-steel-rod-12mm",
-        "brace_rod_10mm": "components/profiles/profile-brace-rod-10mm",
-        "al_flat_bar_25x5": "components/profiles/al-flat-bar-25x5",
-    }
+    mapping = PROFILE_PRINTDB_MAP
     for key, rid in mapping.items():
         if key not in catalog:
             continue

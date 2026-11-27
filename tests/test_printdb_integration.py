@@ -18,7 +18,13 @@ from printsim.schema import (
     get_printdb_status,
     is_printdb_available,
 )
-from printsim.schema.printdb_bridge import get_record_specs, get_reference_constant
+from printsim.schema.printdb_bridge import (
+    FILAMENT_PRINTDB_MAP,
+    MATERIAL_PRINTDB_MAP,
+    PROFILE_PRINTDB_MAP,
+    get_record_specs,
+    get_reference_constant,
+)
 from printsim.thermal.filaments import FILAMENT_CATALOG
 
 
@@ -106,3 +112,53 @@ def test_printdb_hydrated_catalogs_when_available() -> None:
     assert db.get("assemblies/gantries/carbonara-300-cf-x-beam-kit").specs["dressed_mass_g"] == pytest.approx(121.0)
     assert db.get("assemblies/toolheads/microwaved-bowden-chube-v1").specs["dressed_mass_g"] == pytest.approx(225.0)
     assert db.get("references/dynamics/empirical-printer-shaper-benchmarks").specs["voron_trident_300_x_mzv_hz"] == pytest.approx(52.5)
+
+
+def test_printdb_100pct_catalog_parity_and_no_unpromoted_local_drift() -> None:
+    """Enforce that every PrintSim catalog item is backed by a tracked community record in PrintDB/data/."""
+    if not is_printdb_available():
+        pytest.skip("PrintDB repository not accessible in this sandbox")
+
+    db = get_printdb()
+    assert db is not None
+
+    # 1. Every Material, Profile (excluding bare-rail sentinel), and Filament maps to a tracked community PrintDB record
+    for key in MATERIAL_CATALOG:
+        assert key in MATERIAL_PRINTDB_MAP, f"MATERIAL_CATALOG[{key!r}] is missing from MATERIAL_PRINTDB_MAP"
+        rec = db.get(MATERIAL_PRINTDB_MAP[key])
+        assert rec.origin == "community", f"PrintDB record {rec.id!r} is still in local/ — promote it to data/"
+
+    for key in PROFILE_CATALOG:
+        if key == "unsupported_rail":
+            continue
+        assert key in PROFILE_PRINTDB_MAP, f"PROFILE_CATALOG[{key!r}] is missing from PROFILE_PRINTDB_MAP"
+        rec = db.get(PROFILE_PRINTDB_MAP[key])
+        assert rec.origin == "community", f"PrintDB record {rec.id!r} is still in local/ — promote it to data/"
+
+    for key in FILAMENT_CATALOG:
+        assert key in FILAMENT_PRINTDB_MAP, f"FILAMENT_CATALOG[{key!r}] is missing from FILAMENT_PRINTDB_MAP"
+        rec = db.get(FILAMENT_PRINTDB_MAP[key])
+        assert rec.origin == "community", f"PrintDB record {rec.id!r} is still in local/ — promote it to data/"
+
+    # 2. Every stepper, belt, hotend, z-drive, and bed mount resolves to a tracked community PrintDB record
+    for cat_name, cat in (
+        ("STEPPER_CATALOG", STEPPER_CATALOG),
+        ("BELT_CATALOG", BELT_CATALOG),
+        ("HOTEND_CATALOG", HOTEND_CATALOG),
+        ("Z_DRIVE_MECHANISM_CATALOG", Z_DRIVE_MECHANISM_CATALOG),
+        ("BED_MOUNT_CATALOG", BED_MOUNT_CATALOG),
+    ):
+        for key, entry in cat.items():
+            rid = entry.get("printdb_id")
+            assert rid, f"{cat_name}[{key!r}] missing printdb_id"
+            rec = db.get(rid)
+            assert rec.origin == "community", f"PrintDB record {rid!r} is still in local/ — promote it to data/"
+
+    # 3. No unpromoted records left stranded in PrintDB/local/ (ignoring local/inbox/)
+    from printdb.loader import discover_record_files  # type: ignore[import-not-found]
+
+    stranded = [p.relative_to(db.paths.local_dir).as_posix() for p in discover_record_files(db.paths.local_dir)]
+    assert stranded == [], (
+        f"Found unpromoted records in PrintDB/local/: {stranded}. "
+        "Run printdb_promote(all_local=True) or `printdb promote` so they are tracked in PrintDB/data/."
+    )
