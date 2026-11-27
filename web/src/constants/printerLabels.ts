@@ -1,20 +1,37 @@
 import {
   AwdSyncMode,
+  BracingType,
   FrontBraceType,
   InputShaperType,
   PrinterSpecData,
   TopBraceType,
 } from "../types";
 
-export const BRACING_LABELS: Record<PrinterSpecData["frame"]["bracing"], string> = {
+export const BRACING_LABELS: Record<BracingType, string> = {
   none: "None (Open Frame)",
-  corner_gussets: "Corner Gussets",
-  top_cross: "Top Frame X-Brace",
-  rear_cross: "Rear X-Brace + Top",
-  side_cross: "Side X-Braces (Left/Right)",
-  rear_and_sides: "Rear + Side X-Braces (Open Top)",
-  full_truss: "Full 3D Truss (All Faces)",
+  cast_corner_brackets: "Cast Al Corner Brackets (HBLFSN5/6/8 — CAD)",
+  cnc_corner_gussets: "CNC Al 5-Hole Corner Gussets (5–6mm — CAD)",
+  rear_flat_bar_x: "Bolted Rear Flat-Bar X-Brace (25×5mm Al)",
+  side_flat_bar_x: "Bolted Side Flat-Bar X-Braces (25×5mm Al)",
+  rear_and_side_flat_bars: "Bolted Rear + Side Flat-Bar X-Braces (25×5mm)",
+  gussets_and_flat_bars: "CNC Corner Gussets + Rear/Side Flat-Bar X-Braces",
 };
+
+const LEGACY_BRACING_MAP: Record<string, BracingType> = {
+  corner_gussets: "cnc_corner_gussets",
+  top_cross: "cnc_corner_gussets",
+  rear_cross: "rear_flat_bar_x",
+  side_cross: "side_flat_bar_x",
+  rear_and_sides: "rear_and_side_flat_bars",
+  full_truss: "gussets_and_flat_bars",
+};
+
+export function normalizeBracingType(raw: string | undefined | null): BracingType {
+  if (!raw) return "cnc_corner_gussets";
+  const k = raw.trim().toLowerCase();
+  if (k in BRACING_LABELS) return k as BracingType;
+  return LEGACY_BRACING_MAP[k] ?? "cnc_corner_gussets";
+}
 
 export const TOP_BRACE_LABELS: Record<TopBraceType, string> = {
   none: "None (Open Top)",

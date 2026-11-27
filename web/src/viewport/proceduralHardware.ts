@@ -1748,23 +1748,24 @@ export function buildAssemblyHardwareMeshes({
         const spanY = (fd + 2 * upHalfYMm) * SCALE;
         const spanZ = (fh + 2 * frameHalfZMm) * SCALE;
 
-        const isTransparentSheet =
-          panels.material_id === "acrylic_pmma" || panels.material_id === "polycarbonate";
         const isBoltedStructural = panels.mounting === "bolted_structural";
-
-        const panelColor = new THREE.Color(
-          panels.color_hex || (isTransparentSheet ? "#93c5fd" : "#475569")
-        );
         const punchPanelScale = toolheadPunchIn ? 0.14 : 1.0;
-        const panelMat = new THREE.MeshStandardMaterial({
-          color: panelColor,
-          transparent: true,
-          opacity: (isTransparentSheet ? 0.16 : 0.32) * punchPanelScale,
-          depthWrite: false,
-          roughness: isTransparentSheet ? 0.14 : 0.38,
-          metalness: isTransparentSheet ? 0.1 : 0.42,
-          side: THREE.DoubleSide,
-        });
+
+        const resolveFaceVisual = (bay: "left" | "right" | "rear" | "top") => {
+          const face = panels.faces?.[bay];
+          const matId = face?.material_id ?? panels.material_id;
+          const matName = face?.material_name ?? panels.material_name;
+          const thickMm = face?.thickness_mm ?? panels.thickness_mm ?? 3;
+          const isTransparent = matId === "acrylic_pmma" || matId === "polycarbonate";
+          const colorHex = face?.color_hex ?? panels.color_hex ?? (isTransparent ? "#93c5fd" : "#475569");
+          const tFaceScene = Math.max(thickMm * SCALE, 0.024);
+          return { matId, matName, thickMm, isTransparent, colorHex, tFaceScene };
+        };
+
+        const leftVis = resolveFaceVisual("left");
+        const rightVis = resolveFaceVisual("right");
+        const rearVis = resolveFaceVisual("rear");
+        const topVis = resolveFaceVisual("top");
 
         const edgeMat = new THREE.LineBasicMaterial({
           color: isBoltedStructural ? 0x38bdf8 : 0x94a3b8,
@@ -1775,9 +1776,11 @@ export function buildAssemblyHardwareMeshes({
         const topPanelInstalled =
           panels.top_panel !== false && sim.spec.frame.top_panel !== false;
 
-        const sidePanelGeo = new THREE.BoxGeometry(tScene, spanZ, spanY);
-        const rearPanelGeo = new THREE.BoxGeometry(spanX, spanZ, tScene);
-        const sideEdgesGeo = new THREE.EdgesGeometry(sidePanelGeo);
+        const leftPanelGeo = new THREE.BoxGeometry(leftVis.tFaceScene, spanZ, spanY);
+        const rightPanelGeo = new THREE.BoxGeometry(rightVis.tFaceScene, spanZ, spanY);
+        const rearPanelGeo = new THREE.BoxGeometry(spanX, spanZ, rearVis.tFaceScene);
+        const leftEdgesGeo = new THREE.EdgesGeometry(leftPanelGeo);
+        const rightEdgesGeo = new THREE.EdgesGeometry(rightPanelGeo);
         const rearEdgesGeo = new THREE.EdgesGeometry(rearPanelGeo);
 
         // Mount flush on the OUTSIDE face of Left (-X), Right (+X), Rear (+Y CAD = -Z Three.js), and Top (+Z CAD = +Y Three.js) extrusions
@@ -1786,30 +1789,31 @@ export function buildAssemblyHardwareMeshes({
         const rearCenter = toThree([fw * 0.5, fd, fh * 0.5], cx, cy);
         const topCenter = toThree([fw * 0.5, fd * 0.5, fh], cx, cy);
 
-        const leftPos = leftCenter.clone().add(new THREE.Vector3(-(extHalfX + tScene * 0.5), 0, 0));
-        const rightPos = rightCenter.clone().add(new THREE.Vector3(extHalfX + tScene * 0.5, 0, 0));
-        const rearPos = rearCenter.clone().add(new THREE.Vector3(0, 0, -(extHalfY + tScene * 0.5)));
-        const topPos = topCenter.clone().add(new THREE.Vector3(0, extHalfZ + tScene * 0.5, 0));
+        const leftPos = leftCenter.clone().add(new THREE.Vector3(-(extHalfX + leftVis.tFaceScene * 0.5), 0, 0));
+        const rightPos = rightCenter.clone().add(new THREE.Vector3(extHalfX + rightVis.tFaceScene * 0.5, 0, 0));
+        const rearPos = rearCenter.clone().add(new THREE.Vector3(0, 0, -(extHalfY + rearVis.tFaceScene * 0.5)));
+        const topPos = topCenter.clone().add(new THREE.Vector3(0, extHalfZ + topVis.tFaceScene * 0.5, 0));
 
-        const leftBoltX = leftPos.x - tScene * 0.55;
-        const rightBoltX = rightPos.x + tScene * 0.55;
-        const rearBoltZ = rearPos.z - tScene * 0.55;
-        const topBoltY = topPos.y + tScene * 0.55;
+        const leftBoltX = leftPos.x - leftVis.tFaceScene * 0.55;
+        const rightBoltX = rightPos.x + rightVis.tFaceScene * 0.55;
+        const rearBoltZ = rearPos.z - rearVis.tFaceScene * 0.55;
+        const topBoltY = topPos.y + topVis.tFaceScene * 0.55;
 
         const panelSpecs: Array<{
-          bay: string;
+          bay: "left" | "right" | "rear" | "top";
           label: string;
           geo: THREE.BoxGeometry;
           edges: THREE.EdgesGeometry;
           pos: THREE.Vector3;
+          vis: ReturnType<typeof resolveFaceVisual>;
           opacityMul?: number;
         }> = [
-          { bay: "left", label: "Left Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: leftPos },
-          { bay: "right", label: "Right Enclosure Panel", geo: sidePanelGeo, edges: sideEdgesGeo, pos: rightPos },
-          { bay: "rear", label: "Rear Enclosure Panel", geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos },
+          { bay: "left", label: "Left Enclosure Panel", geo: leftPanelGeo, edges: leftEdgesGeo, pos: leftPos, vis: leftVis },
+          { bay: "right", label: "Right Enclosure Panel", geo: rightPanelGeo, edges: rightEdgesGeo, pos: rightPos, vis: rightVis },
+          { bay: "rear", label: "Rear Enclosure Panel", geo: rearPanelGeo, edges: rearEdgesGeo, pos: rearPos, vis: rearVis },
         ];
         if (topPanelInstalled) {
-          const topPanelGeo = new THREE.BoxGeometry(spanX, tScene, spanY);
+          const topPanelGeo = new THREE.BoxGeometry(spanX, topVis.tFaceScene, spanY);
           const topEdgesGeo = new THREE.EdgesGeometry(topPanelGeo);
           panelSpecs.push({
             bay: "top",
@@ -1817,13 +1821,24 @@ export function buildAssemblyHardwareMeshes({
             geo: topPanelGeo,
             edges: topEdgesGeo,
             pos: topPos,
+            vis: topVis,
             opacityMul: 0.78,
           });
         }
 
         for (const ps of panelSpecs) {
-          const wallMat = panelMat.clone();
-          if (ps.opacityMul != null) wallMat.opacity *= ps.opacityMul;
+          const wallMat = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(ps.vis.colorHex),
+            transparent: true,
+            opacity:
+              (ps.vis.isTransparent ? 0.16 : 0.32) *
+              punchPanelScale *
+              (ps.opacityMul ?? 1.0),
+            depthWrite: false,
+            roughness: ps.vis.isTransparent ? 0.14 : 0.38,
+            metalness: ps.vis.isTransparent ? 0.1 : 0.42,
+            side: THREE.DoubleSide,
+          });
           const mesh = new THREE.Mesh(ps.geo, wallMat);
           mesh.position.copy(ps.pos);
           mesh.renderOrder = 2;
@@ -1837,8 +1852,8 @@ export function buildAssemblyHardwareMeshes({
               subsystem: "frame",
               partGroupId: bayGrp.id,
               role: "panel",
-              material: panels.material_name,
-              profile: `${panels.thickness_mm}mm (${panels.mounting.replace(/_/g, " ")})`,
+              material: ps.vis.matName,
+              profile: `${ps.vis.thickMm}mm (${panels.mounting.replace(/_/g, " ")})`,
               complianceSharePct: baySens?.compliance_share_pct ?? bayStiff?.compliance_share_pct,
               heatScore: baySens ? getLensScore(baySens, adjointLens) : undefined,
               estHzGain: bayStiff?.est_hz_gain,
@@ -1853,7 +1868,6 @@ export function buildAssemblyHardwareMeshes({
           outline.position.copy(ps.pos);
           group.add(outline);
         }
-        panelMat.dispose();
 
         // Metallic perimeter bolt heads aligned directly on the extrusion T-slot centerlines
         if (isBoltedStructural && !toolheadPunchIn) {

@@ -2208,7 +2208,7 @@ export default function App() {
     setDeepVerifyLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/verify/deep", {
+      const res = await fetch("/api/verify/signoff", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2218,7 +2218,7 @@ export default function App() {
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(errBody.detail || "Deep Verify failed");
+        throw new Error(errBody.detail || "Sign-Off Verification failed");
       }
       const data: DeepVerifyResponse = await res.json();
       if (reqId !== deepVerifyReqIdRef.current) return;
@@ -2592,15 +2592,15 @@ export default function App() {
                     setOpenMenu(null);
                     void runDeepVerify();
                   }}
-                  title="Run fine-mesh MITC4 shell convergence verification & inspect 3D panel stress/drum modes"
+                  title="Run full Sign-Off Verification: fine-mesh 8×8/16×16 convergence, true multi-position 3D FEA workspace sweep, and 90% parametric uncertainty bands"
                 >
                   <span className="topbar-menu-item-title">
-                    {deepVerifyLoading ? "Verifying..." : "Deep Verify (Fine Shell Mesh)"}
+                    {deepVerifyLoading ? "Running Sign-Off..." : "Sign-Off Verify (Full FEA)"}
                   </span>
                   <span className="topbar-menu-item-sub">
                     {deepVerifyResult
-                      ? "Verified ✓ — Fine MITC4 shell convergence"
-                      : "Fine-mesh MITC4 shell convergence check"}
+                      ? `Verified ✓ — ${deepVerifyResult.verdict ? deepVerifyResult.verdict.toUpperCase() : "Fine mesh"} (${deepVerifyResult.total_fea_solves ?? 2} FEA solves)`
+                      : "Fine mesh + 3D workspace sweep + 90% bands"}
                   </span>
                 </button>
               </div>

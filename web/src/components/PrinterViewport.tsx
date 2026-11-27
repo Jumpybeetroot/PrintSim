@@ -175,19 +175,27 @@ export const PrinterViewport: React.FC<Props> = ({
 
   const hotendVisualGlbUrl = sim?.geometry?.toolhead_structure?.hotend_visual_glb_url ?? null;
   const toolheadVisualGlbUrl = sim?.geometry?.toolhead_structure?.toolhead_visual_glb_url ?? null;
+  const xBeamVisualGlbUrl = sim?.geometry?.x_beam_visual?.visual_glb_url ?? null;
   const gantryCadAssets = sim?.geometry?.gantry_brackets?.cad_assets;
+  const frameBraceVisuals = sim?.geometry?.frame_bracing?.visuals;
 
   const cadGlbUrlsToLoad = useMemo(() => {
     const urls = new Set<string>();
     if (hotendVisualGlbUrl) urls.add(hotendVisualGlbUrl);
     if (toolheadVisualGlbUrl) urls.add(toolheadVisualGlbUrl);
+    if (xBeamVisualGlbUrl) urls.add(xBeamVisualGlbUrl);
     if (gantryCadAssets) {
       for (const asset of Object.values(gantryCadAssets)) {
         if (asset?.visual_glb_url) urls.add(asset.visual_glb_url);
       }
     }
+    if (frameBraceVisuals) {
+      for (const item of frameBraceVisuals) {
+        if (item?.visual_glb_url) urls.add(item.visual_glb_url);
+      }
+    }
     return Array.from(urls).sort();
-  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl, gantryCadAssets]);
+  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl, xBeamVisualGlbUrl, gantryCadAssets, frameBraceVisuals]);
 
   const cadGlbUrlsKey = cadGlbUrlsToLoad.join("|");
 
@@ -2114,7 +2122,9 @@ export const PrinterViewport: React.FC<Props> = ({
         isBedMember &&
         (m.id.startsWith("bed_subframe_") || m.id.startsWith("bed_arm_"));
       const isOpenBraceBar =
-        m.id.startsWith("brace_top_open_") || m.id.startsWith("brace_front_open_");
+        m.id.startsWith("brace_top_open_") ||
+        m.id.startsWith("brace_front_open_") ||
+        m.id.startsWith("brace_flat_");
       const rawW = Math.max(
         m.width_mm * SCALE,
         isOpenBraceBar ? 0.045 : isBedMember ? 0.05 : 0.06
@@ -2338,52 +2348,95 @@ export const PrinterViewport: React.FC<Props> = ({
           (viewMode === "fea_stress" ? deformedPos[nid] || basePos[nid] : basePos[nid]).clone()
         );
 
-        const geo = createContinuousBeamGeometry(
-          controlPts,
-          controlValues,
-          w,
-          h,
-          segmentsPerSpan,
-          useVertexColors,
-          undeformedAxis,
-          fixedStart,
-          fixedEnd
-        );
-        const mesh = new THREE.Mesh(geo, mat);
-        if (viewMode === "modal") {
-          mesh.frustumCulled = false;
-          stateRef.current.modalContinuousBeams.push({
-            geometry: geo,
-            nodeIds: chain.nodeIds,
+        const isPrimaryXBeamChain =
+          m.role === "gantry" &&
+          (m.id.startsWith("x_gantry") || m.id.startsWith("x_beam")) &&
+          !m.id.includes("rail") &&
+          !m.id.includes("backer");
+        const xBeamVis = isPrimaryXBeamChain ? (geom.x_beam_visual ?? null) : null;
+        const cachedXBeamGlb =
+          viewMode === "assembly" && xBeamVis?.visual_glb_url
+            ? (cadGlbResolvedCache.get(xBeamVis.visual_glb_url) ?? null)
+            : null;
+
+        if (cachedXBeamGlb && xBeamVis) {
+          const spanThree = baseFirst.distanceTo(baseLast);
+          const nativeLenThree = Math.max(xBeamVis.length_mm * SCALE, 1e-4);
+          const scaleX = (spanThree / nativeLenThree) * CAD_M_TO_THREE;
+          const beamClone = cloneCachedCadGlb(cachedXBeamGlb, {
+            isHeatMode: false,
+            heatColor: matColor,
+            heatEmissive: sensEmissive,
+            heatEmissiveIntensity: 0,
+            inspectInfo: chainInspectInfo,
+            tagInspectable,
+          });
+          // GLB is in PrintSim CAD coords (+X span, -Y front, +Z up); rotate -90° about X for Three.js Y-up
+          beamClone.rotation.x = -Math.PI * 0.5;
+          beamClone.scale.set(scaleX, CAD_M_TO_THREE, CAD_M_TO_THREE);
+          const wrapper = new THREE.Group();
+          wrapper.name = `cad_x_beam_${xBeamVis.asset_id}`;
+          wrapper.add(beamClone);
+          const midPt = new THREE.Vector3().addVectors(baseFirst, baseLast).multiplyScalar(0.5);
+          wrapper.position.copy(midPt);
+          const dir = new THREE.Vector3().subVectors(baseLast, baseFirst);
+          if (dir.lengthSq() > 1e-10) {
+            dir.normalize();
+            const qAlign = new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(1, 0, 0),
+              dir
+            );
+            wrapper.quaternion.copy(qAlign);
+          }
+          group.add(wrapper);
+        } else {
+          const geo = createContinuousBeamGeometry(
             controlPts,
             controlValues,
-            width: w,
-            height: h,
+            w,
+            h,
             segmentsPerSpan,
+            useVertexColors,
             undeformedAxis,
             fixedStart,
-            fixedEnd,
-          });
-        }
-        tagInspectable(mesh, chainInspectInfo);
-        group.add(mesh);
+            fixedEnd
+          );
+          const mesh = new THREE.Mesh(geo, mat);
+          if (viewMode === "modal") {
+            mesh.frustumCulled = false;
+            stateRef.current.modalContinuousBeams.push({
+              geometry: geo,
+              nodeIds: chain.nodeIds,
+              controlPts,
+              controlValues,
+              width: w,
+              height: h,
+              segmentsPerSpan,
+              undeformedAxis,
+              fixedStart,
+              fixedEnd,
+            });
+          }
+          tagInspectable(mesh, chainInspectInfo);
+          group.add(mesh);
 
-        if (viewMode === "assembly" && isOpenBraceBar && !toolheadPunchIn) {
-          const barEdgesGeo = new THREE.EdgesGeometry(geo, 28);
-          const barEdgesMat = new THREE.LineBasicMaterial({
-            color: 0x64748b,
-            transparent: true,
-            opacity: memberOpacity * 0.7,
-          });
-          group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
-        } else if (viewMode === "assembly" && isCarbonBeam && m.role === "gantry") {
-          const cfEdgesGeo = new THREE.EdgesGeometry(geo, 28);
-          const cfEdgesMat = new THREE.LineBasicMaterial({
-            color: 0x475569,
-            transparent: true,
-            opacity: memberOpacity * 0.55,
-          });
-          group.add(new THREE.LineSegments(cfEdgesGeo, cfEdgesMat));
+          if (viewMode === "assembly" && isOpenBraceBar && !toolheadPunchIn) {
+            const barEdgesGeo = new THREE.EdgesGeometry(geo, 28);
+            const barEdgesMat = new THREE.LineBasicMaterial({
+              color: 0x64748b,
+              transparent: true,
+              opacity: memberOpacity * 0.7,
+            });
+            group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
+          } else if (viewMode === "assembly" && isCarbonBeam && m.role === "gantry") {
+            const cfEdgesGeo = new THREE.EdgesGeometry(geo, 28);
+            const cfEdgesMat = new THREE.LineBasicMaterial({
+              color: 0x475569,
+              transparent: true,
+              opacity: memberOpacity * 0.55,
+            });
+            group.add(new THREE.LineSegments(cfEdgesGeo, cfEdgesMat));
+          }
         }
 
         // Continuous T-slot core accent strip on filled stationary extrusions (Assembly mode only)
@@ -2776,7 +2829,11 @@ export const PrinterViewport: React.FC<Props> = ({
                 ? (geom.top_brace?.material_name ?? "6061-T6 Aluminum")
                 : isFrontBraceBay
                   ? (geom.front_brace?.material_name ?? "6061-T6 Aluminum")
-                  : (geom.panels?.material_name ?? sim.spec.frame.panel_material),
+                  : (geom.panels?.faces?.[
+                      bayName.replace(/_(low|top)$/, "") as "rear" | "left" | "right" | "top"
+                    ]?.material_name ??
+                    geom.panels?.material_name ??
+                    sim.spec.frame.panel_material),
             profile: isBackboneBay
               ? `${(panels[0]?.thickness_mm ?? geom.trident_backbone?.thickness_mm ?? 3.18).toFixed(2)}mm perimeter steel plate (MITC4)`
               : isTopBraceBay
@@ -2874,6 +2931,60 @@ export const PrinterViewport: React.FC<Props> = ({
       });
       if (viewMode === "modal") {
         stateRef.current.modalCadGantryItems = cadGantryRes.modalItems;
+      }
+    }
+
+    // Modeled 3D CAD corner brackets & CNC gusset plates (baked Craig-Bampton superelements)
+    const fbVisuals = geom.frame_bracing?.visuals ?? [];
+    if (fbVisuals.length > 0 && !toolheadPunchIn) {
+      const fbGroup = new THREE.Group();
+      fbGroup.name = "cad_frame_braces";
+      const isHeatMode = viewMode === "fea_stress" || viewMode === "sensitivity";
+      const heatColor = new THREE.Color(viewMode === "sensitivity" ? "#3b82f6" : "#4a7ab5");
+      const heatEmissive = new THREE.Color("#000000");
+      for (const item of fbVisuals) {
+        const cached = cadGlbResolvedCache.get(item.visual_glb_url);
+        if (!cached) continue;
+        const label =
+          item.kind === "cast_corner_bracket"
+            ? "Cast Al Corner Bracket (CAD)"
+            : "CNC Al 5-Hole Corner Gusset (CAD)";
+        const inspectInfo: InspectedPartInfo = {
+          key: item.id,
+          name: label,
+          subsystem: "frame",
+          partGroupId: "frame_bracing",
+          role: "brace",
+          material: "Aluminum 6061-T6 (3D CAD Superelement)",
+          profile: item.asset_id,
+          actionHint:
+            "Modeled as a 3D Tet4 Craig-Bampton superelement in series with Huth T-slot bolt compliance.",
+        };
+        const clone = cloneCachedCadGlb(cached, {
+          isHeatMode,
+          heatColor,
+          heatEmissive,
+          heatEmissiveIntensity: 0.0,
+          inspectInfo,
+          tagInspectable,
+        });
+        clone.scale.setScalar(CAD_M_TO_THREE);
+        const exT = new THREE.Vector3(item.basis_x[0], item.basis_x[2], -item.basis_x[1]).normalize();
+        const eyT = new THREE.Vector3(item.basis_y[0], item.basis_y[2], -item.basis_y[1]).normalize();
+        const ezT = new THREE.Vector3(item.basis_z[0], item.basis_z[2], -item.basis_z[1]).normalize();
+        const basisMat = new THREE.Matrix4().makeBasis(exT, eyT, ezT);
+        clone.quaternion.setFromRotationMatrix(basisMat);
+        clone.position.copy(
+          toThree(
+            [item.origin_m[0] * 1000, item.origin_m[1] * 1000, item.origin_m[2] * 1000],
+            cx,
+            cy
+          )
+        );
+        fbGroup.add(clone);
+      }
+      if (fbGroup.children.length > 0) {
+        group.add(fbGroup);
       }
     }
 
@@ -3840,7 +3951,11 @@ export const PrinterViewport: React.FC<Props> = ({
               ? ([0, -12.76, 27.5] as [number, number, number])
               : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "el_fuego"
                 ? ([-0.322, -19.932, 2.28] as [number, number, number])
-                : isStealthBurnerToolhead
+                : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "trinity_1_6_dav"
+                  ? ([0, -9.74, -21.6] as [number, number, number])
+                  : toolheadGlbLoaded && (sim.spec.toolhead.preset_id || "").toLowerCase() === "trinity_1_6_chube"
+                    ? ([0, -9.74, -33.98] as [number, number, number])
+                    : isStealthBurnerToolhead
                   ? ([0.2, -28.9, -1.9] as [number, number, number])
                   : toolheadGlbLoaded && thStruct?.toolhead_visual_ports_mm?.port1_mm
                     ? ([...thStruct.toolhead_visual_ports_mm.port1_mm] as [number, number, number])

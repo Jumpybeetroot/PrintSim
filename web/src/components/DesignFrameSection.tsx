@@ -6,6 +6,7 @@ import {
   FRONT_BRACE_LABELS,
   TOP_BRACE_LABELS,
   Z_DRIVE_LABELS,
+  normalizeBracingType,
 } from "../constants/printerLabels";
 import {
   CatalogResponse,
@@ -470,6 +471,12 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
   const topPanelInstalled = spec.frame.top_panel ?? true;
   const tridentBackboneEnabled = Boolean(spec.frame.trident_backbone);
   const simBackbone = sim?.geometry.trident_backbone ?? null;
+  const currentBracing = normalizeBracingType(spec.frame.bracing);
+  const simFrameBracing =
+    sim?.geometry.frame_bracing && sim.geometry.frame_bracing.type === currentBracing
+      ? sim.geometry.frame_bracing
+      : null;
+  const frameBracingCatalogItem = catalog.frame_bracing?.find((b) => b.id === currentBracing);
   const currentTopBrace: TopBraceType = spec.frame.top_brace ?? "none";
   const currentFrontBrace: FrontBraceType = spec.frame.front_brace ?? "none";
   const simTopBrace =
@@ -1201,27 +1208,60 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
       )}
 
       <div className="field-row">
-        <label htmlFor="df-bracing-14">Bracing</label>
+        <label htmlFor="df-bracing-14">
+          <span>Frame Bracing</span>
+          {currentBracing !== "none" && (
+            <span style={{ color: "var(--accent)", fontWeight: 500 }}>
+              {frameBracingCatalogItem?.short_label ?? BRACING_LABELS[currentBracing]}
+            </span>
+          )}
+        </label>
         <select id="df-bracing-14"
-          value={spec.frame.bracing}
+          value={currentBracing}
           onChange={(e) => {
-            const nextVal = e.target.value as PrinterSpecData["frame"]["bracing"];
+            const nextVal = normalizeBracingType(e.target.value);
             update(
               (d) => {
                 d.frame.bracing = nextVal;
               },
-              `Bracing: ${BRACING_LABELS[spec.frame.bracing]} → ${BRACING_LABELS[nextVal]}`
+              `Frame Bracing: ${BRACING_LABELS[currentBracing]} → ${BRACING_LABELS[nextVal]}`
             );
           }}
         >
-          <option value="none">None (Open Frame)</option>
-          <option value="corner_gussets">Corner Gussets</option>
-          <option value="top_cross">Top Frame X-Brace</option>
-          <option value="rear_cross">Rear X-Brace + Top</option>
-          <option value="side_cross">Side X-Braces (Left/Right)</option>
-          <option value="rear_and_sides">Rear + Side X-Braces (Open Top)</option>
-          <option value="full_truss">Full 3D Truss (All Faces)</option>
+          <option value="none">{BRACING_LABELS.none}</option>
+          <option value="cast_corner_brackets">{BRACING_LABELS.cast_corner_brackets}</option>
+          <option value="cnc_corner_gussets">{BRACING_LABELS.cnc_corner_gussets}</option>
+          <option value="rear_flat_bar_x">{BRACING_LABELS.rear_flat_bar_x}</option>
+          <option value="side_flat_bar_x">{BRACING_LABELS.side_flat_bar_x}</option>
+          <option value="rear_and_side_flat_bars">{BRACING_LABELS.rear_and_side_flat_bars}</option>
+          <option value="gussets_and_flat_bars">{BRACING_LABELS.gussets_and_flat_bars}</option>
         </select>
+        {currentBracing !== "none" && (
+          <div className="inline-readout-strip">
+            {simFrameBracing && simFrameBracing.cad_count > 0 && (
+              <>
+                <strong>{simFrameBracing.cad_count}× 3D CAD</strong>
+                <span>•</span>
+              </>
+            )}
+            {simFrameBracing && simFrameBracing.flat_bar_mass_kg > 0 && (
+              <>
+                <strong>25×5mm Al bars</strong>
+                <span>•</span>
+              </>
+            )}
+            <span>
+              +{(simFrameBracing?.total_mass_kg ?? 0.5).toFixed(2)} kg
+            </span>
+            <span>•</span>
+            <span>
+              ~${Math.round(simFrameBracing?.cost_usd ?? frameBracingCatalogItem?.cost_usd ?? 35)}
+            </span>
+          </div>
+        )}
+        {showHints && frameBracingCatalogItem?.description && currentBracing !== "none" && (
+          <div className="hint-line">{frameBracingCatalogItem.description}</div>
+        )}
       </div>
 
       {spec.architecture === "corexy" && (
@@ -1770,104 +1810,238 @@ export const DesignFrameSection: React.FC<DesignFrameSectionProps> = ({
           </select>
         </div>
 
-        {panelsEnabled && (
-          <div className="field-grid-2 wide-first">
-            <div className="field-row">
-              <label htmlFor="df-panel-material-20">Panel Material</label>
-              <select id="df-panel-material-20"
-                value={currentPanelMaterial}
-                onChange={(e) => {
-                  const nextMat = e.target.value;
-                  const prevDesc = formatPanelSummary(spec.frame);
-                  const nextDesc = formatPanelSummary({
-                    ...spec.frame,
-                    panel_material: nextMat,
-                  });
-                  update(
-                    (d) => {
-                      d.frame.panel_material = nextMat;
-                    },
-                    `Panels: ${prevDesc} → ${nextDesc}`
-                  );
-                }}
-              >
-                {!PANEL_MATERIALS.some((pm) => pm.id === currentPanelMaterial) && (
-                  <option value={currentPanelMaterial}>
-                    {materialLabel(currentPanelMaterial)} (Custom)
-                  </option>
-                )}
-                {PANEL_MATERIALS.map((pm) => (
-                  <option key={pm.id} value={pm.id}>
-                    {pm.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field-row">
-              <label htmlFor="df-thickness-mm-21">Thickness (mm)</label>
-              <select id="df-thickness-mm-21"
-                value={currentPanelThickness}
-                onChange={(e) => {
-                  const nextThick = Number(e.target.value);
-                  if (!Number.isFinite(nextThick) || nextThick <= 0) return;
-                  const prevDesc = formatPanelSummary(spec.frame);
-                  const nextDesc = formatPanelSummary({
-                    ...spec.frame,
-                    panel_thickness_mm: nextThick,
-                  });
-                  update(
-                    (d) => {
-                      d.frame.panel_thickness_mm = nextThick;
-                    },
-                    `Panels: ${prevDesc} → ${nextDesc}`
-                  );
-                }}
-              >
-                {thicknessChoices.map((mm) => (
-                  <option key={mm} value={mm}>
-                    {mm} mm
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
+        {panelsEnabled &&
+          (() => {
+            type PanelFace = "rear" | "left" | "right" | "top";
+            const overrides = spec.frame.panel_overrides ?? {};
+            const mixedPanelsEnabled =
+              spec.architecture === "corexy" &&
+              (Boolean(spec.frame.side_panel_material) ||
+                Object.values(overrides).some(
+                  (ov) => Boolean(ov?.material) || ov?.thickness_mm != null
+                ));
 
-        {spec.architecture === "corexy" && panelsEnabled && (
-          <div className="field-row">
-            <label htmlFor="df-side-panel-material">Side Panel Material</label>
-            <select
-              id="df-side-panel-material"
-              value={spec.frame.side_panel_material ?? ""}
-              onChange={(e) => {
-                const nextSide = e.target.value || null;
-                const prevLabel = spec.frame.side_panel_material
-                  ? materialLabel(spec.frame.side_panel_material)
-                  : "Same as panels";
-                const nextLabel = nextSide ? materialLabel(nextSide) : "Same as panels";
-                update(
-                  (d) => {
-                    d.frame.side_panel_material = nextSide;
-                  },
-                  `Side Panels: ${prevLabel} → ${nextLabel}`
-                );
-              }}
-            >
-              <option value="">Same as panels</option>
-              {spec.frame.side_panel_material &&
-                !PANEL_MATERIALS.some((pm) => pm.id === spec.frame.side_panel_material) && (
-                  <option value={spec.frame.side_panel_material}>
-                    {materialLabel(spec.frame.side_panel_material)} (Custom)
-                  </option>
+            const resolveFace = (face: PanelFace): { mat: string; thick: number } => {
+              const ov = overrides[face];
+              const mat =
+                ov?.material ||
+                ((face === "left" || face === "right") && spec.frame.side_panel_material
+                  ? spec.frame.side_panel_material
+                  : currentPanelMaterial);
+              const thick =
+                ov?.thickness_mm != null ? ov.thickness_mm : currentPanelThickness;
+              return { mat, thick };
+            };
+
+            const faceRows: Array<{ face: PanelFace; label: string }> = [
+              { face: "rear", label: "Rear Panel Material" },
+              { face: "left", label: "Left Side Material" },
+              { face: "right", label: "Right Side Material" },
+              ...(topPanelInstalled ? [{ face: "top" as const, label: "Top Panel Material" }] : []),
+            ];
+
+            return (
+              <>
+                {!mixedPanelsEnabled && (
+                  <div className="field-grid-2 wide-first">
+                    <div className="field-row">
+                      <label htmlFor="df-panel-material-20">Panel Material</label>
+                      <select
+                        id="df-panel-material-20"
+                        value={currentPanelMaterial}
+                        onChange={(e) => {
+                          const nextMat = e.target.value;
+                          const prevDesc = formatPanelSummary(spec.frame);
+                          const nextDesc = formatPanelSummary({
+                            ...spec.frame,
+                            panel_material: nextMat,
+                          });
+                          update(
+                            (d) => {
+                              d.frame.panel_material = nextMat;
+                            },
+                            `Panels: ${prevDesc} → ${nextDesc}`
+                          );
+                        }}
+                      >
+                        {!PANEL_MATERIALS.some((pm) => pm.id === currentPanelMaterial) && (
+                          <option value={currentPanelMaterial}>
+                            {materialLabel(currentPanelMaterial)} (Custom)
+                          </option>
+                        )}
+                        {PANEL_MATERIALS.map((pm) => (
+                          <option key={pm.id} value={pm.id}>
+                            {pm.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field-row">
+                      <label htmlFor="df-thickness-mm-21">Thickness (mm)</label>
+                      <select
+                        id="df-thickness-mm-21"
+                        value={currentPanelThickness}
+                        onChange={(e) => {
+                          const nextThick = Number(e.target.value);
+                          if (!Number.isFinite(nextThick) || nextThick <= 0) return;
+                          const prevDesc = formatPanelSummary(spec.frame);
+                          const nextDesc = formatPanelSummary({
+                            ...spec.frame,
+                            panel_thickness_mm: nextThick,
+                          });
+                          update(
+                            (d) => {
+                              d.frame.panel_thickness_mm = nextThick;
+                            },
+                            `Panels: ${prevDesc} → ${nextDesc}`
+                          );
+                        }}
+                      >
+                        {thicknessChoices.map((mm) => (
+                          <option key={mm} value={mm}>
+                            {mm} mm
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 )}
-              {PANEL_MATERIALS.map((pm) => (
-                <option key={pm.id} value={pm.id}>
-                  {pm.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+
+                {spec.architecture === "corexy" && (
+                  <label className="checkbox-row" style={{ marginTop: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={mixedPanelsEnabled}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        update(
+                          (d) => {
+                            if (enabled) {
+                              const rear = resolveFace("rear");
+                              const left = resolveFace("left");
+                              const right = resolveFace("right");
+                              const top = resolveFace("top");
+                              d.frame.panel_overrides = {
+                                rear: { material: rear.mat, thickness_mm: rear.thick },
+                                left: { material: left.mat, thickness_mm: left.thick },
+                                right: { material: right.mat, thickness_mm: right.thick },
+                                top: { material: top.mat, thickness_mm: top.thick },
+                              };
+                              d.frame.side_panel_material = null;
+                            } else {
+                              d.frame.panel_overrides = {};
+                              d.frame.side_panel_material = null;
+                            }
+                          },
+                          enabled
+                            ? "Panels: Uniform → Mixed Panel Materials"
+                            : "Panels: Mixed → Uniform Panel Material"
+                        );
+                      }}
+                    />
+                    <span>Mixed Panel Materials</span>
+                  </label>
+                )}
+
+                {mixedPanelsEnabled && (
+                  <div className="sub-block">
+                    {faceRows.map(({ face, label }) => {
+                      const { mat, thick } = resolveFace(face);
+                      const faceThicknessChoices = thicknessChoices.includes(thick)
+                        ? thicknessChoices
+                        : [...thicknessChoices, thick].sort((a, b) => a - b);
+                      const matId = `df-panel-${face}-material`;
+                      const thickId = `df-panel-${face}-thickness`;
+                      return (
+                        <div key={face} className="field-grid-2 wide-first">
+                          <div className="field-row">
+                            <label htmlFor={matId}>{label}</label>
+                            <select
+                              id={matId}
+                              value={mat}
+                              onChange={(e) => {
+                                const nextMat = e.target.value;
+                                update(
+                                  (d) => {
+                                    const nextOv = { ...(d.frame.panel_overrides ?? {}) };
+                                    for (const f of ["rear", "left", "right", "top"] as const) {
+                                      const cur = resolveFace(f);
+                                      nextOv[f] = nextOv[f] ?? {
+                                        material: cur.mat,
+                                        thickness_mm: cur.thick,
+                                      };
+                                    }
+                                    nextOv[face] = {
+                                      ...nextOv[face],
+                                      material: nextMat,
+                                    };
+                                    d.frame.panel_overrides = nextOv;
+                                    d.frame.side_panel_material = null;
+                                    if (face === "rear") {
+                                      d.frame.panel_material = nextMat;
+                                    }
+                                  },
+                                  `${label}: ${materialLabel(mat)} → ${materialLabel(nextMat)}`
+                                );
+                              }}
+                            >
+                              {!PANEL_MATERIALS.some((pm) => pm.id === mat) && (
+                                <option value={mat}>{materialLabel(mat)} (Custom)</option>
+                              )}
+                              {PANEL_MATERIALS.map((pm) => (
+                                <option key={pm.id} value={pm.id}>
+                                  {pm.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="field-row">
+                            <label htmlFor={thickId}>Thickness (mm)</label>
+                            <select
+                              id={thickId}
+                              value={thick}
+                              onChange={(e) => {
+                                const nextThick = Number(e.target.value);
+                                if (!Number.isFinite(nextThick) || nextThick <= 0) return;
+                                update(
+                                  (d) => {
+                                    const nextOv = { ...(d.frame.panel_overrides ?? {}) };
+                                    for (const f of ["rear", "left", "right", "top"] as const) {
+                                      const cur = resolveFace(f);
+                                      nextOv[f] = nextOv[f] ?? {
+                                        material: cur.mat,
+                                        thickness_mm: cur.thick,
+                                      };
+                                    }
+                                    nextOv[face] = {
+                                      ...nextOv[face],
+                                      thickness_mm: nextThick,
+                                    };
+                                    d.frame.panel_overrides = nextOv;
+                                    d.frame.side_panel_material = null;
+                                    if (face === "rear") {
+                                      d.frame.panel_thickness_mm = nextThick;
+                                    }
+                                  },
+                                  `${label.replace(" Material", "")}: ${thick} mm → ${nextThick} mm`
+                                );
+                              }}
+                            >
+                              {faceThicknessChoices.map((mm) => (
+                                <option key={mm} value={mm}>
+                                  {mm} mm
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
         {spec.architecture === "corexy" && panelsEnabled && (
           <label className="checkbox-row" style={{ marginTop: 4 }}>

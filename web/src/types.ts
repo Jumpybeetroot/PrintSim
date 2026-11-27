@@ -521,6 +521,10 @@ export interface ToolheadPresetItem {
   internal_stiffness_n_per_mm?: number;
   z_probe_type?: ZProbeType;
   extruder_type?: "direct_drive" | "bowden";
+  extruder_gear_ratio?: number;
+  default_hotend_preset_id?: string;
+  part_cooling_cfm?: number;
+  envelope_mm?: [number, number, number];
   cpap_blower_id?: CpapBlowerType;
   cpap_hose_id_mm?: number;
   shared_heatsink_cpap_duct?: boolean;
@@ -629,6 +633,16 @@ export interface CatalogResponse {
   hotend_presets?: HotendPresetItem[];
   z_drive_mechanisms?: ZDriveMechanismItem[];
   z_rail_profiles?: ZRailProfileItem[];
+  frame_bracing?: Array<{
+    id: string;
+    label: string;
+    short_label: string;
+    kind: string;
+    cad_asset_family: string | null;
+    physics_model: string;
+    description: string;
+    cost_usd: number;
+  }>;
   top_braces?: BraceCatalogItem[];
   front_braces?: BraceCatalogItem[];
   corner_joints?: CornerJointCatalogItem[];
@@ -979,6 +993,15 @@ export interface ModelConfidenceReport {
   entries: ModelConfidenceEntry[];
 }
 
+export type BracingType =
+  | "none"
+  | "cast_corner_brackets"
+  | "cnc_corner_gussets"
+  | "rear_flat_bar_x"
+  | "side_flat_bar_x"
+  | "rear_and_side_flat_bars"
+  | "gussets_and_flat_bars";
+
 export interface PrinterSpecData {
   name: string;
   description: string;
@@ -990,14 +1013,7 @@ export interface PrinterSpecData {
     profile: string;
     upright_profile?: string | null;
     material: string;
-    bracing:
-      | "none"
-      | "corner_gussets"
-      | "top_cross"
-      | "rear_cross"
-      | "side_cross"
-      | "rear_and_sides"
-      | "full_truss";
+    bracing: BracingType;
     brace_profile: string;
     brace_material: string;
     enclosed_panels: boolean;
@@ -1009,6 +1025,12 @@ export interface PrinterSpecData {
     gantry_top_clearance_mm?: number;
     gantry_on_top_frame?: boolean;
     side_panel_material?: string | null;
+    panel_overrides?: Partial<
+      Record<
+        "rear" | "left" | "right" | "top",
+        { material?: string | null; thickness_mm?: number | null }
+      >
+    >;
     trident_backbone?: boolean;
     top_brace?: TopBraceType;
     front_brace?: FrontBraceType;
@@ -1225,12 +1247,112 @@ export interface DeepVerifySummary {
   panel_drum_freq_hz: number;
   panel_max_von_mises_mpa: number;
   num_shell_elements: number;
+  bed_flatness_error_um?: number;
+  bed_first_mode_hz?: number;
   solve_time_ms: number;
+}
+
+export interface SignoffCheckItem {
+  id: string;
+  title: string;
+  status: "pass" | "caution" | "fail";
+  value: string;
+  detail: string;
+}
+
+export interface SignoffConfidenceBand {
+  nominal: number;
+  p05: number;
+  p95: number;
+  ci90_half_width: number;
+  ci90_pct: number;
+}
+
+export interface SignoffUncertaintyDriver {
+  group_id: string;
+  label: string;
+  trust_pct: number;
+  tier: string;
+  overridden: boolean;
+  sigma_param_pct: number;
+  delta_freq_hz: number;
+  delta_accel_mm_s2: number;
+  delta_deflection_um: number;
+  variance_share_pct: number;
+  /** Share of nozzle-bed flex variance (variance_share_pct is the resonance share). */
+  deflection_variance_share_pct?: number;
+  how_to_tighten: string;
+}
+
+export interface SignoffWorkspaceFea {
+  grid_n: number;
+  coords: number[];
+  /** False for architectures whose model ignores XY (delta): the grid repeats the centre solve. */
+  xy_position_modeled?: boolean;
+  num_fea_solves: number;
+  solve_time_ms: number;
+  freq_x_grid_hz: number[][];
+  freq_y_grid_hz: number[][];
+  min_axis_grid_hz: number[][];
+  safe_accel_grid_mm_s2: number[][];
+  deflection_grid_um: number[][];
+  z_sweep: Array<{
+    z_rel: number;
+    shaper_x_hz: number;
+    shaper_y_hz: number;
+    min_axis_hz: number;
+    safe_accel_mm_s2: number;
+    deflection_um: number;
+  }>;
+  /** Softest XY cell re-solved at the Z extremes (empty when that cell is the centre). */
+  worst_xy_z_sweep?: Array<{
+    u_rel: number;
+    v_rel: number;
+    z_rel: number;
+    shaper_x_hz: number;
+    shaper_y_hz: number;
+    min_axis_hz: number;
+    safe_accel_mm_s2: number;
+    deflection_um: number;
+  }>;
+  center_min_axis_hz: number;
+  center_safe_accel_mm_s2: number;
+  worst_case_min_axis_hz: number;
+  worst_case_safe_accel_mm_s2: number;
+  worst_case_deflection_um: number;
+  worst_freq_pos: [number, number, number];
+  worst_accel_pos: [number, number, number];
+  worst_deflection_pos: [number, number, number];
+  worst_freq_drop_pct: number;
+  worst_accel_drop_pct: number;
+  spatial_spread_pct: number;
+}
+
+export interface SignoffUncertaintyReport {
+  overall_trust_pct: number;
+  num_groups_perturbed: number;
+  /** Labels of uncertain groups a max_uncertainty_groups cap left unperturbed. */
+  skipped_groups?: string[];
+  /** What the parametric band does and does not propagate. */
+  coverage_note?: string;
+  num_fea_solves: number;
+  solve_time_ms: number;
+  bands: {
+    shaper_x_hz: SignoffConfidenceBand;
+    shaper_y_hz: SignoffConfidenceBand;
+    min_axis_hz: SignoffConfidenceBand;
+    fundamental_freq_hz: SignoffConfidenceBand;
+    recommended_max_accel_mm_s2: SignoffConfidenceBand;
+    combined_max_deflection_um: SignoffConfidenceBand;
+  };
+  drivers: SignoffUncertaintyDriver[];
 }
 
 export interface DeepVerifyResponse {
   fast_mesh_n: number;
   deep_mesh_n: number;
+  fast_bed_mesh_n?: number;
+  deep_bed_mesh_n?: number;
   fast_summary: DeepVerifySummary;
   deep_summary: DeepVerifySummary;
   convergence: {
@@ -1240,6 +1362,13 @@ export interface DeepVerifyResponse {
     converged: boolean;
   };
   deep_simulation: SimulationResponse;
+  // Sign-Off Verification superset fields (present from /api/verify/signoff)
+  verdict?: "pass" | "caution" | "fail";
+  checks?: SignoffCheckItem[];
+  total_solve_time_ms?: number;
+  total_fea_solves?: number;
+  workspace_fea?: SignoffWorkspaceFea;
+  uncertainty?: SignoffUncertaintyReport;
 }
 
 export interface ModeCauseItem {
@@ -1655,6 +1784,17 @@ export interface GeometryData {
     material_name: string;
     thickness_mm: number;
     color_hex: string;
+    faces?: Partial<
+      Record<
+        "rear" | "left" | "right" | "top",
+        {
+          material_id: string;
+          material_name: string;
+          thickness_mm: number;
+          color_hex: string;
+        }
+      >
+    >;
     top_panel?: boolean;
     bolted_to_gantry?: boolean;
     is_flying_gantry?: boolean;
@@ -1726,6 +1866,33 @@ export interface GeometryData {
   z_rails?: ZRailGeometryData[];
   z_leadscrews?: ZLeadscrewGeometryData[];
   toolhead_structure?: ToolheadStructureGeometryData;
+  frame_bracing?: {
+    type: string;
+    active: boolean;
+    cad_count: number;
+    cad_asset_id: string | null;
+    cad_mass_kg: number;
+    flat_bar_mass_kg: number;
+    total_mass_kg: number;
+    cost_usd: number;
+    visuals: Array<{
+      id: string;
+      kind: string;
+      asset_id: string;
+      visual_glb_url: string;
+      origin_m: [number, number, number];
+      basis_x: [number, number, number];
+      basis_y: [number, number, number];
+      basis_z: [number, number, number];
+      node_a: string;
+      node_b: string;
+    }>;
+  };
+  x_beam_visual?: {
+    asset_id: string;
+    visual_glb_url: string;
+    length_mm: number;
+  } | null;
   toolhead_node_id: string;
   nozzle_node_id?: string;
   toolhead_cog_node_id?: string;

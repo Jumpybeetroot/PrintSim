@@ -291,8 +291,15 @@ label {
   font-size: var(--fs-xs);
   color: var(--muted);
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+label > .sub-block-tag {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 input[type="number"],
@@ -1110,11 +1117,15 @@ textarea.code-editor {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
+  align-content: flex-start;
   gap: 2px 4px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-  flex: 1 1 160px;
   min-width: 0;
+}
+
+.model-override-head > .model-override-summary {
+  flex: 1 1 160px;
 }
 
 .model-override-prefix {

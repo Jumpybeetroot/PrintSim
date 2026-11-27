@@ -102,6 +102,7 @@ const CACHEABLE_POST_PATHS = new Set<string>([
   "/api/simulate",
   "/api/bom",
   "/api/verify/deep",
+  "/api/verify/signoff",
   "/api/fea/solid-part",
   "/api/superelement/bracket",
 ]);

@@ -3,6 +3,7 @@ import { humanizeId } from "../utils/displayText";
 import {
   CadSuperelementSummary,
   CatalogResponse,
+  HotendMountStyle,
   PrinterSpecData,
   SimulationResponse,
   ToolheadConstructionCatalogItem,
@@ -421,6 +422,46 @@ const FALLBACK_TOOLHEAD_PRESETS: ToolheadPresetItem[] = [
     extruder_type: "direct_drive",
     default_hardware_summary:
       "Exact official printed v24 Vz-Printhead cage (27.4 g ABS/ASA at 4 walls / 40-50% infill) + aluminium standoffs + HextrudORT Low + Moons NEMA14 + CPAP + Beacon = 248 g on-rail with the MGN9H (276 g MGN12H-convention) excl. hotend.",
+  },
+  {
+    preset_id: "trinity_1_6_dav",
+    name: "WV-Design Trinity 1.6 (Dragon Ace Volcano + Dual-3628)",
+    total_mass_g: 382,
+    cog_offset_mm: [0, -28.2, 3.6],
+    nozzle_offset_mm: [0, -32.74, -81.0],
+    mount_material: "ppa_cf_printed",
+    body_construction: "compact_cage",
+    internal_stiffness_n_per_mm: 1350,
+    z_probe_type: "static_eddy",
+    belt_plane_z_offset_mm: -0.3,
+    cpap_blower_id: "none",
+    extruder_type: "direct_drive",
+    extruder_gear_ratio: 6.25,
+    default_hotend_preset_id: "trianglelab_dragon_ace_volcano",
+    part_cooling_cfm: 20,
+    envelope_mm: [114.3, 62.9, 155],
+    default_hardware_summary:
+      "Official WV-Design Trinity 1.6-stable STEP (65.9 cm³ unibody + 24.4 cm³ ducts = 88.9 g ABS-GF/PPA-CF) + FYSETC CNC Sherpa Mini v3 (135 g, 6.25:1) + dual Delta 3628 12V PWM fans (64.4 g, ~20 CFM) + Delta 2510 HEF + Monolith SLM clamp + Beacon + HIWIN MGN12H = 382 g on-rail excl. hotend (373 g off-rail dressed w/ 45 g DAV; CoG dead between rail balls).",
+  },
+  {
+    preset_id: "trinity_1_6_chube",
+    name: "WV-Design Trinity 1.6 (Chube Compact + Dual-3628)",
+    total_mass_g: 394,
+    cog_offset_mm: [0, -28.5, 1.8],
+    nozzle_offset_mm: [0, -32.74, -81.18],
+    mount_material: "ppa_cf_printed",
+    body_construction: "compact_cage",
+    internal_stiffness_n_per_mm: 1350,
+    z_probe_type: "static_eddy",
+    belt_plane_z_offset_mm: -0.3,
+    cpap_blower_id: "none",
+    extruder_type: "direct_drive",
+    extruder_gear_ratio: 6.25,
+    default_hotend_preset_id: "chube_compact",
+    part_cooling_cfm: 20,
+    envelope_mm: [119.2, 60.9, 155],
+    default_hardware_summary:
+      "Official WV-Design Trinity 1.6-stable Chube Compact STEP (78.1 cm³ unibody + 24.2 cm³ ducts = 100.7 g ABS-GF/PPA-CF) + FYSETC CNC Sherpa Mini v3 (135 g, 6.25:1) + dual Delta 3628 12V PWM fans (64.4 g, ~20 CFM) + Delta 2510 HEF + Monolith SLM clamp + Beacon + HIWIN MGN12H = 394 g on-rail excl. hotend (403 g off-rail dressed w/ 63 g Chube Compact).",
   },
   {
     preset_id: "heavy_uhf_long",
@@ -913,6 +954,41 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                         }
                         if (d.toolhead.extruder) {
                           d.toolhead.extruder.type = chosen.extruder_type ?? "direct_drive";
+                          if (chosen.extruder_gear_ratio != null) {
+                            d.toolhead.extruder.gear_ratio = chosen.extruder_gear_ratio;
+                          }
+                        }
+                        if (chosen.envelope_mm != null && chosen.envelope_mm.length === 3) {
+                          d.toolhead.envelope_mm = [...chosen.envelope_mm];
+                        }
+                        if (chosen.default_hotend_preset_id) {
+                          const hp = catalog.hotend_presets?.find(
+                            (h) => h.id === chosen.default_hotend_preset_id
+                          );
+                          if (hp && d.toolhead.hotend) {
+                            d.toolhead.hotend.preset_id = hp.id;
+                            d.toolhead.hotend.name = hp.name;
+                            d.toolhead.hotend.mount_style = hp.mount_style as HotendMountStyle;
+                            d.toolhead.hotend.mass_g = hp.mass_g;
+                            d.toolhead.hotend.overall_length_mm = hp.overall_length_mm;
+                            d.toolhead.hotend.heater_power_w = hp.heater_power_w;
+                            d.toolhead.hotend.block_material = hp.block_material;
+                            d.toolhead.hotend.block_mass_g = hp.block_mass_g;
+                            d.toolhead.hotend.nozzle_material = hp.nozzle_material;
+                            d.toolhead.hotend.melt_zone_length_mm = hp.melt_zone_length_mm;
+                            d.toolhead.hotend.heatbreak_material = hp.heatbreak_material;
+                            d.toolhead.hotend.heatbreak_length_mm = hp.heatbreak_length_mm;
+                            d.toolhead.hotend.heatbreak_wall_mm = hp.heatbreak_wall_mm;
+                            d.toolhead.hotend.heatbreak_id_mm = hp.heatbreak_id_mm;
+                            d.toolhead.hotend.heatsink_thermal_resistance_k_w =
+                              hp.heatsink_thermal_resistance_k_w;
+                            d.toolhead.hotend.structural_stiffness_n_per_mm =
+                              hp.structural_stiffness_n_per_mm;
+                            d.toolhead.hotend.max_temp_c = hp.max_temp_c;
+                          }
+                        }
+                        if (chosen.part_cooling_cfm != null && d.toolhead.hotend) {
+                          d.toolhead.hotend.part_cooling_cfm = chosen.part_cooling_cfm;
                         }
                         if (chosen.cpap_blower_id != null) {
                           d.toolhead.cpap_blower_id = chosen.cpap_blower_id;

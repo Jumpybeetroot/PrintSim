@@ -1495,22 +1495,51 @@ const DeepVerifyCard: React.FC<{
   const hasPanelStress = fast.panel_max_von_mises_mpa > 0 || deep.panel_max_von_mises_mpa > 0;
   const stressDelta = deep.panel_max_von_mises_mpa - fast.panel_max_von_mises_mpa;
 
+  const isSignoff = Boolean(result.workspace_fea && result.uncertainty);
+  const verdict = result.verdict ?? (convergence.converged ? "pass" : "caution");
+  const verdictBadgeClass =
+    verdict === "pass" ? "ok" : verdict === "fail" ? "bad" : "warn";
+  const verdictLabel =
+    verdict === "pass"
+      ? isSignoff
+        ? "Sign-Off Pass"
+        : "Converged"
+      : verdict === "fail"
+        ? "Needs Attention"
+        : isSignoff
+          ? "Sign-Off Caution"
+          : "Mesh Sensitive";
+
+  const ws = result.workspace_fea;
+  const unc = result.uncertainty;
+  const checks = result.checks ?? [];
+  // Relative workspace position (0–1) shown as a percentage of travel.
+  const pct = (rel: number) => `${Math.round(rel * 100)}%`;
+  // Colour a workspace cell by its resonance drop against the bed-centre solve.
+  const dropClass = (hz: number) => {
+    const centerHz = ws?.center_min_axis_hz ?? 0;
+    const drop = centerHz > 0 ? ((centerHz - hz) / centerHz) * 100 : 0;
+    return drop <= 5 ? "ok" : drop <= 12 ? "warn" : "bad";
+  };
+
   return (
-    <div className={`section-card deep-verify-card ${convergence.converged ? "converged" : "refining"}`}>
+    <div
+      className={`section-card deep-verify-card ${
+        verdict === "pass" ? "converged" : verdict === "fail" ? "failed" : "refining"
+      }`}
+    >
       <div className="deep-verify-header">
         <span className="section-title" style={{ margin: 0 }}>
-          Deep Verify Convergence
+          {isSignoff ? "Sign-Off Verification" : "Deep Verify Convergence"}
         </span>
         <div className="deep-verify-header-right">
-          <span className={`badge-pill ${convergence.converged ? "ok" : "warn"}`}>
-            {convergence.converged ? "Converged" : "Mesh Sensitive"}
-          </span>
+          <span className={`badge-pill ${verdictBadgeClass}`}>{verdictLabel}</span>
           <button
             type="button"
             className="deep-verify-close"
             onClick={onDismiss}
-            title="Dismiss Deep Verify results"
-            aria-label="Dismiss Deep Verify results"
+            title="Dismiss verification results"
+            aria-label="Dismiss verification results"
           >
             ×
           </button>
@@ -1523,12 +1552,225 @@ const DeepVerifyCard: React.FC<{
             {fast_mesh_n}×{fast_mesh_n} → {deep_mesh_n}×{deep_mesh_n}
           </strong>{" "}
           MITC4
+          {result.total_fea_solves ? (
+            <>
+              {" "}
+              · <strong>{result.total_fea_solves}</strong> FEA solves
+            </>
+          ) : null}
         </span>
         <span>
-          <strong>{deep.num_shell_elements.toLocaleString()}</strong> shells •{" "}
-          <strong>{Math.round(deep.solve_time_ms)} ms</strong>
+          <strong>{deep.num_shell_elements.toLocaleString()}</strong> shells ·{" "}
+          <strong>
+            {result.total_solve_time_ms != null
+              ? `${(result.total_solve_time_ms / 1000).toFixed(1)} s`
+              : `${Math.round(deep.solve_time_ms)} ms`}
+          </strong>
         </span>
       </div>
+
+      {unc && (
+        <div className="signoff-block">
+          <div className="signoff-subhead">
+            <span title={unc.coverage_note}>90% Parametric Bands</span>
+            <span className="signoff-submeta">
+              Model Trust {unc.overall_trust_pct}% ({unc.num_groups_perturbed} perturbed)
+            </span>
+          </div>
+          <table className="deep-verify-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th className="num">Nominal</th>
+                <th className="num">90% Band</th>
+                <th className="num">±%</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Shaper X (Hz)</td>
+                <td className="num">
+                  <strong>{unc.bands.shaper_x_hz.nominal.toFixed(1)}</strong>
+                </td>
+                <td className="num">
+                  {unc.bands.shaper_x_hz.p05.toFixed(1)}–{unc.bands.shaper_x_hz.p95.toFixed(1)}
+                </td>
+                <td className={`num ${deltaClass(unc.bands.shaper_x_hz.ci90_pct)}`}>
+                  ±{unc.bands.shaper_x_hz.ci90_pct.toFixed(1)}%
+                </td>
+              </tr>
+              <tr>
+                <td>Shaper Y (Hz)</td>
+                <td className="num">
+                  <strong>{unc.bands.shaper_y_hz.nominal.toFixed(1)}</strong>
+                </td>
+                <td className="num">
+                  {unc.bands.shaper_y_hz.p05.toFixed(1)}–{unc.bands.shaper_y_hz.p95.toFixed(1)}
+                </td>
+                <td className={`num ${deltaClass(unc.bands.shaper_y_hz.ci90_pct)}`}>
+                  ±{unc.bands.shaper_y_hz.ci90_pct.toFixed(1)}%
+                </td>
+              </tr>
+              <tr>
+                <td>Safe Accel (mm/s²)</td>
+                <td className="num">
+                  <strong>{Math.round(unc.bands.recommended_max_accel_mm_s2.nominal).toLocaleString()}</strong>
+                </td>
+                <td className="num">
+                  {Math.round(unc.bands.recommended_max_accel_mm_s2.p05).toLocaleString()}–
+                  {Math.round(unc.bands.recommended_max_accel_mm_s2.p95).toLocaleString()}
+                </td>
+                <td className={`num ${deltaClass(unc.bands.recommended_max_accel_mm_s2.ci90_pct)}`}>
+                  ±{unc.bands.recommended_max_accel_mm_s2.ci90_pct.toFixed(1)}%
+                </td>
+              </tr>
+              <tr>
+                <td>Nozzle–Bed Flex (µm)</td>
+                <td className="num">
+                  <strong>{unc.bands.combined_max_deflection_um.nominal.toFixed(1)}</strong>
+                </td>
+                <td className="num">
+                  {unc.bands.combined_max_deflection_um.p05.toFixed(1)}–
+                  {unc.bands.combined_max_deflection_um.p95.toFixed(1)}
+                </td>
+                <td className={`num ${deltaClass(unc.bands.combined_max_deflection_um.ci90_pct)}`}>
+                  ±{unc.bands.combined_max_deflection_um.ci90_pct.toFixed(1)}%
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {ws && (
+        <div className="signoff-block">
+          <div className="signoff-subhead">
+            <span>
+              True 3D FEA Workspace (
+              {ws.xy_position_modeled === false ? "Z sweep" : `${ws.grid_n}×${ws.grid_n} + Z`})
+            </span>
+            <span className="signoff-submeta">
+              Worst: <strong>{ws.worst_case_min_axis_hz.toFixed(1)} Hz</strong> (-{ws.worst_freq_drop_pct.toFixed(1)}%)
+            </span>
+          </div>
+          {ws.xy_position_modeled === false ? (
+            <div className="signoff-ws-foot">
+              <span>XY position is not modeled for this architecture — Z sweep only.</span>
+            </div>
+          ) : (
+          <div
+            className="signoff-ws-grid"
+            style={{ gridTemplateColumns: `repeat(${ws.grid_n}, minmax(0, 1fr))` }}
+          >
+            {ws.min_axis_grid_hz.map((row, rIdx) =>
+              row.map((hz, cIdx) => {
+                const cellCls = dropClass(hz);
+                return (
+                  <div
+                    key={`${rIdx}-${cIdx}`}
+                    className={`signoff-ws-cell ${cellCls}`}
+                    title={`X ${pct(ws.coords[cIdx] ?? 0)}, Y ${pct(ws.coords[rIdx] ?? 0)} · X ${ws.freq_x_grid_hz[rIdx]?.[cIdx]?.toFixed(1)} Hz, Y ${ws.freq_y_grid_hz[rIdx]?.[cIdx]?.toFixed(1)} Hz · Safe accel ${Math.round(ws.safe_accel_grid_mm_s2[rIdx]?.[cIdx] ?? 0).toLocaleString()} mm/s²`}
+                  >
+                    <span className="signoff-ws-hz">{hz.toFixed(1)}</span>
+                    <span className="signoff-ws-sub">Hz</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          )}
+          {ws.xy_position_modeled !== false && ws.coords.length > 1 && (
+            <div className="signoff-ws-foot">
+              <span>
+                Columns: X {pct(ws.coords[0])}–{pct(ws.coords[ws.coords.length - 1])} · Rows: Y{" "}
+                {pct(ws.coords[0])}–{pct(ws.coords[ws.coords.length - 1])}
+              </span>
+              <span>Mid height</span>
+            </div>
+          )}
+          {ws.z_sweep.length > 0 && (
+            <>
+              <div className="signoff-ws-foot">
+                <span>Height sweep at bed centre</span>
+              </div>
+              <div className="signoff-z-grid">
+                {ws.z_sweep.map((z) => (
+                  <div
+                    key={z.z_rel}
+                    className={`signoff-ws-cell ${dropClass(z.min_axis_hz)}`}
+                    title={`Z ${pct(z.z_rel)} · X ${z.shaper_x_hz.toFixed(1)} Hz, Y ${z.shaper_y_hz.toFixed(1)} Hz · Safe accel ${Math.round(z.safe_accel_mm_s2).toLocaleString()} mm/s²`}
+                  >
+                    <span className="signoff-ws-sub">Z {pct(z.z_rel)}</span>
+                    <span className="signoff-ws-hz">{z.min_axis_hz.toFixed(1)}</span>
+                    <span className="signoff-ws-sub">Hz</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {ws.worst_xy_z_sweep && ws.worst_xy_z_sweep.length > 0 && (
+            <div className="signoff-ws-foot">
+              <span>
+                Softest cell (X {pct(ws.worst_xy_z_sweep[0].u_rel)}, Y{" "}
+                {pct(ws.worst_xy_z_sweep[0].v_rel)}) at{" "}
+                {ws.worst_xy_z_sweep.map((z) => `Z ${pct(z.z_rel)}`).join(" / ")}
+              </span>
+              <span>
+                <strong>
+                  {ws.worst_xy_z_sweep.map((z) => z.min_axis_hz.toFixed(1)).join(" / ")} Hz
+                </strong>
+              </span>
+            </div>
+          )}
+          <div className="signoff-ws-foot">
+            <span>
+              Worst-case safe accel:{" "}
+              <strong>{Math.round(ws.worst_case_safe_accel_mm_s2).toLocaleString()} mm/s²</strong> at X{" "}
+              {pct(ws.worst_accel_pos[0])} · Y {pct(ws.worst_accel_pos[1])} · Z{" "}
+              {pct(ws.worst_accel_pos[2])}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {unc && unc.drivers.length > 0 && (
+        <div className="signoff-block">
+          <div className="signoff-subhead">
+            <span>Top Uncertainty Drivers</span>
+            <span className="signoff-submeta">Share of resonance / flex variance</span>
+          </div>
+          <div className="signoff-drivers">
+            {unc.drivers.slice(0, 4).map((d) => (
+              <div
+                key={d.group_id}
+                className="signoff-driver-row"
+                title={`${d.how_to_tighten} (Trust ${d.trust_pct}%, ±${d.sigma_param_pct}% 1σ input · 90% effect: ±${d.delta_freq_hz.toFixed(1)} Hz, ±${Math.round(d.delta_accel_mm_s2).toLocaleString()} mm/s², ±${d.delta_deflection_um.toFixed(1)} µm)`}
+              >
+                <span className="signoff-driver-name">
+                  {d.label}
+                  <span className="signoff-driver-trust">{Math.round(d.trust_pct)}%</span>
+                </span>
+                <span className="signoff-driver-impact">
+                  <strong>{d.variance_share_pct.toFixed(0)}%</strong> Hz ·{" "}
+                  <strong>{(d.deflection_variance_share_pct ?? 0).toFixed(0)}%</strong> flex
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {checks.length > 0 && (
+        <div className="signoff-checks">
+          {checks.map((c) => (
+            <div key={c.id} className="signoff-check-row" title={c.detail}>
+              <span className={`signoff-check-dot ${c.status}`} aria-hidden="true" />
+              <span className="signoff-check-title">{c.title}</span>
+              <span className="signoff-check-val">{c.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <table className="deep-verify-table">
         <thead>

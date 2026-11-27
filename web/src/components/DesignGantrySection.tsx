@@ -73,8 +73,12 @@ const X_BEAM_METAL_PROFILE_IDS = new Set([
   "extrusion_2020",
   "extrusion_2040",
   "cnc_al_beam_20x20",
+  "cnc_al_monocoque_20x20",
+  "cnc_al_truss_voron24_lw",
+  "cnc_al_fysetc_v0_15x15",
   "al_tube_12x12x1",
   "al_tube_20x20x2",
+  "al_tube_20x20x3",
   "extrusion_3030",
 ]);
 
@@ -82,10 +86,12 @@ const X_BEAM_LIGHTWEIGHT_TUBE_IDS = new Set([
   "cf_tube_20x20x1",
   "cf_tube_20x20x1_5",
   "cf_tube_20x20_carbonara",
+  "cf_tube_20x20_carbonara_2_5",
   "cf_tube_20x20x2",
   "cf_tube_30x20x2",
   "cf_tube_25x25x2",
   "ti_tube_20x20x1_2",
+  "ti_tube_20x20x2",
   "unsupported_rail",
 ]);
 
@@ -436,7 +442,7 @@ function isCarbonTubeMaterial(matId: string): boolean {
 }
 
 function inferAutoXBeamMaterial(profileId: string, currentMaterial: string): string | null {
-  if (profileId === "cf_tube_20x20_carbonara") {
+  if (profileId.startsWith("cf_tube_20x20_carbonara")) {
     if (
       currentMaterial !== "carbon_fiber_torsional_45" &&
       currentMaterial !== "carbon_fiber_m40j_hm"
@@ -455,6 +461,16 @@ function inferAutoXBeamMaterial(profileId: string, currentMaterial: string): str
     profileId.startsWith("steel_rod_")
   ) {
     return "steel_4140";
+  }
+  if (profileId === "cnc_al_monocoque_20x20") {
+    return currentMaterial === "aluminum_6061_t6" || currentMaterial === "aluminum_7075_t6"
+      ? null
+      : "aluminum_7075_t6";
+  }
+  if (profileId === "cnc_al_truss_voron24_lw" || profileId === "cnc_al_fysetc_v0_15x15") {
+    return currentMaterial === "aluminum_6061_t6" || currentMaterial === "aluminum_7075_t6"
+      ? null
+      : "aluminum_6061_t6";
   }
   if (
     (profileId.startsWith("extrusion_") ||
@@ -1229,7 +1245,9 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                               : "Real 3D CAD gantry hardware meshes & stiffness active"
                           }
                         >
-                          CAD{resolvedHardwareKitLabel ? ` · ${resolvedHardwareKitLabel}` : ""}
+                          {currentHardwareKit === "auto" && resolvedHardwareKitLabel
+                            ? `CAD · ${resolvedHardwareKitLabel}`
+                            : "CAD-backed"}
                         </span>
                       )}
                     </label>

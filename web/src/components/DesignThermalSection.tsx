@@ -267,6 +267,26 @@ const FALLBACK_HOTEND_PRESETS: HotendPresetItem[] = [
     structural_stiffness_n_per_mm: 920,
     max_temp_c: 350,
   },
+  {
+    id: "trianglelab_dragon_ace_volcano",
+    name: "Trianglelab Dragon Ace Volcano (70W Cu/Ti)",
+    short_name: "Dragon Ace Volcano",
+    mount_style: "dragon_4bolt_m25",
+    mass_g: 45,
+    overall_length_mm: 59.4,
+    heater_power_w: 70,
+    block_material: "copper_c110",
+    block_mass_g: 22,
+    nozzle_material: "copper_c110",
+    melt_zone_length_mm: 34,
+    heatbreak_material: "titanium_grade5",
+    heatbreak_length_mm: 11,
+    heatbreak_wall_mm: 0.45,
+    heatbreak_id_mm: 1.9,
+    heatsink_thermal_resistance_k_w: 3.1,
+    structural_stiffness_n_per_mm: 842,
+    max_temp_c: 450,
+  },
 ];
 
 
@@ -649,10 +669,16 @@ export const DesignThermalSection: React.FC<DesignThermalSectionProps> = ({
                 />
               </div>
 
-              {cadHotendBraceAvailable && (
+              {cadHotendBraceAvailable && (() => {
+                const isTrinityBrace = (spec.toolhead.preset_id || "").toLowerCase().startsWith("trinity_");
+                const braceLabel = isTrinityBrace ? "Unibody Heatsink Brace" : "Ti Bottom Brace";
+                const braceTitle = isTrinityBrace
+                  ? "Toggle the Trinity 1.6 monolithic unibody heatsink/shell wrap brace (couples the lower heatsink/Ti shell directly into the chassis for 3.7–8.3× higher lateral nozzle stiffness)"
+                  : "Toggle the Microwaved lower Ti-6Al-4V hotend bottom brace (+1.7 g, ties the lower hotend block into the SLM chassis for ~8.5× higher lateral nozzle stiffness)";
+                return (
                 <label
                   className={`checkbox-row cad-cms-toggle-row${useHotendBottomBrace ? " active" : ""}`}
-                  title="Toggle the Microwaved lower Ti-6Al-4V hotend bottom brace (+1.7 g, ties the lower hotend block into the SLM chassis for ~8.5× higher lateral nozzle stiffness)"
+                  title={braceTitle}
                 >
                   <input
                     id="dp-use-hotend-bottom-brace"
@@ -664,11 +690,11 @@ export const DesignThermalSection: React.FC<DesignThermalSectionProps> = ({
                         (d) => {
                           d.toolhead.use_hotend_bottom_brace = checked;
                         },
-                        `Ti Bottom Brace: ${checked ? "On (Braced)" : "Off (Unbraced)"}`
+                        `${braceLabel}: ${checked ? "On (Braced)" : "Off (Unbraced)"}`
                       );
                     }}
                   />
-                  <span>Ti Bottom Brace</span>
+                  <span>{braceLabel}</span>
                   <span
                     className={`badge-pill ${useHotendBottomBrace ? "info" : "warn"} cad-cms-toggle-count`}
                   >
@@ -676,7 +702,8 @@ export const DesignThermalSection: React.FC<DesignThermalSectionProps> = ({
                     {effectiveHotendDisplayK.toLocaleString()} N/mm
                   </span>
                 </label>
-              )}
+                );
+              })()}
 
               {nozzleShieldOptions.length > 0 && (
                 <div className="field-row">
