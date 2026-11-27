@@ -190,4 +190,4 @@ The audit row above (480×480×540 2020 frame, 9 mm / 65 N belts, MGN12 X rail, 
 | Toolhead | Archetype CPAP, 344 g | `vz_printhead_cnc`: CAD-measured 343 g dressed, nozzle −54.2 mm, CoG +13.4 mm |
 | Bed / Z | 6 mm ATP-5, kinematic 3-pt, 300 mm Z, TR8x4 | 8 mm cast 330×330 on 4 bolted silicone spacers, 400 mm Z, belt-synced 2× TR8x8, 4× Ø10 mm rods |
 
-Findings #7 and #16 above (dual-Z modelled as 2 motors + MGN12 rails) were already resolved by `leadscrew_dual_belt_sync`. Result: X ≈ 106 Hz / Y ≈ 65 Hz versus the cited community band X 75–118 / Y 47–80 Hz (`tests/test_vzbot_330.py`).
+Findings #7 and #16 above (dual-Z modelled as 2 motors + MGN12 rails) were already resolved by `leadscrew_dual_belt_sync`. Result (CNC head): X ≈ 104 Hz / Y ≈ 62 Hz versus the cited community band X 75–118 / Y 47–80 Hz (`tests/test_vzbot_330.py`).

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "mellow_goliath_air",
+  "name": "Mellow Goliath Air (VzBoT CAD mock-up)",
+  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "baked_at": "2026-11-26T23:58:33Z",
+  "has_superelement": false,
+  "visual_glb": "visual.glb",
+  "visual_triangles": 9844,
+  "visual_bytes": 318396,
+  "ref_size_mm": [
+    33.95,
+    25.16,
+    69.25
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -69.24
+  ],
+  "datum": "Port 0 = top mounting face center; Port 1 = nozzle tip",
+  "cad_trust_pct": 65
+}

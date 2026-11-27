@@ -1590,6 +1590,10 @@ export interface ToolheadStructureGeometryData {
   cad_superelements_active?: CadSuperelementSummary[];
   hotend_visual_glb_url?: string | null;
   toolhead_visual_glb_url?: string | null;
+  toolhead_visual_ports_mm?: {
+    port0_mm: [number, number, number];
+    port1_mm: [number, number, number];
+  } | null;
 }
 
 export interface ToolheadFlexSubCause {

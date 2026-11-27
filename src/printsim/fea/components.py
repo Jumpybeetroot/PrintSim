@@ -241,6 +241,30 @@ _RAIL_BOLT_PATTERN_M: dict[str, tuple[float, float, float, float]] = {
 }
 
 
+# Ball-raceway contact line height above the rail mounting face (m), ~0.6 x rail height
+# (HIWIN MGN rail H_R: MGN9 6.5 mm, MGN12 8.0 mm, MGN15 10.0 mm; VzBot 330 CAD MGN12 = 5 mm).
+_RAIL_RACEWAY_HEIGHT_M: dict[str, float] = {
+    "mgn9_rail": 0.0039,
+    "mgn12_rail": 0.0048,
+    "mgn12_hollow_rail": 0.0048,
+    "mgn15_rail": 0.0060,
+    "hgh15_rail": 0.0090,
+}
+
+
+def y_carriage_raceway_offset_m(rail_profile_id: str, frame_profile_half_width_m: float) -> float:
+    """Lateral distance (m) from the Y-extrusion axis to the ball-raceway line of an inner-face rail.
+
+    Inner-mounted Y rails (VzBot, Monolith) bolt to the inboard face of the Y extrusion, so the
+    carriage rolls on a raceway ``half extrusion width + raceway height`` inboard of the beam axis
+    (VzBot 330 CAD: 10 + 5 = 15 mm for MGN12 on 2020).
+    """
+    key = rail_profile_id.lower().strip()
+    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+        key = f"{key}_rail"
+    return float(frame_profile_half_width_m) + _RAIL_RACEWAY_HEIGHT_M.get(key, 0.0048)
+
+
 def y_carriage_lever_arm_m(
     rail_profile_id: str,
     y_mount: str,
@@ -1062,7 +1086,7 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
             if x_gantry_members
             else max(spec.frame.width_mm * 1e-3, 0.15)
         )
-    bolt_pitch_m = spec.gantry.rail_bolt_pitch_mm * 1e-3
+    bolt_pitch_m = spec.gantry.effective_x_rail_bolt_pitch_mm * 1e-3
     if is_unsupported_rail:
         sub_kind = "solid_bar"
     elif x_beam_prof.id.startswith("cf_") or x_beam_mat.id.startswith("carbon_fiber"):

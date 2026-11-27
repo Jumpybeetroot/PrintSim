@@ -179,7 +179,8 @@ export function buildCadGantryStationMeshes({
     inspectKey: string,
     rotY = 0,
     port1NodeId?: string,
-    sensMemberId?: string
+    sensMemberId?: string,
+    cadOriginNodeId?: string
   ): boolean => {
     const baseAnchor = basePos[anchorNodeId];
     if (!baseAnchor) return false;
@@ -224,6 +225,15 @@ export function buildCadGantryStationMeshes({
     });
     cadObj.scale.setScalar(CAD_M_TO_THREE);
     cadObj.rotation.x = -Math.PI * 0.5;
+    // Station GLBs are baked about a frame datum (e.g. Y-extrusion axis). When the FEA anchor node
+    // sits elsewhere (inner-rail carriage on its raceway), shift the mesh back onto that datum.
+    const cadOriginBase = cadOriginNodeId ? basePos[cadOriginNodeId] : undefined;
+    if (cadOriginBase) {
+      cadObj.position
+        .copy(cadOriginBase)
+        .sub(baseAnchor)
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), -rotY);
+    }
 
     const wrapper = new THREE.Group();
     const placedPos =
@@ -447,6 +457,7 @@ export function buildCadGantryStationMeshes({
     const label = isLeft
       ? `${gantryKitLabel} — Left XY-Joint`
       : `${gantryKitLabel} — Right XY-Joint`;
+    const railNodeId = isLeft ? "y_rail_car_l" : "y_rail_car_r";
     const placed = placeGantryCadStation(
       stationKey,
       n.id,
@@ -454,7 +465,8 @@ export function buildCadGantryStationMeshes({
       `gantry_cad:${stationKey}`,
       0,
       basePos[port1Id] ? port1Id : undefined,
-      sensId
+      sensId,
+      basePos[railNodeId] ? railNodeId : undefined
     );
     if (placed) {
       replacedXyNodeIds.add(n.id);

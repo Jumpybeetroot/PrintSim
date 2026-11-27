@@ -2212,6 +2212,8 @@ GANTRY_HARDWARE_KIT_CATALOG: dict[str, dict[str, Any]] = {
             "rail_block_type": "H",
             "belt_type": "gt2_6mm",
             "belt_pretension_n": 22.0,
+            "x_rail_bolt_pitch_mm": 80.0,
+            "y_rail_bolt_pitch_mm": 50.0,
             "carriage_mass_g": 194.0,
             "idler_axial_preload": "none",
             "z_joint_material_flying": "printed",
@@ -2246,6 +2248,8 @@ GANTRY_HARDWARE_KIT_CATALOG: dict[str, dict[str, Any]] = {
             "rail_block_type": "H",
             "belt_type": "gt2_6mm",
             "belt_pretension_n": 22.0,
+            "x_rail_bolt_pitch_mm": 80.0,
+            "y_rail_bolt_pitch_mm": 50.0,
             "carriage_mass_g": 194.0,
             "idler_axial_preload": "none",
             "z_joint_material_flying": "printed",
@@ -2870,6 +2874,24 @@ class GantrySpec(BaseModel):
     rail_bolt_pitch_mm: float = Field(
         25.0, ge=15.0, le=100.0, description="Linear rail M3 mounting fastener spacing (mm)"
     )
+    x_rail_bolt_pitch_mm: float | None = Field(
+        None,
+        ge=15.0,
+        le=150.0,
+        description=(
+            "X-rail fastener spacing actually populated (mm); None = rail_bolt_pitch_mm. "
+            "E.g. VzBot MGN9 on CF tube: 6 screws every 4th 20 mm hole = 80 mm"
+        ),
+    )
+    y_rail_bolt_pitch_mm: float | None = Field(
+        None,
+        ge=15.0,
+        le=150.0,
+        description=(
+            "Y-rail fastener spacing actually populated (mm); None = rail_bolt_pitch_mm. "
+            "E.g. VzBot MGN12 on 2020: every other 25 mm hole = 50 mm"
+        ),
+    )
     rail_backer_material: RailBackerMaterialType = Field(
         "none", description="Optional X-beam opposite-face thermal bow cancellation backer"
     )
@@ -2909,6 +2931,16 @@ class GantrySpec(BaseModel):
         None,
         description="Optional custom CAD/CMS-condensed bracket stiffness & mass injected into full-printer FEA",
     )
+
+    @property
+    def effective_x_rail_bolt_pitch_mm(self) -> float:
+        """Populated X-rail fastener spacing (mm), falling back to the shared rail_bolt_pitch_mm."""
+        return float(self.x_rail_bolt_pitch_mm or self.rail_bolt_pitch_mm)
+
+    @property
+    def effective_y_rail_bolt_pitch_mm(self) -> float:
+        """Populated Y-rail fastener spacing (mm), falling back to the shared rail_bolt_pitch_mm."""
+        return float(self.y_rail_bolt_pitch_mm or self.rail_bolt_pitch_mm)
 
     @property
     def effective_x_rail_mount(self) -> XRailMountType:
@@ -3970,8 +4002,8 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
     },
     "vz_printhead_cnc": {
         "preset_id": "vz_printhead_cnc",
-        "name": "VzBot Vz-Printhead CNC (HextrudORT Low + CPAP + Beacon)",
-        "total_mass_g": 275.0,
+        "name": "VzBot Vz-Printhead CNC 6061 (HextrudORT Low + CPAP + Beacon)",
+        "total_mass_g": 272.0,
         # CAD-exact datums about the X-beam (CF tube) axis, measured on the top-mounted MGN9H
         # (offset_datum_rail_mount="top": no builder top-mount shift is applied on a VzBot gantry).
         "cog_offset_mm": [1.9, -10.3, 13.4],
@@ -3985,13 +4017,36 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
         "cpap_hose_id_mm": 15.0,
         "envelope_mm": [67.0, 100.0, 171.0],
         "default_hardware_summary": (
-            "Official Vz-330_v1.2 CAD printhead stack (Vz-Printhead MGN9 cage around the 20x20 CF tube) with "
-            "real part masses: CNC 6061 Vz-Printhead plates (27 g stated) + Vz-HextrudORT Low CNC (47 g) w/ "
-            "Moons CSE14HRA1L410A NEMA14 (85 g) + CPAP lower duct & 15 mm rear sliding mount (~26 g) + Goliath "
-            "2510 shroud & fan (9 g) + Beacon (7 g) + X endstop, cable holder, belt clips & fasteners (~20 g) = "
-            "247 g on-rail with the 26 g MGN9H block (275 g in the 54 g MGN12H-baseline convention) excl. "
-            "hotend; 343 g dressed w/ 96 g Goliath Air. Extruder sits above the top-mounted MGN9H, so the "
-            "assembled CoG is +13.4 mm above / -10.3 mm in front of the tube axis; nozzle -54.2 mm below."
+            "Mellow CNC Vz-Printhead: official v24 cage layout (top plate on the MGN9H, front/back pieces "
+            "around the 20x20 CF tube, bottom plate, rear belt/cable pillar) with 1.5 mm top/bottom and "
+            "2.5 mm side 6061 plates fitted to the published 27 g (and 22 g CF-hybrid) masses = 27.4 g + "
+            "6 g CNC hotend adapter + ~5 g fasteners; Vz-HextrudORT Low CNC (47 g) w/ Moons NEMA14 (85 g), "
+            "CPAP duct & 15 mm sliding mount (~26 g), Goliath 2510 shroud & fan (9 g), Beacon (7 g), endstop, "
+            "cable holder & belt clips = 244 g on-rail w/ the real 26 g MGN9H (272 g in the 54 g MGN12H "
+            "convention) excl. hotend; 340 g dressed w/ Goliath Air. Tet4 CMS of the bolted cage (0.58x seams)."
+        ),
+    },
+    "vz_printhead_printed": {
+        "preset_id": "vz_printhead_printed",
+        "name": "VzBot Vz-Printhead Printed v24 (ABS/ASA, HextrudORT Low + CPAP + Beacon)",
+        "total_mass_g": 276.0,
+        "cog_offset_mm": [1.9, -10.3, 13.4],
+        "nozzle_offset_mm": [-0.1, -22.4, -54.2],
+        "offset_datum_rail_mount": "top",
+        "mount_material": "abs_printed",
+        "body_construction": "plate_sandwich_cf",
+        "internal_stiffness_n_per_mm": 450.0,
+        "z_probe_type": "static_eddy",
+        "cpap_blower_id": "ws7040_24v",
+        "cpap_hose_id_mm": 15.0,
+        "envelope_mm": [67.0, 100.0, 171.0],
+        "default_hardware_summary": (
+            "Official VzBoT Vz-330_v1.2 printed v24 MGN9 cage, exact CAD: top plate 10.26 + back 8.69 + "
+            "bottom 8.22 + front 3.25 + hotend adapter 2.23 cm^3 = 27.4 g ABS/ASA at VzBoT's 4-wall / "
+            "40-50% infill (0.84 g/cm^3) + 4x M3 30 mm aluminium standoffs (6.4 g) + 17 heat-set inserts & "
+            "screws (~8 g); same HextrudORT Low / CPAP / Beacon dressing as the CNC head = 248 g on-rail w/ "
+            "the real MGN9H (276 g in the MGN12H convention) excl. hotend; 344 g dressed w/ Goliath Air. "
+            "Tet4 CMS of the exact printed cage (0.32x printed multi-piece knockdown)."
         ),
     },
     "heavy_uhf_long": {
@@ -4318,6 +4373,14 @@ def apply_gantry_hardware_kit(
 
     if "carriage_mass_g" in settings and abs(g.carriage_mass_g - float(settings["carriage_mass_g"])) > 0.1:
         g.carriage_mass_g = float(settings["carriage_mass_g"])
+
+    # Populated rail-fastener pitches ship with the kit (None = shared rail_bolt_pitch_mm)
+    for key, label in (("x_rail_bolt_pitch_mm", "X"), ("y_rail_bolt_pitch_mm", "Y")):
+        new_pitch = settings.get(key)
+        if getattr(g, key) != new_pitch:
+            setattr(g, key, new_pitch)
+            if new_pitch is not None:
+                changes.append(f"{label}-Rail Screws every {float(new_pitch):.0f} mm")
 
     if "idler_axial_preload" in settings and g.idler_axial_preload != settings["idler_axial_preload"]:
         g.idler_axial_preload = settings["idler_axial_preload"]

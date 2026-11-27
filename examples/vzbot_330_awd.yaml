@@ -46,6 +46,10 @@ gantry:
   y_rail_mount: inner
   rail_material: steel_4140
   rail_block_type: H
+  # Populated fasteners, not hole pitch: CAD has 6 M3 into in-tube nuts on the MGN9 (every 4th
+  # 20 mm hole, x = +-30/110/190 mm); manual: MGN12 on 2020 "any other hole is fine" (25 -> 50 mm)
+  x_rail_bolt_pitch_mm: 80.0
+  y_rail_bolt_pitch_mm: 50.0
   dual_x_rails: false
   carriage_mass_g: 194
   idler_axial_preload: none
@@ -89,8 +93,8 @@ kinematics:
     body_length_mm: 60.0
 toolhead:
   preset_id: vz_printhead_cnc
-  name: VzBot Vz-Printhead CNC (HextrudORT Low + CPAP + Beacon)
-  total_mass_g: 275
+  name: VzBot Vz-Printhead CNC 6061 (HextrudORT Low + CPAP + Beacon)
+  total_mass_g: 272
   # CAD-exact (Vz-330_v1.2 STEP) about the CF tube axis, measured on the top-mounted MGN9H
   cog_offset_mm: [1.9, -10.3, 13.4]
   nozzle_offset_mm: [-0.1, -22.4, -54.2]

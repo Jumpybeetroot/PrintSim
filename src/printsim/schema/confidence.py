@@ -120,17 +120,29 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "vz_printhead_cnc": {
-            "trust_pct": 78,
+            "trust_pct": 66,
             "basis": (
-                "Official VzBoT3D Vz-330_v1.2 full-printer STEP (Vz-Printhead_Printed_MGN9-revised_v24 subtree, "
-                "exact solid CoMs) re-weighted with real part masses: 27 g CNC Vz-Printhead (VzBoT3D/Vz-Printhead-CNC "
-                "stated), 47 g Vz-HextrudORT Low CNC + 85 g Moons NEMA14 (PrintDB), 26 g MGN9H, printed CPAP duct / "
-                "sliding mount volumes from the official STLs, 2510 fan, Beacon = 247 g on-rail excl. hotend; "
-                "CAD nozzle Y=-22.4 / Z=-54.2 mm and assembled CoG [+1.9, -10.3, +13.4] mm about the CF tube axis."
+                "Official VzBoT Vz-330_v1.2 STEP cage layout & datums (top plate on the MGN9H top face, front/back "
+                "pieces around the CF tube, bottom plate, rear pillar) per the Mellow kit assembly guide; 6061 "
+                "plate thickness (1.5 mm top/bottom, 2.5 mm sides) and windows fitted so the set reproduces BOTH "
+                "published masses (27 g full-alu, 22 g CF-hybrid); Gmsh Tet4 Craig-Bampton CMS with 0.58x bolted "
+                "seams. Dressing masses from PrintDB (HextrudORT Low 47 g, Moons NEMA14 85 g, MGN9H 26 g)."
             ),
             "caveat": (
-                "Not scale-weighed; the HextrudORT/motor CoM comes from the CAD mock-up envelope and the CPAP hose "
-                "drag is lumped. No official probe (Beacon assumed); printed vs CNC carriage plates differ by ~10 g."
+                "No public CNC CAD: plate outlines follow the printed v24 head and pocket patterns are fitted, "
+                "not measured; calipers on the real plates (or the Mellow STEP) would raise this above 85%."
+            ),
+        },
+        "vz_printhead_printed": {
+            "trust_pct": 80,
+            "basis": (
+                "Exact official VzBoT Vz-330_v1.2 printed v24 MGN9 Vz-Printhead cage (top 10.26, back 8.69, bottom "
+                "8.22, front 3.25, adapter 2.23 cm^3) + 4x M3 standoffs, voxel Tet4 Craig-Bampton CMS in ABS with the "
+                "0.32x printed multi-piece knockdown; VzBoT print settings (4 walls, 5 top/bottom, 40-50% infill)."
+            ),
+            "caveat": (
+                "Not scale-weighed; printed density (0.84 g/cm^3) and layer anisotropy vary with slicer settings; "
+                "HextrudORT CoM from the CAD mock-up envelope."
             ),
         },
         "el_fuego": {

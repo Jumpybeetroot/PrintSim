@@ -47,6 +47,7 @@ from printsim.cad_assets import (
     PortDefinition,
     VisualPart,
     bake_solid_superelement,
+    build_visual_glb,
     clear_asset_cache,
 )
 
@@ -73,6 +74,7 @@ COL_TI = "#b8c2ce"
 REFERENCE_MATERIAL = "aluminum_6061_t6"
 CAD_TRUST_PCT = 72
 FORCE_REBAKE = False  # set by --force; otherwise stations with a complete bundle are skipped
+VISUALS_ONLY = False  # set by --visuals-only; rebuild visual.glb of complete bundles without re-meshing
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +163,8 @@ def _style(path: str, ext: np.ndarray) -> tuple[str, float, float]:
     lo = path.lower()
     if "nema17" in lo or "stepper" in lo:
         return COL_MOTOR, 0.55, 0.42
+    if "sliding_block" in lo or "mgn" in leaf:
+        return COL_STEEL, 0.88, 0.24
     if "titanium" in leaf or "shoulder_bolt" in leaf:
         return COL_TI, 0.86, 0.30
     if "pulley" in lo or "gt2" in lo or "bearing" in leaf or "component" in leaf:
@@ -224,24 +228,43 @@ def _bake_station(
     port1: PortDefinition,
     mesh_size_mm: float,
     recipe: dict[str, Any],
+    visual_only_parts: list[dict[str, Any]] | None = None,
 ) -> None:
     bundle = ASSETS_ROOT / "gantry_brackets" / asset_id
-    if not FORCE_REBAKE and all(
+    complete = all(
         (bundle / f).is_file() for f in ("manifest.json", "superelement.npz", "visual.glb")
-    ):
+    )
+    if complete and not FORCE_REBAKE and not VISUALS_ONLY:
         print(f"  [skip] {asset_id}: complete bundle already baked (use --force to re-bake)")
         return
     visual: list[VisualPart] = []
     structs: list[trimesh.Trimesh] = []
-    for idx, part in enumerate(parts):
+    for idx, part in enumerate(list(parts) + list(visual_only_parts or [])):
+        is_visual_only = idx >= len(parts)
         m = _mesh(part, origin)
         if len(m.faces) == 0:
             continue
         ext = m.extents
         col, met, rough = _style(part["path"], ext)
         visual.append(VisualPart(m, (_leaf(part["path"])[:24] or f"part_{idx}"), col, metallic=met, roughness=rough))
-        if is_structural(part["path"], ext):
+        if not is_visual_only and is_structural(part["path"], ext):
             structs.append(m)
+    if complete and VISUALS_ONLY and not FORCE_REBAKE:
+        import json
+
+        tris, nbytes = build_visual_glb(visual, bundle / "visual.glb", max_total_triangles=22000)
+        man_path = bundle / "manifest.json"
+        man = json.loads(man_path.read_text(encoding="utf-8"))
+        man["visual_triangles"] = int(tris)
+        man["visual_bytes"] = int(nbytes)
+        man_path.write_text(json.dumps(man, indent=2), encoding="utf-8")
+        rec_path = bundle / "part_recipe.json"
+        if rec_path.is_file():
+            rec = json.loads(rec_path.read_text(encoding="utf-8"))
+            rec.update(recipe)
+            rec_path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+        print(f"  [visual] {asset_id}: {tris} tris, {nbytes / 1024:.0f} KiB (superelement unchanged)")
+        return
     if not structs:
         raise RuntimeError(f"{asset_id}: no structural solids selected")
     structural = trimesh.util.concatenate(structs) if len(structs) > 1 else structs[0]
@@ -394,6 +417,9 @@ def bake_xy(parts: list[dict[str, Any]]) -> None:
     for side, sgn, sub in (("left", -1.0, "Y_gantry_printed_-_TS_v50"), ("right", 1.0, "Y_gantry_printed_-_ST_v7")):
         origin = np.array([X_LEFT_CL if sgn < 0 else X_RIGHT_CL, Y_XBEAM, Z_GANTRY])
         sel = _select(parts, GANTRY + sub)
+        # MGN12H Y carriage block riding the inner-face rail (visual only: its ball-raceway
+        # compliance is the Hertzian y_car_bearing in the FEA, not part of this CMS body)
+        y_block = _select(parts, GANTRY + ("Y_sliding_block_left" if sgn < 0 else "Y_sliding_block_right"))
         # Y-carriage pad face: joint face mating the MGN12H block on the inner rail face (X = -/+232)
         x_pad = -232.0 - origin[0] if sgn < 0 else 232.0 - origin[0]
         # CF tube clamp pocket: tube spans |X| <= 220, joint inner face at |X| = 203
@@ -423,19 +449,420 @@ def bake_xy(parts: list[dict[str, Any]]) -> None:
             port0=PortDefinition(p0, _min_count(_pad, p0)),
             port1=PortDefinition(p1, _min_count(_pocket, p1)),
             mesh_size_mm=2.0,
-            recipe={"station": f"xy_{side}", "port0": "MGN12H Y-carriage pad face", "port1": "20x20 CF tube clamp pocket", "origin_cad_mm": origin.tolist()},
+            recipe={"station": f"xy_{side}", "port0": "MGN12H Y-carriage pad face", "port1": "20x20 CF tube clamp pocket", "origin_cad_mm": origin.tolist(), "visual_includes": "MGN12H Y carriage block"},
+            visual_only_parts=y_block,
         )
+
+
+# ---------------------------------------------------------------------------
+# Toolhead & hotend visual assets (Vz-Printhead + Goliath Air)
+# ---------------------------------------------------------------------------
+
+PRINTHEAD = f"{ROOT_LABEL}/Vz-Printhead_Printed_MGN9-revised_v24/"
+# CAD datums: MGN9H block top face center (toolhead Port 0) and Goliath top mounting face / tip
+MGN9H_TOP_FACE_CAD_MM = np.array([0.0, 58.26, 65.0])
+GOLIATH_TIP_CAD_MM = np.array([-0.06, 35.9, -9.24])
+GOLIATH_TOP_Z_CAD_MM = 60.0
+COL_PRINTED_RED = "#c81e2b"
+COL_PRINTED_BLACK = "#1f242d"
+
+
+def _write_visual_bundle(
+    category: str,
+    asset_id: str,
+    name: str,
+    visual: list[VisualPart],
+    extra_meta: dict[str, Any],
+    max_triangles: int,
+) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    bundle = ASSETS_ROOT / category / asset_id
+    if (bundle / "superelement.npz").is_file():
+        print(f"  [skip] {category}/{asset_id}: structural bundle present (visual comes with it)")
+        return
+    if not FORCE_REBAKE and (bundle / "manifest.json").is_file() and (bundle / "visual.glb").is_file():
+        print(f"  [skip] {category}/{asset_id}: visual bundle already baked (use --force to re-bake)")
+        return
+    bundle.mkdir(parents=True, exist_ok=True)
+    tris, nbytes = build_visual_glb(visual, bundle / "visual.glb", max_total_triangles=max_triangles)
+    lo = np.min(np.vstack([vp.shape_or_mesh.bounds[0] for vp in visual]), axis=0)
+    hi = np.max(np.vstack([vp.shape_or_mesh.bounds[1] for vp in visual]), axis=0)
+    manifest = {
+        "schema_version": 1,
+        "category": category,
+        "asset_id": asset_id,
+        "name": name,
+        "source_cad": SOURCE_CAD,
+        "source_url": SOURCE_URL,
+        "baked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "has_superelement": False,
+        "visual_glb": "visual.glb",
+        "visual_triangles": int(tris),
+        "visual_bytes": int(nbytes),
+        "ref_size_mm": [round(float(v), 2) for v in (hi - lo)],
+        **extra_meta,
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"  [visual] {category}/{asset_id}: {tris} tris, {nbytes / 1024:.0f} KiB, size={manifest['ref_size_mm']} mm")
+
+
+def _printhead_style(path: str, ext: np.ndarray) -> tuple[str, float, float]:
+    lo = path.lower()
+    leaf = _leaf(path)
+    if "hextrudort" in lo:
+        return COL_CNC_DARK, 0.78, 0.36
+    if "fan_v2" in lo or "blades" in leaf or "body" in leaf and "25x25" in lo:
+        return COL_PRINTED_BLACK, 0.10, 0.62
+    if "cpap_tube" in leaf:
+        return "#3a414d", 0.05, 0.72
+    if "carriage" in lo or "adapter_plate" in lo:
+        return COL_CNC_DARK, 0.82, 0.34
+    if max(ext) <= 12.0 or "screw" in leaf or "standoff" in leaf or "insert" in leaf or "flathead" in leaf:
+        return COL_STEEL, 0.84, 0.30
+    if "duct" in lo or "cpap" in lo or "endstop" in lo or "enstop" in lo or "cable_holder" in lo:
+        return COL_PRINTED_RED, 0.05, 0.58
+    return COL_PRINTED_BLACK, 0.10, 0.6
+
+
+def bake_toolhead_visuals(parts: list[dict[str, Any]]) -> None:
+    """Vz-Printhead (toolheads/vz_printhead_cnc) and Goliath Air (hotends/mellow_goliath_air) GLBs.
+
+    Visual-only bundles: the official CAD models the *printed* Vz-Printhead, so its geometry is not a
+    valid structural proxy for the 27 g CNC plates the preset simulates; the FEA keeps the calibrated
+    plate-sandwich Stage-2 chain while the Studio renders the exact CAD envelope.
+    """
+    include = (
+        "hardware__7_",
+        "Hotend_universal_adapter_plate",
+        "Duct/",
+        "carriage/",
+        "cable_holder_Vz",
+        "Rear_sliding_mount_CPAP_15mm",
+        "Extruders/",
+        "X-enstop",
+        "Hotends/Goliath_Mockup_AIR_v1/goliath_heatsink_fan_duct",
+    )
+    th_parts = []
+    for p in parts:
+        if not p["path"].startswith(PRINTHEAD):
+            continue
+        rel = p["path"][len(PRINTHEAD):]
+        if "Top_plate_MGN9C" in rel:  # mutually exclusive MGN9C variant at identical coordinates
+            continue
+        if rel.startswith(include):
+            th_parts.append(p)
+    origin = MGN9H_TOP_FACE_CAD_MM
+    visual: list[VisualPart] = []
+    for idx, part in enumerate(th_parts):
+        m = _mesh(part, origin)
+        if len(m.faces) == 0:
+            continue
+        col, met, rough = _printhead_style(part["path"], m.extents)
+        visual.append(VisualPart(m, (_leaf(part["path"])[:24] or f"part_{idx}"), col, metallic=met, roughness=rough))
+    hot_top = np.array([GOLIATH_TIP_CAD_MM[0], GOLIATH_TIP_CAD_MM[1], GOLIATH_TOP_Z_CAD_MM])
+    port1 = [round(float(v), 3) for v in (hot_top - origin)]
+    _write_visual_bundle(
+        "toolheads",
+        "vz_printhead_cnc",
+        "VzBot Vz-Printhead (MGN9H top carriage, HextrudORT Low, CPAP)",
+        visual,
+        {
+            "port0_mm": [0.0, 0.0, 0.0],
+            "port1_mm": port1,
+            "datum": "Port 0 = MGN9H block top face center; Port 1 = Goliath top mounting face",
+            "x_rail_mount": "top",
+            "cad_trust_pct": 70,
+        },
+        max_triangles=24000,
+    )
+
+    goliath = [
+        p
+        for p in parts
+        if p["path"].startswith(PRINTHEAD + "Hotends/Goliath_Mockup_AIR_v1/Goliath_Air_cooled")
+    ]
+    hot_vis = [
+        VisualPart(_mesh(p, hot_top), "goliath_air", "#d6dbe3", metallic=0.86, roughness=0.3) for p in goliath
+    ]
+    tip_drop = float(GOLIATH_TOP_Z_CAD_MM - GOLIATH_TIP_CAD_MM[2])
+    _write_visual_bundle(
+        "hotends",
+        "mellow_goliath_air",
+        "Mellow Goliath Air (VzBoT CAD mock-up)",
+        hot_vis,
+        {
+            "port0_mm": [0.0, 0.0, 0.0],
+            "port1_mm": [0.0, 0.0, round(-tip_drop, 2)],
+            "datum": "Port 0 = top mounting face center; Port 1 = nozzle tip",
+            "cad_trust_pct": 65,
+        },
+        max_triangles=12000,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Structural Vz-Printhead superelements: printed (exact CAD) and CNC (CAD layout, fitted plates)
+# ---------------------------------------------------------------------------
+
+# Fitted CNC plate set (Mellow full-alu 27 g AND hybrid CF top/bottom 22 g both reproduced):
+# 1.5 mm top/bottom plates (window scale 0.93), 2.5 mm front/back side pieces (window scale 0.80)
+CNC_TOP_BOTTOM_T_MM = 1.5
+CNC_SIDE_T_MM = 2.5
+CNC_TB_WINDOW = 0.93
+CNC_SIDE_WINDOW = 0.80
+
+
+def _b3d_box(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float):
+    import build123d as b3d
+
+    return b3d.Box(x1 - x0, y1 - y0, z1 - z0).moved(
+        b3d.Location(((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2))
+    )
+
+
+def _cnc_window(x0, x1, y0, y1, z0, z1, f):
+    cx, cy, cz = (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2
+    if z1 - z0 < 4.0:  # through-thickness window in a horizontal plate (scale x & y)
+        return _b3d_box(cx - (x1 - x0) * f / 2, cx + (x1 - x0) * f / 2, cy - (y1 - y0) * f / 2, cy + (y1 - y0) * f / 2, z0, z1)
+    return _b3d_box(cx - (x1 - x0) * f / 2, cx + (x1 - x0) * f / 2, y0, y1, cz - (z1 - z0) * f / 2, cz + (z1 - z0) * f / 2)
+
+
+def build_cnc_cage_cad_mm():
+    """Return ``{name: build123d Solid}`` for the CNC Vz-Printhead cage in VzBot CAD coordinates (mm).
+
+    Same cage topology & datums as the official printed v24 head (top plate on the MGN9H block top
+    face Z=65, front/back pieces either side of the 20 mm CF tube, bottom plate below it, rear belt /
+    cable pillar), as in the Mellow kit assembly guide; thicknesses & windows fitted to the published
+    27 g (6061) / 22 g (CF top-bottom hybrid) masses.
+    """
+    tt, ts, ftb, fs = CNC_TOP_BOTTOM_T_MM, CNC_SIDE_T_MM, CNC_TB_WINDOW, CNC_SIDE_WINDOW
+    top = _b3d_box(-27.5, 27.5, 26.2, 82.91, 65, 65 + tt)
+    for w in ((-26, -11, 49, 80), (11, 26, 49, 80), (-10, 10, 70, 81)):
+        top = top - _cnc_window(*w, 64.9, 65.1 + tt, ftb)
+    front = _b3d_box(-27.5, 27.5, 47.67 - ts, 47.67, 33 - tt, 65)
+    for w in ((-26, -3), (3, 26)):
+        front = front - _cnc_window(w[0], w[1], 47.6 - ts, 47.7, 34, 62, fs)
+    back = _b3d_box(-22.5, 22.5, 72.91, 72.91 + ts, 33 - tt, 65) + _b3d_box(-5, 5, 72.91, 72.91 + ts, 65, 114)
+    for w in ((-21, -3, 34, 62), (3, 21, 34, 62), (-3.5, 3.5, 72, 108)):
+        back = back - _cnc_window(w[0], w[1], 72.8, 73.0 + ts, w[2], w[3], fs)
+    bottom = _b3d_box(-27.5, 27.5, 33.64, 82.9, 33 - tt, 33)
+    for w in ((-26, -3), (3, 26)):
+        bottom = bottom - _cnc_window(w[0], w[1], 36, 80, 32.9 - tt, 33.1, ftb)
+    # CNC 6061 universal hotend adapter (official outline 41.2 x 20.7 x 5 mm under the top plate front)
+    adapter = _b3d_box(-20.62, 20.61, 26.2, 46.86, 60, 65)
+    import build123d as b3d
+
+    for hx, hy in ((-5.66, 30.21), (5.66, 30.21), (5.66, 41.52), (-5.66, 41.52)):
+        adapter = adapter - b3d.Cylinder(1.3, 5.2).moved(b3d.Location((hx, hy, 62.5)))
+    return {"top_plate": top, "front_piece": front, "back_piece": back, "bottom_plate": bottom, "hotend_adapter": adapter}
+
+
+def _shape_mesh(shape: Any, origin: np.ndarray) -> trimesh.Trimesh:
+    from bake_voron_kits import _shape_to_trimesh  # type: ignore[import-not-found]
+
+    m = _shape_to_trimesh(shape, deflection=0.2)
+    m.apply_translation(-origin)
+    return m
+
+
+def _dressing_parts(parts: list[dict[str, Any]], include_carriage: bool) -> list[dict[str, Any]]:
+    keep = (
+        "hardware__7_/Heat_insert",
+        "hardware__7_/M3_8mm",
+        "hardware__7_/M3_10mm",
+        "Duct/",
+        "cable_holder_Vz",
+        "Rear_sliding_mount_CPAP_15mm",
+        "Extruders/",
+        "X-enstop",
+        "Hotends/Goliath_Mockup_AIR_v1/goliath_heatsink_fan_duct",
+    )
+    carriage = ("carriage/", "Hotend_universal_adapter_plate", "hardware__7_/M3__30mm_round_standoffs")
+    out = []
+    for p in parts:
+        if not p["path"].startswith(PRINTHEAD):
+            continue
+        rel = p["path"][len(PRINTHEAD):]
+        if "Top_plate_MGN9C" in rel:
+            continue
+        if rel.startswith(keep) or (include_carriage and rel.startswith(carriage)):
+            out.append(p)
+    return out
+
+
+def _toolhead_ports() -> tuple[PortDefinition, PortDefinition]:
+    p1 = (-0.06, -22.36, -5.0)
+
+    def _p0(c: np.ndarray) -> np.ndarray:  # top-plate underside on the MGN9H 4x M3 pad
+        return (np.abs(c[:, 2]) <= 0.8) & (np.abs(c[:, 0]) <= 10.5) & (np.abs(c[:, 1]) <= 10.5)
+
+    def _p1(c: np.ndarray) -> np.ndarray:  # hotend adapter underside around the Goliath top face
+        return (np.abs(c[:, 2] - p1[2]) <= 0.8) & (np.hypot(c[:, 0] - p1[0], c[:, 1] - p1[1]) <= 12.0)
+
+    return (
+        PortDefinition((0.0, 0.0, 0.0), _min_count(_p0, (0.0, 0.0, 0.0))),
+        PortDefinition(p1, _min_count(_p1, p1)),
+    )
+
+
+def _mark_multi_piece(category: str, asset_id: str, note: str) -> None:
+    import json
+
+    man_path = ASSETS_ROOT / category / asset_id / "manifest.json"
+    man = json.loads(man_path.read_text(encoding="utf-8"))
+    man["multi_piece_bolted"] = True
+    man["x_rail_mount"] = "top"
+    man["datum"] = "Port 0 = MGN9H block top face center; Port 1 = Goliath top mounting face"
+    man["construction_note"] = note
+    man_path.write_text(json.dumps(man, indent=2), encoding="utf-8")
+
+
+def bake_toolhead_structural(parts: list[dict[str, Any]]) -> None:
+    origin = MGN9H_TOP_FACE_CAD_MM
+    port0, port1 = _toolhead_ports()
+
+    # ---- Printed Vz-Printhead (exact official v24 MGN9 printed cage) ----
+    struct_keys = (
+        "carriage/Top_plate_MGN9H",
+        "carriage/back_plate",
+        "carriage/bottom_plate",
+        "carriage/Front",
+        "Hotend_universal_adapter_plate/SOLID",
+        "hardware__7_/M3__30mm_round_standoffs",
+    )
+    printed_struct, printed_vis = [], []
+    for idx, part in enumerate(_dressing_parts(parts, include_carriage=True)):
+        m = _mesh(part, origin)
+        if len(m.faces) == 0:
+            continue
+        rel = part["path"][len(PRINTHEAD):]
+        col, met, rough = _printhead_style(part["path"], m.extents)
+        if rel.startswith(("carriage/", "Hotend_universal_adapter_plate/SOLID")):
+            col, met, rough = COL_PRINTED_BLACK, 0.08, 0.62
+        printed_vis.append(VisualPart(m, (_leaf(part["path"])[:24] or f"part_{idx}"), col, metallic=met, roughness=rough))
+        if rel.startswith(struct_keys):
+            printed_struct.append(m)
+    _bake_toolhead_asset(
+        "vz_printhead_printed",
+        "VzBot Vz-Printhead Printed v24 (ABS/ASA, MGN9H top carriage)",
+        material="abs_printed",
+        fdm=True,
+        region=trimesh.util.concatenate(printed_struct),
+        visual=printed_vis,
+        port0=port0,
+        port1=port1,
+        mesh_size_mm=1.1,
+        trust=80,
+        recipe={"structural": list(struct_keys), "cage": "official printed v24 MGN9 cage (exact CAD)"},
+    )
+    _mark_multi_piece("toolheads", "vz_printhead_printed", "4 printed plates + adapter bolted at 8 corners with 4x M3 standoffs")
+
+    # ---- CNC Vz-Printhead (official cage layout, plates fitted to Mellow 27 g / 22 g) ----
+    import build123d as b3d
+
+    cage = build_cnc_cage_cad_mm()
+    fused = None
+    for solid in cage.values():
+        fused = solid if fused is None else fused.fuse(solid)
+    fused_local = fused.moved(b3d.Location((-origin[0], -origin[1], -origin[2])))
+    cnc_vis = []
+    for name, solid in cage.items():
+        cnc_vis.append(VisualPart(_shape_mesh(solid, origin), f"cnc_{name}", COL_STEEL if name != "hotend_adapter" else COL_CNC_DARK, metallic=0.88, roughness=0.3))
+    for idx, part in enumerate(_dressing_parts(parts, include_carriage=False)):
+        m = _mesh(part, origin)
+        if len(m.faces) == 0:
+            continue
+        col, met, rough = _printhead_style(part["path"], m.extents)
+        cnc_vis.append(VisualPart(m, (_leaf(part["path"])[:24] or f"part_{idx}"), col, metallic=met, roughness=rough))
+    vol_cm3 = {k: round(float(v.volume) / 1000.0, 3) for k, v in cage.items()}
+    _bake_toolhead_asset(
+        "vz_printhead_cnc",
+        "VzBot Vz-Printhead CNC 6061 (Mellow, MGN9H top carriage)",
+        material="aluminum_6061_t6",
+        fdm=False,
+        region=fused_local,
+        visual=cnc_vis,
+        port0=port0,
+        port1=port1,
+        mesh_size_mm=1.0,
+        trust=62,
+        recipe={
+            "cage": "official v24 cage layout & datums; CNC plate thickness/windows fitted to Mellow 27 g (6061) & 22 g (CF hybrid)",
+            "top_bottom_t_mm": CNC_TOP_BOTTOM_T_MM,
+            "side_t_mm": CNC_SIDE_T_MM,
+            "part_volumes_cm3": vol_cm3,
+        },
+    )
+    _mark_multi_piece("toolheads", "vz_printhead_cnc", "4 CNC plates + adapter bolted at 8 corners (Mellow kit)")
+
+
+def _bake_toolhead_asset(
+    asset_id: str,
+    name: str,
+    *,
+    material: str,
+    fdm: bool,
+    region: Any,
+    visual: list[VisualPart],
+    port0: PortDefinition,
+    port1: PortDefinition,
+    mesh_size_mm: float,
+    trust: int,
+    recipe: dict[str, Any],
+) -> None:
+    import shutil
+
+    bundle = ASSETS_ROOT / "toolheads" / asset_id
+    if (bundle / "superelement.npz").is_file() and not FORCE_REBAKE:
+        print(f"  [skip] toolheads/{asset_id}: structural bundle already baked (use --force)")
+        return
+    if bundle.is_dir() and not (bundle / "superelement.npz").is_file():
+        shutil.rmtree(bundle)  # replace an earlier visual-only bundle
+    spec = BakedAssetSpec(
+        category="toolheads",
+        asset_id=asset_id,
+        name=name,
+        source_cad=SOURCE_CAD,
+        source_url=SOURCE_URL,
+        reference_material_id=material,
+        cad_trust_pct=trust,
+        port0=port0,
+        port1=port1,
+        n_internal_modes=8,
+        mesh_size_mm=mesh_size_mm,
+        is_multi_material=False,
+        is_fdm_anisotropic=fdm,
+        part_recipe=recipe,
+        visual_max_triangles=24000,
+        fea_surface_max_triangles=80000,
+    )
+    t0 = time.perf_counter()
+    res = bake_solid_superelement(
+        spec,
+        regions=[MaterialRegion(solid=region, material_id=material, label=asset_id, fdm_anisotropic=fdm)],
+        visual_parts=visual,
+    )
+    ps = res.manifest["port_stiffness_n_per_mm"]
+    print(
+        f"  [CMS] toolheads/{asset_id}: {res.manifest['num_elements']} tets, mass={res.manifest['mass_kg'] * 1e3:.1f} g "
+        f"({material}), rb={res.manifest['rigid_body_max_freq_hz']:.4f} Hz, k=({ps['kx']:.0f}, {ps['ky']:.0f}, {ps['kz']:.0f}) N/mm "
+        f"({time.perf_counter() - t0:.0f}s)"
+    )
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--step", type=Path, default=Path("cad_sources/vzbot/Vz-330_WEB v2.step"))
     ap.add_argument("--parts", type=Path, default=DEFAULT_CACHE)
-    ap.add_argument("--group", choices=["all", "rear", "front_awd", "front_2wd", "xy"], default="all")
+    ap.add_argument("--group", choices=["all", "rear", "front_awd", "front_2wd", "xy", "toolhead", "toolhead_structural"], default="all")
     ap.add_argument("--force", action="store_true", help="Re-bake stations that already have a complete bundle")
+    ap.add_argument("--visuals-only", action="store_true", help="Rebuild visual.glb of complete bundles without re-meshing")
     args = ap.parse_args()
-    global FORCE_REBAKE
+    global FORCE_REBAKE, VISUALS_ONLY
     FORCE_REBAKE = bool(args.force)
+    VISUALS_ONLY = bool(args.visuals_only)
     parts = load_parts(args.parts, args.step)
     print(f"Loaded {len(parts)} VzBot CAD solids")
     if args.group in ("all", "rear"):
@@ -446,6 +873,10 @@ def main() -> None:
         bake_front_2wd(parts)
     if args.group in ("all", "xy"):
         bake_xy(parts)
+    if args.group in ("all", "toolhead"):
+        bake_toolhead_visuals(parts)  # Goliath hotend visual (toolheads are structural below)
+    if args.group in ("all", "toolhead_structural"):
+        bake_toolhead_structural(parts)
     clear_asset_cache()
 
 

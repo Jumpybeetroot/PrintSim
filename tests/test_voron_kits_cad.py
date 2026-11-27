@@ -264,7 +264,14 @@ def test_cad_xy_joint_superelements_wired_into_3d_corexy_fea() -> None:
         nm = asm.node_map
         assert "x_beam_l" in nm and "x_beam_r" in nm
         assert nm["x_beam_l"].position_m[0] * 1000.0 == pytest.approx(expected_inset_mm, abs=0.2)
-        w_cl_mm = nm["y_car_r"].position_m[0] * 1000.0
+        # Frame-width reference is the Y-extrusion axis (rail station node); on inner-face rails
+        # the moving carriage node rides the raceway inboard of it (Monolith / VzBot).
+        w_cl_mm = nm["y_rail_car_r"].position_m[0] * 1000.0
+        if spec.gantry.y_rail_mount == "inner":
+            assert nm["y_car_l"].position_m[0] * 1000.0 == pytest.approx(14.8, abs=0.05)
+            assert w_cl_mm - nm["y_car_r"].position_m[0] * 1000.0 == pytest.approx(14.8, abs=0.05)
+        else:
+            assert nm["y_car_r"].position_m[0] == pytest.approx(nm["y_rail_car_r"].position_m[0])
         assert (w_cl_mm - nm["x_beam_r"].position_m[0] * 1000.0) == pytest.approx(expected_inset_mm, abs=0.2)
 
         xg_l = next(m for m in asm.members if m.id == "x_gantry_l")

@@ -3833,8 +3833,14 @@ export const PrinterViewport: React.FC<Props> = ({
                 ? ([-0.322, -19.932, 2.28] as [number, number, number])
                 : isStealthBurnerToolhead
                   ? ([0.2, -28.9, -1.9] as [number, number, number])
-                  : null;
+                  : toolheadGlbLoaded && thStruct?.toolhead_visual_ports_mm?.port1_mm
+                    ? ([...thStruct.toolhead_visual_ports_mm.port1_mm] as [number, number, number])
+                    : null;
       const isCadSelfContainedToolhead = toolheadGlbLoaded && !isDeltaArch && xRailMountTool === "front";
+      // CAD toolheads carried on a TOP-mounted X rail (VzBot Vz-Printhead on MGN9H): Port 0 is the
+      // carriage block's top face, directly above the X-beam axis (beam half-height + carriage height).
+      const isCadTopMountToolhead =
+        toolheadGlbLoaded && !isDeltaArch && xRailMountTool === "top" && rawCadToolheadPort1Mm != null;
 
       let hotendLen = Math.max(Math.min(Math.abs(nozRelY) * 0.72, 0.56), 0.34);
       if (cachedHotendGlb && hotendGlbBounds && !hotendGlbBounds.isEmpty()) {
@@ -3911,6 +3917,7 @@ export const PrinterViewport: React.FC<Props> = ({
       const cadToolheadBackClearZ =
         !isDeltaArch &&
         !isCadSelfContainedToolhead &&
+        !isCadTopMountToolhead &&
         cadPort1Three &&
         toolheadGlbBounds &&
         !toolheadGlbBounds.isEmpty() &&
@@ -3930,11 +3937,15 @@ export const PrinterViewport: React.FC<Props> = ({
           : Math.max(baseNozRelZ, backplateFrontZ + Math.max(0.16, hotendGlbRearZ + 0.025));
       const rearBridgeZ = isDeltaArch ? 0 : -(targetHotendRelZ - backplateFrontZ);
 
+      // CAD Port 0 (carriage bolt face) relative to the X-beam toolhead node, in Three.js coordinates
+      const cadPort0LocalInTh = isCadTopMountToolhead
+        ? new THREE.Vector3(0, beamHalfY + carTotalH, 0)
+        : new THREE.Vector3(0, 0, backplateFrontZ + cadToolheadBackClearZ);
       const stage2RestPos = cadPort1Three && !isDeltaArch
         ? new THREE.Vector3(
-            baseTh.x + cadPort1Three.x,
-            baseTh.y + cadPort1Three.y,
-            baseTh.z + backplateFrontZ + cadToolheadBackClearZ + cadPort1Three.z
+            baseTh.x + cadPort0LocalInTh.x + cadPort1Three.x,
+            baseTh.y + cadPort0LocalInTh.y + cadPort1Three.y,
+            baseTh.z + cadPort0LocalInTh.z + cadPort1Three.z
           )
         : new THREE.Vector3(
             baseNoz.x,
@@ -4157,7 +4168,7 @@ export const PrinterViewport: React.FC<Props> = ({
           effCollarRelY + (cadPort1Three ? 0.06 : clampBotY + clampH + 0.02)
         );
 
-        if (isCadSelfContainedToolhead) {
+        if (isCadSelfContainedToolhead || isCadTopMountToolhead) {
           // Self-contained CAD toolhead GLB mounts directly to the MGN carriage; omit generic procedural backplate
         } else if (xRailMountTool === "front") {
           const zRear = beamHalfZ + carTotalH;
@@ -4778,10 +4789,11 @@ export const PrinterViewport: React.FC<Props> = ({
         if (cadPort1Three && !isDeltaArch) {
           // Pivot CAD toolhead cleanly around Port 0 / carriage bolt face (not Port 1!)
           // so microwaved_bowden stays seated flush on the MGN12 carriage instead of swinging off.
-          const port0LocalInTh = new THREE.Vector3(0, 0, backplateFrontZ + cadToolheadBackClearZ);
-          const port0World = isCadSelfContainedToolhead
-            ? thAnchor.clone().add(port0LocalInTh)
-            : port0LocalInTh.applyQuaternion(backplateGroup.quaternion).add(thAnchor);
+          const port0LocalInTh = cadPort0LocalInTh.clone();
+          const port0World =
+            isCadSelfContainedToolhead || isCadTopMountToolhead
+              ? thAnchor.clone().add(port0LocalInTh)
+              : port0LocalInTh.applyQuaternion(backplateGroup.quaternion).add(thAnchor);
           const port1FromPort0 = cadPort1Three.clone().applyQuaternion(stage1FeaQuat);
           cogGroup.position.copy(port0World).add(port1FromPort0);
         }

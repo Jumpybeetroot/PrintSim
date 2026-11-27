@@ -907,14 +907,17 @@ class AssemblyModel:
                 "cad_superelements_active": [se.to_summary_dict() for se in self.superelements],
                 "hotend_visual_glb_url": (
                     f"/api/assets/hardware/hotends/{hid_vis}/visual.glb"
-                    if (hid_vis and _has_cad_asset("hotends", hid_vis))
+                    if (hid_vis and _has_cad_visual("hotends", hid_vis))
                     else None
                 ),
                 "toolhead_visual_glb_url": (
                     f"/api/assets/hardware/toolheads/{tid_vis}/visual.glb"
-                    if (tid_vis and _has_cad_asset("toolheads", tid_vis))
+                    if (tid_vis and _has_cad_visual("toolheads", tid_vis))
                     else None
                 ),
+                # Port 0 / Port 1 datums of visual-only CAD toolheads (no structural superelement),
+                # e.g. the printed-geometry VzBot Vz-Printhead on a top-mounted MGN9H
+                "toolhead_visual_ports_mm": _cad_visual_ports_mm("toolheads", tid_vis),
             },
             "nodes": [
                 {
@@ -1508,6 +1511,36 @@ def _build_custom_assembly(spec: PrinterSpec) -> AssemblyModel:
     return model
 
 
+def _has_cad_visual(category: str, asset_id: str | None) -> bool:
+    """True when a baked ``visual.glb`` exists (structural or visual-only bundle)."""
+    if not asset_id:
+        return False
+    if _has_cad_asset(category, asset_id):
+        return True
+    try:
+        from printsim.cad_assets.registry import has_visual_asset
+    except ImportError:
+        return False
+    return bool(has_visual_asset(category, asset_id))
+
+
+def _cad_visual_ports_mm(category: str, asset_id: str | None) -> dict[str, list[float]] | None:
+    """Return ``{"port0_mm", "port1_mm"}`` from a visual-only bundle manifest, else ``None``."""
+    if not asset_id:
+        return None
+    try:
+        from printsim.cad_assets.registry import get_hardware_asset_manifest
+    except ImportError:
+        return None
+    man = get_hardware_asset_manifest(category, asset_id)
+    if not man or man.get("has_superelement", True):
+        return None
+    p0, p1 = man.get("port0_mm"), man.get("port1_mm")
+    if not (isinstance(p0, list) and isinstance(p1, list) and len(p0) == 3 and len(p1) == 3):
+        return None
+    return {"port0_mm": [float(v) for v in p0], "port1_mm": [float(v) for v in p1]}
+
+
 def corexy_frame_centerlines_m(spec: PrinterSpec) -> tuple[float, float, float]:
     """Return CoreXY beam centerline spans (w_cl, d_cl, h_cl) in meters from outer edge-to-edge dims.
 
@@ -1855,6 +1888,17 @@ def _build_corexy(
             StructuralNode("toolhead", np.array([x_tool, y_gantry, z_gantry]), lumped_mass_kg=toolhead_kg, role="toolhead"),
         ]
     )
+    if spec.gantry.y_rail_mount == "inner":
+        # Inner-face Y rails: the carriage rolls on a raceway inboard of the Y-extrusion axis, so the
+        # moving carriage node sits on that raceway (rigid arm back to y_rail_car_* in the bearing).
+        from printsim.fea.components import y_carriage_raceway_offset_m
+
+        r_race = y_carriage_raceway_offset_m(
+            spec.gantry.y_rail_profile, 0.5 * get_profile(spec.frame.profile).width_m
+        )
+        _nm = {n.id: n for n in nodes}
+        _nm["y_car_l"].position_m = np.array([r_race, y_gantry, z_gantry])
+        _nm["y_car_r"].position_m = np.array([w - r_race, y_gantry, z_gantry])
 
 
     trident_bed_anchors = _setup_corexy_z_drive_nodes_and_bed(
@@ -2029,6 +2073,7 @@ def _build_corexy(
     xp = spec.gantry.x_beam_profile
     xm = spec.gantry.x_beam_material
     xy_assets = _resolve_cad_xy_joint_assets(spec)
+    nmap_ycar = {n.id: n for n in nodes if n.id in ("y_car_l", "y_car_r")}
     if xy_assets is not None:
         xy_l_asset, xy_r_asset = xy_assets
         raw_in_l = abs(float(xy_l_asset.port_coords_m[1][0]))  # type: ignore[attr-defined]
@@ -2037,8 +2082,8 @@ def _build_corexy(
         max_in_r = max(0.015, min(0.25 * w, (w - x_tool) - 0.015))
         x_in_l = float(np.clip(raw_in_l, 0.015, max_in_l))
         x_in_r = float(np.clip(raw_in_r, 0.015, max_in_r))
-        p_ycar_l = np.array([0.0, y_gantry, z_gantry], dtype=float)
-        p_ycar_r = np.array([w, y_gantry, z_gantry], dtype=float)
+        p_ycar_l = np.array(nmap_ycar["y_car_l"].position_m, dtype=float)
+        p_ycar_r = np.array(nmap_ycar["y_car_r"].position_m, dtype=float)
         p_xbeam_l = np.array([x_in_l, y_gantry, z_gantry], dtype=float)
         p_xbeam_r = np.array([w - x_in_r, y_gantry, z_gantry], dtype=float)
         nodes.extend(
@@ -2079,8 +2124,8 @@ def _build_corexy(
         max_in_r = max(0.015, min(0.25 * w, (w - x_tool) - 0.015))
         x_in_l = float(np.clip(default_in, 0.015, max_in_l))
         x_in_r = float(np.clip(default_in, 0.015, max_in_r))
-        p_ycar_l = np.array([0.0, y_gantry, z_gantry], dtype=float)
-        p_ycar_r = np.array([w, y_gantry, z_gantry], dtype=float)
+        p_ycar_l = np.array(nmap_ycar["y_car_l"].position_m, dtype=float)
+        p_ycar_r = np.array(nmap_ycar["y_car_r"].position_m, dtype=float)
         p_xbeam_l = np.array([x_in_l, y_gantry, z_gantry], dtype=float)
         p_xbeam_r = np.array([w - x_in_r, y_gantry, z_gantry], dtype=float)
         nodes.extend(
@@ -2179,6 +2224,7 @@ def _build_corexy(
             ("y_rail_car_l", "y_car_l"),
             y_car,
             spec,
+            rail_and_car_pos_m=(nmap["y_rail_car_l"].position_m, nmap["y_car_l"].position_m),
         )
     )
     fastener_springs.append(
@@ -2187,6 +2233,7 @@ def _build_corexy(
             ("y_rail_car_r", "y_car_r"),
             y_car,
             spec,
+            rail_and_car_pos_m=(nmap["y_rail_car_r"].position_m, nmap["y_car_r"].position_m),
         )
     )
 

@@ -1071,6 +1071,8 @@ def generate_bom(
 
     # Track total linear rail length (mm) and carriage count for fasteners
     total_bolted_rail_mm = 0.0
+    # Rail-length / populated-fastener-pitch sum (X & Y may use sparse per-axis pitches, e.g. VzBot)
+    rail_screw_slots = 0.0
     total_carriages = 0
 
     def _add_rail_and_carriage(
@@ -1083,7 +1085,7 @@ def generate_bom(
         mount_note: str = "",
         block_type: str = "H",
     ) -> None:
-        nonlocal total_bolted_rail_mm, total_carriages
+        nonlocal total_bolted_rail_mm, rail_screw_slots, total_carriages
         prof = get_profile(rail_prof_id)
         car_name, rail_usd_m, car_usd, car_mass_g = _rail_hw_info(
             rail_prof_id, block_type=block_type
@@ -1151,6 +1153,14 @@ def generate_bom(
             )
             if prof.shape == "rail":
                 total_bolted_rail_mm += rail_len_mm * rail_qty
+                pitch_mm = (
+                    spec.gantry.effective_x_rail_bolt_pitch_mm
+                    if sku_prefix == "X"
+                    else spec.gantry.effective_y_rail_bolt_pitch_mm
+                    if sku_prefix == "Y"
+                    else spec.gantry.rail_bolt_pitch_mm
+                )
+                rail_screw_slots += rail_len_mm * rail_qty / max(float(pitch_mm), 1.0)
         total_carriages += carriage_qty
 
     z_norm = _normalize_z_drive(spec.bed.z_drive)
@@ -2015,8 +2025,8 @@ def generate_bom(
     m5_bolt_qty = corner_joints * 2 + brace_cuts * 2
     m5_tnut_qty = m5_bolt_qty
 
-    # M3 linear rail mounting screws spaced every 25 mm along total bolted rail length
-    m3_rail_screw_qty = int(math.ceil(total_bolted_rail_mm / 25.0)) if total_bolted_rail_mm > 0 else 0
+    # M3 linear rail mounting screws at the populated fastener pitch of each rail (default 25 mm)
+    m3_rail_screw_qty = int(math.ceil(rail_screw_slots - 1e-9)) if total_bolted_rail_mm > 0 else 0
     m3_motor_toolhead_qty = (
         total_motors * 4
         + total_carriages * 4
