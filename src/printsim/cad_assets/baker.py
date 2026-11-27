@@ -1438,6 +1438,346 @@ def _assemble_tet4_km(
     return mesh, K_total, M_total, mesh.p.T
 
 
+def _compute_subpart_recovery(
+    mesh: Any,
+    coords_m: np.ndarray,
+    tets: np.ndarray,
+    region_ids: np.ndarray,
+    regions: list[MaterialRegion],
+    Psi_b: np.ndarray,
+    port0_vp_m: np.ndarray,
+    port1_vp_m: np.ndarray,
+    default_fdm_anisotropic: bool,
+) -> tuple[dict[str, np.ndarray], list[dict[str, Any]]]:
+    """Compute exact Craig-Bampton boundary-to-subpart recovery operators (strict SI).
+
+    Partitions all Tet4 elements into disjoint physical sub-parts (one per material
+    region when multi-region, or structural zones along the Port 0 -> Port 1 load path
+    when single-region) so ``sum(subpart_K_bb) == K_bb`` and ``sum(subpart_M_bb) == M_bb``
+    identically.
+    """
+    import skfem
+
+    n_elems = int(mesh.nelements)
+    if n_elems == 0 or Psi_b.shape[1] < 12:
+        return {}, []
+    Psi = np.asarray(Psi_b[:, :12], dtype=np.float64)
+
+    # Element centroids in meters
+    tet_nodes = np.asarray(mesh.t.T, dtype=np.int64)  # (E, 4) oriented
+    centroids_m = coords_m[tet_nodes].mean(axis=1)  # (E, 3)
+
+    # Build disjoint element partitions: list of (name, material_id, D_mat, rho, elem_indices)
+    partitions: list[tuple[str, str, np.ndarray, float, np.ndarray]] = []
+    if len(regions) > 1:
+        for reg_idx, reg in enumerate(regions):
+            eids = np.where(region_ids == reg_idx)[0]
+            if len(eids) == 0:
+                continue
+            mat = get_material(reg.material_id)
+            is_fdm = (
+                bool(reg.fdm_anisotropic)
+                if reg.fdm_anisotropic is not None
+                else (bool(default_fdm_anisotropic) and bool(mat.is_printed_polymer))
+            )
+            D = constitutive_matrix_3d(mat, fdm_anisotropic=is_fdm)
+            partitions.append(
+                (reg.label or f"region_{reg_idx}", reg.material_id, D, float(mat.density_kg_m3), eids)
+            )
+    else:
+        reg = regions[0]
+        mat = get_material(reg.material_id)
+        is_fdm = (
+            bool(reg.fdm_anisotropic)
+            if reg.fdm_anisotropic is not None
+            else (bool(default_fdm_anisotropic) and bool(mat.is_printed_polymer))
+        )
+        D = constitutive_matrix_3d(mat, fdm_anisotropic=is_fdm)
+        rho = float(mat.density_kg_m3)
+        # Partition single-material CAD solid into physical load-path zones:
+        # carriage_mount_zone (near Port 0), hotend_mount_zone (near Port 1),
+        # upper_extruder_zone (above rail if tall direct-drive), and main_chassis.
+        dp = port1_vp_m - port0_vp_m
+        dp_len = max(float(np.linalg.norm(dp)), 1e-4)
+        dp_hat = dp / dp_len
+        rel = centroids_m - port0_vp_m[None, :]
+        proj = rel @ dp_hat
+        s_path = proj / dp_len
+        z_above = centroids_m[:, 2] - port0_vp_m[2]
+        has_upper = bool(np.percentile(z_above, 95) > 0.014 and np.sum(z_above > 0.010) >= 0.08 * n_elems)
+
+        zone_id = np.full(n_elems, 1, dtype=np.int32)  # 1 = main_chassis
+        zone_id[s_path <= 0.28] = 0  # 0 = carriage_mount_zone
+        zone_id[s_path >= 0.72] = 2  # 2 = hotend_mount_zone
+        if has_upper:
+            zone_id[(z_above > 0.010) & (s_path > 0.15) & (s_path < 0.85)] = 3  # 3 = upper_extruder_zone
+
+        zone_names = {
+            0: "carriage_mount_zone",
+            1: "main_chassis",
+            2: "hotend_mount_zone",
+            3: "upper_extruder_zone",
+        }
+        for zid, zname in zone_names.items():
+            eids = np.where(zone_id == zid)[0]
+            if len(eids) > 0:
+                partitions.append((zname, reg.material_id, D, rho, eids))
+
+    if not partitions:
+        return {}, []
+
+    elem = skfem.ElementVector(skfem.ElementTetP1())
+    basis_full = skfem.CellBasis(mesh, elem, intorder=1)
+    nodal_dofs = basis_full.nodal_dofs  # (3, N)
+    perm = nodal_dofs.T.ravel()
+    need_perm = not np.array_equal(perm, np.arange(basis_full.N))
+
+    @skfem.BilinearForm
+    def mass_form(u, v, w):
+        return w["rho"] * (u[0] * v[0] + u[1] * v[1] + u[2] * v[2])
+
+    def _make_elast_form(D_mat: np.ndarray):
+        nz_rows = [
+            [(j, float(D_mat[i, j])) for j in range(6) if abs(float(D_mat[i, j])) > 0.0]
+            for i in range(6)
+        ]
+
+        @skfem.BilinearForm
+        def elast_form(u, v, w):
+            gu, gv = u.grad, v.grad
+            eu = (
+                gu[0, 0], gu[1, 1], gu[2, 2],
+                gu[0, 1] + gu[1, 0], gu[1, 2] + gu[2, 1], gu[0, 2] + gu[2, 0],
+            )
+            ev = (
+                gv[0, 0], gv[1, 1], gv[2, 2],
+                gv[0, 1] + gv[1, 0], gv[1, 2] + gv[2, 1], gv[0, 2] + gv[2, 0],
+            )
+            out = None
+            for i in range(6):
+                terms = nz_rows[i]
+                if not terms:
+                    continue
+                s_i = terms[0][1] * eu[terms[0][0]]
+                for j, d_ij in terms[1:]:
+                    s_i = s_i + d_ij * eu[j]
+                t = s_i * ev[i]
+                out = t if out is None else out + t
+            return out
+
+        return elast_form
+
+    # Probe unit X/Y/Z Port-1 displacements (Port 0 clamped) for picking representative peak nodes/elements
+    q_probes = np.zeros((12, 3), dtype=np.float64)
+    q_probes[6, 0] = 1e-4  # +0.1 mm X at Port 1
+    q_probes[7, 1] = 1e-4  # +0.1 mm Y at Port 1
+    q_probes[8, 2] = 1e-4  # +0.1 mm Z at Port 1
+
+    # Precompute Tet4 shape-function gradients for all elements (vectorized)
+    p0 = coords_m[tet_nodes[:, 0]]
+    p1 = coords_m[tet_nodes[:, 1]]
+    p2 = coords_m[tet_nodes[:, 2]]
+    p3 = coords_m[tet_nodes[:, 3]]
+    J = np.stack([p1 - p0, p2 - p0, p3 - p0], axis=-1)  # (E, 3, 3)
+    det_j = np.linalg.det(J)
+    vols_m3 = np.abs(det_j) / 6.0
+
+    sp_names: list[str] = []
+    sp_mats: list[str] = []
+    sp_mass: list[float] = []
+    sp_com: list[np.ndarray] = []
+    sp_K_list: list[np.ndarray] = []
+    sp_M_list: list[np.ndarray] = []
+    sp_disp_list: list[np.ndarray] = []
+    sp_stress_list: list[np.ndarray] = []
+    manifest_subparts: list[dict[str, Any]] = []
+
+    # 3D internal field recovery sample cloud across all partitions
+    field_pts_list: list[np.ndarray] = []
+    field_disp_list: list[np.ndarray] = []
+    field_stress_list: list[np.ndarray] = []
+    field_sp_idx_list: list[int] = []
+
+    for part_idx, (pname, mat_id, D_mat, rho, eids) in enumerate(partitions):
+        bk = skfem.CellBasis(mesh, elem, intorder=1, elements=eids)
+        bm = skfem.CellBasis(mesh, elem, intorder=2, elements=eids)
+        K_p = _make_elast_form(D_mat).assemble(bk)
+        M_p = mass_form.assemble(bm, rho=rho)
+        if need_perm:
+            K_p = K_p[perm, :][:, perm]
+            M_p = M_p[perm, :][:, perm]
+
+        K_p_bb = Psi.T @ (K_p @ Psi)
+        K_p_bb = 0.5 * (K_p_bb + K_p_bb.T)
+        M_p_bb = Psi.T @ (M_p @ Psi)
+        M_p_bb = 0.5 * (M_p_bb + M_p_bb.T)
+
+        part_vols = vols_m3[eids]
+        vol_sum = float(np.sum(part_vols))
+        mass_p = max(vol_sum * rho, 1e-9)
+        com_p = (
+            (part_vols[:, None] * centroids_m[eids]).sum(axis=0) / vol_sum
+            if vol_sum > 1e-18
+            else centroids_m[eids].mean(axis=0)
+        )
+
+        # Pick 95th-percentile elastic deflection node relative to Port 0 rigid-body motion
+        part_nodes = np.unique(tet_nodes[eids].ravel())
+        best_disp_op = np.zeros((3, 12), dtype=np.float64)
+        if len(part_nodes) > 0:
+            # Rigid-body motion of node x relative to port0: u_rb = u0 + theta0 x (x - port0)
+            r_rel = coords_m[part_nodes] - port0_vp_m[None, :]  # (K, 3)
+            # Evaluate elastic displacement under X/Y/Z unit probes (u0=0, theta0=0 -> u_rel = u)
+            nd_dofs = np.stack([3 * part_nodes, 3 * part_nodes + 1, 3 * part_nodes + 2], axis=1)  # (K, 3)
+            psi_nodes = Psi[nd_dofs, :]  # (K, 3, 12)
+            u_probes = np.einsum("kij,jp->kip", psi_nodes, q_probes)  # (K, 3, 3)
+            mags = np.linalg.norm(u_probes, axis=(1, 2))
+            idx_p95 = int(np.argsort(mags)[min(len(mags) - 1, int(0.95 * (len(mags) - 1)))])
+            chosen_psi = psi_nodes[idx_p95].copy()  # (3, 12)
+            # Subtract Port-0 rigid-body motion from columns 0..5
+            rx, ry, rz = float(r_rel[idx_p95, 0]), float(r_rel[idx_p95, 1]), float(r_rel[idx_p95, 2])
+            chosen_psi[:, 0:3] -= np.eye(3, dtype=np.float64)
+            chosen_psi[:, 3:6] -= np.array(
+                [[0.0, rz, -ry], [-rz, 0.0, rx], [ry, -rx, 0.0]], dtype=np.float64
+            )
+            best_disp_op = chosen_psi
+
+        # Pick 95th-percentile peak von Mises stress element in this sub-part
+        best_stress_op = np.zeros((6, 12), dtype=np.float64)
+        valid_eids = eids[np.abs(det_j[eids]) > 1e-18]
+        if len(valid_eids) > 0:
+            # Sample at most 2000 elements if very large for fast baking
+            sample_eids = (
+                valid_eids[:: max(1, len(valid_eids) // 2000)]
+                if len(valid_eids) > 2000
+                else valid_eids
+            )
+            J_inv = np.linalg.inv(J[sample_eids])  # (S, 3, 3)
+            # Shape function gradients: dN1, dN2, dN3 are rows 0,1,2 of J_inv; dN0 = -(dN1+dN2+dN3)
+            g1 = J_inv[:, 0, :]
+            g2 = J_inv[:, 1, :]
+            g3 = J_inv[:, 2, :]
+            g0 = -(g1 + g2 + g3)
+            grads = np.stack([g0, g1, g2, g3], axis=1)  # (S, 4, 3)
+
+            vm_scores = np.zeros(len(sample_eids), dtype=np.float64)
+            s_ops: list[np.ndarray] = []
+            for idx_s, eid in enumerate(sample_eids):
+                tn = tet_nodes[eid]
+                B_e = np.zeros((6, 12), dtype=np.float64)
+                for a in range(4):
+                    gx, gy, gz = float(grads[idx_s, a, 0]), float(grads[idx_s, a, 1]), float(grads[idx_s, a, 2])
+                    c = 3 * a
+                    B_e[0, c] = gx
+                    B_e[1, c + 1] = gy
+                    B_e[2, c + 2] = gz
+                    B_e[3, c] = gy
+                    B_e[3, c + 1] = gx
+                    B_e[4, c + 1] = gz
+                    B_e[4, c + 2] = gy
+                    B_e[5, c] = gz
+                    B_e[5, c + 2] = gx
+                edofs = np.array(
+                    [
+                        3 * tn[0], 3 * tn[0] + 1, 3 * tn[0] + 2,
+                        3 * tn[1], 3 * tn[1] + 1, 3 * tn[1] + 2,
+                        3 * tn[2], 3 * tn[2] + 1, 3 * tn[2] + 2,
+                        3 * tn[3], 3 * tn[3] + 1, 3 * tn[3] + 2,
+                    ],
+                    dtype=np.int64,
+                )
+                s_op = D_mat @ (B_e @ Psi[edofs, :])  # (6, 12)
+                s_ops.append(s_op)
+                sig = s_op @ q_probes  # (6, 3)
+                vm_max = 0.0
+                for col in range(3):
+                    sxx, syy, szz, txy, tyz, txz = sig[:, col]
+                    vm2 = 0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2) + 3.0 * (
+                        txy**2 + tyz**2 + txz**2
+                    )
+                    vm_max = max(vm_max, math.sqrt(max(vm2, 0.0)))
+                vm_scores[idx_s] = vm_max
+            idx_s95 = int(np.argsort(vm_scores)[min(len(vm_scores) - 1, int(0.95 * (len(vm_scores) - 1)))])
+            best_stress_op = s_ops[idx_s95]
+
+            # Spatial farthest-point sampling for compact 3D intra-part field recovery
+            k_target = min(
+                len(sample_eids),
+                max(16, min(64, int(round(180.0 * len(eids) / max(n_elems, 1))))),
+            )
+            pts_s = centroids_m[sample_eids]  # (S, 3)
+            chosen_local: list[int] = [idx_s95]
+            min_d2 = np.sum((pts_s - pts_s[idx_s95][None, :]) ** 2, axis=1)
+            for _ in range(1, k_target):
+                nxt = int(np.argmax(min_d2))
+                if min_d2[nxt] <= 1e-12:
+                    break
+                chosen_local.append(nxt)
+                d2_new = np.sum((pts_s - pts_s[nxt][None, :]) ** 2, axis=1)
+                np.minimum(min_d2, d2_new, out=min_d2)
+
+            for loc_i in chosen_local:
+                eid_f = int(sample_eids[loc_i])
+                tn_f = tet_nodes[eid_f]
+                c_m = centroids_m[eid_f]
+                psi_c = 0.25 * (
+                    Psi[3 * tn_f[0] : 3 * tn_f[0] + 3, :]
+                    + Psi[3 * tn_f[1] : 3 * tn_f[1] + 3, :]
+                    + Psi[3 * tn_f[2] : 3 * tn_f[2] + 3, :]
+                    + Psi[3 * tn_f[3] : 3 * tn_f[3] + 3, :]
+                )
+                rx_f, ry_f, rz_f = (
+                    float(c_m[0] - port0_vp_m[0]),
+                    float(c_m[1] - port0_vp_m[1]),
+                    float(c_m[2] - port0_vp_m[2]),
+                )
+                psi_c[:, 0:3] -= np.eye(3, dtype=np.float64)
+                psi_c[:, 3:6] -= np.array(
+                    [[0.0, rz_f, -ry_f], [-rz_f, 0.0, rx_f], [ry_f, -rx_f, 0.0]],
+                    dtype=np.float64,
+                )
+                field_pts_list.append(c_m)
+                field_disp_list.append(psi_c)
+                field_stress_list.append(s_ops[loc_i])
+                field_sp_idx_list.append(part_idx)
+
+        sp_names.append(pname)
+        sp_mats.append(mat_id)
+        sp_mass.append(mass_p)
+        sp_com.append(com_p)
+        sp_K_list.append(K_p_bb)
+        sp_M_list.append(M_p_bb)
+        sp_disp_list.append(best_disp_op)
+        sp_stress_list.append(best_stress_op)
+        manifest_subparts.append(
+            {
+                "id": pname,
+                "name": pname.replace("_", " ").title(),
+                "material_id": mat_id,
+                "mass_g": round(mass_p * 1e3, 2),
+                "com_mm": [round(float(v) * 1e3, 2) for v in com_p],
+                "num_elements": int(len(eids)),
+            }
+        )
+
+    npz_payload = {
+        "subpart_names": np.asarray(sp_names, dtype="<U64"),
+        "subpart_materials": np.asarray(sp_mats, dtype="<U64"),
+        "subpart_mass_kg": np.asarray(sp_mass, dtype=np.float64),
+        "subpart_com_m": np.asarray(sp_com, dtype=np.float64),
+        "subpart_K_bb": np.asarray(sp_K_list, dtype=np.float64),
+        "subpart_M_bb": np.asarray(sp_M_list, dtype=np.float64),
+        "subpart_disp_op": np.asarray(sp_disp_list, dtype=np.float64),
+        "subpart_stress_op": np.asarray(sp_stress_list, dtype=np.float64),
+    }
+    if field_pts_list:
+        npz_payload["field_points_m"] = np.asarray(field_pts_list, dtype=np.float32)
+        npz_payload["field_disp_op"] = np.asarray(field_disp_list, dtype=np.float32)
+        npz_payload["field_stress_op"] = np.asarray(field_stress_list, dtype=np.float32)
+        npz_payload["field_subpart_idx"] = np.asarray(field_sp_idx_list, dtype=np.int16)
+    return npz_payload, manifest_subparts
+
+
 def _compute_mass_com_inertia(
     M: Any,
     coords_m: np.ndarray,
@@ -1664,6 +2004,19 @@ def bake_solid_superelement(
         se.K_cb, se.M_cb
     )
 
+    # 7b. Exact Craig-Bampton boundary-to-subpart recovery operators (strain/kinetic energy, flex, stress)
+    subpart_npz, manifest_subparts = _compute_subpart_recovery(
+        mesh=mesh,
+        coords_m=coords_m,
+        tets=tets,
+        region_ids=region_ids,
+        regions=regions,
+        Psi_b=se.T_cb[:, :12],
+        port0_vp_m=p0_vp_m,
+        port1_vp_m=p1_vp_m,
+        default_fdm_anisotropic=spec.is_fdm_anisotropic,
+    )
+
     # 8. Build decimated PBR visual.glb in strict SI meters
     vis_list = visual_parts
     if vis_list is None:
@@ -1715,6 +2068,7 @@ def bake_solid_superelement(
         fixed_interface_freqs_hz=np.asarray(se.fixed_interface_freqs_hz, dtype=np.float64),
         com_m=com_m,
         inertia_kg_m2=inertia_kg_m2,
+        **subpart_npz,
     )
 
     manifest: dict[str, Any] = {
@@ -1748,6 +2102,7 @@ def bake_solid_superelement(
         "visual_triangles": int(vis_tris),
         "visual_bytes": int(vis_bytes),
         "cad_trust_pct": int(spec.cad_trust_pct),
+        "subparts": manifest_subparts,
         "source_hash": source_hash,
     }
     (asset_dir / "manifest.json").write_text(

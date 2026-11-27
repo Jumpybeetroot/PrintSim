@@ -5,7 +5,7 @@
   "name": "WV-Design Trinity 1.6 Unibody (Dragon Ace Volcano + Dual-3628)",
   "source_cad": "Trinity_DAV_1.6_10mm.step",
   "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
-  "baked_at": "2026-11-27T03:31:52Z",
+  "baked_at": "2026-11-27T15:16:05Z",
   "reference_material_id": "ppa_cf_printed",
   "reference_youngs_modulus_pa": 10800000000.0,
   "reference_density_kg_m3": 1250.0,
@@ -17,7 +17,7 @@
   "num_dofs": 55095,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.003251,
+  "rigid_body_max_freq_hz": 0.00325,
   "mass_kg": 0.082119,
   "com_mm": [
     -0.0988,
@@ -56,6 +56,44 @@
   "visual_triangles": 31984,
   "visual_bytes": 1244432,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 41.43,
+      "com_mm": [
+        0.06,
+        -10.53,
+        17.8
+      ],
+      "num_elements": 31679
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 13.72,
+      "com_mm": [
+        -0.01,
+        -10.59,
+        -8.82
+      ],
+      "num_elements": 10481
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 26.97,
+      "com_mm": [
+        -0.39,
+        -13.0,
+        -26.46
+      ],
+      "num_elements": 20625
+    }
+  ],
   "source_hash": "2e89727aae505df71e219d083ecc77c39d27f4d8c1e295f6b09b129d512a3c31",
   "is_unibody": true
 }

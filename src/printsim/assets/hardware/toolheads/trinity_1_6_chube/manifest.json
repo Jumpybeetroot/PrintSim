@@ -5,7 +5,7 @@
   "name": "WV-Design Trinity 1.6 Unibody (Chube Compact + Dual-3628)",
   "source_cad": "Trinity_Chube_1.6_10mm.step",
   "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
-  "baked_at": "2026-11-27T03:32:49Z",
+  "baked_at": "2026-11-27T15:16:43Z",
   "reference_material_id": "ppa_cf_printed",
   "reference_youngs_modulus_pa": 10800000000.0,
   "reference_density_kg_m3": 1250.0,
@@ -17,7 +17,7 @@
   "num_dofs": 63870,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.003211,
+  "rigid_body_max_freq_hz": 0.00321,
   "mass_kg": 0.098299,
   "com_mm": [
     0.0441,
@@ -56,6 +56,44 @@
   "visual_triangles": 31992,
   "visual_bytes": 1246940,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 46.53,
+      "com_mm": [
+        0.05,
+        -11.06,
+        15.42
+      ],
+      "num_elements": 35597
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 21.26,
+      "com_mm": [
+        0.06,
+        -8.68,
+        -16.52
+      ],
+      "num_elements": 16207
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 30.5,
+      "com_mm": [
+        0.02,
+        -13.57,
+        -34.71
+      ],
+      "num_elements": 23351
+    }
+  ],
   "source_hash": "cc2b1a3aeb0dd6e1d8a0eb73278cc7c3f6453f3b033ea0d844e874862a6a1320",
   "is_unibody": true
 }

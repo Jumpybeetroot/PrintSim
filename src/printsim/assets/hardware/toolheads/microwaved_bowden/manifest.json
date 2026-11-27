@@ -5,7 +5,7 @@
   "name": "Microwaved Bowden Toolhead (SLM Ti-6Al-4V)",
   "source_cad": "mbt_tricorn_v2.step",
   "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
-  "baked_at": "2026-11-25T17:27:12Z",
+  "baked_at": "2026-11-27T15:17:37Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 74172,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.005813,
+  "rigid_body_max_freq_hz": 0.005821,
   "mass_kg": 0.071867,
   "com_mm": [
     0.0185,
@@ -58,5 +58,55 @@
   "visual_triangles": 23998,
   "visual_bytes": 777816,
   "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "titanium_grade5",
+      "mass_g": 36.18,
+      "com_mm": [
+        0.01,
+        -1.05,
+        -18.2
+      ],
+      "num_elements": 37139
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "titanium_grade5",
+      "mass_g": 1.19,
+      "com_mm": [
+        -0.3,
+        -8.28,
+        8.35
+      ],
+      "num_elements": 1309
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "titanium_grade5",
+      "mass_g": 22.78,
+      "com_mm": [
+        -0.01,
+        -2.97,
+        34.49
+      ],
+      "num_elements": 25210
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "titanium_grade5",
+      "mass_g": 11.71,
+      "com_mm": [
+        0.12,
+        -2.3,
+        20.64
+      ],
+      "num_elements": 11980
+    }
+  ],
   "source_hash": "61b19932e72b92d9013faa614646628fd862250115ff3c81355e78b432eab22b"
 }

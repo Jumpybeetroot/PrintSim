@@ -5,7 +5,7 @@
   "name": "A4T + Dragon HE Duct + Xol Carriage (PPA-CF / ASA)",
   "source_cad": "a4t_cowling_dragon_xol.step + a4t_he_duct_dragon.step + Xol_Carriage_MGN12H",
   "source_url": "https://github.com/DW-Tas/A4T",
-  "baked_at": "2026-11-27T04:14:07Z",
+  "baked_at": "2026-11-27T15:13:35Z",
   "reference_material_id": "ppa_cf_printed",
   "reference_youngs_modulus_pa": 10800000000.0,
   "reference_density_kg_m3": 1250.0,
@@ -17,7 +17,7 @@
   "num_dofs": 54810,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.003435,
+  "rigid_body_max_freq_hz": 0.003433,
   "mass_kg": 0.085004,
   "com_mm": [
     0.132,
@@ -56,5 +56,55 @@
   "visual_triangles": 29993,
   "visual_bytes": 1050040,
   "cad_trust_pct": 84,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 18.68,
+      "com_mm": [
+        0.19,
+        -0.88,
+        -6.58
+      ],
+      "num_elements": 11617
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 8.98,
+      "com_mm": [
+        0.5,
+        -16.18,
+        -19.65
+      ],
+      "num_elements": 5570
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 46.54,
+      "com_mm": [
+        0.09,
+        -40.11,
+        -8.81
+      ],
+      "num_elements": 28929
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 10.81,
+      "com_mm": [
+        -0.1,
+        -8.41,
+        17.46
+      ],
+      "num_elements": 6724
+    }
+  ],
   "source_hash": "e67e61f3e697fe71a48dcb19a948c9dbc70c2511bde5a330b7929d71b8b2532b"
 }

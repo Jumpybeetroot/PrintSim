@@ -5,7 +5,7 @@
   "name": "VzBot Vz-Printhead Printed v24 (ABS/ASA, MGN9H top carriage)",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-27T00:20:55Z",
+  "baked_at": "2026-11-27T15:16:57Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 307104,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.005354,
+  "rigid_body_max_freq_hz": 0.005355,
   "mass_kg": 0.035265,
   "com_mm": [
     0.124,
@@ -58,6 +58,44 @@
   "visual_triangles": 23961,
   "visual_bytes": 1217964,
   "cad_trust_pct": 80,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 19.3,
+      "com_mm": [
+        0.06,
+        16.34,
+        -9.96
+      ],
+      "num_elements": 219905
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 5.28,
+      "com_mm": [
+        0.4,
+        -9.87,
+        -11.79
+      ],
+      "num_elements": 60153
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 10.69,
+      "com_mm": [
+        0.1,
+        -21.25,
+        -11.51
+      ],
+      "num_elements": 121822
+    }
+  ],
   "source_hash": "d8edf64ace1ad70e6f08ebff231fe94f6e36e12f41a742ffd7796488f7bfc78b",
   "multi_piece_bolted": true,
   "x_rail_mount": "top",

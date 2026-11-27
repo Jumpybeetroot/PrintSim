@@ -5,7 +5,7 @@
   "name": "Tricorn Long (120W 3x40W Inverted Ti)",
   "source_cad": "tricorn_hotends.step",
   "source_url": "https://tricornhotend.com/",
-  "baked_at": "2026-11-25T17:16:24Z",
+  "baked_at": "2026-11-27T15:16:57Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 92421,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.009095,
+  "rigid_body_max_freq_hz": 0.009085,
   "mass_kg": 0.046387,
   "com_mm": [
     0.0005,
@@ -58,5 +58,67 @@
   "visual_triangles": 23996,
   "visual_bytes": 835848,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 1.86,
+      "com_mm": [
+        -0.01,
+        -0.0,
+        -60.06
+      ],
+      "num_elements": 4076
+    },
+    {
+      "id": "ti_crown_heatbreak",
+      "name": "Ti Crown Heatbreak",
+      "material_id": "titanium_grade5",
+      "mass_g": 1.61,
+      "com_mm": [
+        0.0,
+        0.0,
+        -15.55
+      ],
+      "num_elements": 37783
+    },
+    {
+      "id": "m3_crown_screws",
+      "name": "M3 Crown Screws",
+      "material_id": "stainless_304",
+      "mass_g": 3.1,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -17.86
+      ],
+      "num_elements": 14280
+    },
+    {
+      "id": "heatsink",
+      "name": "Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.09,
+      "com_mm": [
+        0.0,
+        0.0,
+        -5.89
+      ],
+      "num_elements": 28127
+    },
+    {
+      "id": "cucrzr_hotblock",
+      "name": "Cucrzr Hotblock",
+      "material_id": "copper_c110",
+      "mass_g": 31.72,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -37.58
+      ],
+      "num_elements": 32179
+    }
+  ],
   "source_hash": "d24c35d747e2d4af0fca0cf73acc87c7487c034cc7e0bdfaf150fd19d5c3bf45"
 }

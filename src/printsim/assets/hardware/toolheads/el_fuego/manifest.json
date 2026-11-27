@@ -5,7 +5,7 @@
   "name": "El Fuego SLM Toolhead (AlSi10Mg + Ti Plate)",
   "source_cad": "el_fuego/{main_body_al,belt_plate_rev1,extruder_plate_ti}.stl",
   "source_url": "https://discord.com/channels/1227971059764953230/1382552084490096670",
-  "baked_at": "2026-11-26T15:51:12Z",
+  "baked_at": "2026-11-27T15:14:31Z",
   "reference_material_id": "slm_aluminum",
   "reference_youngs_modulus_pa": 68000000000.0,
   "reference_density_kg_m3": 2670.0,
@@ -58,5 +58,55 @@
   "visual_triangles": 23998,
   "visual_bytes": 706256,
   "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "slm_aluminum",
+      "mass_g": 33.0,
+      "com_mm": [
+        -0.09,
+        3.65,
+        -30.49
+      ],
+      "num_elements": 85001
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "slm_aluminum",
+      "mass_g": 10.68,
+      "com_mm": [
+        -0.43,
+        -13.23,
+        -24.2
+      ],
+      "num_elements": 27514
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "slm_aluminum",
+      "mass_g": 47.2,
+      "com_mm": [
+        -0.63,
+        -25.48,
+        0.48
+      ],
+      "num_elements": 121642
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "slm_aluminum",
+      "mass_g": 2.97,
+      "com_mm": [
+        -1.68,
+        -5.71,
+        13.34
+      ],
+      "num_elements": 7733
+    }
+  ],
   "source_hash": "14e292149f3bd935e41ee744e5d49dd3b634582f1d3a45ef3ecb85fa42f2a98c"
 }

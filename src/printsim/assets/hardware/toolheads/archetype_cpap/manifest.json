@@ -5,7 +5,7 @@
   "name": "Archetype Breakneck v24 CPAP (PPA-CF / ASA)",
   "source_cad": "Archetype Public CAD STEP.step",
   "source_url": "https://github.com/Armchair-Heavy-Industries/Archetype",
-  "baked_at": "2026-11-27T04:15:26Z",
+  "baked_at": "2026-11-27T15:05:52Z",
   "reference_material_id": "ppa_cf_printed",
   "reference_youngs_modulus_pa": 10800000000.0,
   "reference_density_kg_m3": 1250.0,
@@ -17,7 +17,7 @@
   "num_dofs": 59970,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.002653,
+  "rigid_body_max_freq_hz": 0.002656,
   "mass_kg": 0.088962,
   "com_mm": [
     -0.0834,
@@ -56,5 +56,55 @@
   "visual_triangles": 29947,
   "visual_bytes": 1319012,
   "cad_trust_pct": 82,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 14.57,
+      "com_mm": [
+        0.02,
+        -8.13,
+        -16.81
+      ],
+      "num_elements": 9062
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 6.08,
+      "com_mm": [
+        -0.23,
+        -24.05,
+        -15.0
+      ],
+      "num_elements": 3776
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 54.35,
+      "com_mm": [
+        -0.11,
+        -24.97,
+        33.09
+      ],
+      "num_elements": 33776
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "ppa_cf_printed",
+      "mass_g": 13.97,
+      "com_mm": [
+        -0.02,
+        -3.36,
+        19.83
+      ],
+      "num_elements": 8686
+    }
+  ],
   "source_hash": "25758e81c3387702260e776062e0e97790ae94870e1aa14225109b8785af5f89"
 }

@@ -5,7 +5,7 @@
   "name": "Luke's Lab Chube Conduction (120W Ti Shell)",
   "source_cad": "CHUBE_INTEGRATION_REVA.step",
   "source_url": "https://www.chubehotends.com/",
-  "baked_at": "2026-11-26T00:59:23Z",
+  "baked_at": "2026-11-27T15:05:42Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 56271,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.009083,
+  "rigid_body_max_freq_hz": 0.008919,
   "mass_kg": 0.078196,
   "com_mm": [
     -0.0004,
@@ -58,5 +58,55 @@
   "visual_triangles": 20854,
   "visual_bytes": 722432,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.99,
+      "com_mm": [
+        0.0,
+        0.0,
+        -59.14
+      ],
+      "num_elements": 2053
+    },
+    {
+      "id": "ti_monocoque_shell",
+      "name": "Ti Monocoque Shell",
+      "material_id": "titanium_grade5",
+      "mass_g": 19.02,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -38.9
+      ],
+      "num_elements": 27689
+    },
+    {
+      "id": "conduction_heatsink",
+      "name": "Conduction Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 7.74,
+      "com_mm": [
+        -0.0,
+        0.0,
+        -3.96
+      ],
+      "num_elements": 16736
+    },
+    {
+      "id": "copper_melt_core",
+      "name": "Copper Melt Core",
+      "material_id": "copper_c110",
+      "mass_g": 48.44,
+      "com_mm": [
+        0.0,
+        0.11,
+        -37.32
+      ],
+      "num_elements": 33703
+    }
+  ],
   "source_hash": "4d1cf4139b65275829aa54267afff86c9000bd477dcbf47c414da2ef8033f0cd"
 }

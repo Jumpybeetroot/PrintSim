@@ -24,6 +24,133 @@ _DEFAULT_CATEGORIES: tuple[str, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class SubpartRecoveryData:
+    """Compact Craig-Bampton boundary-to-subpart recovery operators (strict SI internals).
+
+    Maps any 12-DOF boundary displacement vector ``q_b = [u0(3), r0(3), u1(3), r1(3)]``
+    (from static FEA or a modal eigenvector) directly to per-subpart strain energy,
+    kinetic energy, local elastic deflection, and peak von Mises stress in pure NumPy.
+    """
+
+    names: tuple[str, ...]
+    materials: tuple[str, ...]
+    mass_kg: np.ndarray  # (P,)
+    com_m: np.ndarray  # (P, 3)
+    K_bb: np.ndarray  # (P, 12, 12)
+    M_bb: np.ndarray  # (P, 12, 12)
+    disp_op: np.ndarray  # (P, 3, 12)
+    stress_op: np.ndarray  # (P, 6, 12)
+    field_points_m: np.ndarray | None = None  # (K, 3) CAD meters
+    field_disp_op: np.ndarray | None = None  # (K, 3, 12)
+    field_stress_op: np.ndarray | None = None  # (K, 6, 12)
+    field_subpart_idx: np.ndarray | None = None  # (K,)
+
+    def scaled(self, scale_k: float, scale_m: float) -> "SubpartRecoveryData":
+        return SubpartRecoveryData(
+            names=self.names,
+            materials=self.materials,
+            mass_kg=self.mass_kg * float(scale_m),
+            com_m=self.com_m.copy(),
+            K_bb=self.K_bb * float(scale_k),
+            M_bb=self.M_bb * float(scale_m),
+            disp_op=self.disp_op.copy(),
+            stress_op=self.stress_op * float(scale_k),
+            field_points_m=self.field_points_m.copy() if self.field_points_m is not None else None,
+            field_disp_op=self.field_disp_op.copy() if self.field_disp_op is not None else None,
+            field_stress_op=(
+                self.field_stress_op * float(scale_k) if self.field_stress_op is not None else None
+            ),
+            field_subpart_idx=(
+                self.field_subpart_idx.copy() if self.field_subpart_idx is not None else None
+            ),
+        )
+
+    def recover_field(self, q_b: np.ndarray) -> dict[str, Any] | None:
+        """Evaluate exact 3D Tet4 internal flex (µm) and von Mises stress (MPa) at sampled points."""
+        if (
+            self.field_points_m is None
+            or self.field_disp_op is None
+            or self.field_stress_op is None
+            or len(self.field_points_m) == 0
+        ):
+            return None
+        q = np.asarray(q_b, dtype=np.float64).reshape(12)
+        du = np.einsum("kij,j->ki", self.field_disp_op.astype(np.float64, copy=False), q)  # (K, 3)
+        flex_um = np.linalg.norm(du, axis=1) * 1e6
+        sig = np.einsum("kij,j->ki", self.field_stress_op.astype(np.float64, copy=False), q)  # (K, 6)
+        sxx, syy, szz = sig[:, 0], sig[:, 1], sig[:, 2]
+        txy, tyz, txz = sig[:, 3], sig[:, 4], sig[:, 5]
+        vm2 = 0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2) + 3.0 * (
+            txy**2 + tyz**2 + txz**2
+        )
+        vm_mpa = np.sqrt(np.maximum(vm2, 0.0)) * 1e-6
+        pts_mm = np.round(self.field_points_m.astype(np.float64) * 1e3, 2)
+        max_flex = float(np.max(flex_um)) if len(flex_um) > 0 else 0.0
+        max_vm = float(np.max(vm_mpa)) if len(vm_mpa) > 0 else 0.0
+        return {
+            "source": "cad_3d_tet4",
+            "points_mm": pts_mm.tolist(),
+            "flex_um": np.round(flex_um, 3).tolist(),
+            "stress_mpa": np.round(vm_mpa, 3).tolist(),
+            "max_flex_um": round(max_flex, 3),
+            "max_stress_mpa": round(max_vm, 3),
+            "subpart_idx": (
+                self.field_subpart_idx.astype(int).tolist()
+                if self.field_subpart_idx is not None
+                else []
+            ),
+        }
+
+    def recover(self, q_b: np.ndarray) -> list[dict[str, Any]]:
+        """Evaluate exact per-subpart strain/kinetic energy, local flex, and von Mises stress."""
+        q = np.asarray(q_b, dtype=np.float64).reshape(12)
+        n_parts = len(self.names)
+        if n_parts == 0:
+            return []
+        u_arr = np.empty(n_parts, dtype=np.float64)
+        t_arr = np.empty(n_parts, dtype=np.float64)
+        flex_um = np.empty(n_parts, dtype=np.float64)
+        vm_mpa = np.empty(n_parts, dtype=np.float64)
+        for i in range(n_parts):
+            u_arr[i] = max(0.0, 0.5 * float(q @ self.K_bb[i] @ q))
+            t_arr[i] = max(0.0, 0.5 * float(q @ self.M_bb[i] @ q))
+            du = self.disp_op[i] @ q
+            flex_um[i] = float(np.linalg.norm(du)) * 1e6
+            sv = self.stress_op[i] @ q
+            sxx, syy, szz, txy, tyz, txz = (
+                float(sv[0]),
+                float(sv[1]),
+                float(sv[2]),
+                float(sv[3]),
+                float(sv[4]),
+                float(sv[5]),
+            )
+            vm2 = 0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2) + 3.0 * (
+                txy**2 + tyz**2 + txz**2
+            )
+            vm_mpa[i] = math.sqrt(max(vm2, 0.0)) * 1e-6
+        u_tot = float(np.sum(u_arr))
+        t_tot = float(np.sum(t_arr))
+        out: list[dict[str, Any]] = []
+        for i in range(n_parts):
+            out.append(
+                {
+                    "name": self.names[i],
+                    "material_id": self.materials[i],
+                    "mass_g": round(float(self.mass_kg[i]) * 1e3, 2),
+                    "com_mm": [round(float(v) * 1e3, 2) for v in self.com_m[i]],
+                    "strain_energy_j": float(u_arr[i]),
+                    "strain_energy_pct": round((u_arr[i] / u_tot * 100.0) if u_tot > 1e-18 else 0.0, 2),
+                    "kinetic_energy": float(t_arr[i]),
+                    "kinetic_energy_pct": round((t_arr[i] / t_tot * 100.0) if t_tot > 1e-18 else 0.0, 2),
+                    "local_flex_um": round(float(flex_um[i]), 3),
+                    "stress_mpa": round(float(vm_mpa[i]), 3),
+                }
+            )
+        return out
+
+
 @dataclass
 class LoadedHardwareAsset:
     """In-memory Craig-Bampton superelement bundle for a CAD-backed hardware component."""
@@ -41,6 +168,7 @@ class LoadedHardwareAsset:
     visual_glb_path: Path | None
     stiffness_scale_applied: float = 1.0
     mass_scale_applied: float = 1.0
+    subpart_recovery: SubpartRecoveryData | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +184,7 @@ class _RawCachedAsset:
     com_m: np.ndarray
     inertia_kg_m2: np.ndarray
     visual_glb_path: Path | None
+    subpart_recovery: SubpartRecoveryData | None = None
 
 
 _ASSET_CACHE: dict[tuple[str, str], _RawCachedAsset] = {}
@@ -311,7 +440,8 @@ def _read_raw_bundle(category: str, asset_id: str) -> _RawCachedAsset | None:
         return None
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    with np.load(npz_path) as data:
+    subpart_recovery: SubpartRecoveryData | None = None
+    with np.load(npz_path, allow_pickle=False) as data:
         K_cb = np.array(data["K_cb"], dtype=np.float64)
         M_cb = np.array(data["M_cb"], dtype=np.float64)
         K_bb = np.array(data["K_bb"], dtype=np.float64)
@@ -319,6 +449,57 @@ def _read_raw_bundle(category: str, asset_id: str) -> _RawCachedAsset | None:
         freqs = tuple(float(x) for x in np.asarray(data["fixed_interface_freqs_hz"], dtype=np.float64).ravel())
         com_m = np.array(data["com_m"], dtype=np.float64).reshape(3)
         inertia_kg_m2 = np.array(data["inertia_kg_m2"], dtype=np.float64).reshape(3, 3)
+        if "subpart_K_bb" in data.files and "subpart_names" in data.files:
+            sp_names = tuple(str(x) for x in np.asarray(data["subpart_names"]).ravel())
+            sp_mats = (
+                tuple(str(x) for x in np.asarray(data["subpart_materials"]).ravel())
+                if "subpart_materials" in data.files
+                else tuple(str(manifest.get("reference_material_id") or "") for _ in sp_names)
+            )
+            sp_mass = np.array(data["subpart_mass_kg"], dtype=np.float64).reshape(-1)
+            sp_com = np.array(data["subpart_com_m"], dtype=np.float64).reshape(-1, 3)
+            sp_K = np.array(data["subpart_K_bb"], dtype=np.float64).reshape(-1, 12, 12)
+            sp_M = np.array(data["subpart_M_bb"], dtype=np.float64).reshape(-1, 12, 12)
+            sp_disp = np.array(data["subpart_disp_op"], dtype=np.float64).reshape(-1, 3, 12)
+            sp_stress = np.array(data["subpart_stress_op"], dtype=np.float64).reshape(-1, 6, 12)
+            for arr in (sp_mass, sp_com, sp_K, sp_M, sp_disp, sp_stress):
+                arr.setflags(write=False)
+            field_pts: np.ndarray | None = None
+            field_disp: np.ndarray | None = None
+            field_stress: np.ndarray | None = None
+            field_sp_idx: np.ndarray | None = None
+            if (
+                "field_points_m" in data.files
+                and "field_disp_op" in data.files
+                and "field_stress_op" in data.files
+            ):
+                field_pts = np.array(data["field_points_m"], dtype=np.float32).reshape(-1, 3)
+                field_disp = np.array(data["field_disp_op"], dtype=np.float32).reshape(-1, 3, 12)
+                field_stress = np.array(data["field_stress_op"], dtype=np.float32).reshape(-1, 6, 12)
+                field_sp_idx = (
+                    np.array(data["field_subpart_idx"], dtype=np.int16).reshape(-1)
+                    if "field_subpart_idx" in data.files
+                    else None
+                )
+                for arr in (field_pts, field_disp, field_stress):
+                    arr.setflags(write=False)
+                if field_sp_idx is not None:
+                    field_sp_idx.setflags(write=False)
+            if len(sp_names) > 0 and sp_K.shape[0] == len(sp_names):
+                subpart_recovery = SubpartRecoveryData(
+                    names=sp_names,
+                    materials=sp_mats,
+                    mass_kg=sp_mass,
+                    com_m=sp_com,
+                    K_bb=sp_K,
+                    M_bb=sp_M,
+                    disp_op=sp_disp,
+                    stress_op=sp_stress,
+                    field_points_m=field_pts,
+                    field_disp_op=field_disp,
+                    field_stress_op=field_stress,
+                    field_subpart_idx=field_sp_idx,
+                )
 
     K_cb.setflags(write=False)
     M_cb.setflags(write=False)
@@ -341,6 +522,7 @@ def _read_raw_bundle(category: str, asset_id: str) -> _RawCachedAsset | None:
         com_m=com_m,
         inertia_kg_m2=inertia_kg_m2,
         visual_glb_path=visual_path,
+        subpart_recovery=subpart_recovery,
     )
     _ASSET_CACHE[key] = raw
     return raw
@@ -469,6 +651,12 @@ def load_superelement(
     freq_scale = math.sqrt(max(scale_k, 0.0) / max(scale_m, 1e-18))
     freqs = [f * freq_scale for f in raw.fixed_interface_freqs_hz]
 
+    subpart_rec = (
+        raw.subpart_recovery.scaled(scale_k, scale_m)
+        if raw.subpart_recovery is not None
+        else None
+    )
+
     return LoadedHardwareAsset(
         category=category,
         asset_id=asset_id,
@@ -483,4 +671,5 @@ def load_superelement(
         visual_glb_path=raw.visual_glb_path,
         stiffness_scale_applied=scale_k,
         mass_scale_applied=scale_m,
+        subpart_recovery=subpart_rec,
     )

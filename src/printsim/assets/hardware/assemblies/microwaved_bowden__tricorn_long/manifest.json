@@ -5,7 +5,7 @@
   "name": "Tricorn Long + Microwaved Ti Bottom Brace",
   "source_cad": "mbt_tricorn_v2.step",
   "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
-  "baked_at": "2026-11-25T18:38:29Z",
+  "baked_at": "2026-11-27T15:18:18Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 100263,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.012947,
+  "rigid_body_max_freq_hz": 0.012976,
   "mass_kg": 0.048013,
   "com_mm": [
     -0.0005,
@@ -58,5 +58,67 @@
   "visual_triangles": 23998,
   "visual_bytes": 864428,
   "cad_trust_pct": 89,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 1.86,
+      "com_mm": [
+        0.01,
+        0.0,
+        -60.06
+      ],
+      "num_elements": 4069
+    },
+    {
+      "id": "ti_crown_heatbreak_brace",
+      "name": "Ti Crown Heatbreak Brace",
+      "material_id": "titanium_grade5",
+      "mass_g": 1.92,
+      "com_mm": [
+        -0.0,
+        1.57,
+        -20.84
+      ],
+      "num_elements": 41336
+    },
+    {
+      "id": "m3_crown_and_brace_screws",
+      "name": "M3 Crown And Brace Screws",
+      "material_id": "stainless_304",
+      "mass_g": 4.45,
+      "com_mm": [
+        0.0,
+        2.98,
+        -27.0
+      ],
+      "num_elements": 19134
+    },
+    {
+      "id": "heatsink",
+      "name": "Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.09,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -5.89
+      ],
+      "num_elements": 28468
+    },
+    {
+      "id": "cucrzr_hotblock",
+      "name": "Cucrzr Hotblock",
+      "material_id": "copper_c110",
+      "mass_g": 31.69,
+      "com_mm": [
+        -0.0,
+        -0.01,
+        -37.56
+      ],
+      "num_elements": 32350
+    }
+  ],
   "source_hash": "6b9e2ee50cfd69bce0e14a7f37fbebd5245616c7a0a35ed70b8b621131dbeabc"
 }

@@ -5,7 +5,7 @@
   "name": "Microwaved Bowden Chube V1 (SLM AlSi10Mg / Ti)",
   "source_cad": "MBT_Chube_V1.STEP",
   "source_url": "https://github.com/micreathonn/Microwaved-Bowden-Toolhead",
-  "baked_at": "2026-11-26T01:01:11Z",
+  "baked_at": "2026-11-27T15:13:38Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -58,5 +58,55 @@
   "visual_triangles": 23997,
   "visual_bytes": 774764,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 26.83,
+      "com_mm": [
+        -0.06,
+        -1.84,
+        -17.75
+      ],
+      "num_elements": 35741
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 1.55,
+      "com_mm": [
+        -0.13,
+        -9.37,
+        7.52
+      ],
+      "num_elements": 2114
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 17.89,
+      "com_mm": [
+        -0.0,
+        -6.71,
+        32.18
+      ],
+      "num_elements": 23838
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 10.25,
+      "com_mm": [
+        -0.01,
+        -0.99,
+        21.83
+      ],
+      "num_elements": 13617
+    }
+  ],
   "source_hash": "a4d7168c57d072cd5f0088e94ac1be1d27680d202b3d07c23ccd0e6bc8b8ce60"
 }

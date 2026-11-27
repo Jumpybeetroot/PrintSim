@@ -5,7 +5,7 @@
   "name": "Chube Compact + Trinity Unibody Shell Brace",
   "source_cad": "Trinity_Chube_1.6_10mm.step + Chube_Compact_integration_assembly.step",
   "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
-  "baked_at": "2026-11-27T03:29:33Z",
+  "baked_at": "2026-11-27T15:12:59Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 36102,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.027805,
+  "rigid_body_max_freq_hz": 0.027811,
   "mass_kg": 0.066972,
   "com_mm": [
     0.2497,
@@ -58,5 +58,55 @@
   "visual_triangles": 24000,
   "visual_bytes": 865032,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.97,
+      "com_mm": [
+        0.0,
+        0.0,
+        -40.35
+      ],
+      "num_elements": 1240
+    },
+    {
+      "id": "ti_monocoque_shell",
+      "name": "Ti Monocoque Shell",
+      "material_id": "titanium_grade5",
+      "mass_g": 18.52,
+      "com_mm": [
+        0.06,
+        0.0,
+        -21.23
+      ],
+      "num_elements": 19956
+    },
+    {
+      "id": "compact_heatsink",
+      "name": "Compact Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 6.11,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -11.82
+      ],
+      "num_elements": 7222
+    },
+    {
+      "id": "copper_melt_core",
+      "name": "Copper Melt Core",
+      "material_id": "copper_c110",
+      "mass_g": 39.38,
+      "com_mm": [
+        0.4,
+        -0.0,
+        -30.42
+      ],
+      "num_elements": 16204
+    }
+  ],
   "source_hash": "be0daf5081a736ff57cb26c987827d3c9aea39eabae1a79c03cdfdbd0545329a"
 }

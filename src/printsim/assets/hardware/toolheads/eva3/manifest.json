@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "eva3",
+  "name": "RatRig EVA 3 (PET-CF / ASA)",
+  "source_cad": "EVA 3 Onshape Assembly (5af1985e8b5d6fb20ee622b9)",
+  "source_url": "https://cad.onshape.com/documents/5af1985e8b5d6fb20ee622b9/w/64ab471748be7627dcc5d993/e/154cc3182cd0a0ee76e3be5e",
+  "baked_at": "2026-11-27T15:12:07Z",
+  "reference_material_id": "pet_cf_printed",
+  "reference_youngs_modulus_pa": 5200000000.0,
+  "reference_density_kg_m3": 1290.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 18884,
+  "num_elements": 58780,
+  "num_dofs": 56652,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002802,
+  "mass_kg": 0.154963,
+  "com_mm": [
+    1.5529,
+    -3.6389,
+    -13.0142
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    4.0,
+    -30.08,
+    -42.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 986.391,
+    "ky": 1359.836,
+    "kz": 2945.57
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 683.089,
+    "kry": 1170.824,
+    "krz": 1718.434
+  },
+  "fixed_interface_freqs_hz": [
+    408.78,
+    661.74,
+    901.74,
+    969.63,
+    970.89,
+    1036.32
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 29990,
+  "visual_bytes": 1129824,
+  "cad_trust_pct": 84,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "pet_cf_printed",
+      "mass_g": 81.38,
+      "com_mm": [
+        1.33,
+        4.37,
+        0.96
+      ],
+      "num_elements": 30869
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "pet_cf_printed",
+      "mass_g": 52.82,
+      "com_mm": [
+        2.55,
+        -7.89,
+        -26.0
+      ],
+      "num_elements": 20037
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "pet_cf_printed",
+      "mass_g": 19.02,
+      "com_mm": [
+        -0.57,
+        -23.21,
+        -39.05
+      ],
+      "num_elements": 7213
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "pet_cf_printed",
+      "mass_g": 1.74,
+      "com_mm": [
+        4.82,
+        -35.03,
+        12.33
+      ],
+      "num_elements": 661
+    }
+  ],
+  "source_hash": "479f9613bb4ee7b0f6eb0d3a21bd9ee7111d2f8ab0fdff967c07f154a8a685a1"
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "siboor_cnc_x_carriage",
+  "source_cad": "siboor_cnc_x_carriage.step",
+  "source_url": "https://cad.onshape.com/documents/8815cfcf2c39d4bef7b1d1fe/w/333249d118e927d6219d2e17/e/3d4c8b8bb873147aa0f62918",
+  "regions": [
+    {
+      "label": "siboor_cnc_carriage_body",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": null
+    }
+  ]
+}

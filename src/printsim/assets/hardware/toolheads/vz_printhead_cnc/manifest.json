@@ -5,7 +5,7 @@
   "name": "VzBot Vz-Printhead CNC 6061 (Mellow, MGN9H top carriage)",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-27T00:22:03Z",
+  "baked_at": "2026-11-27T15:18:18Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 66828,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.01081,
+  "rigid_body_max_freq_hz": 0.010812,
   "mass_kg": 0.03748,
   "com_mm": [
     -0.0014,
@@ -58,6 +58,44 @@
   "visual_triangles": 23938,
   "visual_bytes": 1199196,
   "cad_trust_pct": 62,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 13.04,
+      "com_mm": [
+        0.01,
+        14.32,
+        -7.8
+      ],
+      "num_elements": 26245
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.64,
+      "com_mm": [
+        0.07,
+        -12.05,
+        -6.44
+      ],
+      "num_elements": 16755
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 15.8,
+      "com_mm": [
+        -0.05,
+        -21.93,
+        -8.79
+      ],
+      "num_elements": 35589
+    }
+  ],
   "source_hash": "9bab9586988125bf6c4ace17b4482e12f733e8b58f3c51165bc116e04269835b",
   "multi_piece_bolted": true,
   "x_rail_mount": "top",

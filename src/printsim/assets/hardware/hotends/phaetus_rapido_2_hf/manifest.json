@@ -5,7 +5,7 @@
   "name": "Phaetus Rapido 2 HF (85W Ceramic, 3x Ti Screws)",
   "source_cad": "phaetus_rapido_2_hf.step (Phaetus official Rapido 2 HF CAD)",
   "source_url": "https://www.phaetus.com/products/rapido2",
-  "baked_at": "2026-11-27T04:57:21Z",
+  "baked_at": "2026-11-27T15:12:11Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 32493,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.005764,
+  "rigid_body_max_freq_hz": 0.005835,
   "mass_kg": 0.045189,
   "com_mm": [
     0.0005,
@@ -58,5 +58,55 @@
   "visual_triangles": 23995,
   "visual_bytes": 914548,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "rapido2_v6_nozzle",
+      "name": "Rapido2 V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.97,
+      "com_mm": [
+        0.0,
+        0.0,
+        -47.65
+      ],
+      "num_elements": 1200
+    },
+    {
+      "id": "rapido2_3x_ti_screws_throat",
+      "name": "Rapido2 3X Ti Screws Throat",
+      "material_id": "titanium_grade5",
+      "mass_g": 0.47,
+      "com_mm": [
+        0.03,
+        0.0,
+        -26.54
+      ],
+      "num_elements": 8164
+    },
+    {
+      "id": "rapido2_cylindrical_cu_core",
+      "name": "Rapido2 Cylindrical Cu Core",
+      "material_id": "copper_c110",
+      "mass_g": 24.83,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -35.73
+      ],
+      "num_elements": 13426
+    },
+    {
+      "id": "rapido2_heatsink",
+      "name": "Rapido2 Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 16.93,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -12.39
+      ],
+      "num_elements": 21158
+    }
+  ],
   "source_hash": "a281e9a4592f501a2b98fc911f09bac05de40dac3b891e1cdc899e48c16430da"
 }

@@ -5,7 +5,7 @@
   "name": "Trianglelab Dragon Ace Volcano (70W Cu/Ti)",
   "source_cad": "Trinity_DAV_1.6_10mm.step (dragon_ace_volcano sub-assembly)",
   "source_url": "https://trianglelab.net/products/dragon-ace%E2%84%A2-hotend?VariantsId=12007",
-  "baked_at": "2026-11-27T03:29:06Z",
+  "baked_at": "2026-11-27T15:12:22Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 32670,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.006395,
+  "rigid_body_max_freq_hz": 0.006819,
   "mass_kg": 0.078261,
   "com_mm": [
     -0.0,
@@ -58,5 +58,55 @@
   "visual_triangles": 23996,
   "visual_bytes": 883512,
   "cad_trust_pct": 87,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.96,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -52.55
+      ],
+      "num_elements": 1152
+    },
+    {
+      "id": "ti_standoffs_and_heatbreak",
+      "name": "Ti Standoffs And Heatbreak",
+      "material_id": "titanium_grade5",
+      "mass_g": 1.82,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -27.45
+      ],
+      "num_elements": 9174
+    },
+    {
+      "id": "dav_heatsink",
+      "name": "Dav Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 15.09,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -10.79
+      ],
+      "num_elements": 16440
+    },
+    {
+      "id": "volcano_copper_block_mze",
+      "name": "Volcano Copper Block Mze",
+      "material_id": "copper_c110",
+      "mass_g": 58.39,
+      "com_mm": [
+        -0.0,
+        1.81,
+        -36.51
+      ],
+      "num_elements": 16710
+    }
+  ],
   "source_hash": "aecffd24262674d8a3213050465108ce4608685287cd184c1f9178cc57fe2023"
 }

@@ -5,7 +5,7 @@
   "name": "E3D Revo Voron (40W RapidChange, Thin-Wall SS304)",
   "source_cad": "Stealthburner_CW2.5_Assembly.step (E3D P6_Assembly__RevC_)",
   "source_url": "https://e3d-online.com/products/revo-voron",
-  "baked_at": "2026-11-27T04:57:10Z",
+  "baked_at": "2026-11-27T15:11:57Z",
   "reference_material_id": "stainless_304",
   "reference_youngs_modulus_pa": 193000000000.0,
   "reference_density_kg_m3": 8000.0,
@@ -17,7 +17,7 @@
   "num_dofs": 22233,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.007521,
+  "rigid_body_max_freq_hz": 0.007264,
   "mass_kg": 0.025175,
   "com_mm": [
     0.0006,
@@ -58,5 +58,43 @@
   "visual_triangles": 23998,
   "visual_bytes": 762148,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "revo_thinwall_ss304_throat",
+      "name": "Revo Thinwall Ss304 Throat",
+      "material_id": "stainless_304",
+      "mass_g": 0.26,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -28.4
+      ],
+      "num_elements": 2778
+    },
+    {
+      "id": "revo_brass_nozzle_and_core",
+      "name": "Revo Brass Nozzle And Core",
+      "material_id": "brass_c360",
+      "mass_g": 13.85,
+      "com_mm": [
+        0.0,
+        0.0,
+        -38.48
+      ],
+      "num_elements": 8862
+    },
+    {
+      "id": "revo_voron_heatsink",
+      "name": "Revo Voron Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 11.06,
+      "com_mm": [
+        0.0,
+        0.0,
+        -12.65
+      ],
+      "num_elements": 16359
+    }
+  ],
   "source_hash": "8857f8cdbf73e224981ccc00eb8cc7213fadf053fef9dcc49ea5afc803046c92"
 }

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "eva3",
+  "source_cad": "EVA 3 Onshape Assembly (5af1985e8b5d6fb20ee622b9)",
+  "source_url": "https://cad.onshape.com/documents/5af1985e8b5d6fb20ee622b9/w/64ab471748be7627dcc5d993/e/154cc3182cd0a0ee76e3be5e",
+  "regions": [
+    {
+      "label": "eva3_body",
+      "material_id": "pet_cf_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "origin": "MGN12C top carriage mount face (0,0,0)",
+  "hotend_port_mm": [
+    4.0,
+    -30.08,
+    -42.0
+  ],
+  "x_rail_mount": "top",
+  "multi_piece_bolted": true
+}

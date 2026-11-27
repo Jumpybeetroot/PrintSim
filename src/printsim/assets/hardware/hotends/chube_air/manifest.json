@@ -5,7 +5,7 @@
   "name": "Luke's Lab Chube Air (100W Ti Shell)",
   "source_cad": "CHUBE_INTEGRATION_REVA.step",
   "source_url": "https://www.chubehotends.com/",
-  "baked_at": "2026-11-26T00:59:05Z",
+  "baked_at": "2026-11-27T15:12:47Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 50250,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.010143,
+  "rigid_body_max_freq_hz": 0.010161,
   "mass_kg": 0.066916,
   "com_mm": [
     -0.0001,
@@ -58,5 +58,55 @@
   "visual_triangles": 24000,
   "visual_bytes": 849564,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.99,
+      "com_mm": [
+        0.0,
+        0.0,
+        -59.14
+      ],
+      "num_elements": 1962
+    },
+    {
+      "id": "ti_monocoque_shell",
+      "name": "Ti Monocoque Shell",
+      "material_id": "titanium_grade5",
+      "mass_g": 18.1,
+      "com_mm": [
+        -0.0,
+        0.0,
+        -40.88
+      ],
+      "num_elements": 26548
+    },
+    {
+      "id": "air_heatsink_fins",
+      "name": "Air Heatsink Fins",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.09,
+      "com_mm": [
+        -0.0,
+        0.0,
+        -5.93
+      ],
+      "num_elements": 13724
+    },
+    {
+      "id": "copper_melt_core",
+      "name": "Copper Melt Core",
+      "material_id": "copper_c110",
+      "mass_g": 37.73,
+      "com_mm": [
+        0.0,
+        0.54,
+        -42.42
+      ],
+      "num_elements": 28418
+    }
+  ],
   "source_hash": "154a49a3bb62c356fcc6b378c4a237138a03ca6e1847eecf306ed6ceafd91980"
 }

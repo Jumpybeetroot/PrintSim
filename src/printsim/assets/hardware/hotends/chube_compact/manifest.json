@@ -5,7 +5,7 @@
   "name": "Luke's Lab Chube Compact (80W Ti Shell)",
   "source_cad": "Chube_Compact_integration_assembly.step",
   "source_url": "https://www.chubehotends.com/",
-  "baked_at": "2026-11-26T00:37:59Z",
+  "baked_at": "2026-11-27T15:12:23Z",
   "reference_material_id": "titanium_grade5",
   "reference_youngs_modulus_pa": 113800000000.0,
   "reference_density_kg_m3": 4430.0,
@@ -17,7 +17,7 @@
   "num_dofs": 39639,
   "n_boundary_dofs": 12,
   "n_internal_modes": 8,
-  "rigid_body_max_freq_hz": 0.008437,
+  "rigid_body_max_freq_hz": 0.008438,
   "mass_kg": 0.06697,
   "com_mm": [
     0.2501,
@@ -58,5 +58,55 @@
   "visual_triangles": 24000,
   "visual_bytes": 865032,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "v6_nozzle",
+      "name": "V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.98,
+      "com_mm": [
+        0.0,
+        0.0,
+        -40.35
+      ],
+      "num_elements": 1512
+    },
+    {
+      "id": "ti_monocoque_shell",
+      "name": "Ti Monocoque Shell",
+      "material_id": "titanium_grade5",
+      "mass_g": 18.51,
+      "com_mm": [
+        0.06,
+        -0.0,
+        -21.23
+      ],
+      "num_elements": 22109
+    },
+    {
+      "id": "compact_heatsink",
+      "name": "Compact Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 6.11,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -11.82
+      ],
+      "num_elements": 8123
+    },
+    {
+      "id": "copper_melt_core",
+      "name": "Copper Melt Core",
+      "material_id": "copper_c110",
+      "mass_g": 39.37,
+      "com_mm": [
+        0.4,
+        0.0,
+        -30.43
+      ],
+      "num_elements": 17576
+    }
+  ],
   "source_hash": "4be6a4eeb933d2500cb09ca74c06b36bdee80b35661b0f35d3ce859b478823ba"
 }

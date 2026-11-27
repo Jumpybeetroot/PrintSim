@@ -5,7 +5,7 @@
   "name": "Voron StealthBurner + Clockwork 2.5 (ABS/ASA)",
   "source_cad": "Stealthburner_CW2.5_Assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Stealthburner",
-  "baked_at": "2026-11-26T19:58:33Z",
+  "baked_at": "2026-11-27T15:12:50Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 45963,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.000794,
+  "rigid_body_max_freq_hz": 0.000796,
   "mass_kg": 0.143403,
   "com_mm": [
     -0.4387,
@@ -56,5 +56,55 @@
   "visual_triangles": 31985,
   "visual_bytes": 1598776,
   "cad_trust_pct": 86,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 33.76,
+      "com_mm": [
+        -0.63,
+        2.55,
+        -4.3
+      ],
+      "num_elements": 10683
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 15.61,
+      "com_mm": [
+        0.94,
+        -13.38,
+        -12.98
+      ],
+      "num_elements": 4891
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 68.56,
+      "com_mm": [
+        0.93,
+        -39.22,
+        -2.03
+      ],
+      "num_elements": 21624
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 25.47,
+      "com_mm": [
+        -4.72,
+        -15.24,
+        43.59
+      ],
+      "num_elements": 8002
+    }
+  ],
   "source_hash": "7b8e651d3de1615b9bde6a2be201276d2e1c8644288fc690025b8c7c4dec4f75"
 }

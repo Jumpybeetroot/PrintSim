@@ -1,0 +1,32 @@
+schema_version: 1
+category: toolheads
+asset_id: eva3
+name: RatRig EVA 3 (PET-CF / ASA)
+step_path: cad_sources/onshape/eva3_structural.step
+source_url: https://cad.onshape.com/documents/5af1985e8b5d6fb20ee622b9/w/64ab471748be7627dcc5d993/e/154cc3182cd0a0ee76e3be5e
+reference_material_id: pet_cf_printed
+cad_trust_pct: 84
+is_fdm_anisotropic: true
+mesh_size_mm: 3.5
+n_internal_modes: 6
+visual_max_triangles: 30000
+transform:
+  scale: 1.0
+  rotate_deg: [0.0, 0.0, 0.0]
+  translate_mm: [0.0, 0.0, 0.0]
+port0:
+  kind: plane_box
+  vp_coord_mm: [0.0, 0.0, 0.0]
+  params:
+    axis: 2
+    coord_mm: 0.0
+    tol_mm: 2.5
+    bounds_mm: [[-20.0, 20.0], [-14.0, 14.0], [-2.5, 2.5]]
+port1:
+  kind: plane_box
+  vp_coord_mm: [0.0, -30.0, -42.0]
+  params:
+    axis: 2
+    coord_mm: -42.0
+    tol_mm: 3.0
+    bounds_mm: [[-20.0, 22.0], [-44.0, -16.0], [-45.0, -39.0]]

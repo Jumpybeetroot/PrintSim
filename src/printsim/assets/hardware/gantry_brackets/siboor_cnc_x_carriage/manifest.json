@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "category": "gantry_brackets",
+  "asset_id": "siboor_cnc_x_carriage",
+  "name": "Siboor / Voron Lightweight CNC 6061-T6 X-Carriage",
+  "source_cad": "siboor_cnc_x_carriage.step",
+  "source_url": "https://cad.onshape.com/documents/8815cfcf2c39d4bef7b1d1fe/w/333249d118e927d6219d2e17/e/3d4c8b8bb873147aa0f62918",
+  "baked_at": "2026-11-27T13:51:05Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 3262,
+  "num_elements": 8930,
+  "num_dofs": 9786,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.011273,
+  "mass_kg": 0.020199,
+  "com_mm": [
+    -0.019,
+    -4.8992,
+    -5.6848
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -10.5,
+    -10.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 636.436,
+    "ky": 903.028,
+    "kz": 4488.433
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 571.009,
+    "kry": 695.941,
+    "krz": 141.472
+  },
+  "fixed_interface_freqs_hz": [
+    911.97,
+    2608.69,
+    2621.24,
+    3451.84,
+    5969.21,
+    6660.82
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 12000,
+  "visual_bytes": 458324,
+  "cad_trust_pct": 90,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 10.4,
+      "com_mm": [
+        0.0,
+        -4.71,
+        13.94
+      ],
+      "num_elements": 4598
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 1.22,
+      "com_mm": [
+        -0.13,
+        -1.37,
+        -10.3
+      ],
+      "num_elements": 536
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.47,
+      "com_mm": [
+        -0.03,
+        -5.52,
+        -29.31
+      ],
+      "num_elements": 3750
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 0.11,
+      "com_mm": [
+        0.0,
+        -13.77,
+        10.53
+      ],
+      "num_elements": 46
+    }
+  ],
+  "source_hash": "fd9cc71317d6771ae97fb9b2b05f267c1dabb164ae32612e11652730c7baa7af"
+}

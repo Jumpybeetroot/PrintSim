@@ -43,6 +43,7 @@ from printsim.cad_assets import (
 from printsim.cad_assets.baker import (
     _assemble_tet4_km,
     _compute_mass_com_inertia,
+    _compute_subpart_recovery,
     _mesh_regions_tet4,
     _verify_and_extract_tip_stiffness,
 )
@@ -1443,6 +1444,19 @@ def _bake_coupled_multi_mount_superelement(
         K_cb, M_cb
     )
 
+    Psi_b_tied = se_multi.T_cb @ Q[:, :12]
+    subpart_npz, manifest_subparts = _compute_subpart_recovery(
+        mesh=mesh,
+        coords_m=coords_m,
+        tets=tets,
+        region_ids=region_ids,
+        regions=regions,
+        Psi_b=Psi_b_tied,
+        port0_vp_m=p0_vp_m,
+        port1_vp_m=p1_vp_m,
+        default_fdm_anisotropic=spec.is_fdm_anisotropic,
+    )
+
     glb_path = asset_dir / "visual.glb"
     vis_tris, vis_bytes = build_visual_glb(
         visual_parts, glb_path, max_total_triangles=spec.visual_max_triangles
@@ -1476,6 +1490,7 @@ def _bake_coupled_multi_mount_superelement(
         fixed_interface_freqs_hz=np.asarray(se_multi.fixed_interface_freqs_hz, dtype=np.float64),
         com_m=com_m,
         inertia_kg_m2=inertia_kg_m2,
+        **subpart_npz,
     )
 
     manifest: dict[str, Any] = {
@@ -1509,6 +1524,7 @@ def _bake_coupled_multi_mount_superelement(
         "visual_triangles": int(vis_tris),
         "visual_bytes": int(vis_bytes),
         "cad_trust_pct": int(spec.cad_trust_pct),
+        "subparts": manifest_subparts,
         "source_hash": source_hash,
     }
     (asset_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

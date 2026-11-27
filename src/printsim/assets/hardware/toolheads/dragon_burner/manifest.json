@@ -5,7 +5,7 @@
   "name": "Dragon Burner V8 + Orbiter 2 Mount (PA12-CF / ABS)",
   "source_cad": "dragon_burner_v8.step",
   "source_url": "https://github.com/chirpy2605/voron/tree/main/V0/Dragon_Burner",
-  "baked_at": "2026-11-27T04:17:21Z",
+  "baked_at": "2026-11-27T15:13:48Z",
   "reference_material_id": "pa12_cf_printed",
   "reference_youngs_modulus_pa": 6200000000.0,
   "reference_density_kg_m3": 1180.0,
@@ -17,7 +17,7 @@
   "num_dofs": 26793,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.002414,
+  "rigid_body_max_freq_hz": 0.002412,
   "mass_kg": 0.055964,
   "com_mm": [
     -0.2112,
@@ -56,5 +56,55 @@
   "visual_triangles": 27997,
   "visual_bytes": 977344,
   "cad_trust_pct": 83,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "pa12_cf_printed",
+      "mass_g": 14.97,
+      "com_mm": [
+        0.0,
+        -1.71,
+        3.1
+      ],
+      "num_elements": 8118
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "pa12_cf_printed",
+      "mass_g": 9.34,
+      "com_mm": [
+        -0.17,
+        -8.64,
+        -3.37
+      ],
+      "num_elements": 5085
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "pa12_cf_printed",
+      "mass_g": 25.03,
+      "com_mm": [
+        -0.39,
+        -29.82,
+        5.85
+      ],
+      "num_elements": 13572
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "pa12_cf_printed",
+      "mass_g": 6.62,
+      "com_mm": [
+        -0.08,
+        -12.82,
+        15.32
+      ],
+      "num_elements": 3590
+    }
+  ],
   "source_hash": "f54e8a0dd6940e6efb246a77525b5c0f22df42abe9ded46408d7b687a0d77636"
 }
