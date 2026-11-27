@@ -1113,3 +1113,35 @@ def test_cli_kb_forget_removes_item_and_derived_records(tmp_path: Path) -> None:
 
     missing = runner.invoke(app, ["kb", "forget", "424242", "--db", str(db_path)])
     assert missing.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# 16. A curated record with an empty "records" object yields nothing by regex
+# ---------------------------------------------------------------------------
+
+
+def test_empty_records_object_stops_regex_extraction(tmp_path: Path) -> None:
+    # A note that merely mentions an existing figure. The regex extractor reads this
+    # sentence as a new weight; a curated note must not create one.
+    sentence = "The datasheet figure for Mellow Goliath Air is 96 g, so the two differ."
+
+    guessed = tmp_path / "guessed.json"
+    guessed.write_text(json.dumps([{"author": "someone", "content": sentence}]), encoding="utf-8")
+    stated = tmp_path / "stated.json"
+    stated.write_text(
+        json.dumps([{"author": "agent note", "content": sentence + " (note)", "records": {}}]),
+        encoding="utf-8",
+    )
+
+    with TouchstoneKB(tmp_path / "guessed.db") as kb:
+        res = ingest_local_path(kb, guessed, min_score=0.0, auto_approve=True)
+        # Guard against a vacuous test: without "records" the extractor does invent a row.
+        assert res["weights_added"] == 1
+
+    with TouchstoneKB(tmp_path / "stated.db") as kb:
+        res = ingest_local_path(kb, stated, min_score=0.0, auto_approve=True)
+        assert res["items_kept"] == 1
+        assert res["weights_added"] == 0
+        assert kb.conn.execute("SELECT COUNT(*) FROM component_weights").fetchone()[0] == 0
+        # The note itself is still stored and searchable.
+        assert len(kb.search("Goliath datasheet")) == 1

@@ -993,7 +993,8 @@ def kb_ingest_cmd(
     A JSON-list or JSONL record may state verified data outright in a "records" object, e.g.
     {"content": "...", "url": "...", "records": {"component_weights": [{"category": "hotend",
     "component_name": "Chube Air", "mass_g": 79.0}]}}. Tables: component_weights, builds,
-    material_tests, troubleshooting_cases. With --auto-approve those rows are inserted as given.
+    material_tests, troubleshooting_cases. With --auto-approve those rows are inserted as given,
+    and the regex extractor is not run on that record; "records": {} states "nothing to extract".
     """
     from printsim.kb import TouchstoneKB, ingest_local_path
 

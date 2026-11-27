@@ -551,7 +551,13 @@ def _explicit_structured_records(rec: dict[str, Any]) -> dict[str, list[dict[str
 
     Tables and fields follow ``insert_extracted_records``. Unknown tables and fields are
     ignored, numbers are coerced, and a row without its required name (or a weight without
-    a positive ``mass_g``) is dropped. Returns ``None`` when nothing usable is present.
+    a positive ``mass_g``) is dropped.
+
+    Returns ``None`` when the record has no ``records`` object, so the caller falls back to
+    the regex extractor. When the object is present, even empty (``"records": {}``), the
+    result is a dict and the regex extractor is not run: a curated record yields only what
+    it states. An empty object is how a note or a verbatim quote says "nothing to extract
+    here", which keeps numbers it merely mentions from becoming records.
     """
     raw = rec.get("records")
     if not isinstance(raw, dict):
@@ -581,7 +587,7 @@ def _explicit_structured_records(rec: dict[str, Any]) -> dict[str, list[dict[str
             if table == "component_weights" and not clean.get("mass_g", 0.0) > 0.0:
                 continue
             out[table].append(clean)
-    return out if any(out.values()) else None
+    return out
 
 
 def _is_klipper_shaper_csv(path: Path) -> bool:
@@ -649,10 +655,16 @@ def _ingest_single_record(
 
     stats["items_kept"] += 1
     if auto_approve:
-        extracted = extra_extracted or extract_structured_records(
-            raw_text,
-            title=title,
-            meta={"author": author, "channel": channel, "source_name": source_name},
+        # ``extra_extracted`` given (even with no rows) means the source states its own data:
+        # use exactly that and do not run the regex extractor over its wording.
+        extracted = (
+            extra_extracted
+            if extra_extracted is not None
+            else extract_structured_records(
+                raw_text,
+                title=title,
+                meta={"author": author, "channel": channel, "source_name": source_name},
+            )
         )
         ins = kb.insert_extracted_records(extracted, raw_item_id=item_id)
         for k, v in ins.items():
@@ -837,8 +849,8 @@ def ingest_local_path(
                     stats=stats,
                     # A record that states its data outright is curated: keep it whatever the
                     # regex scorer thinks of its wording, and use exactly the records it states.
-                    forced_score=0.9 if explicit else None,
-                    forced_tags=["curated"] if explicit else None,
+                    forced_score=0.9 if explicit and any(explicit.values()) else None,
+                    forced_tags=["curated"] if explicit is not None else None,
                     extra_extracted=explicit,
                 )
             continue
@@ -871,8 +883,8 @@ def ingest_local_path(
                     min_score=min_score,
                     auto_approve=auto_approve,
                     stats=stats,
-                    forced_score=0.9 if explicit else None,
-                    forced_tags=["curated"] if explicit else None,
+                    forced_score=0.9 if explicit and any(explicit.values()) else None,
+                    forced_tags=["curated"] if explicit is not None else None,
                     extra_extracted=explicit,
                 )
             continue
