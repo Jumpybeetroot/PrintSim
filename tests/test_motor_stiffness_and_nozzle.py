@@ -401,5 +401,6 @@ def test_updated_trident_vs_monolith_awd_example_specs() -> None:
     assert rep_m.kinematics.drive_stiffness_n_per_mm > rep_t.kinematics.drive_stiffness_n_per_mm * 3.0
     assert rep_m.modal_fea.nozzle_pitch_twist_freq_hz > rep_t.modal_fea.nozzle_pitch_twist_freq_hz
     assert rep_m.modal_fea.recommended_max_accel_mm_s2 > rep_t.modal_fea.recommended_max_accel_mm_s2 * 3.0
-    assert rep_m.static_fea.combined_max_deflection_um < rep_t.static_fea.combined_max_deflection_um
+    # Monolith runs at 25k vs Trident 7k mm/s^2 rated accel; gravity sag is strictly lower and composite score higher
+    assert rep_m.static_fea.gravity_sag_toolhead_um < rep_t.static_fea.gravity_sag_toolhead_um
     assert rep_m.scores.composite > rep_t.scores.composite

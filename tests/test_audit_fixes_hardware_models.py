@@ -88,7 +88,8 @@ def test_h1_voron_v24_flying_gantry_joints_z_variation_and_trident_comparison() 
             else:
                 assert zj.shell_node_id == f"col_g_{tag}"
             assert zj.frame_node_id == f"g_{tag}"
-            assert zj.k_normal_n_m == pytest.approx(1.8e5, rel=1e-6)
+            # CAL-10: two-span height-dependent Z-belt elasticity in series with voron_24_z_drive_* CAD CMS
+            assert 1.5e5 < zj.k_normal_n_m < 2.4e5
             assert zj.k_shear_n_m == pytest.approx(1.2e6, rel=1e-6)
             assert zj.k_rot_nm_rad == pytest.approx(65.0, rel=1e-6)
 
@@ -121,36 +122,36 @@ def test_h1_voron_v24_flying_gantry_joints_z_variation_and_trident_comparison() 
 
 
 def test_h2_corner_gussets_has_zero_diagonal_braces_and_modestly_stiffens_joints() -> None:
-    """H2: corner_gussets emits zero brace_* diagonal rods on CoreXY/Bedslinger, unlike rear_cross/full_truss."""
+    """H2: cnc_corner_gussets emits zero diagonal brace rods on CoreXY/Bedslinger, unlike rear_flat_bar_x."""
     for fname in ("corexy_voron_style.yaml", "voron_trident_300.yaml", "doomcube_4040.yaml"):
         spec = PrinterSpec.from_yaml(EXAMPLES_DIR / fname)
-        assert spec.frame.bracing == "corner_gussets"
+        assert spec.frame.bracing == "cnc_corner_gussets"
         asm = build_assembly(spec)
         assert [m for m in asm.members if m.role == "brace" or m.id.startswith("brace_")] == []
 
-    # Open-panel blind-joint CoreXY: corner_gussets has zero brace rods yet increases stiffness over bracing="none"
+    # Open-panel blind-joint CoreXY: cnc_corner_gussets has zero brace rods yet increases stiffness over bracing="none"
     open_none = PrinterSpec(architecture="corexy")
     open_none.frame.enclosed_panels = False
     open_none.frame.corner_joint_type = "blind_joint"
     open_none.frame.bracing = "none"
 
     open_gusset = open_none.model_copy(deep=True)
-    open_gusset.frame.bracing = "corner_gussets"
+    open_gusset.frame.bracing = "cnc_corner_gussets"
 
     open_cross = open_none.model_copy(deep=True)
-    open_cross.frame.bracing = "rear_cross"
+    open_cross.frame.bracing = "rear_flat_bar_x"
 
     asm_none = build_assembly(open_none)
     asm_gusset = build_assembly(open_gusset)
     asm_cross = build_assembly(open_cross)
 
     assert [m for m in asm_gusset.members if m.role == "brace"] == []
-    assert len([m for m in asm_cross.members if m.role == "brace"]) >= 3
+    assert len([m for m in asm_cross.members if m.role == "brace"]) >= 2
     assert solve_modal_fea(asm_gusset).fundamental_freq_hz > solve_modal_fea(asm_none).fundamental_freq_hz
 
-    # Cartesian bedslinger with corner_gussets also emits zero full-face diagonal brace rods
+    # Cartesian bedslinger with cnc_corner_gussets also emits zero full-face diagonal brace rods
     bs = PrinterSpec.from_yaml(EXAMPLES_DIR / "cartesian_bedslinger.yaml")
-    bs.frame.bracing = "corner_gussets"
+    bs.frame.bracing = "cnc_corner_gussets"
     asm_bs = build_assembly(bs)
     assert [m for m in asm_bs.members if m.role == "brace" or m.id.startswith("brace_")] == []
 
@@ -194,7 +195,9 @@ def test_h3_delta_6_rod_parallelogram_honors_delta_radius_and_no_pitch_modes() -
 
     modal = solve_modal_fea(asm, num_modes=6)
     assert modal.fundamental_freq_hz > 80.0
-    assert abs(modal.modes[1].frequency_hz - modal.modes[2].frequency_hz) < 1.0
+    xy_modes = [m for m in modal.modes if (m.x_axis_share_pct + m.y_axis_share_pct) > 10.0]
+    assert len(xy_modes) >= 2
+    assert abs(xy_modes[0].frequency_hz - xy_modes[1].frequency_hz) < 1.0
 
 
 def test_h4_bedslinger_nonfixed_portal_base_and_moving_y_bed() -> None:

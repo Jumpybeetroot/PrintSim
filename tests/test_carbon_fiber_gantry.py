@@ -507,7 +507,7 @@ def test_cf_diagnostics_and_optimizer_pareto_integration() -> None:
     # Optimizer _mutate_spec reaches Carbonara / torsional / high-Tg / 30x20 / M40J options cleanly
     rng = random.Random(123)
     mutated_xbeams: set[tuple[str, str]] = set()
-    for _ in range(120):
+    for _ in range(300):
         cand, _ = optimizer_mod._mutate_spec(base, rng)
         mutated_xbeams.add((cand.gantry.x_beam_profile, cand.gantry.x_beam_material))
     assert ("cf_tube_20x20_carbonara", "carbon_fiber_torsional_45") in mutated_xbeams
@@ -834,3 +834,28 @@ def test_xbeam_3d_tet10_fea_calibrated_constants_and_confidence() -> None:
     assert e_al["x_gantry_beam"]["trust_pct"] == 96
     assert e_carb["rail_preload"]["trust_pct"] == 90
     assert e_al["rail_preload"]["trust_pct"] == 90
+
+
+def test_thick_walled_x_beam_profiles_and_monotonic_stiffness() -> None:
+    """Thicker-walled 20x20 Alu (3.0mm), Ti (2.0mm), and theoretical Carbonara (2.5mm) X-beams."""
+    pairs = [
+        ("al_tube_20x20x2", "al_tube_20x20x3", "aluminum_6061_t6"),
+        ("ti_tube_20x20x1_2", "ti_tube_20x20x2", "titanium_grade5"),
+        ("cf_tube_20x20_carbonara", "cf_tube_20x20_carbonara_2_5", "carbon_fiber_torsional_45"),
+    ]
+    for thin_id, thick_id, mat_id in pairs:
+        p_thin = get_profile(thin_id)
+        p_thick = get_profile(thick_id)
+        assert p_thick.area_m2 > p_thin.area_m2
+        assert p_thick.iy_m4 > p_thin.iy_m4
+        assert p_thick.iz_m4 > p_thin.iz_m4
+        assert p_thick.j_m4 > p_thin.j_m4
+
+        s_thin = _corexy_cf_base(x_beam_profile=thin_id, x_beam_material=mat_id)
+        s_thick = _corexy_cf_base(x_beam_profile=thick_id, x_beam_material=mat_id)
+        if thick_id == "cf_tube_20x20_carbonara_2_5":
+            assert s_thick.gantry.effective_cf_rail_mounting == "two_wall_clamped_inserts"
+        r_thin = evaluate_printer(s_thin)
+        r_thick = evaluate_printer(s_thick)
+        assert r_thick.static_fea.combined_max_deflection_um < r_thin.static_fea.combined_max_deflection_um
+

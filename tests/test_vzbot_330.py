@@ -104,10 +104,60 @@ def test_side_panel_material_softens_and_lightens_sides(vz_spec: PrinterSpec) ->
     assert all(s.material.id == "aluminum_5052_sheet" for s in rear_pc)
     assert all(s.material.id == "aluminum_5052_sheet" for s in side_al)
     assert a_pc.panel_mass_kg < a_al.panel_mass_kg
-    # Softer side panels can only lower the Y-axis (side-wall racking) shaper frequency
-    y_pc = evaluate_printer(vz_spec, include_advanced_analysis=False).modal_fea.shaper_y.effective_freq_hz
-    y_al = evaluate_printer(all_al, include_advanced_analysis=False).modal_fea.shaper_y.effective_freq_hz
+    # Softer side panels lower the Y-axis structural (side-wall racking) frequency
+    y_pc = evaluate_printer(vz_spec, include_advanced_analysis=False).modal_fea.shaper_y.structural_freq_hz
+    y_al = evaluate_printer(all_al, include_advanced_analysis=False).modal_fea.shaper_y.structural_freq_hz
     assert y_pc <= y_al + 1e-6
+
+
+def test_per_face_panel_overrides_material_and_thickness(vz_spec: PrinterSpec) -> None:
+    from printsim.geometry.bom import generate_bom
+    from printsim.schema.printer import PanelFaceOverride
+
+    mixed = vz_spec.model_copy(deep=True)
+    mixed.frame.side_panel_material = None
+    mixed.frame.top_panel = True
+    mixed.frame.panel_overrides = {
+        "rear": PanelFaceOverride(material="aluminum_5052_sheet", thickness_mm=5.0),
+        "left": PanelFaceOverride(material="polycarbonate", thickness_mm=3.0),
+        "right": PanelFaceOverride(material="acrylic_pmma", thickness_mm=4.0),
+        "top": PanelFaceOverride(material="carbon_fiber_plate", thickness_mm=2.0),
+    }
+    asm = build_assembly(mixed)
+    rear_shells = [s for s in asm.shell_elements if s.bay.startswith("rear")]
+    left_shells = [s for s in asm.shell_elements if s.bay.startswith("left")]
+    right_shells = [s for s in asm.shell_elements if s.bay.startswith("right")]
+    top_shells = [s for s in asm.shell_elements if s.bay == "top"]
+
+    assert rear_shells and all(
+        s.material.id == "aluminum_5052_sheet" and abs(s.thickness_m - 0.005) < 1e-9
+        for s in rear_shells
+    )
+    assert left_shells and all(
+        s.material.id == "polycarbonate" and abs(s.thickness_m - 0.003) < 1e-9
+        for s in left_shells
+    )
+    assert right_shells and all(
+        s.material.id == "acrylic_pmma" and abs(s.thickness_m - 0.004) < 1e-9
+        for s in right_shells
+    )
+    assert top_shells and all(
+        s.material.id == "carbon_fiber_plate" and abs(s.thickness_m - 0.002) < 1e-9
+        for s in top_shells
+    )
+
+    fe = asm.to_geometry_dict()["panels"]["faces"]
+    assert fe["rear"]["material_id"] == "aluminum_5052_sheet" and fe["rear"]["thickness_mm"] == 5.0
+    assert fe["left"]["material_id"] == "polycarbonate" and fe["left"]["thickness_mm"] == 3.0
+    assert fe["right"]["material_id"] == "acrylic_pmma" and fe["right"]["thickness_mm"] == 4.0
+    assert fe["top"]["material_id"] == "carbon_fiber_plate" and fe["top"]["thickness_mm"] == 2.0
+
+    bom = generate_bom(mixed)
+    by_sku = {item.sku: item for item in bom.items}
+    assert "5.0 mm" in by_sku["ENC-REAR"].specification
+    assert "3.0 mm" in by_sku["ENC-LEFT"].specification
+    assert "4.0 mm" in by_sku["ENC-RIGHT"].specification
+    assert "2.0 mm" in by_sku["ENC-TOP"].specification
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +320,8 @@ def test_vzbot_cad_toolhead_and_goliath_visuals_match_fea_datums(vz_spec: Printe
     assert se["asset_id"] == "vz_printhead_cnc" and th["cad_toolhead_self_contained"]
     port1 = se["port1_mm"]
     goliath = get_hardware_asset_manifest("hotends", "mellow_goliath_air")
-    assert goliath is not None and goliath["has_superelement"] is False  # visual-only hotend
+    assert goliath is not None and goliath["has_superelement"] is True  # upgraded to full CAD CMS
+    assert goliath["rigid_body_max_freq_hz"] < 0.05
     l_goliath = -goliath["port1_mm"][2]
     assert l_goliath == pytest.approx(vz_spec.toolhead.hotend.overall_length_mm, abs=0.1)
     # Drawn nozzle = MGN9H top face (10 mm tube half + 10 mm MGN9H) + CAD Port 1 - Goliath length

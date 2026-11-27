@@ -255,14 +255,19 @@ def test_f3_bed_plate_thermal_gradient_concave_up_and_degenerate_fallback() -> N
         assert min(edge_mid_vals) > center_z + 0.5
         assert min(corner_vals) > max(edge_mid_vals)
 
-        # Verify exact analytical 2D spherical curvature (partial_xx = partial_yy = alpha * q_top / k)
+        # Verify exact analytical 2D spherical curvature (plate gradient + Volkersen/Timoshenko bimetallic PEI bow)
+        from printsim.fea.bed_plate_fem import compute_bed_bimetallic_pei_bow_um
+
         mat = get_material(spec.bed.plate_material)
         lx_m, ly_m = bed_size[0] * 1e-3, bed_size[1] * 1e-3
-        l_bed = max(lx_m, ly_m)
         q_top = 12.0 * (110.0 - 25.0)
         kappa = mat.thermal_expansion_1_k * q_top / mat.thermal_conductivity_w_mk
-        expected_corner_minus_center_um = 0.5 * kappa * ((0.5 * lx_m) ** 2 + (0.5 * ly_m) ** 2) * 1e6
-        assert (corner_vals[0] - center_z) == pytest.approx(expected_corner_minus_center_um, rel=1e-9)
+        expected_grad_um = 0.5 * kappa * ((0.5 * lx_m) ** 2 + (0.5 * ly_m) ** 2) * 1e6
+        bimetallic_edge_um = compute_bed_bimetallic_pei_bow_um(spec)
+        r_corner2 = (0.5 * lx_m) ** 2 + (0.5 * ly_m) ** 2
+        r_edge2 = (0.5 * max(lx_m, ly_m)) ** 2
+        expected_corner_minus_center_um = expected_grad_um + bimetallic_edge_um * (r_corner2 / r_edge2)
+        assert (corner_vals[0] - center_z) == pytest.approx(expected_corner_minus_center_um, rel=1e-6)
 
         # Anchor mean of thermal field is zero
         gx = np.array(res.grid_x_rel, dtype=float)
@@ -570,10 +575,10 @@ def test_inverted_eigh_matches_eigsh_and_sensitivity_fd_exact() -> None:
             float(uy[6 * noz_i + 1] - uy[6 * bed_i + 1]),
         )
 
-    f_rp, _, _ = _eval_member_fd("brace_rear_1", rho_scale=1.0 + eps)
-    f_rm, _, _ = _eval_member_fd("brace_rear_1", rho_scale=1.0 - eps)
+    f_rp, _, _ = _eval_member_fd("brace_flat_rear_0", rho_scale=1.0 + eps)
+    f_rm, _, _ = _eval_member_fd("brace_flat_rear_0", rho_scale=1.0 - eps)
     fd_mass = (f_rp - f_rm) / dln
-    assert sen_cx.member_sensitivities["brace_rear_1"]["mass_sens_hz"] == pytest.approx(fd_mass, rel=1e-3)
+    assert sen_cx.member_sensitivities["brace_flat_rear_0"]["mass_sens_hz"] == pytest.approx(fd_mass, rel=1e-3)
 
     f_ep, ux_ep, uy_ep = _eval_member_fd("col_rl_low", e_scale=1.0 + eps)
     f_em, ux_em, uy_em = _eval_member_fd("col_rl_low", e_scale=1.0 - eps)

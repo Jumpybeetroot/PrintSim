@@ -82,30 +82,33 @@ def test_top_panel_toggle_removes_top_shells_reduces_mass_and_lowers_freq() -> N
 
 
 def test_expanded_bracing_modes_and_open_top_cross_stiffening() -> None:
-    """New bracing modes add expected truss rods and stiffen open-top and bare CoreXY frames."""
+    """Modeled bracing modes add expected CAD corner hardware / bolted flat bars and stiffen CoreXY frames."""
     expected_braces = {
         "none": set(),
-        "corner_gussets": set(),
-        "top_cross": {"brace_top_1", "brace_top_2"},
-        "rear_cross": {"brace_rear_1", "brace_rear_2", "brace_top_1"},
-        "side_cross": {"brace_left_1", "brace_left_2", "brace_right_1", "brace_right_2"},
-        "rear_and_sides": {
-            "brace_rear_1",
-            "brace_rear_2",
-            "brace_left_1",
-            "brace_left_2",
-            "brace_right_1",
-            "brace_right_2",
+        "cast_corner_brackets": set(),
+        "cnc_corner_gussets": set(),
+        "rear_flat_bar_x": {"brace_flat_rear_0", "brace_flat_rear_1"},
+        "side_flat_bar_x": {
+            "brace_flat_left_0",
+            "brace_flat_left_1",
+            "brace_flat_right_0",
+            "brace_flat_right_1",
         },
-        "full_truss": {
-            "brace_rear_1",
-            "brace_rear_2",
-            "brace_left_1",
-            "brace_left_2",
-            "brace_right_1",
-            "brace_right_2",
-            "brace_top_1",
-            "brace_top_2",
+        "rear_and_side_flat_bars": {
+            "brace_flat_rear_0",
+            "brace_flat_rear_1",
+            "brace_flat_left_0",
+            "brace_flat_left_1",
+            "brace_flat_right_0",
+            "brace_flat_right_1",
+        },
+        "gussets_and_flat_bars": {
+            "brace_flat_rear_0",
+            "brace_flat_rear_1",
+            "brace_flat_left_0",
+            "brace_flat_left_1",
+            "brace_flat_right_0",
+            "brace_flat_right_1",
         },
     }
 
@@ -121,18 +124,18 @@ def test_expanded_bracing_modes_and_open_top_cross_stiffening() -> None:
         mo = solve_modal_fea(asm)
         open_results[mode] = (st, mo)
 
-    # All new modes increase directional static stiffness vs bare 'none'
+    # Modeled bracing options increase directional static stiffness & resonance vs bare 'none'
     st_none, mo_none = open_results["none"]
-    assert open_results["top_cross"][0].toolhead_stiffness_x_n_per_mm > st_none.toolhead_stiffness_x_n_per_mm
-    assert open_results["side_cross"][0].toolhead_stiffness_y_n_per_mm > st_none.toolhead_stiffness_y_n_per_mm
-    assert open_results["side_cross"][1].shaper_y.effective_freq_hz > mo_none.shaper_y.effective_freq_hz
-    assert open_results["side_cross"][1].fundamental_freq_hz > mo_none.fundamental_freq_hz
-    assert open_results["rear_and_sides"][0].toolhead_stiffness_x_n_per_mm > st_none.toolhead_stiffness_x_n_per_mm
-    assert open_results["rear_and_sides"][0].toolhead_stiffness_y_n_per_mm > st_none.toolhead_stiffness_y_n_per_mm
-    assert open_results["rear_and_sides"][1].fundamental_freq_hz > mo_none.fundamental_freq_hz * 1.5
-    assert open_results["full_truss"][1].fundamental_freq_hz > open_results["rear_and_sides"][1].fundamental_freq_hz
+    assert open_results["cast_corner_brackets"][0].toolhead_stiffness_x_n_per_mm > st_none.toolhead_stiffness_x_n_per_mm
+    assert open_results["cnc_corner_gussets"][0].toolhead_stiffness_x_n_per_mm > open_results["cast_corner_brackets"][0].toolhead_stiffness_x_n_per_mm
+    assert open_results["side_flat_bar_x"][0].toolhead_stiffness_y_n_per_mm > st_none.toolhead_stiffness_y_n_per_mm
+    assert open_results["side_flat_bar_x"][1].shaper_y.effective_freq_hz > mo_none.shaper_y.effective_freq_hz
+    assert open_results["rear_and_side_flat_bars"][0].toolhead_stiffness_x_n_per_mm > st_none.toolhead_stiffness_x_n_per_mm
+    assert open_results["rear_and_side_flat_bars"][0].toolhead_stiffness_y_n_per_mm > st_none.toolhead_stiffness_y_n_per_mm
+    assert open_results["rear_and_side_flat_bars"][1].fundamental_freq_hz > mo_none.fundamental_freq_hz * 1.35
+    assert open_results["gussets_and_flat_bars"][0].toolhead_stiffness_x_n_per_mm >= open_results["rear_and_side_flat_bars"][0].toolhead_stiffness_x_n_per_mm
 
-    # Open-top bolted enclosure (top_panel=False) + top_cross restores torsional & structural resonance
+    # Open-top bolted enclosure (top_panel=False) + CNC halo top brace restores torsional & structural resonance
     spec_open_top = PrinterSpec(architecture="corexy")
     spec_open_top.frame.bracing = "none"
     spec_open_top.frame.enclosed_panels = True
@@ -141,20 +144,19 @@ def test_expanded_bracing_modes_and_open_top_cross_stiffening() -> None:
     spec_open_top.frame.panel_thickness_mm = 4.0
     spec_open_top.frame.top_panel = False
 
-    spec_top_cross = spec_open_top.model_copy(deep=True)
-    spec_top_cross.frame.bracing = "top_cross"
+    spec_top_halo = spec_open_top.model_copy(deep=True)
+    spec_top_halo.frame.top_brace = "cnc_halo_ring"
 
     asm_open_top = build_assembly(spec_open_top)
-    asm_top_cross = build_assembly(spec_top_cross)
+    asm_top_halo = build_assembly(spec_top_halo)
     mo_open_top = solve_modal_fea(asm_open_top)
-    mo_top_cross = solve_modal_fea(asm_top_cross)
+    mo_top_halo = solve_modal_fea(asm_top_halo)
     st_open_top = solve_static_fea(asm_open_top)
-    st_top_cross = solve_static_fea(asm_top_cross)
+    st_top_halo = solve_static_fea(asm_top_halo)
 
-    # Top cross bracing raises open-top X-twist (79 -> 117.5 Hz) up to the ~84.4 Hz flying-gantry Z-belt ceiling
-    assert mo_top_cross.fundamental_freq_hz > mo_open_top.fundamental_freq_hz + 5.0
-    assert mo_top_cross.shaper_x.structural_freq_hz > mo_open_top.shaper_x.structural_freq_hz + 8.5
-    assert st_top_cross.toolhead_stiffness_x_n_per_mm > st_open_top.toolhead_stiffness_x_n_per_mm
+    assert mo_top_halo.fundamental_freq_hz > mo_open_top.fundamental_freq_hz + 5.0
+    assert mo_top_halo.shaper_x.structural_freq_hz > mo_open_top.shaper_x.structural_freq_hz + 5.0
+    assert st_top_halo.toolhead_stiffness_x_n_per_mm > st_open_top.toolhead_stiffness_x_n_per_mm
 
 
 def test_gantry_top_clearance_shifts_elevation_and_evaluates_cleanly() -> None:

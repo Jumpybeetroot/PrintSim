@@ -888,7 +888,7 @@ def test_real_cad_assets_registry_if_present() -> None:
         assert np.all(eigs_11 > 0.0), f"{cat}/{aid} K_11 not strictly SPD"
         assert manifest.get("cad_trust_pct", 0) > 0
 
-        if cat == "gantry_brackets":
+        if cat in ("gantry_brackets", "frame_braces"):
             continue
 
         s = base.model_copy(deep=True)

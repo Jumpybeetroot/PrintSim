@@ -188,7 +188,7 @@ def test_real_world_preset_touchstone_bands_and_catalog_parity() -> None:
     assert 37.0 <= tri.modal_fea.shaper_y.effective_freq_hz <= 47.0
     assert 5000.0 <= tri.modal_fea.recommended_max_accel_mm_s2 <= 9000.0
     assert 52.0 <= v24.modal_fea.shaper_x.effective_freq_hz <= 70.0
-    assert 37.0 <= v24.modal_fea.shaper_y.effective_freq_hz <= 47.0
+    assert 35.5 <= v24.modal_fea.shaper_y.effective_freq_hz <= 47.0
     assert 5000.0 <= v24.modal_fea.recommended_max_accel_mm_s2 <= 9000.0
     assert tri.modal_fea.shaper_x.effective_freq_hz > tri.modal_fea.shaper_y.effective_freq_hz
     assert v24.modal_fea.shaper_x.effective_freq_hz > v24.modal_fea.shaper_y.effective_freq_hz

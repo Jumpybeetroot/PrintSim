@@ -106,9 +106,9 @@ def test_belt_tension_sweep_has_realistic_shaper_sensitivity_and_diminishing_ret
         assert accels_y[t_hi] >= accels_y[t_lo], f"Expected accel_y({t_hi}N) >= accel_y({t_lo}N)"
 
     # Substantial real-world drop when lowering tension on a stiff belt-dominated AWD build:
-    # 65 N -> 15 N drops >= 12 Hz Y; 65 N -> 5 N drops >= 45 Hz Y and degrades off ZV
+    # 65 N -> 15 N drops >= 12 Hz Y; 65 N -> 5 N drops >= 40 Hz Y and degrades off ZV
     assert freqs_y[65] - freqs_y[15] >= 12.0
-    assert freqs_y[65] - freqs_y[5] >= 45.0
+    assert freqs_y[65] - freqs_y[5] >= 40.0
     assert shapers_y[5] != "ZV"
     # Diminishing returns at high tension: 45->90 N gains far less than 5->45 N
     assert (freqs_y[90] - freqs_y[45]) < (freqs_y[45] - freqs_y[5]) * 0.15

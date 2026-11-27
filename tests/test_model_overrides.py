@@ -780,7 +780,7 @@ def test_item_confidence_registry_completeness_all_14_catalogs() -> None:
             assert isinstance(meta["basis"], str) and len(meta["basis"].strip()) > 10
             assert isinstance(meta["caveat"], str) and len(meta["caveat"].strip()) > 10
             total_options += 1
-    assert total_options == 116
+    assert total_options == 119
 
 
 def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
@@ -811,10 +811,10 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "belt": 15,
         "belt_routing": 2,
         "gantry_bracket": 14,
-        "toolhead_preset": 13,
+        "toolhead_preset": 15,
         "toolhead_construction": 6,
         "z_probe": 4,
-        "hotend_clamp": 13,
+        "hotend_clamp": 14,
         "bed_mount": 13,
         "z_drive_mechanism": 12,
     }
@@ -942,10 +942,10 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         s.gantry.rail_quality = qid
         rq_scores[qid] = _by_id(s)["rail_quality"]["trust_pct"]
     assert rq_scores == {
-        "hiwin_genuine": 86,
-        "midgrade_matched": 68,
-        "precision_thk_nsk": 60,
-        "budget_generic": 48,
+        "hiwin_genuine": 88,
+        "midgrade_matched": 82,
+        "precision_thk_nsk": 84,
+        "budget_generic": 80,
     }
 
     # 5. hotends + hotend_mount_styles fallback differentiation
@@ -955,15 +955,15 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         s.toolhead.hotend.preset_id = hid
         e = _by_id(s)["hotend_clamp"]
         he_scores[hid] = e["trust_pct"]
-        assert len(e["options_breakdown"]) == 13
+        assert len(e["options_breakdown"]) == 14
         assert [x["id"] for x in e["options_breakdown"] if x["active"]] == [hid]
     assert he_scores == {
-        "tricorn_long": 88,      # elevated from 78 -> 88 by baked 116k-elem Tet4 CAD CMS superelement
-        "tricorn_short": 87,     # elevated from 76 -> 87 by baked 112k-elem Tet4 CAD CMS superelement
-        "chube_conduction": 86,  # elevated from 78 -> 86 by baked 56k-elem Tet4 CAD CMS superelement
-        "phaetus_dragon_hf": 70,
+        "tricorn_long": 88,       # elevated from 78 -> 88 by baked 116k-elem Tet4 CAD CMS superelement
+        "tricorn_short": 87,      # elevated from 76 -> 87 by baked 112k-elem Tet4 CAD CMS superelement
+        "chube_conduction": 86,   # elevated from 78 -> 86 by baked 80.2k-elem Tet4 CAD CMS superelement
+        "phaetus_dragon_hf": 86,  # CAL-12 baked 46.9k-elem Tet4 CAD CMS superelement
         "e3d_v6_groove": 68,
-        "mellow_goliath_air": 58,
+        "mellow_goliath_air": 85, # CAL-12 baked 51.8k-elem Tet4 CAD CMS superelement
     }
     # Disabling CAD superelements reverts baked hotends to their catalog baselines
     for hid, base_pct in (("tricorn_long", 78), ("tricorn_short", 76), ("chube_conduction", 78)):
@@ -1010,14 +1010,14 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
 
     s_bolted = spec.model_copy(deep=True)
     s_bolted.frame.corner_joint_type = "blind_joint"
-    assert _by_id(s_bolted)["corner_joint"]["trust_pct"] == 64
-    assert _by_id(s_bolted)["corner_joint"]["tier"] == "estimate"
+    assert _by_id(s_bolted)["corner_joint"]["trust_pct"] == 84
+    assert _by_id(s_bolted)["corner_joint"]["tier"] == "calibrated"
 
     s_cube = spec.model_copy(deep=True)
     s_cube.frame.corner_joint_type = "corner_cube"
-    assert _by_id(s_cube)["corner_joint"]["trust_pct"] == 54
+    assert _by_id(s_cube)["corner_joint"]["trust_pct"] == 82
 
-    # Enclosure panels: none -> 95%, bolted -> 86%, clip -> 68%
+    # Enclosure panels: none -> 95%, bolted -> 86%, clip -> 80%
     s_open = spec.model_copy(deep=True)
     s_open.frame.enclosed_panels = False
     assert _by_id(s_open)["enclosure_panels"]["trust_pct"] == 95
@@ -1028,29 +1028,29 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     s_panel_clip = spec.model_copy(deep=True)
     s_panel_clip.frame.enclosed_panels = True
     s_panel_clip.frame.panel_mounting = "clip_enclosure"
-    assert _by_id(s_panel_clip)["enclosure_panels"]["trust_pct"] == 68
+    assert _by_id(s_panel_clip)["enclosure_panels"]["trust_pct"] == 80
 
-    # Extrusion filling: none (unoverridden) -> 96%, epoxy_granite / overridden -> 62%, silica_sand -> 64%
+    # Extrusion filling: none (unoverridden) -> 96%, epoxy_granite -> 82%, silica_sand -> 80%, overridden -> 62%
     assert _by_id(spec)["extrusion_filling"]["trust_pct"] == 96
     s_sand = spec.model_copy(deep=True)
     s_sand.frame.extrusion_filling = "silica_sand"
-    assert _by_id(s_sand)["extrusion_filling"]["trust_pct"] == 64
+    assert _by_id(s_sand)["extrusion_filling"]["trust_pct"] == 80
     s_fill = spec.model_copy(deep=True)
     s_fill.frame.extrusion_filling = "epoxy_granite"
-    assert _by_id(s_fill)["extrusion_filling"]["trust_pct"] == 62
+    assert _by_id(s_fill)["extrusion_filling"]["trust_pct"] == 82
     s_fill_ov = spec.model_copy(deep=True)
     s_fill_ov.model_overrides.extrusion_filling.damping_boost = 0.02
     assert _by_id(s_fill_ov)["extrusion_filling"]["trust_pct"] == 62
     assert _by_id(s_fill_ov)["extrusion_filling"]["overridden"] is True
 
-    # Frame feet: rigid_bolted (unoverridden) -> 95%, rubber_feet / overridden -> 58%, anti_vib_pads -> 48%
+    # Frame feet: rigid_bolted (unoverridden) -> 95%, rubber_feet -> 79%, anti_vib_pads -> 78%, overridden -> 58%
     assert _by_id(spec)["frame_feet"]["trust_pct"] == 95
     s_feet = spec.model_copy(deep=True)
     s_feet.frame.feet_type = "rubber_feet"
-    assert _by_id(s_feet)["frame_feet"]["trust_pct"] == 58
+    assert _by_id(s_feet)["frame_feet"]["trust_pct"] == 79
     s_pads = spec.model_copy(deep=True)
     s_pads.frame.feet_type = "anti_vib_pads"
-    assert _by_id(s_pads)["frame_feet"]["trust_pct"] == 48
+    assert _by_id(s_pads)["frame_feet"]["trust_pct"] == 78
     s_feet_ov = spec.model_copy(deep=True)
     s_feet_ov.model_overrides.frame_feet.k_axial_n_per_mm = 400.0
     assert _by_id(s_feet_ov)["frame_feet"]["trust_pct"] == 58
@@ -1079,18 +1079,18 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     assert _by_id(s_theo)["belt"]["trust_pct"] == 38
     assert _by_id(s_theo)["belt"]["tier"] == "heuristic"
 
-    # Belt routing: stock_corexy -> 74%, monolith_short -> 62%
-    assert _by_id(spec)["belt_routing"]["trust_pct"] == 74
+    # Belt routing: stock_corexy -> 87%, monolith_short -> 86%
+    assert _by_id(spec)["belt_routing"]["trust_pct"] == 87
     s_mono = spec.model_copy(deep=True)
     s_mono.gantry.belt_routing = "monolith_short"
-    assert _by_id(s_mono)["belt_routing"]["trust_pct"] == 62
+    assert _by_id(s_mono)["belt_routing"]["trust_pct"] == 86
 
-    # Gantry bracket: CAD-backed default >= 85%, heuristic fallback abs_printed -> 58%, aluminum_6061_t6 -> 66%, custom -> 85%
+    # Gantry bracket: CAD-backed default >= 85%, PrintDB polymer fallback abs_printed -> 82%, aluminum_6061_t6 -> 66%, custom -> 85%
     assert _by_id(spec)["gantry_bracket"]["trust_pct"] >= 85
     assert _by_id(spec)["gantry_bracket"]["cad_superelement_active"] is True
     s_heur_bkt = spec.model_copy(deep=True)
     s_heur_bkt.use_cad_superelements = False
-    assert _by_id(s_heur_bkt)["gantry_bracket"]["trust_pct"] == 58
+    assert _by_id(s_heur_bkt)["gantry_bracket"]["trust_pct"] == 82
     assert _by_id(s_heur_bkt)["gantry_bracket"]["overridden"] is False
     s_al_bkt = s_heur_bkt.model_copy(deep=True)
     s_al_bkt.gantry.bracket_material = "aluminum_6061_t6"
@@ -1121,29 +1121,29 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     s_tap.toolhead.z_probe_type = "printed_tap"
     assert _by_id(s_tap)["z_probe"]["trust_pct"] == 48
 
-    # Hotend clamp: phaetus_dragon_hf -> 70%, e3d_v6_groove -> 68%
-    assert _by_id(spec)["hotend_clamp"]["trust_pct"] == 70
+    # Hotend clamp: phaetus_dragon_hf -> 86% (CAL-12 CAD CMS), e3d_v6_groove -> 68%
+    assert _by_id(spec)["hotend_clamp"]["trust_pct"] == 86
     s_v6 = spec.model_copy(deep=True)
     s_v6.toolhead.hotend.preset_id = "e3d_v6_groove"
     assert _by_id(s_v6)["hotend_clamp"]["trust_pct"] == 68
 
-    # Bed mount: kinematic_3pt -> 70%, rigid_4pt -> 78%, springs_4pt -> 52%
-    assert _by_id(spec)["bed_mount"]["trust_pct"] == 70
+    # Bed mount: kinematic_3pt -> 85%, rigid_4pt -> 86%, springs_4pt -> 80%
+    assert _by_id(spec)["bed_mount"]["trust_pct"] == 85
     s_r4 = spec.model_copy(deep=True)
     s_r4.bed.mount_type = "rigid_4pt"
-    assert _by_id(s_r4)["bed_mount"]["trust_pct"] == 78
+    assert _by_id(s_r4)["bed_mount"]["trust_pct"] == 86
     s_spr = spec.model_copy(deep=True)
     s_spr.bed.mount_type = "springs_4pt"
-    assert _by_id(s_spr)["bed_mount"]["trust_pct"] == 52
+    assert _by_id(s_spr)["bed_mount"]["trust_pct"] == 80
 
-    # Z-drive mechanism: gt2_6mm_z_belt -> 74%, tr8x4_wobblex -> 60%, gt2_9mm_worm_z -> 54%
-    assert _by_id(spec)["z_drive_mechanism"]["trust_pct"] == 74
+    # Z-drive mechanism: gt2_6mm_z_belt -> 85%, tr8x4_wobblex -> 83%, gt2_9mm_worm_z -> 80%
+    assert _by_id(spec)["z_drive_mechanism"]["trust_pct"] == 85
     s_wx = spec.model_copy(deep=True)
     s_wx.bed.z_leadscrew_type = "tr8x4_wobblex"
-    assert _by_id(s_wx)["z_drive_mechanism"]["trust_pct"] == 60
+    assert _by_id(s_wx)["z_drive_mechanism"]["trust_pct"] == 83
     s_worm = spec.model_copy(deep=True)
     s_worm.bed.z_leadscrew_type = "gt2_9mm_worm_z"
-    assert _by_id(s_worm)["z_drive_mechanism"]["trust_pct"] == 54
+    assert _by_id(s_worm)["z_drive_mechanism"]["trust_pct"] == 80
 
     # Setting overrides on all 14 groups flips overridden=True and updates active_values live
     s_all_ov = _load_preset("voron_trident_300.yaml")

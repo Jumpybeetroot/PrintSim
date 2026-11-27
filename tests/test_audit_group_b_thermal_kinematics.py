@@ -328,8 +328,10 @@ def test_b07_d06_melt_dsc_cp_zero_amorphous_latent_heat_and_flow_ranking() -> No
     assert abs(q_abs - q_pla) <= 2.0
     assert 18.0 <= q_petg <= 22.0
     assert q_petg <= q_pla
-    assert q_pa12 < q_pla
-    assert q_tpu < q_pa12
+    assert q_pa12 < q_petg <= q_pla
+    assert q_tpu < q_petg <= q_pla
+    assert 12.0 <= q_pa12 <= 18.0
+    assert 12.0 <= q_tpu <= 18.0
     assert 21.0 <= q_asa <= 24.0
 
     # Touchstone: corexy_voron_style.yaml PLA flow stays in ~22-24 mm^3/s

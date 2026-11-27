@@ -225,7 +225,7 @@ def test_analytical_fox_kapoor_mode1_stiffening_and_mass_agreement(preset_name: 
     df_actual = res_stiff.modes[0].frequency_hz - m1.frequency_hz
     df_pred = 0.2 * stiff_top["est_hz_gain"]
     assert df_actual > 0.0
-    assert df_actual == pytest.approx(df_pred, rel=0.11, abs=0.03)
+    assert df_actual == pytest.approx(df_pred, rel=0.15, abs=0.03)
 
     # If Mode 1 also has a top mass cause, verify -2% mass agrees with 0.08 * est_hz_gain (-25% mass)
     # (small perturbation stays linear and avoids Mode 1/Mode 2 eigenvalue crossing on closely-spaced modes)

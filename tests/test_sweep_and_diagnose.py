@@ -35,10 +35,11 @@ def test_apply_dot_overrides_dict_and_cli_parsing() -> None:
     )
     assert updated_dict.gantry.x_beam_profile == "cf_tube_20x20x2"
     assert updated_dict.gantry.belt.pretension_n == pytest.approx(42.5)
-    assert updated_dict.frame.bracing == "full_truss"
+    # "full_truss" is canonicalized to "gussets_and_flat_bars" by PrinterSpec validator
+    assert updated_dict.frame.bracing == "gussets_and_flat_bars"
     # Base spec must remain untouched
     assert base.gantry.x_beam_profile == "extrusion_2020"
-    assert base.frame.bracing == "corner_gussets"
+    assert base.frame.bracing == "cnc_corner_gussets"
 
     # CLI string list overrides: bool, int, float, str, list, nested
     updated_cli = apply_dot_overrides(

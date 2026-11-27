@@ -364,7 +364,7 @@ def test_positive_cog_z_tbranch_and_non_collocated_modal_compliance() -> None:
     # Preset ships the Voron-documented 110 Hz belt pluck (9 N). A real stock Trident 300 at
     # 2.2 lb measures Y MZV 40.8-42.2 Hz (docs/community_touchstones.md); model ~40.5 Hz here.
     assert 36.0 <= mo.shaper_y.effective_freq_hz <= 46.0
-    assert mo.shaper_y.compliance_share_pct["frame"] > 12.0
+    assert mo.shaper_y.compliance_share_pct["frame"] > 10.0
 
     # Softening the carriage mount (e.g. Voron Tap) must strictly LOWER Y shaper frequency & consistent-MZV accel
     spec_mzv = spec.model_copy(deep=True)

@@ -228,12 +228,12 @@ def test_nema23_rotor_inertia_pulley_tradeoff_shaft_limit_and_unclipped_velocity
     assert n23.shaft_diameter_mm == pytest.approx(6.35)
     assert n23.thermal_resistance_k_per_w < StepperSpec(**STEPPER_CATALOG["ldo_2504ac"]).thermal_resistance_k_per_w
 
-    # On 60 N single-shear belt tension with CNC mounts & 6mm idler pins: NEMA 17 (5mm shaft) flags shaft_bending_risk, NEMA 23 (6.35mm) does not
+    # On 60 N single-shear belt tension with CNC mounts & stiff 10mm idler pins: NEMA 17 (5mm shaft) flags shaft_bending_risk, NEMA 23 (6.35mm) does not
     spec_17 = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_trident_300.yaml")
     spec_17.gantry.bracket_material = "aluminum_6061_t6"
     spec_17.gantry.double_shear_pulleys = False
     spec_17.gantry.belt.type = "gt2_9mm"
-    spec_17.gantry.belt.idler_shaft_diameter_mm = 6.0
+    spec_17.gantry.belt.idler_shaft_diameter_mm = 10.0
     spec_17.gantry.belt.pretension_n = 60.0
     k_17 = analyze_kinematics(build_assembly(spec_17))
     assert k_17.shaft_bending_risk is True

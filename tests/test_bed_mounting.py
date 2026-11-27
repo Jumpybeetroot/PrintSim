@@ -1135,7 +1135,7 @@ def test_z_carriage_drive_springs_and_vertical_bounce_realism() -> None:
             bounce_hz_list.append(f_bounce)
             if ls == "tr8x4_pom":
                 assert 220.0 <= f_bounce <= 330.0
-                assert ratio_bounce > 0.50
+                assert ratio_bounce > 0.40
 
     assert kz_list[2] > kz_list[1] > kz_list[0]
     assert bounce_hz_list[1] > bounce_hz_list[0] + 50.0

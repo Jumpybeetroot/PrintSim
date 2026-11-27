@@ -221,7 +221,7 @@ def test_a10_pareto_safe_accel_respects_1x_motor_and_belt_limits() -> None:
     # Belt-limited build: low wrap angle + modest pretension triggers tooth-cam-out belt slip below shaper limit
     belt_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
     belt_spec.gantry.belt.wrap_angle_deg = 90.0
-    belt_spec.gantry.belt.pretension_n = 12.0
+    belt_spec.gantry.belt.pretension_n = 8.0
     rep_belt = evaluate_printer(belt_spec, panel_mesh_n=2, include_advanced_analysis=False)
     assert rep_belt.kinematics.belt_max_accel_mm_s2 > 0.0
     assert rep_belt.kinematics.belt_max_accel_mm_s2 < rep_belt.kinematics.motor_max_accel_mm_s2

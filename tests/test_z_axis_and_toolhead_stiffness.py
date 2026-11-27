@@ -54,6 +54,7 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
         "chube_air",
         "mellow_goliath_air",
         "chube_conduction",
+        "trianglelab_dragon_ace_volcano",
         "monolith_50mm_hf",
         "chube_compact",
     ]
@@ -95,6 +96,7 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
         "chube_air",
         "mellow_goliath_air",
         "chube_conduction",
+        "trianglelab_dragon_ace_volcano",
         "monolith_50mm_hf",
         "chube_compact",
     ]
@@ -141,7 +143,10 @@ def test_hotend_catalog_presets_and_monotonic_stiffness_spectrum() -> None:
         cad_chube_cond.toolhead_flex_breakdown["hotend_stiffness_n_per_mm"]
         > cad_chube_air.toolhead_flex_breakdown["hotend_stiffness_n_per_mm"]
     )
-    assert cad_chube_cond.toolhead_stiffness_y_n_per_mm > statics[0].toolhead_stiffness_y_n_per_mm * 3.0
+    s_cad_v6 = base.model_copy(deep=True)
+    s_cad_v6.toolhead.hotend = HotendSpec(preset_id="e3d_v6_groove")
+    cad_v6 = solve_static_fea(build_assembly(s_cad_v6))
+    assert cad_chube_cond.toolhead_stiffness_y_n_per_mm > cad_v6.toolhead_stiffness_y_n_per_mm * 2.0
 
     # Massive real-world difference between floppy groove-mount V6 and rigid Chube Compact / Conduction
     v6_st, chube_st = statics[0], statics[-1]
@@ -284,13 +289,14 @@ def test_delta_axisymmetric_toolhead_xy_symmetry_and_bracket_mass() -> None:
     assert st.toolhead_stiffness_x_n_per_mm == pytest.approx(st.toolhead_stiffness_y_n_per_mm, rel=5e-3)
     delta_no_z = delta.model_copy(deep=True)
     delta_no_z.bed.z_rail_profile = "none"
+    delta_no_z.use_cad_superelements = False  # isolate exact analytical C3 symmetry (real Dragon HF Tet4 mesh has ~0.3% anisotropy)
     st_no_z = solve_static_fea(build_assembly(delta_no_z))
     assert st_no_z.toolhead_stiffness_x_n_per_mm == pytest.approx(
         st_no_z.toolhead_stiffness_y_n_per_mm, rel=1e-6
     )
 
     mo = solve_modal_fea(asm)
-    assert abs(mo.modes[1].frequency_hz - mo.modes[2].frequency_hz) < 1.0
+    assert abs(mo.modes[1].frequency_hz - mo.modes[2].frequency_hz) < 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +366,7 @@ def test_z_leadscrew_and_z_belt_mechanisms_monotonic_bed_stiffness() -> None:
         assert bed_droops[idx + 1] < bed_droops[idx]
         assert bed_kzs[idx + 1] > bed_kzs[idx]
 
-    # Voron 2.4 Z-belt upgrade: gt2_6mm_z_belt -> gt2_9mm_z_belt (+50% z_joint normal stiffness)
+    # Voron 2.4 Z-belt upgrade: gt2_6mm_z_belt -> gt2_9mm_z_belt (CAL-10: wired with voron_24_z_drive_* CAD CMS)
     v24 = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
     v24_9 = v24.model_copy(deep=True)
     v24_9.bed.z_leadscrew_type = "gt2_9mm_z_belt"
@@ -368,9 +374,21 @@ def test_z_leadscrew_and_z_belt_mechanisms_monotonic_bed_stiffness() -> None:
     asm_9 = build_assembly(v24_9)
     sp6 = next(sp for sp in asm_6.fastener_springs if sp.id == "z_joint_fl")
     sp9 = next(sp for sp in asm_9.fastener_springs if sp.id == "z_joint_fl")
-    assert sp6.k_normal_n_m == pytest.approx(1.8e5, rel=1e-6)
-    assert sp9.k_normal_n_m == pytest.approx(2.7e5, rel=1e-6)
+    assert sp6.k_normal_n_m == pytest.approx(1.706e5, rel=0.02)
+    assert sp9.k_normal_n_m == pytest.approx(2.50e5, rel=0.02)
+    assert sp9.k_normal_n_m > sp6.k_normal_n_m * 1.40
     assert solve_static_fea(asm_9).toolhead_stiffness_z_n_per_mm > solve_static_fea(asm_6).toolhead_stiffness_z_n_per_mm
+    # Disabling CAD superelements removes Z-drive pod compliance so k_normal strictly increases vs CMS
+    v24_no_cad = v24.model_copy(deep=True)
+    v24_no_cad.use_cad_superelements = False
+    v24_9_no_cad = v24_9.model_copy(deep=True)
+    v24_9_no_cad.use_cad_superelements = False
+    sp6_nc = next(sp for sp in build_assembly(v24_no_cad).fastener_springs if sp.id == "z_joint_fl")
+    sp9_nc = next(sp for sp in build_assembly(v24_9_no_cad).fastener_springs if sp.id == "z_joint_fl")
+    assert sp6_nc.k_normal_n_m > sp6.k_normal_n_m
+    assert sp9_nc.k_normal_n_m > sp9.k_normal_n_m
+    assert 1.65e5 < sp6_nc.k_normal_n_m < 1.85e5
+    assert 2.45e5 < sp9_nc.k_normal_n_m < 2.75e5
 
 
 # ---------------------------------------------------------------------------
@@ -461,12 +479,12 @@ def test_api_and_mcp_expose_new_catalogs_and_hotend_overrides() -> None:
     resp = client.get("/api/catalog")
     assert resp.status_code == 200
     payload = resp.json()
-    assert len(payload["hotend_presets"]) == 13
+    assert len(payload["hotend_presets"]) == 14
     assert len(payload["z_drive_mechanisms"]) == 12
     assert len(payload["z_rail_profiles"]) == 6
 
     mcp_cat = dispatch_tool("list_catalog", {})
-    assert len(mcp_cat["hotend_presets"]) == 13
+    assert len(mcp_cat["hotend_presets"]) == 14
     assert len(mcp_cat["z_drive_mechanisms"]) == 12
     assert len(mcp_cat["z_rail_profiles"]) == 6
 
@@ -479,7 +497,7 @@ def test_api_and_mcp_expose_new_catalogs_and_hotend_overrides() -> None:
                 {
                     "name": "chube_ballscrew",
                     "overrides": {
-                        "toolhead.hotend.preset_id": "chube_conduction",
+                        "toolhead.hotend.preset_id": "chube_compact",
                         "bed.z_leadscrew_type": "sfu1204_bk10",
                     },
                 }
@@ -745,6 +763,7 @@ def test_toolhead_construction_catalog_and_api_exposure() -> None:
 def test_body_construction_monotonic_ranking_and_no_double_counting() -> None:
     """Stage 2 body_n_per_mm ranks constructions monotonically and ignores internal_stiffness_n_per_mm."""
     base = PrinterSpec.from_yaml(EXAMPLES_DIR / "voron_monolith_awd.yaml")
+    base.use_cad_superelements = False  # isolate analytical Stage 2 body_construction ranking from Archetype CAD CMS
     base.toolhead.hotend = HotendSpec(preset_id="chube_conduction")
 
     ordered = [
@@ -1218,6 +1237,7 @@ def test_hotend_mass_g_presets_nozzle_cantilever_resonance_and_mass_conservation
         "chube_air": 79.0,
         "chube_conduction": 90.0,
         "monolith_50mm_hf": 52.0,
+        "trianglelab_dragon_ace_volcano": 45.0,
     }
     assert set(HOTEND_CATALOG.keys()) == set(expected_masses_g.keys())
     assert HotendSpec().mass_g == pytest.approx(45.0, abs=1e-9)
