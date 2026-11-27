@@ -116,9 +116,10 @@ uv run printsim cad verify                                 # verify all baked as
 uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --out cad_sources/part.step
 uv run printsim cad fetch-onshape "https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>" --kind assemblies --out cad_sources/asm.step
 
-# Zero-LLM diagnostics, A/B comparisons & parallel SQLite-cached sweeps
+# Zero-LLM diagnostics, A/B comparisons, real-machine shaper benchmarks & parallel SQLite-cached sweeps
 uv run printsim diagnose examples/corexy_voron_style.yaml
 uv run printsim compare examples/corexy_voron_style.yaml -O frame.bracing=gussets_and_flat_bars
+uv run printsim shaper-benchmark --compare data/touchstones/shaper_baseline.json
 uv run printsim sweep sweeps/example_parametric_sweep.yaml --workers 4
 ```
 

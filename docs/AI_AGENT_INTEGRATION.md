@@ -248,21 +248,7 @@ more toolhead positions (`fea/belt_identification.py`); without `--point` it ret
 measurement plan and the model's predicted frequency at each position. Belt branch lengths in
 `evaluate_printer` follow `toolhead_rel_pos`.
 
-## 6. Hands-Off Discord & Touchstone KB Research Workflow
-
-To gather empirical 3D-printer hardware specs (toolhead/hotend weights, gantry masses, polymer tests, and Klipper/Shake&Tune ADXL resonance data) from public 3D-printing Discord communities without manual babysitting, PrintSim combines:
-
-- **Workspace Skill & Server Directory**: [`.agents/skills/discord-research/SKILL.md`](../.agents/skills/discord-research/SKILL.md) + [`.agents/skills/discord-research/servers.yaml`](../.agents/skills/discord-research/servers.yaml) (pre-mapped channel IDs for Monolith, VzBoT, Klipper, Luke's Laboratory, Isik's Tech, ANNEX Engineering, Armchair Heavy Industries, Kalico, and VORONDesign).
-- **Zero-LLM Query Router + KB Cache Check**:
-  ```bash
-  uv run python .agents/skills/discord-research/scripts/route_query.py "vzbot 330 adxl" --topic adxl
-  ```
-  Checks PrintSim's local SQLite+FTS5 Touchstone KB (`data/touchstones/printsim_kb.db`) first, then emits direct Discord channel URLs, `[CHECK PINS FIRST]` hints, and native Discord search queries (`in:#channel`, `has:file`, `has:image`).
-- **Automatic Persistence**: Captured thread findings (`data/touchstones/discord_captures/*.json`) and downloaded Klipper/Shake&Tune CSVs (`data/touchstones/adxl_csvs/*.csv`) are ingested directly into the local KB via `uv run printsim kb ingest <path> --auto-approve` so future lookups return in <1 second without re-opening Discord.
-
----
-
-## 7. Hybrid Onshape CAD + Local `build123d` Workflow
+## 6. Hybrid Onshape CAD + Local `build123d` Workflow
 
 PrintSim agents can pair the **Onshape MCP server** (full cloud CAD REST access when connected) with local **`build123d` + `gmsh` + `scikit-fem`** (`printsim cad`) for an end-to-end CAD-to-FEA pipeline.
 
@@ -287,6 +273,23 @@ When the `onshape` MCP server is connected and authenticated (verify with `onsha
 - **Assemblies vs. Part Studios:** Pass `kind: "assemblies"` on `onshape_export` / `onshape_shaded_view` (or `--kind assemblies` on `printsim cad fetch-onshape`) when targeting an Assembly tab.
 - **Units:** Onshape MCP tool parameters use **inches and degrees**; exported STEP files preserve exact physical geometry and are read in **mm** by `build123d` / `printsim cad`.
 - **Sandboxed agent sessions vs. host CLI:** Inside a sandboxed shell, `printsim cad fetch-onshape` cannot read `~/.onshape-mcp` or macOS Keychain unless `ONSHAPE_ACCESS_KEY`/`ONSHAPE_SECRET_KEY` are exported — use the MCP tool `onshape_export` directly instead. Outside the sandbox (user terminal), `printsim cad fetch-onshape` automatically resolves env vars, `~/.onshape-mcp/credentials.json`, or macOS Keychain.
+
+---
+
+## 7. Empirical Touchstone KB (Curated Records, Re-Seeding & Retraction)
+
+The local SQLite + FTS5 touchstone KB (`data/touchstones/printsim_kb.db`, `printsim.kb`) holds verified real-machine measurements (builds with shaper results, component weights, material/belt tests, troubleshooting cases) used by `printsim kb calibrate` and `printsim kb gaps`.
+
+- **Search before measuring or researching again**: `uv run printsim kb search "<query>"`.
+- **Curated records state their data outright**: a JSON-list or JSONL record passed to `uv run printsim kb ingest <file> --auto-approve` may carry a `records` object. Those rows are inserted exactly as given (the regex extractor is skipped for that record) and stay linked to the record's `url`:
+  ```json
+  [{"author": "agent note", "url": "<source link>",
+    "content": "79 g with heater and thermistor, read from the scale photo.",
+    "records": {"component_weights": [{"category": "hotend", "component_name": "Chube Air", "mass_g": 79.0, "details": "with heater + thermistor"}]}}]
+  ```
+  Tables and fields: `component_weights` (`category`, `component_name`, `mass_g`, `details`), `builds` (`build_name`, `architecture`, `printer_model`, `frame_profile`, `frame_size_mm`, `panel_spec`, `drive_mode`, `belt_width_mm`, `belt_core`, `belt_pluck_hz`, `motors`, `voltage_v`, `toolhead`, `hotend`, `x_shaper_type`, `x_shaper_hz`, `x_max_accel`, `y_shaper_type`, `y_shaper_hz`, `y_max_accel`, `x_moving_mass_g`, `y_moving_mass_g`, `preset_hint`, `notes`), `material_tests` (`material_name`, `modulus_gpa`, `hdt_c`, `creep_limit_n`, `belt_pluck_hz`, `shaper_hz`, `test_notes`), `troubleshooting_cases` (`printer_class`, `symptom`, `measured_signature`, `root_cause`, `verified_fix`). Unknown tables/fields are ignored; a row without its name, or a weight without a positive `mass_g`, is dropped.
+- **Re-seeding replaces, it does not accumulate**: `uv run printsim kb seed` re-reads `docs/*benchmark*.md` / `docs/*touchstone*.md`. When a doc has been edited, its earlier snapshot and every row derived from it are removed (`stale_snapshots_removed` in the summary), so a corrected value replaces the old one instead of sitting beside it.
+- **Retract a wrong entry**: `uv run printsim kb forget <raw_item_id>` removes one raw item together with every structured record derived from it.
 
 ---
 

@@ -58,6 +58,7 @@ Always run verification before committing or declaring a task complete:
 
 - Make small, focused commits with clear prefixes (`feat:`, `fix:`, `phys:`, `ui:`, `test:`, `docs:`, `chore:`).
 - Never commit `.venv/`, `web/node_modules/`, `web/dist/`, `.cache/`, `cad_sources/`, or generated `.stl`/`.msh` outputs (baked hardware `src/printsim/assets/hardware/**/*.glb` ARE tracked).
+- In `data/touchstones/`, only the canonical inputs are tracked: `shaper_benchmarks.yaml`, `shaper_baseline.json`, `shaper_baseline_corexy.json`, and `belt_pitch_cell_fea.json` (tests and the regression check read them). The KB database, raw captures, and downloaded accelerometer CSVs stay local; to track another file there, add a `!` line for it in `.gitignore`.
 - Keep example YAML presets valid and passing `tests/test_engine_api.py`.
 
 ## 5. Specialized Subagents, Parallel Splitting & Model Routing

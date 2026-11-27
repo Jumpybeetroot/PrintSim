@@ -140,14 +140,35 @@ The dynamic stiffness as installed is `ea_static_n ×` one family ratio
 (`GATES_FIBERGLASS_DYNAMIC_STIFFENING`; GT3 2MGT × 0.97). That ratio is set from controlled
 measurements in section 5.2: **1.85**, replacing the earlier fitted 2.0 and 2.23.
 
-### 4.4 Still open
+### 4.4 First-principles belt micromechanics, 3D Tet10 pitch-cell FEA & nonlinear shaker dynamics (2026-11-27)
+
+All four legacy empirical belt sub-models (`0.52 / 2.3` exponential crimp fit, `0.0015 / 0.0145 / 0.036` flexural rigidity constants, `5.5e4` + `0.22 / 2.2` tooth seating, and `modal.py`'s `1 - 0.42 u_pen^1.5` / `0.30 + 0.85 exp(-q0/1.4)` / `0.82 f_eff` shaker heuristics) have been replaced by first-principles continuum/analytical models (`fea/belt_micromechanics.py`, `fea/belt_nonlinear.py`):
+
+| Subsystem | First-Principles Model | Calibrated Constants / Validation |
+| :--- | :--- | :--- |
+| **Cord crimp toe** (`belt_crimp_factor`) | Costello helical-cord radial compaction against fiber/matrix confinement: `EA_tan(T) = EA_inf / (1 + β_0 exp(-λ_comp T))`, saturating at `N_c E_f A_f cos³(α)` | 6 mm 2GT E-glass 135 tex: `12.1 kN` @ 0 N (`+3.7%` vs Wang 2018 `11.7 kN`) → `22.5 kN` @ 100 N (`-0.5%` vs Wang `22.6 kN`); `0.1%` secant matches Gates Table 6 `16.9 kN`. |
+| **Tooth-mesh shear & seating** (`gerbert_tooth_mesh_stiffness_n_m`) | 3D Tet10 active-set unilateral pulley-groove seating FEA (`scripts/calibrate_belt_pitch_cell_fea.py`, `data/touchstones/belt_pitch_cell_fea.json`) + Gerbert discrete spring chain with wrap pressure ratio `20 / Z_pulley` & Ling et al. (2020) DMA filled-EPDM small-strain dynamic factor (`EPDM_DYNAMIC_TOOTH_MODULUS_FACTOR = 1.45` at 40–150 Hz; `1.0` for TPU) | Static Tet10: `2GT`: `k_t_full = 32,934 N/(m·mm)`, `s_0 = 0.76`, `q_s = 5.85 N/mm`; `3GT`: `41,378`, `0.32`, `1.50`; `AT3`: `108,743`, `0.05`, `2.40` (mesh convergence `≤ 2.1%`). Dynamic 2GT EPDM: `47,755 N/(m·mm)`. |
+| **Composite bending `EI_b` & wrap radius** (`belt_flexural_rigidity_nm2`, `belt_effective_ea_n`) | Exact 3D Tet10 2×2 ABD static-condensation bending FEA partitioned into cord-dominated & thermally softening matrix fractions + serpentine back-idler/90° corner effective bend radius `R_eff = max(0.5·(R_p + R_back + h_belt), R_p + 0.75·h_belt)` | `2GT`: `0.001917 N·m²/m` (`70.6%` cord / `29.4%` elastomer); `3GT` (`2.41 mm`): `0.01289`; `AT3` (`1.90 mm`): `0.006225` (proving thick `3GT > AT3 > 2GT` in bending). |
+| **Elastomer DMA thermal retention & damping** (`BeltSpec.tooth_modulus_retention`, `belt_damping_ratio`) | Ling et al. (2020) DMA on EPDM/CSM timing-belt compound (`tan δ ≈ 0.06–0.08` → `ζ ≈ 0.03–0.04` base; `E'` drops `44%` from `25 → 120 °C`) | EPDM rated plateau `≤ 80 °C` (`1.0`), linear DMA decline to `0.56` at `120 °C` (floor `0.55`); TPU softens `> 45 °C` (`0.72` @ 65 °C, floor `0.35`). |
+| **Coupled nonlinear shaker dynamics** (`solve_nonlinear_belt_shaker_response` in `modal.py`) | Vectorized harmonic-balance / describing-function solver (`~2 ms/axis`, Pyodide-WASM safe) on 2-DOF `[m_rot, m_car]` + unilateral tension-only Costello `EA(T)` branches + Beikmann–Perkins–Ulsoy (1996) 1:1 sag/runout & 2:1 parametric Mathieu–Duffing transverse whip | Cross-validated against full time-domain swept-sine ODE (`simulate_swept_sine_time_domain`). Eliminates double-damping by feeding pure DMA viscoelastic `zeta_belt_mat` into the nonlinear solver and mapping intermittent slack duty cycle `D > 0.28` onto the exact unloaded-branch frequency `f_slack`. |
+
+**Calibrated empirical benchmark summary (`printsim shaper-benchmark`, baselines refreshed):**
+- **37 CoreXY machines (65 axes):** Overall MAPE improved **`9.88% → 9.73%`** (`-0.15%`; X `10.00%`, Y `9.50%`; `≤10%`: `39/65`, `≤15%`: `48/65`, `≤20%`: `58/65`).
+- **All 40 machines (71 axes):** Overall MAPE improved **`10.69% → 10.61%`** (`-0.08%`).
+- **17 controlled same-machine A/B sweeps:** **`17/17` direction match**, Ratio MAPE improved **`3.95% → 3.65%`** (`-0.30%`):
+  - `jeff.k` Trident `6.2 → 9.8 N` tension sweep: X **`+0.8%`** err (`1.141×` vs `1.132×`, was `+6.1%`), Y `-6.1%` err (`1.132×` vs `1.206×`).
+  - CloakedWayne Monolith AWD `1.0 → 2.8 A` current sweep: **`+0.7%`** err (`1.178×` vs `1.170×`).
+  - CloakedWayne `10 mm` GT3 vs GT2 EPDM swap: **`-1.1%`** err (`0.961×` vs `0.972×`); Aramid vs Fiberglass `+3.6%`.
+  - LH 3-point tension sweep (`13.3 → 19.2 → 25.0 N`; measured `66.4 → 67.6 → 68.2 Hz` MZV): reproduces strictly concave diminishing frequency rise (`+4.5%` then `+2.2%`) and PSD sharpening.
+  - CloakedWayne `12 mm` GT3 `89 → 200 N` (`+4.0% ZV / +5.75% MZV`): pure 2GT fiberglass Costello crimp is already `>99.9%` saturated at `89 N / 12 mm = 7.4 N/mm` (`+0.8%` on standard 2GT), confirming that the larger measured `89 → 200 N` jump on GT3 reflects GT3's softer compound (`e_seat = 0.90` at 89 N) seating further toward GT2 EPDM plus idler-bearing preload at extreme tension.
+
+### 4.5 Still open
 
 | Item | Finding |
 | :--- | :--- |
-| Dynamic ratio 2.23 | A calibration constant: no published static-vs-dynamic measurement was found |
-| Linear mass | Gates sonic-meter constant 1.4 g/m per mm → 8.4 g/m (6 mm), 12.6 g/m (9 mm); catalog agrees (8.3 / 12.45) |
-| Tension sensitivity | One Prusa XL report: pluck 80 → 120 Hz moved the shaper 32 → 34 Hz. The model moves a Trident about +25% over a similar span. The XL is frame-limited, so the cases are not equivalent; needs a controlled sweep |
-| Belt damping | No measurement for GT2 or PU timing belts found |
+| Dynamic ratio `1.85` | Controlled testbeds support `1.6–2.0×` over Gates Table 6 static `EA`; no published 40–150 Hz dynamic `EA(f, T_0)` bench curve for glass-cord timing belts yet |
+| Linear mass | Gates sonic-meter constant `1.4 g/m` per mm → `8.4 g/m` (6 mm), `12.6 g/m` (9 mm); catalog agrees (`8.3 / 12.45 g/m`) |
+| 3GT / AT3 real CoreXY ADXL data | 3D Tet10 pitch-cell FEA & Costello cord models now anchor `k_t`, `EI_b`, and crimp, but zero real CoreXY ADXL sweeps exist for 3GT or AT3 |
 
 ## 5. Identifying belt stiffness from what an owner can measure
 

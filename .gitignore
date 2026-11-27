@@ -35,8 +35,16 @@ sweeps/out/
 
 # Live Studio session bridge & local touchstone KB
 .printsim_session/
-data/touchstones/
+# data/touchstones/: the KB database, raw captures and downloaded accelerometer files stay
+# local. The benchmark manifest, its regression baselines and the belt pitch-cell FEA
+# dataset are canonical inputs that code, tests and CI read, so they are tracked.
+data/touchstones/*
+!data/touchstones/shaper_benchmarks.yaml
+!data/touchstones/shaper_baseline.json
+!data/touchstones/shaper_baseline_corexy.json
+!data/touchstones/belt_pitch_cell_fea.json
 review_queue/
+.agents/skills/discord-research/
 
 # OS / Editor / Local tool state
 .DS_Store
