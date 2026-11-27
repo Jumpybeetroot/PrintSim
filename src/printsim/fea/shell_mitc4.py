@@ -469,3 +469,162 @@ def fastener_spring_matrices(
             k12 = b_off.T @ k12 @ b_off
 
     return 0.5 * (k12 + k12.T)
+
+
+def clip_gasket_stiffness_per_m(
+    frame_width_m: float = 0.020,
+    chamber_temp_c: float = 25.0,
+    foam_thickness_mm: float = 3.0,
+    compression_ratio: float = 0.33,
+    clip_pitch_m: float = 0.15,
+) -> dict[str, float]:
+    """Compute ASTM D1056 closed-cell EPDM foam-tape + ABS twist-clip perimeter stiffness (SI).
+
+    Models stock Voron 2.4r2 / Trident clip-in enclosure mounting:
+    - Continuous 3 mm closed-cell EPDM/Neoprene foam strip (ASTM D1056 2A2/2A3,
+      nominal 25% CFD ~40 kPa -> G_foam_25 ≈ 0.085 MPa, confined E_eff_25 ≈ 0.14 MPa),
+      contact strip width ``w_tape = min(0.5 * frame_width_m, 0.010 m)``, compressed
+      by ``compression_ratio`` (default 33% -> ``t_comp ≈ 2.0 mm``).
+    - Discrete printed ABS quarter-turn panel clips spaced at ``clip_pitch_m`` (~150 mm),
+      contributing micro-slip friction + tab shear (``k_clip_shear = 16.5 kN/m``) and
+      out-of-plane retention (``k_clip_normal = 30.0 kN/m``) in parallel with the gasket.
+    - Mild elastomer/ABS thermal softening above 25 C: ``1 / (1 + 0.003 * (T - 25))``.
+
+    Calibrated against same-printer panels-on vs panels-off Klipper ADXL resonance deltas
+    on stock Voron 2.4r2 / Trident 300 (+0.2..+1.0 Hz X/Y shaper shift, +1..+4% static
+    frame stiffening, ~20-22 Hz PMMA drum mode).
+    """
+    w_tape = max(0.004, min(0.5 * float(frame_width_m), 0.010))
+    t_raw = max(float(foam_thickness_mm) * 1e-3, 5e-4)
+    comp = max(0.05, min(0.65, float(compression_ratio)))
+    t_comp = max(t_raw * (1.0 - comp), 3e-4)
+    dt_c = max(0.0, float(chamber_temp_c) - 25.0)
+    temp_ret = 1.0 / (1.0 + 0.003 * dt_c)
+
+    # ASTM D1056 2A2/2A3 medium-firm closed-cell EPDM foam (compressed gasket shear & normal)
+    g_foam_pa = 0.085e6 * temp_ret
+    e_foam_eff_pa = 0.065e6 * temp_ret  # effective normal modulus with discrete clip contact band
+    k_shear_foam_per_m = g_foam_pa * w_tape / t_comp
+    k_normal_foam_per_m = e_foam_eff_pa * w_tape / t_comp
+
+    # Printed ABS perimeter twist-clips (~150 mm pitch) in parallel with foam gasket
+    pitch = max(float(clip_pitch_m), 0.05)
+    k_shear_clip_per_m = (16_500.0 * temp_ret) / pitch
+    k_normal_clip_per_m = (26_000.0 * temp_ret) / pitch
+
+    k_shear_per_m = k_shear_foam_per_m + k_shear_clip_per_m
+    k_normal_per_m = k_normal_foam_per_m + k_normal_clip_per_m
+    k_rot_per_m = 0.25 * temp_ret
+    return {
+        "k_shear_per_m": float(k_shear_per_m),
+        "k_normal_per_m": float(k_normal_per_m),
+        "k_rot_per_m": float(k_rot_per_m),
+        "k_shear_foam_per_m": float(k_shear_foam_per_m),
+        "k_shear_clip_per_m": float(k_shear_clip_per_m),
+        "foam_thickness_comp_mm": float(t_comp * 1e3),
+        "temp_retention": float(temp_ret),
+    }
+
+
+def mitc4_panel_bay_racking_stiffness(
+    bay_w_m: float,
+    bay_h_m: float,
+    e_pa: float,
+    nu: float,
+    thickness_m: float,
+    areal_mass_kg_m2: float,
+    k_shear_per_m: float,
+    k_normal_per_m: float,
+    k_rot_per_m: float = 0.25,
+    mesh_n: int = 4,
+    e_mem_h_n_m: float | None = None,
+    d_bend_nm: float | None = None,
+    g_transverse_h_n_m: float | None = None,
+) -> tuple[float, float]:
+    """Compute exact 4-edge MITC4+CBUSH bay in-plane racking stiffness (N/m) & drum freq (Hz).
+
+    Applies a pure shear displacement field ``u_x(y) = y / bay_h_m`` along all 4 perimeter
+    frame anchors (bottom fixed, top displaced by 1.0 m in X, vertical sides linearly sheared)
+    to evaluate the exact strain energy ``K_rack = u^T K u``, and extracts the lowest
+    out-of-plane drum eigenfrequency ``f_11`` with grounded perimeter anchors.
+    """
+    from scipy.linalg import eigh
+
+    n = max(2, int(mesh_n))
+    nx = ny = n + 1
+    xs = np.linspace(0.0, float(bay_w_m), nx, dtype=float)
+    ys = np.linspace(0.0, float(bay_h_m), ny, dtype=float)
+    coords = np.array([[x, y, 0.0] for y in ys for x in xs], dtype=float)
+    n_nodes = nx * ny
+    n_dof = 6 * n_nodes
+    k_mat = np.zeros((n_dof, n_dof), dtype=float)
+    m_mat = np.zeros((n_dof, n_dof), dtype=float)
+
+    ke_ref, me_ref, _ = mitc4_shell_matrices(
+        coords[[0, 1, nx + 1, nx]],
+        e_pa=e_pa,
+        nu=nu,
+        thickness_m=thickness_m,
+        areal_mass_kg_m2=areal_mass_kg_m2,
+        d_bend_nm=d_bend_nm,
+        g_transverse_h_n_m=g_transverse_h_n_m,
+        e_mem_h_n_m=e_mem_h_n_m,
+    )
+    for ey in range(n):
+        for ex in range(n):
+            n0 = ey * nx + ex
+            dofs = [6 * nid + d for nid in (n0, n0 + 1, n0 + nx + 1, n0 + nx) for d in range(6)]
+            k_mat[np.ix_(dofs, dofs)] += ke_ref
+            m_mat[np.ix_(dofs, dofs)] += me_ref
+
+    # Add perimeter CBUSH springs to grounded frame anchors (for drum) and prescribed racking frame
+    f_rack = np.zeros(n_dof, dtype=float)
+    e_frame_self = 0.0
+    for j in range(ny):
+        ds_v = (float(bay_h_m) / n) * (0.5 if j in (0, n) else 1.0)
+        for i in range(nx):
+            is_perim = i in (0, n) or j in (0, n)
+            if not is_perim:
+                continue
+            ds = 0.0
+            if j in (0, n):
+                ds += (float(bay_w_m) / n) * (0.5 if i in (0, n) else 1.0)
+            if i in (0, n):
+                ds += ds_v
+            nid = j * nx + i
+            base = 6 * nid
+            ks = float(k_shear_per_m) * ds
+            kn = float(k_normal_per_m) * ds
+            kr = float(k_rot_per_m) * ds
+            k_mat[base + 0, base + 0] += ks
+            k_mat[base + 1, base + 1] += ks
+            k_mat[base + 2, base + 2] += kn
+            k_mat[base + 3, base + 3] += kr
+            k_mat[base + 4, base + 4] += kr
+            k_mat[base + 5, base + 5] += kr
+
+            ux_frame = float(ys[j]) / max(float(bay_h_m), 1e-6)
+            f_rack[base + 0] += ks * ux_frame
+            e_frame_self += ks * (ux_frame**2)
+
+    k_mat = 0.5 * (k_mat + k_mat.T)
+    m_mat = 0.5 * (m_mat + m_mat.T)
+    u_shell = np.linalg.solve(k_mat, f_rack)
+    # Exact condensed strain energy for unit top horizontal displacement (delta = 1.0 m):
+    # 2*U = u_frame^T K_ff u_frame - f_rack^T u_shell = K_rack * 1^2
+    k_rack_n_m = max(0.0, float(e_frame_self - float(np.dot(f_rack, u_shell))))
+
+    m_diag = np.maximum(np.diag(m_mat), 1e-14)
+    np.fill_diagonal(m_mat, m_diag)
+    evals, evecs = eigh(k_mat, m_mat, subset_by_index=[0, min(11, n_dof - 1)], check_finite=False)
+    drum_hz = 0.0
+    for idx in range(evals.size):
+        lam = float(evals[idx])
+        if lam <= 1.0:
+            continue
+        phi = evecs[:, idx]
+        uz = phi[2::6]
+        if float(np.dot(uz, uz)) > 0.5 * float(np.dot(phi[0::6], phi[0::6]) + np.dot(phi[1::6], phi[1::6]) + np.dot(uz, uz)):
+            drum_hz = math.sqrt(lam) / (2.0 * math.pi)
+            break
+    return float(k_rack_n_m), float(drum_hz)

@@ -231,22 +231,53 @@ def simulate_chamber_and_cpap(
         rho_panel = 1200.0
         cp_panel = 1200.0
 
-    r_wall = (
-        (1.0 / _H_IN_W_M2K)
-        + (t_panel_m / max(k_panel, 0.01))
-        + (t_pir_m / _K_PIR_W_MK)
-        + (1.0 / _H_OUT_W_M2K)
-    )
-    u_wall = 1.0 / r_wall
+    def _wall_u(mat_id: str, thick_mm: float) -> float:
+        try:
+            mat = get_material(mat_id)
+            k_p = mat.thermal_conductivity_w_mk
+        except KeyError:
+            k_p = 0.20
+        r_w = (
+            (1.0 / _H_IN_W_M2K)
+            + ((thick_mm * 1e-3) / max(k_p, 0.01))
+            + (t_pir_m / _K_PIR_W_MK)
+            + (1.0 / _H_OUT_W_M2K)
+        )
+        return 1.0 / r_w
+
+    u_wall = _wall_u(frame.panel_material, frame.panel_thickness_mm)
+    r_wall = 1.0 / u_wall
 
     if frame.enclosed_panels:
-        u_eff_paneled = (1.0 - _BRIDGE_AREA_FRAC) * u_wall + _BRIDGE_AREA_FRAC * _U_BRIDGE_W_M2K
-        if frame.top_panel:
-            ua_w_per_k = a_enc_m2 * u_eff_paneled
-            a_paneled_m2 = a_enc_m2
+        if frame.has_mixed_panels:
+            face_areas = [
+                ("rear", w_m * h_m),
+                ("left", d_m * h_m),
+                ("right", d_m * h_m),
+                ("front_bot", w_m * h_m + w_m * d_m),
+            ]
+            if frame.top_panel:
+                face_areas.append(("top", a_top_m2))
+            ua_paneled = 0.0
+            a_paneled_m2 = 0.0
+            for f_name, f_area in face_areas:
+                if f_name == "front_bot":
+                    u_f = u_wall
+                else:
+                    f_mat_id, f_thick_mm = frame.effective_panel_spec(f_name)
+                    u_f = _wall_u(f_mat_id, f_thick_mm)
+                u_eff_f = (1.0 - _BRIDGE_AREA_FRAC) * u_f + _BRIDGE_AREA_FRAC * _U_BRIDGE_W_M2K
+                ua_paneled += f_area * u_eff_f
+                a_paneled_m2 += f_area
+            ua_w_per_k = ua_paneled if frame.top_panel else (ua_paneled + a_top_m2 * _U_OPEN_TOP_W_M2K)
         else:
-            a_paneled_m2 = max(a_enc_m2 - a_top_m2, 0.0)
-            ua_w_per_k = a_paneled_m2 * u_eff_paneled + a_top_m2 * _U_OPEN_TOP_W_M2K
+            u_eff_paneled = (1.0 - _BRIDGE_AREA_FRAC) * u_wall + _BRIDGE_AREA_FRAC * _U_BRIDGE_W_M2K
+            if frame.top_panel:
+                ua_w_per_k = a_enc_m2 * u_eff_paneled
+                a_paneled_m2 = a_enc_m2
+            else:
+                a_paneled_m2 = max(a_enc_m2 - a_top_m2, 0.0)
+                ua_w_per_k = a_paneled_m2 * u_eff_paneled + a_top_m2 * _U_OPEN_TOP_W_M2K
     else:
         a_paneled_m2 = 0.0
         ua_w_per_k = a_enc_m2 * _U_OPEN_FRAME_W_M2K

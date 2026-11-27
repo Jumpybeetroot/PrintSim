@@ -162,14 +162,7 @@ def _build_delta(
                 is_truss=True,
             )
 
-        if spec.frame.bracing in ("rear_cross", "full_truss"):
-            _b._add_member(
-                members, f"brace_{i}_a", f"b_{i}", f"t_{j}", bp, bm, role="brace", is_truss=True
-            )
-        if spec.frame.bracing == "full_truss":
-            _b._add_member(
-                members, f"brace_{i}_b", f"b_{j}", f"t_{i}", bp, bm, role="brace", is_truss=True
-            )
+        # Modeled & simulated frame bracing is attached below via add_modeled_frame_bracing()
 
     z_rail_id = spec.bed.z_rail_profile
     if z_rail_id != "none":
@@ -243,6 +236,20 @@ def _build_delta(
             )
         )
 
+    from printsim.geometry._builder_bracing import add_modeled_frame_bracing
+
+    nmap_br = {n.id: n for n in nodes}
+    frame_superelements: list[_b.AttachedSuperelement] = []
+    frame_brace_res = add_modeled_frame_bracing(
+        spec=spec,
+        nodes=nodes,
+        nmap=nmap_br,
+        members=members,
+        springs=fastener_springs,
+        superelements=frame_superelements,
+        allow_gantry=False,
+    )
+
     eff_mass = toolhead_kg + 0.09  # ultra-light effector + arm portion
     stage_stiffnesses = _b._attach_toolhead_cog_and_nozzle(
         nodes, members, spec, base_node_id="toolhead", fastener_springs=fastener_springs
@@ -255,6 +262,13 @@ def _build_delta(
         nodes=nodes,
         members=members,
         fastener_springs=fastener_springs,
+        superelements=frame_superelements,
+        frame_brace_cad_mass_kg=float(frame_brace_res["cad_mass_kg"]),
+        frame_brace_flat_bar_mass_kg=float(frame_brace_res["flat_bar_mass_kg"]),
+        frame_brace_cost_usd=float(frame_brace_res["cost_usd"]),
+        frame_brace_cad_count=int(frame_brace_res["cad_count"]),
+        frame_brace_cad_asset_id=frame_brace_res["cad_asset_id"],
+        frame_brace_visuals=list(frame_brace_res["visuals"]),
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",

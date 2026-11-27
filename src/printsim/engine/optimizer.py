@@ -142,7 +142,15 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
             child.frame.profile = val
             changes.append(f"frame.profile={val}")
         elif m == "bracing":
-            opts = ["none", "corner_gussets", "rear_cross", "full_truss"]
+            opts = [
+                "none",
+                "cast_corner_brackets",
+                "cnc_corner_gussets",
+                "rear_flat_bar_x",
+                "side_flat_bar_x",
+                "rear_and_side_flat_bars",
+                "gussets_and_flat_bars",
+            ]
             alts = [x for x in opts if x != child.frame.bracing] or opts
             val = rng.choice(alts)
             child.frame.bracing = val  # type: ignore[assignment]
@@ -170,14 +178,19 @@ def _mutate_spec(parent: PrinterSpec, rng: random.Random) -> tuple[PrinterSpec, 
         elif m == "x_beam":
             opts = [
                 ("extrusion_2020", "aluminum_6063_t5"),
+                ("cnc_al_monocoque_20x20", "aluminum_7075_t6"),
+                ("cnc_al_truss_voron24_lw", "aluminum_6061_t6"),
                 ("cf_tube_20x20x1_5", "carbon_fiber_tube"),
                 ("cf_tube_20x20x2", "carbon_fiber_tube"),
                 ("cf_tube_20x20x2", "carbon_fiber_high_tg"),
                 ("cf_tube_20x20_carbonara", "carbon_fiber_torsional_45"),
+                ("cf_tube_20x20_carbonara_2_5", "carbon_fiber_torsional_45"),
                 ("cf_tube_30x20x2", "carbon_fiber_torsional_45"),
                 ("cf_tube_20x20_carbonara", "carbon_fiber_m40j_hm"),
                 ("cf_tube_25x25x2", "carbon_fiber_tube"),
                 ("al_tube_20x20x2", "aluminum_6061_t6"),
+                ("al_tube_20x20x3", "aluminum_6061_t6"),
+                ("ti_tube_20x20x2", "titanium_grade5"),
             ]
             cur_xb = (child.gantry.x_beam_profile, child.gantry.x_beam_material)
             alts = [x for x in opts if x != cur_xb] or opts

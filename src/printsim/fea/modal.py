@@ -1977,9 +1977,12 @@ def _build_mounting_dynamics(
         }
 
     sway = [float(mm["freq_hz"]) for mm in mount_modes if mm["kind"] in ("sway_x", "sway_y")]
+    mount_zeta_val = float(feet_cfg.get("mount_damping_ratio", 0.05))
+    mount_eta_val = float(feet_cfg.get("loss_factor", 2.0 * mount_zeta_val))
     out: dict = {
         "feet_type": spec.frame.feet_type,
-        "mount_damping_ratio": round(float(feet_cfg.get("mount_damping_ratio", 0.05)), 4),
+        "mount_damping_ratio": round(mount_zeta_val, 4),
+        "mount_loss_factor": round(mount_eta_val, 4),
         "total_mass_kg": round(float(total_mass_kg), 3),
         "ballast_mass_kg": round(float(assembly.ballast_mass_kg), 3),
         "ballast_location": spec.frame.ballast_location,
@@ -2440,12 +2443,28 @@ def solve_modal_fea(
             rec_x = abs(comp_x_noz)
             rec_y = abs(comp_y_noz)
 
-            is_mount_mode = bool(feet_blocks and u_feet_share >= MOUNT_MODE_STRAIN_SHARE)
-            if is_mount_mode:
+            p_frac = (0.0, 0.0, 0.0)
+            if feet_blocks:
                 p_lin = [float(e_dir @ m_phi) for e_dir in mount_dir_vecs]
                 p_frac = tuple(
                     min(1.0, (pv * pv) / (m_gen * mount_total_mass_kg)) for pv in p_lin
                 )
+            # When an enclosure panel drum frequency coincides with a whole-printer foot sway mode,
+            # eigh() hybridizes the degenerate eigenspace; normalize foot strain share by non-panel
+            # structural energy `ke_struct` so hybridized sway modes retain their mount classification.
+            u_feet_struct = (
+                min(1.0, u_feet_share / ke_struct)
+                if (has_panels and not is_isolated_panel_drum and u_feet_share >= 0.08)
+                else u_feet_share
+            )
+            is_mount_mode = bool(
+                feet_blocks
+                and (
+                    u_feet_struct >= MOUNT_MODE_STRAIN_SHARE
+                    or (u_feet_share >= 0.35 and max(p_frac) >= 0.65)
+                )
+            )
+            if is_mount_mode:
                 rot_mean = (
                     np.mean(rot_raw[frame_struct_idx], axis=0)
                     if frame_struct_idx

@@ -35,9 +35,11 @@ FRAME_PROFILES: tuple[str, ...] = (
 
 BRACING_OPTIONS: tuple[str, ...] = (
     "none",
-    "corner_gussets",
-    "rear_cross",
-    "full_truss",
+    "cast_corner_brackets",
+    "cnc_corner_gussets",
+    "rear_flat_bar_x",
+    "rear_and_side_flat_bars",
+    "gussets_and_flat_bars",
 )
 
 # (id, label, enclosed_panels, panel_mounting, panel_material, panel_thickness_mm)
@@ -52,6 +54,8 @@ PANEL_CONFIGS: tuple[tuple[str, str, bool, str, str, float], ...] = (
 # (id, label, profile, material)
 X_BEAM_OPTIONS: tuple[tuple[str, str, str, str], ...] = (
     ("al_2020", "Aluminum 2020 extrusion", "extrusion_2020", "aluminum_6063_t5"),
+    ("cnc_al_monocoque_20x20", "PrintSim CNC Monocoque Truss 20x20 (Al 7075)", "cnc_al_monocoque_20x20", "aluminum_7075_t6"),
+    ("cnc_al_truss_voron24_lw", "Voron 2.4 LW Milled Truss 20x20 (Al 6061)", "cnc_al_truss_voron24_lw", "aluminum_6061_t6"),
     ("cf_tube_20x20x2", "Carbon Fiber 20x20x2mm tube", "cf_tube_20x20x2", "carbon_fiber_tube"),
     ("cf_20x20x2_high_tg", "Carbon Fiber 20x20x2mm (High-Tg 125C)", "cf_tube_20x20x2", "carbon_fiber_high_tg"),
     ("cf_carbonara_torsional_45", "Carbonara 20x20mm (±45°/0° High-Tg)", "cf_tube_20x20_carbonara", "carbon_fiber_torsional_45"),

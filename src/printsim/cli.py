@@ -13,7 +13,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from printsim.api.session import get_live_session, request_snapshot_capture
-from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.engine import (
+    evaluate_printer,
+    optimize_design,
+    optimize_pareto_front,
+    run_signoff_verification,
+)
 from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.adxl_calibration import calibrate_printer_against_adxl, fit_printer_to_adxl
 from printsim.geometry import (
@@ -150,6 +155,94 @@ def verify(
     tbl.add_row("Safe Max Accel (mm/s^2)", f"{fast['recommended_max_accel_mm_s2']:.0f}", f"{deep['recommended_max_accel_mm_s2']:.0f}")
     tbl.add_row("Panel Max von Mises (MPa)", f"{fast['panel_max_von_mises_mpa']:.3f}", f"{deep['panel_max_von_mises_mpa']:.3f}")
     console.print(tbl)
+
+
+@app.command()
+def signoff(
+    spec_path: Path = typer.Argument(..., exists=True, help="Path to printer YAML spec"),
+    filament: str = typer.Option("pla", "--filament", "-f", help="Filament ID"),
+    mesh_n: int = typer.Option(8, "--mesh-n", "-m", min=4, max=10, help="Fine MITC4 shell grid density"),
+    bed_mesh_n: int = typer.Option(16, "--bed-mesh-n", min=8, max=20, help="Fine 2D MITC4 bed plate grid"),
+    workspace_grid_n: int = typer.Option(3, "--grid-n", "-g", min=2, max=5, help="True 3D FEA XY workspace grid (n x n)"),
+    z_extremes: bool = typer.Option(True, "--z-extremes/--no-z-extremes", help="Also sweep bottom/top Z at the centre and the softest XY cell"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON sign-off verification report (without the full fine-mesh simulation)"),
+    full_json: bool = typer.Option(False, "--full-json", help="Emit JSON including the full fine-mesh deep_simulation report (~0.7 MB)"),
+) -> None:
+    """Run Sign-Off Verification: fine-mesh convergence, workspace 3D FEA, 90% parametric bands."""
+    spec = PrinterSpec.from_yaml(spec_path)
+    res = run_signoff_verification(
+        spec,
+        filament_id=filament,
+        deep_mesh_n=mesh_n,
+        deep_bed_mesh_n=bed_mesh_n,
+        workspace_grid_n=workspace_grid_n,
+        include_z_extremes=z_extremes,
+    )
+
+    if full_json:
+        print(json.dumps(res, indent=2))
+        return
+    if json_out:
+        print(json.dumps({k: v for k, v in res.items() if k != "deep_simulation"}, indent=2))
+        return
+
+    verdict = str(res["verdict"]).upper()
+    v_style = {"PASS": "bold green", "CAUTION": "bold yellow", "FAIL": "bold red"}.get(verdict, "bold")
+    ws = res["workspace_fea"]
+    unc = res["uncertainty"]
+    b_x = unc["bands"]["shaper_x_hz"]
+    b_y = unc["bands"]["shaper_y_hz"]
+    b_acc = unc["bands"]["recommended_max_accel_mm_s2"]
+    b_def = unc["bands"]["combined_max_deflection_um"]
+
+    def _fmt_pos(pos: list[float]) -> str:
+        return f"u={pos[0]:.2f}, v={pos[1]:.2f}, z={pos[2]:.2f}"
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]{spec.name}[/bold cyan] ({spec.architecture})\n"
+            f"Verdict: [{v_style}]{verdict}[/{v_style}] | "
+            f"{res['total_fea_solves']} 3D FEA solves in {res['total_solve_time_ms']:.0f} ms\n"
+            f"90% parametric band: fX {b_x['nominal']:.1f} Hz [{b_x['p05']:.1f}–{b_x['p95']:.1f}] | "
+            f"fY {b_y['nominal']:.1f} Hz [{b_y['p05']:.1f}–{b_y['p95']:.1f}] | "
+            f"Accel {b_acc['nominal']:.0f} [{b_acc['p05']:.0f}–{b_acc['p95']:.0f}] mm/s²\n"
+            f"Worst-Case Workspace FEA: {ws['worst_case_min_axis_hz']:.1f} Hz "
+            f"(-{ws['worst_freq_drop_pct']:.1f}% at {_fmt_pos(ws['worst_freq_pos'])}) | "
+            f"{ws['worst_case_safe_accel_mm_s2']:.0f} mm/s² "
+            f"(-{ws['worst_accel_drop_pct']:.1f}% at {_fmt_pos(ws['worst_accel_pos'])})",
+            title="PrintSim Sign-Off Verification",
+        )
+    )
+
+    chk_tbl = Table(title="Readiness Checks", show_header=True, header_style="bold magenta")
+    chk_tbl.add_column("Gate")
+    chk_tbl.add_column("Status", justify="center")
+    chk_tbl.add_column("Value", justify="right")
+    chk_tbl.add_column("Detail")
+    for c in res["checks"]:
+        st = str(c["status"]).upper()
+        st_fmt = f"[green]{st}[/green]" if st == "PASS" else (f"[yellow]{st}[/yellow]" if st == "CAUTION" else f"[red]{st}[/red]")
+        chk_tbl.add_row(c["title"], st_fmt, c["value"], c["detail"])
+    console.print(chk_tbl)
+
+    if unc["drivers"]:
+        drv_tbl = Table(title=f"Top Uncertainty Drivers (Overall Trust {unc['overall_trust_pct']}% · Flex ±{b_def['ci90_half_width']:.1f} um)", show_header=True, header_style="bold cyan")
+        drv_tbl.add_column("Parameter")
+        drv_tbl.add_column("Trust", justify="right")
+        drv_tbl.add_column("Hz Var Share", justify="right")
+        drv_tbl.add_column("Flex Var Share", justify="right")
+        drv_tbl.add_column("90% ±Hz", justify="right")
+        drv_tbl.add_column("90% ±Accel", justify="right")
+        for d in unc["drivers"][:5]:
+            drv_tbl.add_row(
+                d["label"],
+                f"{int(d['trust_pct'])}%",
+                f"{d['variance_share_pct']:.1f}%",
+                f"{d['deflection_variance_share_pct']:.1f}%",
+                f"±{d['delta_freq_hz']:.2f}",
+                f"±{int(d['delta_accel_mm_s2'])}",
+            )
+        console.print(drv_tbl)
 
 
 @app.command("calibrate-adxl")

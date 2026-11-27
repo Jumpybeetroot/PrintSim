@@ -156,13 +156,15 @@ def _build_side_panel(spec: PrinterSpec, title: str = "Side Enclosure Panel") ->
     w = max(80.0, float(spec.frame.depth_mm) - lip_total)
     h = max(80.0, float(spec.frame.height_mm) - lip_total)
     contour, holes = _panel_mounting_geometry(spec, w, h, ext_w)
+    face_key = "right" if "right" in title.lower() else "left"
+    mat_id, thick_mm = spec.frame.effective_panel_spec(face_key)
     return _Plate2D(
         part_id="side_panel",
         title=title,
         width_mm=w,
         height_mm=h,
-        thickness_mm=float(spec.frame.panel_thickness_mm),
-        material_label=_safe_material_name(spec.frame.panel_material),
+        thickness_mm=float(thick_mm),
+        material_label=_safe_material_name(mat_id),
         contours=[contour],
         holes=holes,
         description=(
@@ -200,13 +202,14 @@ def _build_rear_panel(spec: PrinterSpec) -> _Plate2D:
             for hy in (y_bot - 5.0, y_bot + cut_h + 5.0):
                 holes.append((hx, hy, 3.4))
 
+    rear_mat_id, rear_thick_mm = spec.frame.effective_panel_spec("rear")
     return _Plate2D(
         part_id="rear_panel",
         title="Rear Enclosure Panel",
         width_mm=w,
         height_mm=h,
-        thickness_mm=float(spec.frame.panel_thickness_mm),
-        material_label=_safe_material_name(spec.frame.panel_material),
+        thickness_mm=float(rear_thick_mm),
+        material_label=_safe_material_name(rear_mat_id),
         contours=contours,
         holes=holes,
         description=(
@@ -221,13 +224,14 @@ def _build_top_panel(spec: PrinterSpec) -> _Plate2D:
     w = max(80.0, float(spec.frame.width_mm) - lip_total)
     d = max(80.0, float(spec.frame.depth_mm) - lip_total)
     contour, holes = _panel_mounting_geometry(spec, w, d, ext_w)
+    top_mat_id, top_thick_mm = spec.frame.effective_panel_spec("top")
     return _Plate2D(
         part_id="top_panel",
         title="Top Enclosure Panel",
         width_mm=w,
         height_mm=d,
-        thickness_mm=float(spec.frame.panel_thickness_mm),
-        material_label=_safe_material_name(spec.frame.panel_material),
+        thickness_mm=float(top_thick_mm),
+        material_label=_safe_material_name(top_mat_id),
         contours=[contour],
         holes=holes,
         description=f"Top enclosure panel ({spec.frame.panel_mounting}), {len(holes)} holes",
@@ -614,7 +618,7 @@ def _select_kit_plates(spec: PrinterSpec) -> list[_Plate2D]:
             plates.append(_build_front_portal_frame(spec))
         elif spec.frame.front_brace == "header_and_skirt":
             plates.extend(_build_front_header_skirt(spec))
-    if spec.frame.bracing == "corner_gussets" or spec.frame.corner_joint_type in (
+    if spec.frame.bracing in ("cnc_corner_gussets", "gussets_and_flat_bars") or spec.frame.corner_joint_type in (
         "gusset_plate",
         "l_bracket",
     ):
@@ -655,7 +659,7 @@ def list_dxf_exportable_parts(spec: PrinterSpec) -> list[dict[str, Any]]:
     panels_active = bool(spec.frame.enclosed_panels and spec.frame.panel_mounting != "none")
     bb_active = bool(spec.frame.trident_backbone and not spec.is_flying_gantry)
     gussets_active = bool(
-        spec.frame.bracing == "corner_gussets"
+        spec.frame.bracing in ("cnc_corner_gussets", "gussets_and_flat_bars")
         or spec.frame.corner_joint_type in ("gusset_plate", "l_bracket")
     )
     halo_active = spec.architecture == "corexy" and spec.frame.top_brace == "cnc_halo_ring"

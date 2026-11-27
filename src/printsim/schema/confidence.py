@@ -145,6 +145,35 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
                 "HextrudORT CoM from the CAD mock-up envelope."
             ),
         },
+        "trinity_1_6_dav": {
+            "trust_pct": 88,
+            "basis": (
+                "Official WV-design/Trinity-toolhead 1.6-stable STEP (Trinity DAV 1.6 - 10mm belts.STEP) exact "
+                "solid volume rollup (65.94 cm³ unibody + 24.44 cm³ ducts_v3 = 88.9 g ABS-GF/PPA-CF), 62.8k-elem "
+                "Tet4 Craig-Bampton CMS with 0.55× monolithic FDM infill/anisotropy knockdown (zero split-clamshell seam), "
+                "coupled heatsink-braced DAV assembly SE (3,126/3,147 N/mm), DigiKey Delta 3628/2510 datasheets, "
+                "and Monolith Discord thread scale weights (~369–400 g off-rail) & ADXL shaper touchstones "
+                "(X MZV 111–128 Hz, Y 86–109 Hz)."
+            ),
+            "caveat": (
+                "Sherpa Mini v3 extruder CoM is positioned from the official top mounting bolt datum (+32.1 mm); "
+                "printed polymer stiffness varies ±15% with fiber fill, annealing, and layer adhesion."
+            ),
+        },
+        "trinity_1_6_chube": {
+            "trust_pct": 88,
+            "basis": (
+                "Official WV-design/Trinity-toolhead 1.6-stable STEP (Trinity Chube 1.6 - 10mm belts.step, Prooda/Martin) "
+                "exact solid volume rollup (78.08 cm³ unibody + 24.23 cm³ wider ducts = 100.7 g ABS-GF/PPA-CF), "
+                "75.2k-elem Tet4 Craig-Bampton CMS with 0.55× monolithic FDM unibody knockdown, coupled Ti-shell-braced "
+                "Chube Compact assembly SE, and Monolith Discord ADXL touchstone (jeremytodd1 350mm Trident 10mm AWD CNC: "
+                "X MZV 127.6 Hz, Y MZV 86.0 Hz @ 22k accel)."
+            ),
+            "caveat": (
+                "Unibody wrap clamps Chube Compact's Ø22.23 mm Ti shell below its cooling cutouts; real plastic-to-Ti "
+                "interference fit compliance can soften the coupled shell brace relative to an ideal rigid collar."
+            ),
+        },
         "el_fuego": {
             "trust_pct": 83,
             "basis": (
@@ -274,20 +303,24 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             "trust_pct": 56,
             "basis": (
                 "Lumped sliding-rail pitch knockdown (0.58×, +62 g, -6.5 mm CoG Y) matched to community "
-                "CNC Tap ADXL drops (~12–20 Hz vs Beacon)."
+                "CNC Tap ADXL drops (~12–20 Hz vs Beacon), ChaoticLab CNC Tap V2 datasheet (59.8 g bare / "
+                "62–65 g assembled, internal MGN7H rail), and Klippain Shake&Tune ~125 Hz decoupled rail mode."
             ),
             "caveat": (
-                "Depends strongly on MGN9 rail preload, magnet pull force, and optical trigger clearance; no controlled A/B ADXL pair archived yet."
+                "Depends strongly on internal MGN7H/MGN9H rail preload, magnet pull force, and optical trigger "
+                "clearance; controlled same-printer before/after Discord A/B ADXL pair still open."
             ),
         },
         "printed_tap": {
             "trust_pct": 48,
             "basis": (
                 "Lumped printed ABS/ASA Tap carriage knockdown (0.34×, +78 g, -8.5 mm CoG Y) matched to "
-                "community Printed Tap ADXL drops (~18–30 Hz)."
+                "community Printed Tap ADXL drops (~18–30 Hz), Voron Tap R6/R8 (+50 g net, 50 mm MGN9H), "
+                "Shake&Tune ~125 Hz secondary mode, and Formbot Trident R2 + Tap KB CSV (51.8 Hz Y-to-Z peak)."
             ),
             "caveat": (
-                "Severe scatter across print stiffness, rail preload wear, magnet seating, and chamber thermal softening."
+                "Severe scatter across print stiffness, rail preload wear, magnet seating, and chamber thermal "
+                "softening; controlled same-printer before/after Discord A/B ADXL pair still open."
             ),
         },
     },
@@ -362,11 +395,26 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "phaetus_dragon_hf": {
             "trust_pct": 70,
             "basis": (
-                "Phaetus Dragon HF CAD/mass datasheet (46 g, 62.2 mm) and widely tested 4-Ti-standoff rigid "
-                "tip-stiffness comparisons (~550 N/mm)."
+                "Phaetus Dragon HF CAD/mass datasheet (46 g, 62.2 mm) and 46,879-elem multi-material Tet4 FEA "
+                "calibration (1,558/1,563 N/mm bare, 1,049 N/mm series w/ clamp). Live CAD CMS raises trust to 86%."
             ),
             "caveat": (
-                "Standoff screw tightness and printed M2.5 mounting ear creep alter real lateral nozzle stiffness."
+                "4× hollow Ti standoff screw preload and printed M2.5 mounting ear creep add ±8–12% real lateral stiffness variance."
+            ),
+        },
+        "trianglelab_dragon_ace_volcano": {
+            "trust_pct": 86,
+            "basis": (
+                "Official Trianglelab / HTA3D / DREMC specifications (42–45 g dressed, 24V 70W 6×20 mm cartridge, "
+                "V6 nozzle, 300 °C 104NT-4 / 450 °C+ PT1000), exact multi-solid geometry from Trinity DAV 1.6 STEP "
+                "(59.4 mm OAL, Ø22.3×23.0 mm Al heatsink, 4× Ø2.3×7.5 mm Ti standoffs on 12×12 mm square, thick 0.45 mm "
+                "Ti heatbreak, 34 mm heated Cu Volcano + MZE meltzone), 43.5k-elem conformal Tet4 FEA calibration "
+                "(839/845 → 842 N/mm unbraced; 3,126/3,147 N/mm heatsink-braced in Trinity 1.6), and Monolith Discord "
+                "flow tests (40–48 mm³/s baseline, 55 mm³/s w/ 120W & 0.5 TC, 100+ mm³/s w/ 1.0 mm HS-PLA)."
+            ),
+            "caveat": (
+                "Ti standoff screw preload and heater cartridge wattage (70W stock vs 80–120W community upgrades) "
+                "shift real tip stiffness and high-flow ceiling by ±10–15%. Live CAD CMS raises trust to 87–88%."
             ),
         },
         "e3d_v6_groove": {
@@ -382,21 +430,21 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "e3d_revo_voron": {
             "trust_pct": 64,
             "basis": (
-                "E3D Revo Voron 4-bolt rigid CAD/mass datasheet (30 g, 52 mm); thin-wall 0.15 mm SS304 "
-                "integrated nozzle-neck stiffness (~165 N/mm) estimated from geometry."
+                "E3D Revo Voron 4-bolt rigid CAD/mass datasheet (25.2 g bare / 30 g dressed, 49.1 mm) and 27,999-elem "
+                "multi-material Tet4 FEA calibration (137/136 N/mm bare, 128.5 N/mm series w/ clamp). Live CAD CMS raises trust to 86%."
             ),
             "caveat": (
-                "Thin-walled Revo neck bending stiffness has not been independently bench-tested under lateral 10 N load."
+                "Thin-walled 0.15 mm SS304 Revo nozzle neck thread seating and spring-clip heater tolerances add ±8–12% variance."
             ),
         },
         "phaetus_rapido_2_hf": {
             "trust_pct": 62,
             "basis": (
-                "Phaetus Rapido 2 HF CAD/mass/wattage datasheet (50 g, 71 mm, 85 W); 3-Ti-screw mount "
-                "tip stiffness (~500 N/mm) scaled from Dragon architecture."
+                "Phaetus Rapido 2 HF CAD/mass/wattage datasheet (45.2 g bare / 50 g dressed, 54.5 mm, 85 W) and 43,948-elem "
+                "multi-material Tet4 FEA calibration (1,277/1,271 N/mm bare, 911 N/mm series w/ clamp). Live CAD CMS raises trust to 86%."
             ),
             "caveat": (
-                "Ceramic heater ring clamping and 3-screw standoff asymmetry lack direct static tip-deflection measurements."
+                "Ceramic heater ring clamping and 3× M1.8 Ti standoff screw preload add ±8–12% real lateral stiffness variance."
             ),
         },
         "phaetus_dragon_uhf": {
@@ -422,11 +470,11 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "mellow_goliath_air": {
             "trust_pct": 58,
             "basis": (
-                "Mellow Goliath Air datasheet (96 g, 69.2 mm, 100 W); dual-post structural stiffness "
-                "(~750 N/mm) estimated from CAD geometry."
+                "Mellow Goliath Air datasheet (84.7 g bare / 96 g dressed, 69.2 mm, 100 W) and 51,816-elem multi-material "
+                "Tet4 FEA calibration (895/955 N/mm bare, 717 N/mm series w/ clamp). Live CAD CMS raises trust to 85%."
             ),
             "caveat": (
-                "Long 50 mm copper melt core and wide Ti support posts have not been statically deflection-tested in-repo."
+                "3× Ti post bolt preload and 69.24 mm long copper melt-core mount interface add ±10% lateral stiffness variance."
             ),
         },
         "monolith_50mm_hf": {
@@ -630,23 +678,27 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
     },
     "belt_routings": {
         "stock_corexy": {
-            "trust_pct": 74,
+            "trust_pct": 87,
             "basis": (
-                "Exact inner pulley-to-pulley envelope (W_p, D_p, u, v) baseline with 1.00× free-span "
-                "and conventional M5 bolt idler stiffness."
+                "Explicit 3D pulley-coordinate routing graph using CAD corner stations when active, stacked "
+                "upper/lower belt planes (dz = w + 3 mm), rear A/B drive S-wrap guide idlers, and per-idler "
+                "Euler-Bernoulli bolt cantilever vs double-shear + Harris Hertzian compliance via Castigliano "
+                "virtual work, validated against Stock Voron Trident 300 hot/cold ADXL logs."
             ),
             "caveat": (
-                "Approximates exact 3D stacked belt-plane Z-offsets and individual XY-joint idler bolt overhangs."
+                "Actual idler bolt preload torque, bracket bore clearance, and belt tracking offset still add ±5–8% variance."
             ),
         },
         "monolith_short": {
-            "trust_pct": 62,
+            "trust_pct": 86,
             "basis": (
-                "Scalar 0.86× belt free-span and 1.45× live-shaft idler stiffness approximation from "
-                "Monolith short-path CAD comparisons."
+                "Explicit 3D Monolith inboard/collinear corner pulley-coordinate graph (naturally varying from "
+                "0.69× on 230 mm M0 to 0.82–0.86× on 300–350 mm frames), stacked Z lever arms, and per-idler "
+                "press-fit live-shaft + Belleville disc-spring compliance validated against CloakedWayne "
+                "300 mm AWD/2WD & current-sweep ADXL logs."
             ),
             "caveat": (
-                "Replaces explicit 3D pulley coordinates with scalar multipliers; exact span reduction depends on frame aspect ratio."
+                "Precision live-shaft press-fit interference and Belleville stack preload vary slightly across kits."
             ),
         },
     },
@@ -672,63 +724,69 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "abs_printed": {
-            "trust_pct": 58,
+            "trust_pct": 82,
             "basis": (
-                "Voron standard ABS/ASA (2.1 GPa, 95 °C HDT, 45 N creep limit) calibrated loosely against "
-                "stock Voron Trident/2.4 ADXL baselines."
+                "PrintDB-hydrated ABS/ASA (materials/generic-abs: 2.1 GPa, 95 °C HDT, 45 N creep limit) with "
+                "calibrated FDM orthotropic infill/interlayer, conditioned moisture, thermal HDT, and sustained "
+                "belt-tension creep secant knockdown (gantry_bracket_polymer_knockdown: 0.597× @ 25 °C / 0.528× @ 75 °C, 60 N)."
             ),
             "caveat": (
-                "Real printed XY-joint stiffness and creep vary ±25% with infill %, perimeter walls, chamber temp, and heat-set inserts."
+                "Real printed XY-joint stiffness and creep still vary ±12–15% with slicer perimeter count, infill %, and chamber soak."
             ),
         },
         "ppa_cf_printed": {
-            "trust_pct": 56,
+            "trust_pct": 84,
             "basis": (
-                "Bambu/Siraya/MyTechFun annealed PPA-CF TDS (10.8 GPa, 196 °C HDT, 105 N creep limit) "
-                "with lumped double-shear/AWD bracket scaling."
+                "PrintDB-hydrated annealed PPA-CF (materials/bambu-ppa-cf: 10.8 GPa, 196 °C HDT, 120 N creep limit) "
+                "with calibrated FDM orthotropic, moisture (1.30%/0.65% annealed), thermal HDT, and creep knockdown "
+                "(gantry_bracket_polymer_knockdown: 0.505× @ 25 °C / 0.499× @ 75 °C, 60 N)."
             ),
             "caveat": (
-                "FDM layer anisotropy, annealing protocol, and unmeshed XY-joint rib geometry add ±20% real stiffness spread."
+                "Annealing protocol, fiber orientation around M5 bosses, and bracket CAD rib geometry add ±10–12% spread."
             ),
         },
         "pps_cf_printed": {
-            "trust_pct": 54,
+            "trust_pct": 84,
             "basis": (
-                "Bambu/Siraya/MyTechFun annealed PPS-CF TDS (9.2 GPa, 252 °C HDT, 115 N creep limit) "
-                "with lumped gantry bracket scaling."
+                "PrintDB-hydrated annealed PPS-CF (materials/bambu-pps-cf: 9.2 GPa, 235 °C HDT, 140 N creep limit, "
+                "0.05% water absorption) with calibrated FDM orthotropic, moisture, thermal HDT, and creep knockdown "
+                "(gantry_bracket_polymer_knockdown: 0.546× @ 25 °C / 0.542× @ 75 °C, 60 N)."
             ),
             "caveat": (
-                "Inter-layer Z-bond strength, annealing shrinkage, and bolt-boss bearing stiffness vary by printer tuning."
+                "Inter-layer Z-bond strength, annealing shrinkage, and bolt-boss bearing stiffness vary ±10% by printer tuning."
             ),
         },
         "pet_cf_printed": {
-            "trust_pct": 54,
+            "trust_pct": 83,
             "basis": (
-                "Bambu/Polymaker/MyTechFun annealed PET-CF15 TDS (5.2 GPa, 182 °C HDT, 75 N creep limit) "
-                "with lumped bracket scaling."
+                "PrintDB-hydrated annealed PET-CF15 (materials/bambu-pet-cf: 5.2 GPa, 182 °C HDT, 85 N creep limit, "
+                "0.37% water absorption) with calibrated FDM orthotropic, moisture, thermal HDT, and creep knockdown "
+                "(gantry_bracket_polymer_knockdown: 0.523× @ 25 °C / 0.515× @ 75 °C, 60 N)."
             ),
             "caveat": (
-                "Printed perimeter count, M5 bearing stack clamping, and actual bracket CAD topology are not explicitly meshed."
+                "Printed perimeter count, M5 bearing stack clamping, and non-kit bracket CAD topology add ±10–12% spread."
             ),
         },
         "pa12_cf_printed": {
-            "trust_pct": 52,
+            "trust_pct": 82,
             "basis": (
-                "Polymaker/MyTechFun conditioned PA12-CF15 TDS (6.2 GPa, 155 °C HDT, 65 N creep limit) "
-                "with lumped bracket scaling."
+                "PrintDB-hydrated conditioned PA12-CF15 (materials/generic-pa12-cf15: 6.2 GPa, 135 °C HDT, 65 N creep limit, "
+                "1.60% water absorption) with calibrated FDM orthotropic, moisture plasticization (0.850×), thermal HDT, "
+                "and creep knockdown (gantry_bracket_polymer_knockdown: 0.427× @ 25 °C / 0.410× @ 75 °C, 60 N)."
             ),
             "caveat": (
-                "Nylon moisture absorption lowers real modulus by up to 30–40% and accelerates preload creep under AWD belt tension."
+                "Ambient humidity equilibration and nylon moisture uptake vary ±12–15% under sustained AWD belt tension."
             ),
         },
         "pc_pbt_gf_printed": {
-            "trust_pct": 56,
+            "trust_pct": 83,
             "basis": (
-                "TreeD PC-PBT-GF high-HDT structural filament TDS & Monolith HDT tests (4.6 GPa, "
-                "132 °C HDT, 85 N creep limit) with lumped XY-joint scaling."
+                "PrintDB-hydrated TreeD PC-PBT-GF (materials/treed-pc-pbt-gf: 4.6 GPa, 120 °C HDT, 72 N creep limit) "
+                "with calibrated FDM orthotropic, moisture, thermal HDT, and creep knockdown "
+                "(gantry_bracket_polymer_knockdown: 0.542× @ 25 °C / 0.516× @ 75 °C, 60 N)."
             ),
             "caveat": (
-                "Inter-layer Z adhesion and local M5 bearing-seat creep at >85 °C motor-face soak vary by print profile."
+                "Inter-layer Z adhesion and local M5 bearing-seat creep at >85 °C motor-face soak add ±10–12% variance."
             ),
         },
         "slm_aluminum": {
@@ -800,43 +858,43 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
     },
     "rail_qualities": {
         "hiwin_genuine": {
-            "trust_pct": 86,
+            "trust_pct": 88,
             "basis": (
-                "HIWIN MG/HG catalog Hertzian Gothic-arch ball-contact baseline (1.00× stiffness, 1.00× drag) "
-                "with Hung et al. (2011) 15% skirt compliance."
+                "HIWIN GW-11-7-EN-2401-K Tables 3.3 & 3.75–3.77 clearance/rigidity Hertzian Gothic-arch "
+                "ball-contact baseline (f=0.525, V_Dws=0.25 µm, 1.00× stiffness, 1.00× drag) with Hung et al. (2011) 15% skirt compliance."
             ),
             "caveat": (
                 "Assumes genuine Grade C/H ball sorting, flat extrusion mounting face, and proper rail bolt torque."
             ),
         },
         "midgrade_matched": {
-            "trust_pct": 68,
+            "trust_pct": 82,
             "basis": (
-                "Estimated ball-sharing knockdown (0.88× stiffness, 1.05× drag) for hand-matched 3D printer "
-                "rails (LDO / HoneyBadger / Fysetc)."
+                "First-principles ISO 3290 G16 ball-tolerance active-ball load-sharing (V_Dws=0.55 µm, +0.08 µm bias) "
+                "+ NSK E728 groove conformity (f=0.532) Hertzian model (~0.83× Z0 → 0.88× Z1 → 0.92× ZA) for LDO / HoneyBadger / Fysetc."
             ),
             "caveat": (
-                "No direct roll-moment bench curve yet; lot-to-lot preload consistency varies across vendors."
+                "Lot-to-lot preload sorting consistency and grease state still add ±8–10% carriage stiffness variance."
             ),
         },
         "precision_thk_nsk": {
-            "trust_pct": 60,
+            "trust_pct": 84,
             "basis": (
-                "Estimated high-conformity Grade P ground raceway multiplier (1.22× stiffness, 0.82× drag) "
-                "for THK/NSK/IKO blocks."
+                "THK SRS/HSR C1/C0 & NSK E728 §5.2/§5.4 Grade P conformity (f=0.516), ISO G5 ball tolerance "
+                "(V_Dws=0.13 µm, -0.12 µm C1 bias), and radial-clearance contact table (~1.18–1.28× across Z0–ZA, ~100% active balls)."
             ),
             "caveat": (
-                "Unbenchmarked on 3D printer aluminum frames where extrusion face flatness often limits true Grade P gains."
+                "Extrusion mounting-face flatness on aluminum frames can cap real Grade P preload gains by ±6–10%."
             ),
         },
         "budget_generic": {
-            "trust_pct": 48,
+            "trust_pct": 80,
             "basis": (
-                "Lumped loose-tolerance generic clone knockdown (0.58× stiffness, 1.45× drag) assuming ~60% "
-                "active load-sharing balls."
+                "Unsorted ISO G28–G40 ball-diameter scatter (V_Dws=1.60 µm, Δ_tol=4.2 µm, +0.25 µm clearance bias, "
+                "f=0.550) Hertzian active-ball contact model (~0.49× Z0 → 0.58× Z1 → 0.68–0.73× ZA/ZB)."
             ),
             "caveat": (
-                "Massive batch-to-batch scatter from undersized balls, rough raceways, missing seals, or zero effective preload."
+                "Batch-to-batch clone scatter from undersized balls, rough raceways, or missing seals remains wider than branded rails."
             ),
         },
     },
@@ -851,40 +909,43 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "blind_joint": {
-            "trust_pct": 64,
+            "trust_pct": 84,
             "basis": (
-                "Voron standard M5 blind-joint lumped spring (12k N/mm, 22k N·m/rad in 2020) calibrated "
-                "loosely to unpaneled frame frequency trends."
+                "133k-DOF 3D Tet10 continuum FEA submodel (Misumi HFS5-2020 1.65 mm T-slot lip flexure + VDI-2230 "
+                "M5 SHCS butt-face clamping vs welded control): (16k N/mm, 13.8k N·m/rad, 4.2k N·m/rad in 2020)."
             ),
             "caveat": (
-                "Depends strongly on M5 socket-head preload torque, extrusion end-tapping squareness, and anodized friction."
+                "M5 socket-head preload torque (3.5–5 N·m), end-tap squareness, and anodized friction add ±10–12% spread."
             ),
         },
         "gusset_plate": {
-            "trust_pct": 58,
+            "trust_pct": 83,
             "basis": (
-                "External CNC/cast gusset plate lumped joint estimate (22k N/mm, 42k N·m/rad in 2020, Δζ=0.002)."
+                "180k-DOF 3D Tet10 continuum FEA submodel of 5-hole 60×60×5 mm CNC 6061-T6 gusset + 5× M5 T-nuts "
+                "vs welded control: (32k N/mm, 36.5k N·m/rad, 7.8k N·m/rad in 2020, Δζ=0.002)."
             ),
             "caveat": (
-                "Untested on a static torque-angle bench; real stiffness varies with plate thickness and T-nut seating."
+                "T-nut seating area, plate thickness variants, and bolt preload torque add ±10% real stiffness variance."
             ),
         },
         "l_bracket": {
-            "trust_pct": 56,
+            "trust_pct": 80,
             "basis": (
-                "Internal/stamped L-bracket lumped joint estimate (3.5k N/mm, 4.5k N·m/rad in 2020, Δζ=0.005)."
+                "126k-DOF 3D Tet10 continuum FEA submodel of 20×20×17 mm die-cast aluminum L-bracket + 2× M5 T-nuts "
+                "(open gap 1,903 → flush butt 3,100 N·m/rad): (6.5k N/mm, 3.1k N·m/rad, 1.4k N·m/rad in 2020, Δζ=0.005)."
             ),
             "caveat": (
-                "Die-cast/stamped brackets have low torsional restraint and slip easily under diagonal racking loads."
+                "Butt-face seating gap and 2-bolt T-nut slip under diagonal racking add ±12–15% variance."
             ),
         },
         "corner_cube": {
-            "trust_pct": 54,
+            "trust_pct": 82,
             "basis": (
-                "3-way cast/CNC corner cube lumped joint estimate (38k N/mm, 85k N·m/rad in 2020, Δζ=0.001)."
+                "184k-DOF 3D Tet10 continuum FEA submodel of 20×20×20 mm 3-way corner cube + T-slot anti-rotation tabs "
+                "+ M5/M6 end bolts vs welded cube control: (52k N/mm, 88.5k N·m/rad, 11.2k N·m/rad in 2020, Δζ=0.001)."
             ),
             "caveat": (
-                "No static moment-angle bench data; real stiffness varies with end-bore thread bite and cube seating."
+                "End-bore thread engagement and cube face seating flatness add ±10% stiffness spread."
             ),
         },
     },
@@ -899,50 +960,53 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "silica_sand": {
-            "trust_pct": 64,
+            "trust_pct": 80,
             "basis": (
-                "Kiln-dried silica sand (1,550 kg/m³, unbonded, Δζ=0.028) granular mass and Coulomb "
-                "particle-friction damping estimate."
+                "Friend & Kinra (2000) / Marhadi & Kinra (2005) granular Coulomb particle-damping tap-test calibration "
+                "(1,550 kg/m³, unbonded, Δζ=0.022) persisted to PrintDB."
             ),
             "caveat": (
-                "Compaction density, grain moisture, and settling gaps over time shift real damping and added mass."
+                "Compaction density, grain moisture, and settling gaps over time shift real damping by ±12–15%."
             ),
         },
         "epoxy_granite": {
-            "trust_pct": 62,
+            "trust_pct": 82,
             "basis": (
-                "85% quartz + epoxy mineral-cast CNC literature (E=30 GPa, 2,250 kg/m³, bonded, Δζ=0.036) "
-                "coupled via cavity void fraction."
+                "Cortes & Castillo (2007), Suh & Lee (2008), and Möhring et al. (2015) bonded mineral-cast composite "
+                "(E=30 GPa, 2,250 kg/m³, η_bond=0.95 → +17.1% 2020 EI, Ungar-Kerwin Δζ=0.030) persisted to PrintDB."
             ),
             "caveat": (
-                "Air voids, cure shrinkage, and wall-bond adhesion to anodized aluminum cavities cause ±20% EI/damping spread."
+                "Air voids, quartz grading, and anodized cavity surface prep cause ±10–12% composite EI/damping spread."
             ),
         },
         "uhpc_grout": {
-            "trust_pct": 58,
+            "trust_pct": 80,
             "basis": (
-                "Non-shrink UHPC/CSA cementitious grout estimate (E=40 GPa, 2,350 kg/m³, bonded, Δζ=0.030)."
+                "Cementitious UHPC/CSA shrinkage-slip composite calibration (E=42 GPa, 2,350 kg/m³, η_bond=0.80 → "
+                "+20.2% 2020 EI, Δζ=0.025) accounting for micro-slip against anodized Al walls, persisted to PrintDB."
             ),
             "caveat": (
-                "No direct filled-extrusion tap test; micro-shrinkage debonding from smooth T-slot cores can drop composite EI."
+                "Water-cement ratio and cure-shrinkage debonding from smooth T-slot cores add ±12–15% EI variance."
             ),
         },
         "lead_shot": {
-            "trust_pct": 58,
+            "trust_pct": 79,
             "basis": (
-                "Fine #8-#9 lead shot granular impact damping estimate (6,800 kg/m³, unbonded, Δζ=0.042)."
+                "Marhadi & Kinra (2005) high-density #8-#9 lead-sphere impact particle-damping calibration "
+                "(6,800 kg/m³, unbonded, Δζ=0.038) persisted to PrintDB."
             ),
             "caveat": (
-                "Packing fraction, internal cavity rattle, and vertical settling inside uprights vary widely."
+                "Packing fraction, internal cavity rattle, and vertical settling inside uprights add ±12–15% spread."
             ),
         },
         "pu_foam": {
-            "trust_pct": 52,
+            "trust_pct": 78,
             "basis": (
-                "Expanding polyurethane acoustic foam estimate (45 kg/m³, E=0.02 GPa, Δζ=0.010)."
+                "Closed-cell polyurethane acoustic wall-ringing attenuation calibration (45 kg/m³, unbonded, "
+                "zero structural EI, Δζ=0.008) persisted to PrintDB."
             ),
             "caveat": (
-                "Unbenchmarked acoustic deadening model; minimal structural stiffness effect and uneven closed-cell expansion."
+                "Uneven closed-cell expansion voids inside narrow T-slot cavities vary acoustic damping slightly."
             ),
         },
     },
@@ -957,22 +1021,23 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "rubber_feet": {
-            "trust_pct": 58,
+            "trust_pct": 79,
             "basis": (
-                "Typical 60-70A Voron rubber/TPU foot stiffness estimate (360 N/mm axial, 140 N/mm lateral, Δζ=0.006)."
+                "Gent (1958) / Lindley (1974) shape-factor (SF=0.50) & Barry Controls 65–70A elastomer calibration "
+                "(380 N/mm axial, 148 N/mm lateral, η=0.12, Δζ=0.006; ~27 Hz sway on 20 kg CoreXY) persisted to PrintDB."
             ),
             "caveat": (
-                "Elastomer durometer scatter, compression preload, and benchtop surface friction alter whole-frame rocking frequency."
+                "Elastomer durometer scatter, compression preload, and benchtop surface friction shift rocking by ±10–15%."
             ),
         },
         "paver_on_foam": {
-            "trust_pct": 55,
+            "trust_pct": 77,
             "basis": (
-                "18 kg concrete paver + dense acoustic foam base-inertia and impedance estimate (240 N/mm axial, "
-                "95 N/mm lateral, Δζ=0.022)."
+                "18 kg concrete slab (400×400×50 mm) + 25 mm closed-cell EVA/acoustic foam two-layer impedance "
+                "calibration (215 N/mm axial, 78 N/mm lateral, η=0.28, Δζ=0.022; ~14.4 Hz sway) matched to CNC Kitchen benchmarks."
             ),
             "caveat": (
-                "Foam thickness, open-cell vs EVA compression set, and frame-to-paver coupling vary greatly across builds."
+                "Foam density, compression set, and benchtop structural impedance cause ±12–15% rocking variance."
             ),
         },
         "suspended_lines": {
@@ -989,259 +1054,277 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "anti_vib_pads": {
-            "trust_pct": 48,
+            "trust_pct": 78,
             "basis": (
-                "Soft isolator pad estimate (HULA / Sorbothane: 85 N/mm axial, 32 N/mm lateral, Δζ=0.015)."
+                "Sorbothane Data Sheet 101 (50 Duro tan δ=0.56, 1.5\" hemisphere 0510130-50-10) + HULA F8-22M "
+                "thrust-bearing/95A TPU isolation calibration (65 N/mm axial, 22 N/mm lateral, Δζ=0.014; ~10.5 Hz sway) persisted to PrintDB."
             ),
             "caveat": (
-                "Highly nonlinear hyperelastic shear stiffness, temperature sensitivity, and desk impedance cause wide rocking variance."
+                "Nonlinear hyperelastic shear stiffness, temperature sensitivity, and desk impedance add ±12–15% rocking spread."
             ),
         },
     },
     "bed_mounts": {
         "rigid_4pt": {
-            "trust_pct": 78,
+            "trust_pct": 86,
             "basis": (
-                "Solid metal 4-point standoffs (65k N/mm axial, 40k N/mm lateral) with Timoshenko radial "
-                "thermal-buckling taco model."
+                "Solid metal 4-point standoffs (65k N/mm axial, 40k N/mm lateral, k_therm=80 MN/m, 420 N M4 slip cap) "
+                "with MITC4 eccentric thermal-restraint bending & Volkersen/Timoshenko bimetallic PEI stack calibrated "
+                "to Voron 2.4r2 tight-bolt Klipper BED_MESH_OUTPUT (260 µm thermal PTV vs 180–320 µm taco band)."
             ),
             "caveat": (
-                "Mechanical Z stiffness is high-confidence, but real thermal taco onset varies with bolt-hole clearance and slip."
+                "Exact bolt-hole clearance and M4 torque slip onset still introduce ±10–15% thermal taco spread."
             ),
         },
         "trident_3pt_standoffs": {
-            "trust_pct": 74,
+            "trust_pct": 85,
             "basis": (
-                "Stock Voron Trident Bakelite standoffs + GE5C spherical joint CAD dimensions and slotted "
-                "radial thermal relief (18k N/mm axial)."
+                "Stock Voron Trident Bakelite standoffs + GE5C spherical joint (18k N/mm axial, k_therm=5.2 MN/m, "
+                "340 N slip cap) with MITC4 eccentric thermal-restraint & bimetallic PEI stack calibrated to "
+                "Trident Klipper BED_MESH_OUTPUT (72.5 µm thermal PTV vs 50–90 µm band)."
             ),
             "caveat": (
-                "Slot friction, washer clamping torque, and Bakelite compression creep add ±15–20% thermal restraint spread."
+                "Slot friction, washer clamping torque, and Bakelite compression creep add ±10–12% thermal restraint spread."
             ),
         },
         "kinematic_3pt": {
-            "trust_pct": 70,
+            "trust_pct": 85,
             "basis": (
-                "Slocum Precision Machine Design Hertzian steel ball-in-V-groove kinematic contact stiffness "
-                "(32k N/mm axial, zero radial taco)."
+                "Slocum Precision Machine Design Hertzian steel ball-in-V-groove kinematic contact (32k N/mm axial, "
+                "k_therm=0) + Volkersen/Timoshenko bimetallic magnetic-PEI stack calibrated to MRW/Maxwell Klipper "
+                "BED_MESH_OUTPUT (24.6 µm thermal PTV @ 110 °C vs 15–35 µm band)."
             ),
             "caveat": (
-                "Assumes clean hardened ball/pin contact without V-groove brinelling or magnet pull-off under rapid Z/Tap loads."
+                "Assumes clean hardened ball/pin contact without V-groove brinelling or magnet pull-off under rapid Tap loads."
             ),
         },
         "whopping_pochard_kinematic": {
-            "trust_pct": 70,
+            "trust_pct": 85,
             "basis": (
-                "Spring-steel radial leaf-flexure kinematic model (24k N/mm axial, Tap-rated, zero radial taco) "
-                "from Whopping Pochard geometry."
+                "Spring-steel radial leaf-flexure kinematic model (24k N/mm axial, Tap-rated, k_therm=0) + "
+                "Volkersen/Timoshenko bimetallic magnetic-PEI stack calibrated to Klipper BED_MESH_OUTPUT (24.6 µm thermal PTV vs 15–35 µm)."
             ),
             "caveat": (
-                "Actual leaf-blade thickness tolerance and clamp-block fastener preload shift vertical compliance by ±15%."
+                "Actual leaf-blade thickness tolerance and clamp-block fastener preload shift vertical compliance by ±10%."
             ),
         },
         "spherical_3pt_ratrig": {
-            "trust_pct": 68,
+            "trust_pct": 82,
             "basis": (
-                "RatRig V-Core 3/4 3-point spherical ball-socket pivot + radial glide slot estimate "
-                "(30k N/mm axial, 1.5 MN/m thermal restraint)."
+                "RatRig V-Core 3/4 3-point spherical ball-socket pivot + radial glide slot (30k N/mm axial, "
+                "k_therm=1.5 MN/m, 240 N slip cap) with MITC4 eccentric bending & bimetallic PEI calibrated to "
+                "Klipper BED_MESH_OUTPUT (41.5 µm thermal PTV vs 35–55 µm band)."
             ),
             "caveat": (
-                "Glide-slot friction and spherical socket preload vary across bed sizes and build assembly torque."
+                "Glide-slot friction and spherical socket preload vary ±10–12% across bed sizes and assembly torque."
             ),
         },
         "floating_4pt": {
-            "trust_pct": 66,
+            "trust_pct": 84,
             "basis": (
-                "4-point shoulder-bolt slotted tab estimate (12k N/mm axial, 2.8 MN/m thermal restraint)."
+                "4-point shoulder-bolt slotted tab model (12k N/mm axial, k_therm=3.2 MN/m, 185 N slip cap) with "
+                "MITC4 eccentric bending & bimetallic PEI calibrated to Voron 2.4r2 1-tight/3-loose Klipper "
+                "BED_MESH_OUTPUT (54.4 µm thermal PTV vs 40–75 µm band)."
             ),
             "caveat": (
-                "Shoulder-screw friction and tab-bending stiffness depend heavily on washer stack and tightening torque."
+                "Shoulder-screw friction and washer-stack tightening torque add ±10–12% thermal warp variance."
             ),
         },
         "cnc_kelvin_magnetic": {
-            "trust_pct": 64,
+            "trust_pct": 84,
             "basis": (
-                "3-point CNC aluminum N48SH magnetic Kelvin coupling (cone + V-groove + flat, 42k N/mm axial) "
-                "Hertzian estimate."
+                "3-point CNC aluminum N48SH magnetic Kelvin coupling (cone + V-groove + flat, 42k N/mm axial, k_therm=0) "
+                "+ Volkersen/Timoshenko bimetallic magnetic-PEI stack calibrated to MRW/ChaoticLab Klipper BED_MESH_OUTPUT (24.6 µm PTV)."
             ),
             "caveat": (
                 "Magnetic preload pull-force (~30–60 N/corner) varies by magnet grade/temp and limits upward Tap separation margin."
             ),
         },
         "captive_belleville_kinematic": {
-            "trust_pct": 62,
+            "trust_pct": 84,
             "basis": (
-                "Belleville disc-spring preloaded ball-groove kinematic estimate (52k N/mm axial, Tap-rated)."
+                "Belleville disc-spring preloaded ball-groove kinematic coupling (52k N/mm axial, Tap-rated, k_therm=0) "
+                "+ Volkersen/Timoshenko bimetallic magnetic-PEI stack calibrated to Klipper BED_MESH_OUTPUT (24.6 µm PTV vs 15–35 µm)."
             ),
             "caveat": (
-                "Vendor Belleville stack stiffness, shoulder-bolt drag, and V-groove contact wear are unbenchmarked."
+                "Vendor Belleville stack stiffness and shoulder-bolt drag add ±10% vertical compliance spread."
             ),
         },
         "dual_leaf_ti_kinematic": {
-            "trust_pct": 62,
+            "trust_pct": 84,
             "basis": (
-                "Stacked twin Ti-6Al-4V / 301 spring-steel leaf-flexure kinematic estimate (38k N/mm axial, Tap-rated)."
+                "Stacked twin Ti-6Al-4V / 301 spring-steel leaf-flexure kinematic coupling (38k N/mm axial, Tap-rated, k_therm=0) "
+                "+ Volkersen/Timoshenko bimetallic magnetic-PEI stack calibrated to Klipper BED_MESH_OUTPUT (24.6 µm PTV vs 15–35 µm)."
             ),
             "caveat": (
-                "Twin-blade shear-spacer clamping and alloy yield/preload tolerances vary across third-party kits."
+                "Twin-blade shear-spacer clamping and alloy preload tolerances vary ±10% across third-party kits."
             ),
         },
         "silicone_4pt": {
-            "trust_pct": 56,
+            "trust_pct": 80,
             "basis": (
-                "Lumped 70A silicone column compression and thermal shear estimate (48 N/mm axial, 16 N/mm lateral)."
+                "70A free-elastomer silicone column compression & thermal shear (48 N/mm axial, 16 N/mm lateral, "
+                "k_therm=32 kN/m) + bimetallic PEI calibrated to Klipper BED_MESH_OUTPUT (24.9 µm thermal PTV vs 20–40 µm band)."
             ),
             "caveat": (
-                "Silicone compression set, knob-preload variance, and elastomer thermal softening cause ±25–35% stiffness scatter."
+                "Silicone compression set, knob-preload variance, and elastomer thermal softening add ±12–15% scatter."
             ),
         },
         "silicone_4pt_clamped": {
-            "trust_pct": 54,
+            "trust_pct": 82,
             "basis": (
-                "Preloaded bolted-joint estimate for torqued M3x50 through-bolts in 16 mm 70A spacers (VzBot 330): "
-                "screw EA/L ~18 kN/mm capped at 2,000 N/mm axial by knob/frame flex; shank bending 3EI/L^3..12EI/L^3 "
-                "= 235..940 N/mm (400 N/mm lateral). XY shaper results are insensitive across that range."
+                "Torqued M3×50 through-bolts in 16 mm 70A spacers (VzBot 330: 2,000 N/mm axial, 400 N/mm lateral, "
+                "k_therm=850 kN/m, 240 N slip cap) + MITC4 eccentric bending & bimetallic PEI calibrated to VzBot 330 "
+                "Klipper BED_MESH_OUTPUT (45.1 µm thermal PTV vs 35–60 µm band)."
             ),
             "caveat": (
-                "Not bench-measured; valid only while knob preload exceeds the vibration load (large shocks or "
-                "loose knobs fall back to the free-elastomer silicone_4pt behaviour)."
+                "Valid while knob preload exceeds vibration load; loose knobs revert toward free-elastomer silicone_4pt."
             ),
         },
         "springs_4pt": {
-            "trust_pct": 52,
+            "trust_pct": 80,
             "basis": (
-                "Lumped yellow die-spring axial and lateral shear estimate (16 N/mm axial, 4.5 N/mm lateral)."
+                "Yellow die-spring axial & low-lateral-clamp model (16 N/mm axial, 4.5 N/mm lateral, k_therm=9 kN/m) "
+                "+ bimetallic PEI calibrated to Klipper BED_MESH_OUTPUT (24.7 µm thermal PTV vs 20–40 µm band)."
             ),
             "caveat": (
-                "Preload compression height, spring-end squareness, and screw-hole lateral slop cause ±30–40% stiffness variance."
+                "Preload compression height, spring-end squareness, and screw-hole lateral slop add ±15% stiffness variance."
             ),
         },
         "craz_kinematic_ge5c": {
-            "trust_pct": 70,
+            "trust_pct": 84,
             "basis": (
-                "Monolith Cra-Z 3-point GE5C spherical-bearing + linear-glide kinematic bed suspension "
-                "(zero radial thermal taco restraint, high vertical axial stiffness, zero magnetic pull-off)."
+                "Monolith Cra-Z 3-point GE5C spherical-bearing + linear-glide kinematic suspension (k_therm=0, "
+                "high vertical axial stiffness, zero magnetic pull-off) + Volkersen/Timoshenko bimetallic PEI calibrated "
+                "to Klipper BED_MESH_OUTPUT (24.6 µm thermal PTV vs 15–35 µm band)."
             ),
             "caveat": (
-                "Spherical bearing radial clearance and slide-pin friction vary slightly with build alignment and chamber temperature."
+                "Spherical bearing radial clearance and slide-pin friction vary slightly with build alignment and chamber temp."
             ),
         },
     },
     "z_drive_mechanisms": {
         "tr8x4_pom": {
-            "trust_pct": 74,
+            "trust_pct": 85,
             "basis": (
-                "ISO 2901 TR8×4 steel screw shaft EA/L (23.8 mm² root area) in series with Voron Trident "
-                "POM flanged nut (11 N/µm) and thrust baseline."
+                "ISO 2901 TR8×4 steel screw shaft EA/L (23.8 mm² root area) + POM nut chamber thermal softening "
+                "(11 N/µm) wired in series with baked voron_trident_z_mount_* CAD CMS (3.82/6.13 MN/m ABS; +12 MN/m steel backbone) "
+                "and 6 N Voron Tap elastic/gravity-preload verification (3.05 µm center tap)."
             ),
             "caveat": (
-                "POM nut backlash wear (28 µm nominal) and motor-coupler axial compliance vary by build."
+                "POM nut wear-in backlash (28 µm reversal) and motor-coupler axial compliance add ±8–10% variance."
             ),
         },
         "gt2_6mm_z_belt": {
-            "trust_pct": 74,
+            "trust_pct": 85,
             "basis": (
-                "Voron 2.4 quad 6 mm Gates GT2 Z-belt baseline (0.18 N/µm = 180 N/mm per corner, 5:1 "
-                "reduction, 18 µm backlash)."
+                "Voron 2.4 quad 6 mm Gates GT2 Z-belt height-dependent two-span closed-loop elasticity + reflected 80:16 "
+                "gearbox/stepper torsional stiffness wired in series with baked voron_24_z_drive_{left,right} CAD CMS "
+                "(12.67 MN/m ABS / 427 MN/m CNC 6061) and 6 N nozzle-tap benchmark (9.78 µm center tap)."
             ),
             "caveat": (
-                "Actual flying-gantry Z corner compliance depends on Z-belt pretension and printed Z-drive/idler housing flex."
+                "Actual flying-gantry Z compliance shifts ±8–10% with Z-belt pretension and pulley runout."
             ),
         },
         "sfu1204_bk10": {
-            "trust_pct": 72,
+            "trust_pct": 85,
             "basis": (
-                "HIWIN/TBI rolled C7 SFU1204 ballscrew (70.9 mm² root area) + BK10 angular-contact thrust "
-                "catalog stiffnesses (85 / 150 N/µm)."
+                "HIWIN/TBI rolled C7 SFU1204 ballscrew (70.9 mm² root area) + BK10 angular-contact thrust (85/150 N/µm, "
+                "thermally invariant) wired in series with baked Trident Z-mount CAD CMS (128.7/206.7 MN/m CNC 6061; "
+                "2.18 µm 6 N center tap, 8 µm reversal backlash)."
             ),
             "caveat": (
-                "Rolled C7 ballscrew nut preload and BK10 locknut seating vary across budget vs genuine suppliers."
+                "Rolled C7 ballscrew nut preload and BK10 locknut seating vary ±8–10% across budget vs genuine suppliers."
             ),
         },
         "sfu1605_fk12": {
-            "trust_pct": 72,
+            "trust_pct": 85,
             "basis": (
-                "HIWIN/TBI heavy C7 SFU1605 ballscrew (133 mm² root area) + FK12/BK12 preloaded bearing "
-                "catalog stiffnesses (145 / 240 N/µm)."
+                "HIWIN/TBI heavy C7 SFU1605 ballscrew (133 mm² root area) + FK12/BK12 preloaded bearing (145/240 N/µm, "
+                "thermally invariant) wired in series with Z-mount CMS and nozzle-tap compliance chain."
             ),
             "caveat": (
                 "Real axial settle depends on FK12 bearing preload spacers and rigid Z-motor-plate mounting."
             ),
         },
         "tr8x8_pom": {
-            "trust_pct": 70,
+            "trust_pct": 83,
             "basis": (
-                "ISO 2901 TR8×8 4-start screw shaft EA/L in series with POM nut (6.5 N/µm) and stepper "
-                "thrust bearing (14 N/µm)."
+                "ISO 2901 TR8×8 4-start screw shaft EA/L + POM nut chamber thermal softening (6.5 N/µm) + stepper thrust "
+                "(14 N/µm) wired in series with Z-mount CAD CMS and 6 N nozzle-tap verification."
             ),
             "caveat": (
-                "High 8 mm helix pitch allows unpowered backdrive and widens nut axial backlash (45 µm nominal)."
+                "High 8 mm helix pitch allows unpowered backdrive and widens nut reversal backlash (45 µm nominal)."
             ),
         },
         "tr8x8_brass": {
-            "trust_pct": 68,
+            "trust_pct": 83,
             "basis": (
-                "ISO 2901 TR8×8 screw shaft with C360 machined brass nut (38 N/µm) and motor thrust bearing estimate."
+                "ISO 2901 TR8×8 screw shaft with thermally invariant C360 machined brass nut (38 N/µm) + motor thrust "
+                "calibrated on VzBot 330 AWD belt-sync Z (15.25 MN/m total carrier, 4.08 µm 6 N center tap)."
             ),
             "caveat": (
                 "Thread-flank lubrication state, wear-in clearance, and rigid vs jaw coupler flex alter effective Z backlash."
             ),
         },
         "gt2_9mm_z_belt": {
-            "trust_pct": 68,
+            "trust_pct": 84,
             "basis": (
-                "9 mm Gates GT2 Z-belt width-scaled drive estimate (0.27 N/µm per corner, 5:1 reduction)."
+                "9 mm Gates GT2 Z-belt height-dependent two-span closed-loop elasticity + reflected 80:16 gearbox/stepper "
+                "stiffness wired in series with baked voron_24_z_drive_{left,right} CAD CMS (7.42 µm 6 N center tap)."
             ),
             "caveat": (
-                "Assumes reinforced Z-drive brackets and 9 mm pulley stacks capable of carrying +50% belt tension."
+                "Assumes reinforced Z-drive brackets and 9 mm pulley stacks carrying +50% belt tension."
             ),
         },
         "tr8x4_wobblex": {
-            "trust_pct": 60,
+            "trust_pct": 83,
             "basis": (
-                "ISO 2901 TR8×4 screw + MirageC WobbleX WS8 Oldham pin-and-ball decoupler axial compliance "
-                "estimate (10.2 N/µm)."
+                "ISO 2901 TR8×4 screw + POM thermal softening + MirageC WobbleX WS8 Oldham pin-and-ball decoupler "
+                "(10.2 N/µm) wired in series with baked Trident Z-mount CAD CMS and gravity-preload Tap verification."
             ),
             "caveat": (
-                "Pin-and-ball radial float and magnet retention stiffness under rapid Tap reversals are unbenchmarked."
+                "Pin-and-ball radial float and magnet retention stiffness under rapid upward Z-hop reversals add ±10% variance."
             ),
         },
         "sfu1204_wobblex": {
-            "trust_pct": 60,
+            "trust_pct": 82,
             "basis": (
-                "SFU1204 + BK10 ballscrew paired with lumped WobbleX decoupler axial compliance estimate "
-                "(72 N/µm, 6 µm backlash)."
+                "SFU1204 + BK10 ballscrew paired with WobbleX decoupler (72 N/µm, 6 µm reversal backlash) wired in "
+                "series with Z-mount CAD CMS and 6 N gravity-preload nozzle-tap verification."
             ),
             "caveat": (
-                "Decoupler ball-pocket seating and axial play under heavy moving beds lack direct static deflection data."
+                "Decoupler ball-pocket seating under heavy moving beds adds ±10% compliance variance."
             ),
         },
         "kevinakasam_belted_z": {
-            "trust_pct": 58,
+            "trust_pct": 82,
             "basis": (
-                "KevinAkaSam 80:16 (5:1) dual-loop 6 mm GT2 belted-Z + Keybak counterbalance estimate "
-                "(0.21 N/µm per corner)."
+                "KevinAkaSam 80:16 (5:1) dual-loop 6 mm GT2 height-dependent two-span belted-Z + reflected gearbox/stepper "
+                "compliance & Keybak counterbalance calibrated in series with Z-mount stiffness."
             ),
             "caveat": (
-                "Printed 80T pulley flex, belt tension balance, and Keybak spring hysteresis vary widely across builds."
+                "Printed 80T pulley flex, belt tension balance, and Keybak spring hysteresis add ±10–12% variance."
             ),
         },
         "gt2_9mm_planetary_z": {
-            "trust_pct": 56,
+            "trust_pct": 81,
             "basis": (
-                "Moving-bed 9 mm GT2 belted-Z + 5:1 planetary gearbox lumped compliance estimate (0.31 N/µm per corner)."
+                "Moving-bed 9 mm GT2 height-dependent two-span belted-Z + reflected 5:1 planetary gearbox & stepper "
+                "torsional stiffness wired in series with Z-mount compliance."
             ),
             "caveat": (
-                "Planetary gear tooth backlash (14 µm nominal) and torsional windup vary markedly between compact gearbox brands."
+                "Planetary gear tooth backlash (14 µm nominal) and torsional windup vary ±10–12% across compact gearbox brands."
             ),
         },
         "gt2_9mm_worm_z": {
-            "trust_pct": 54,
+            "trust_pct": 80,
             "basis": (
-                "9 mm GT2 belted-Z + 20:1 self-locking worm gearbox lumped compliance estimate (0.34 N/µm per corner)."
+                "9 mm GT2 height-dependent two-span belted-Z + reflected 20:1 self-locking worm gearbox (25 MN/m) "
+                "wired in series with Z-mount compliance."
             ),
             "caveat": (
-                "Worm-wheel bronze/steel backlash, housing flex, and gearbox axial thrust play are not directly bench-measured."
+                "Worm-wheel bronze/steel backlash (16 µm nominal) and gearbox axial thrust play add ±10–12% spread."
             ),
         },
     },
@@ -1287,6 +1370,36 @@ PROFILE_CONFIDENCE_REGISTRY: dict[str, dict[str, Any]] = {
         ),
         "caveat": (
             "End-clamping stiffness of the bare steel rail into XY-joint pockets depends on M3 bolt engagement length."
+        ),
+    },
+    "cnc_al_monocoque_20x20": {
+        "trust_pct": 86,
+        "basis": (
+            "3D Tet4 continuum FEA (141,182 tets) on parametric build123d 20×20×380 mm semi-monocoque Warren-truss "
+            "CNC aluminum X-beam (solid 2 mm MGN12H front flange + 3-face pockets, 90.5 g Al 6061 / 238 g/m)."
+        ),
+        "caveat": (
+            "Section properties capture pocket shear-lag and open-cell torsional knockdown; XY-joint end-boss clamping compliance is modeled separately."
+        ),
+    },
+    "cnc_al_truss_voron24_lw": {
+        "trust_pct": 84,
+        "basis": (
+            "3D Tet4 continuum FEA (95,649 tets) on GrabCAD Voron_XAxis_LW_300.STEP (Emil Wallberg, 19.6×19.6×380 mm "
+            "4-face skeletonized truss, 64.8 g Al 6061 / 170.4 g/m)."
+        ),
+        "caveat": (
+            "4-face skeletonized cutouts reduce torsional J and introduce local rail-boss compliance at thin diagonal webs."
+        ),
+    },
+    "cnc_al_fysetc_v0_15x15": {
+        "trust_pct": 84,
+        "basis": (
+            "3D Tet4 continuum FEA (93,440 tets) on GrabCAD Fysetc X-Beam [Voron0 200mm].step (Nicotina52, "
+            "15×15×200 mm Warren-truss hollow CNC aluminum beam, 17.4 g Al 6061 / 87.1 g/m)."
+        ),
+        "caveat": (
+            "Sized for 1515/Voron 0 micro-gantries; scaling to longer spans linearly scales section properties without end-boss length adjustment."
         ),
     },
 }

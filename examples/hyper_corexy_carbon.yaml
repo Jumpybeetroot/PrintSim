@@ -7,7 +7,7 @@ frame:
   height_mm: 490
   profile: extrusion_3030
   material: aluminum_6063_t5
-  bracing: full_truss
+  bracing: gussets_and_flat_bars
   brace_profile: brace_rod_10mm
   brace_material: carbon_fiber_tube
   enclosed_panels: true

@@ -11,7 +11,7 @@ from scipy.linalg import solve
 
 from printsim.schema import PrinterSpec, get_material
 from printsim.thermal.chamber import simulate_chamber_and_cpap
-from printsim.thermal.filaments import get_filament
+from printsim.thermal.filaments import FilamentSpec, get_filament
 
 
 _R_GAS_J_MOLK = 8.3144626
@@ -19,6 +19,32 @@ _R_GAS_J_MOLK = 8.3144626
 _NOZZLE_AMB_LOSS_W_K = 0.020
 _BLOCK_AMB_LOSS_W_K = 0.030
 _BLOCK_NOZZLE_LOSS_W_K = _NOZZLE_AMB_LOSS_W_K + _BLOCK_AMB_LOSS_W_K
+
+# 8-point Gauss-Legendre quadrature nodes and weights on [-1, 1] for Cross-WLF cone integration
+_GL8_NODES: tuple[float, ...] = (
+    -0.9602898564975363,
+    -0.7966664774136267,
+    -0.5255324099163290,
+    -0.1834346424956498,
+    0.1834346424956498,
+    0.5255324099163290,
+    0.7966664774136267,
+    0.9602898564975363,
+)
+_GL8_WEIGHTS: tuple[float, ...] = (
+    0.1012285362903763,
+    0.2223810344533745,
+    0.3137066458778873,
+    0.3626837833783620,
+    0.3626837833783620,
+    0.3137066458778873,
+    0.2223810344533745,
+    0.1012285362903763,
+)
+# Bondtech CHT / E3D Revo HF 3-channel split-core nozzle geometry constants
+_CHT_SPLIT_SECTION_LENGTH_M = 0.0080  # ~8 mm internal copper splitter inside nozzle body
+_CHT_SEGMENT_GAIN = 0.95  # Net thermal conductance addition (+0.95 * L_split effective melt length)
+_CHT_HYDRAULIC_SPLIT_LENGTH_M = 0.0065
 
 
 @dataclass
@@ -47,6 +73,12 @@ class HotendThermalReport:
     required_push_force_n: float = 0.0
     nozzle_pressure_drop_mpa: float = 0.0
     chamber_cpap: dict[str, Any] | None = None
+    coupled_flow_limit_mm3_s: float = 0.0
+    melt_exit_temp_c: float = 0.0
+    apparent_viscosity_pa_s: float = 0.0
+    wall_shear_rate_s1: float = 0.0
+    nozzle_type: str = "standard"
+    push_force_curve: list[dict[str, float]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -69,8 +101,14 @@ class HotendThermalReport:
             "melt_zone_flow_limit_mm3_s": round(self.melt_zone_flow_limit_mm3_s, 1),
             "heater_power_flow_limit_mm3_s": round(self.heater_power_flow_limit_mm3_s, 1),
             "extruder_pressure_flow_limit_mm3_s": round(self.extruder_pressure_flow_limit_mm3_s, 1),
+            "coupled_flow_limit_mm3_s": round(self.coupled_flow_limit_mm3_s, 1),
             "required_push_force_n": round(self.required_push_force_n, 2),
             "nozzle_pressure_drop_mpa": round(self.nozzle_pressure_drop_mpa, 2),
+            "melt_exit_temp_c": round(self.melt_exit_temp_c, 1),
+            "apparent_viscosity_pa_s": round(self.apparent_viscosity_pa_s, 1),
+            "wall_shear_rate_s1": round(self.wall_shear_rate_s1, 1),
+            "nozzle_type": self.nozzle_type,
+            "push_force_curve": self.push_force_curve,
             "heatup_curve": self.heatup_curve,
             "axial_profile": self.axial_profile,
             "chamber_cpap": self.chamber_cpap,
@@ -239,6 +277,33 @@ def _solve_axial_hotend_fvm(
     ]
 
 
+def effective_melt_zone_length_m(melt_zone_length_m: float, nozzle_type: str = "standard") -> float:
+    """Effective Graetz thermal-transfer length (m), accounting for 3-channel CHT nozzle splitters."""
+    l_m = max(melt_zone_length_m, 1e-4)
+    if nozzle_type.lower() == "cht":
+        l_split = min(l_m, _CHT_SPLIT_SECTION_LENGTH_M)
+        return l_m + _CHT_SEGMENT_GAIN * l_split
+    return l_m
+
+
+def graetz_characteristic_flow_m3_s(
+    melt_zone_length_m: float,
+    thermal_diffusivity_m2_s: float,
+    k_block_w_mk: float = 385.0,
+    k_nozzle_w_mk: float = 115.0,
+    melt_transfer_factor: float = 1.0,
+    nozzle_type: str = "standard",
+) -> float:
+    """Characteristic Graetz conduction throughput Q_th = C_core * f_mat * f_wall * pi * Nu * alpha * L_eff (m^3/s)."""
+    nu = 3.66
+    c_melt_core = 3.30 * max(melt_transfer_factor, 0.05)
+    alpha = max(thermal_diffusivity_m2_s, 1e-9)
+    k_eff = (2.0 * k_block_w_mk * k_nozzle_w_mk) / max(k_block_w_mk + k_nozzle_w_mk, 1e-9)
+    wall_factor = (k_eff / 150.0) ** 0.12
+    l_eff = effective_melt_zone_length_m(melt_zone_length_m, nozzle_type=nozzle_type)
+    return c_melt_core * wall_factor * (math.pi * nu * alpha * l_eff)
+
+
 def graetz_melt_zone_flow_m3_s(
     melt_zone_length_m: float,
     thermal_diffusivity_m2_s: float,
@@ -248,32 +313,379 @@ def graetz_melt_zone_flow_m3_s(
     k_block_w_mk: float = 385.0,
     k_nozzle_w_mk: float = 115.0,
     melt_transfer_factor: float = 1.0,
+    nozzle_type: str = "standard",
 ) -> float:
     """Compute Graetz radial-conduction melt-zone volumetric flow limit (m^3/s).
 
-    Q_melt = C_core * f_mat * f_wall * (pi * Nu * alpha * L) / ln((T_nozzle - T_in) / (T_nozzle - T_core))
+    Q_melt = C_core * f_mat * f_wall * (pi * Nu * alpha * L_eff) / ln((T_nozzle - T_in) / (T_nozzle - T_core))
     where Nu = 3.66 (circular tube constant wall temperature), C_core = 3.30 accounts for
     partially melted PLA core shear-film extrusion on a melt-averaged DSC cp basis
     (Go et al. 2017; Mackay 2018), and melt_transfer_factor (f_mat) scales per polymer.
     """
-    nu = 3.66
-    c_melt_core = 3.30 * max(melt_transfer_factor, 0.05)
-    alpha = max(thermal_diffusivity_m2_s, 1e-9)
-    k_eff = (2.0 * k_block_w_mk * k_nozzle_w_mk) / max(k_block_w_mk + k_nozzle_w_mk, 1e-9)
-    wall_factor = (k_eff / 150.0) ** 0.12
+    q_th = graetz_characteristic_flow_m3_s(
+        melt_zone_length_m=melt_zone_length_m,
+        thermal_diffusivity_m2_s=thermal_diffusivity_m2_s,
+        k_block_w_mk=k_block_w_mk,
+        k_nozzle_w_mk=k_nozzle_w_mk,
+        melt_transfer_factor=melt_transfer_factor,
+        nozzle_type=nozzle_type,
+    )
 
     t_crit = t_core_c + 0.5
     if t_nozzle_c >= t_crit:
         dt_num = max(t_nozzle_c - t_inlet_c, 1.0)
         dt_den = t_nozzle_c - t_core_c
         log_term = max(math.log(dt_num / dt_den), 0.15)
-        return c_melt_core * wall_factor * (math.pi * nu * alpha * melt_zone_length_m) / log_term
+        return q_th / log_term
 
     # Smooth positive monotonic taper when nozzle is at or below core melt threshold
     dt_num_crit = max(t_crit - t_inlet_c, 1.0)
     log_crit = max(math.log(dt_num_crit / 0.5), 0.15)
-    q_crit = c_melt_core * wall_factor * (math.pi * nu * alpha * melt_zone_length_m) / log_crit
+    q_crit = q_th / log_crit
     return q_crit * math.exp(0.15 * (t_nozzle_c - t_crit))
+
+
+def cross_wlf_zero_shear_viscosity_pa_s(
+    temp_c: float,
+    d1_pa_s: float,
+    d2_k: float,
+    a1: float,
+    a3_k: float = 51.6,
+    pressure_pa: float = 0.0,
+    d3_k_per_pa: float = 0.0,
+) -> float:
+    """Cross-WLF zero-shear Newtonian plateau viscosity eta_0(T, p) in Pa*s.
+
+    eta_0(T, p) = D1 * exp(-A1 * (T - T*) / (A3 + (T - T*))),   T* = D2 + D3 * p
+    Matches PrintDB ``references/fluid_cooling/melt-viscosity-cross-wlf-carreau-yasuda``.
+    """
+    t_k = max(temp_c + 273.15, 200.0)
+    t_star = d2_k + d3_k_per_pa * max(pressure_pa, 0.0)
+    dt = t_k - t_star
+    denom = a3_k + dt
+    if denom <= 8.0:
+        # Smooth vitrified-polymer clamp near or below D2 - A3
+        exponent = -a1 * (8.0 - a3_k) / 8.0
+    else:
+        exponent = -a1 * dt / denom
+    return d1_pa_s * math.exp(max(-60.0, min(60.0, exponent)))
+
+
+def cross_wlf_viscosity_pa_s(
+    shear_rate_s1: float,
+    temp_c: float,
+    d1_pa_s: float,
+    d2_k: float,
+    a1: float,
+    tau_star_pa: float,
+    n: float,
+    a3_k: float = 51.6,
+    pressure_pa: float = 0.0,
+    d3_k_per_pa: float = 0.0,
+) -> float:
+    """Cross-WLF generalized-Newtonian melt viscosity eta(gamma_dot, T, p) in Pa*s."""
+    eta0 = cross_wlf_zero_shear_viscosity_pa_s(
+        temp_c=temp_c,
+        d1_pa_s=d1_pa_s,
+        d2_k=d2_k,
+        a1=a1,
+        a3_k=a3_k,
+        pressure_pa=pressure_pa,
+        d3_k_per_pa=d3_k_per_pa,
+    )
+    g = max(shear_rate_s1, 0.0)
+    if g <= 0.0:
+        return eta0
+    return eta0 / (1.0 + (eta0 * g / max(tau_star_pa, 1.0)) ** (1.0 - n))
+
+
+def cross_wlf_wall_shear_stress_pa(
+    q_m3_s: float,
+    radius_m: float,
+    eta0_pa_s: float,
+    tau_star_pa: float,
+    n: float,
+) -> tuple[float, float, float]:
+    """Weissenberg-Rabinowitsch wall shear stress (Pa), wall shear rate (1/s), and viscosity (Pa*s).
+
+    Solves gamma_w = gamma_a * (3*n_loc(gamma_w) + 1) / (4*n_loc(gamma_w)) where
+    n_loc(gamma) = d(ln tau)/d(ln gamma) = (1 + n * X) / (1 + X), X = (eta0 * gamma / tau*)^(1 - n).
+    Exact in both Newtonian (X -> 0, n_loc -> 1) and power-law (X -> inf, n_loc -> n) limits.
+    """
+    q = max(q_m3_s, 0.0)
+    if q <= 0.0:
+        return 0.0, 0.0, eta0_pa_s
+    r = max(radius_m, 1e-6)
+    gamma_a = (4.0 * q) / (math.pi * (r**3))
+    tau_s = max(tau_star_pa, 1.0)
+    gamma_w = gamma_a * (3.0 * n + 1.0) / (4.0 * n)
+    one_minus_n = 1.0 - n
+    for _ in range(5):
+        x = (eta0_pa_s * gamma_w / tau_s) ** one_minus_n
+        n_loc = (1.0 + n * x) / (1.0 + x)
+        gamma_w = gamma_a * (3.0 * n_loc + 1.0) / (4.0 * n_loc)
+    x = (eta0_pa_s * gamma_w / tau_s) ** one_minus_n
+    eta_w = eta0_pa_s / (1.0 + x)
+    return eta_w * gamma_w, gamma_w, eta_w
+
+
+def cross_wlf_nozzle_pressure_drop_pa(
+    q_m3_s: float,
+    nozzle_diameter_m: float,
+    melt_zone_length_m: float,
+    chamber_diameter_m: float,
+    eta0_film_pa_s: float,
+    eta0_exit_pa_s: float,
+    tau_star_pa: float,
+    n: float,
+    orifice_length_m: float | None = None,
+    cone_half_angle_deg: float = 30.0,
+    bagley_factor: float = 3.0,
+    nozzle_type: str = "standard",
+    plug_multiplier: float = 1.0,
+) -> dict[str, float]:
+    """Cross-WLF capillary + 8-pt Gauss-Legendre cone + CHT splitter + Bagley entry drop (Pa)."""
+    r_orifice = max(0.5 * nozzle_diameter_m, 1e-6)
+    r_chamber = max(0.5 * chamber_diameter_m, r_orifice + 1e-6)
+    l_orifice = orifice_length_m if orifice_length_m is not None else max(0.0006, 1.5 * nozzle_diameter_m)
+    l_melt = max(melt_zone_length_m, 0.0)
+
+    if nozzle_type.lower() == "cht":
+        l_cht = min(l_melt, _CHT_HYDRAULIC_SPLIT_LENGTH_M)
+        l_barrel = max(l_melt - l_cht, 0.0)
+        tau_bar, _, _ = cross_wlf_wall_shear_stress_pa(q_m3_s, r_chamber, eta0_film_pa_s, tau_star_pa, n)
+        dp_chamber = (2.0 * l_barrel * tau_bar) / r_chamber
+        # 3 parallel split channels preserving total bore area (r_sub = r_chamber / sqrt(3))
+        r_sub = r_chamber / math.sqrt(3.0)
+        tau_sub, _, _ = cross_wlf_wall_shear_stress_pa(q_m3_s / 3.0, r_sub, eta0_exit_pa_s, tau_star_pa, n)
+        dp_cht = (2.0 * l_cht * tau_sub) / r_sub
+    else:
+        tau_bar, _, _ = cross_wlf_wall_shear_stress_pa(q_m3_s, r_chamber, eta0_film_pa_s, tau_star_pa, n)
+        dp_chamber = (2.0 * l_melt * tau_bar) / r_chamber
+        dp_cht = 0.0
+
+    # Exact convergent-cone integral: int_{r_o}^{r_c} (2 * tau_w(Q, r) / tan(beta)) * dr / r
+    # Evaluated in u = ln(r) via 8-point Gauss-Legendre quadrature (exact Bellini limit for power-law)
+    u0 = math.log(r_orifice)
+    u1 = math.log(r_chamber)
+    half_du = 0.5 * (u1 - u0)
+    mid_u = 0.5 * (u1 + u0)
+    tan_b = math.tan(math.radians(cone_half_angle_deg))
+    cone_int = 0.0
+    for xi, wi in zip(_GL8_NODES, _GL8_WEIGHTS):
+        r_u = math.exp(mid_u + half_du * xi)
+        tw_u, _, _ = cross_wlf_wall_shear_stress_pa(q_m3_s, r_u, eta0_exit_pa_s, tau_star_pa, n)
+        cone_int += wi * tw_u
+    dp_cone = (2.0 / tan_b) * half_du * cone_int * plug_multiplier
+
+    tau_o, gamma_w_o, eta_o = cross_wlf_wall_shear_stress_pa(
+        q_m3_s, r_orifice, eta0_exit_pa_s, tau_star_pa, n
+    )
+    dp_orifice = ((2.0 * l_orifice * tau_o) / r_orifice) * (1.0 + 0.45 * (plug_multiplier - 1.0))
+    dp_entry = bagley_factor * tau_o * plug_multiplier
+    dp_total = dp_chamber + dp_cht + dp_cone + dp_orifice + dp_entry
+    return {
+        "dp_total_pa": dp_total,
+        "dp_chamber_pa": dp_chamber,
+        "dp_cht_pa": dp_cht,
+        "dp_cone_pa": dp_cone,
+        "dp_orifice_pa": dp_orifice,
+        "dp_entry_pa": dp_entry,
+        "tau_w_orifice_pa": tau_o,
+        "gamma_w_orifice_s1": gamma_w_o,
+        "eta_orifice_pa_s": eta_o,
+    }
+
+
+def coupled_melt_pressure_drop_pa(
+    q_m3_s: float,
+    nozzle_diameter_m: float,
+    melt_zone_length_m: float,
+    chamber_diameter_m: float,
+    t_wall_c: float,
+    t_inlet_c: float,
+    q_th_char_m3_s: float,
+    fil: FilamentSpec,
+    nozzle_type: str = "standard",
+) -> dict[str, float]:
+    """Coupled Graetz thermal-penetration + Cross-WLF + Osswald core-plug nozzle pressure drop (Pa)."""
+    dt_drive = max(t_wall_c - t_inlet_c, 1.0)
+    if q_m3_s <= 0.0:
+        theta_exit = 0.0
+    else:
+        theta_exit = math.exp(-min(q_th_char_m3_s / max(q_m3_s, 1e-15), 50.0))
+    t_exit_c = t_wall_c - dt_drive * theta_exit
+
+    # Dimensionless Graetz thermal-penetration shortfall ratio r_th = (T_w - T_exit) / (T_w - T_core)
+    # Equals 1.0 identically at Q = Q_melt across all polymers and print temperatures.
+    t_crit = fil.extrudable_temp_c + 0.5
+    if t_wall_c >= t_crit:
+        r_th = (t_wall_c - t_exit_c) / (t_wall_c - fil.extrudable_temp_c)
+    else:
+        r_th = (t_crit - t_exit_c) / 0.5
+    excess = max(r_th - 0.72, 0.0)
+    plug_mult = 1.0 + 4.0 * (excess**2) * math.exp(min(4.2 * excess, 10.0))
+
+    # Wall shear film along melt barrel stays closer to block temperature than bulk exit core
+    t_film_c = 0.70 * t_wall_c + 0.30 * t_exit_c
+    eta0_film = cross_wlf_zero_shear_viscosity_pa_s(
+        temp_c=t_film_c,
+        d1_pa_s=fil.wlf_d1_pa_s,
+        d2_k=fil.wlf_d2_k,
+        a1=fil.wlf_a1,
+        a3_k=fil.wlf_a3_k,
+        d3_k_per_pa=fil.wlf_d3_k_per_pa,
+    )
+    eta0_exit = cross_wlf_zero_shear_viscosity_pa_s(
+        temp_c=t_exit_c,
+        d1_pa_s=fil.wlf_d1_pa_s,
+        d2_k=fil.wlf_d2_k,
+        a1=fil.wlf_a1,
+        a3_k=fil.wlf_a3_k,
+        d3_k_per_pa=fil.wlf_d3_k_per_pa,
+    )
+    res = cross_wlf_nozzle_pressure_drop_pa(
+        q_m3_s=q_m3_s,
+        nozzle_diameter_m=nozzle_diameter_m,
+        melt_zone_length_m=melt_zone_length_m,
+        chamber_diameter_m=chamber_diameter_m,
+        eta0_film_pa_s=eta0_film,
+        eta0_exit_pa_s=eta0_exit,
+        tau_star_pa=fil.cross_tau_star_pa,
+        n=fil.cross_n,
+        bagley_factor=fil.bagley_factor,
+        nozzle_type=nozzle_type,
+        plug_multiplier=plug_mult,
+    )
+    res["t_exit_c"] = t_exit_c
+    res["r_th"] = r_th
+    res["plug_multiplier"] = plug_mult
+    return res
+
+
+def solve_coupled_flow_limit_m3_s(
+    max_pressure_pa: float,
+    nozzle_diameter_m: float,
+    melt_zone_length_m: float,
+    chamber_diameter_m: float,
+    t_wall_c: float,
+    t_inlet_c: float,
+    q_th_char_m3_s: float,
+    fil: FilamentSpec,
+    nozzle_type: str = "standard",
+) -> float:
+    """Solve coupled Graetz + Cross-WLF dP(Q) = max_pressure_pa by monotonic bisection (m^3/s)."""
+    if max_pressure_pa <= 0.0:
+        return 0.0
+    lo = 0.0
+    hi = 5e-8  # 50 mm^3/s initial upper bracket
+    while coupled_melt_pressure_drop_pa(
+        q_m3_s=hi,
+        nozzle_diameter_m=nozzle_diameter_m,
+        melt_zone_length_m=melt_zone_length_m,
+        chamber_diameter_m=chamber_diameter_m,
+        t_wall_c=t_wall_c,
+        t_inlet_c=t_inlet_c,
+        q_th_char_m3_s=q_th_char_m3_s,
+        fil=fil,
+        nozzle_type=nozzle_type,
+    )["dp_total_pa"] < max_pressure_pa:
+        hi *= 2.0
+        if hi > 1e-3:  # 1,000,000 mm^3/s safety cap
+            break
+    for _ in range(72):
+        mid = 0.5 * (lo + hi)
+        dp_mid = coupled_melt_pressure_drop_pa(
+            q_m3_s=mid,
+            nozzle_diameter_m=nozzle_diameter_m,
+            melt_zone_length_m=melt_zone_length_m,
+            chamber_diameter_m=chamber_diameter_m,
+            t_wall_c=t_wall_c,
+            t_inlet_c=t_inlet_c,
+            q_th_char_m3_s=q_th_char_m3_s,
+            fil=fil,
+            nozzle_type=nozzle_type,
+        )["dp_total_pa"]
+        if dp_mid < max_pressure_pa:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def compute_push_force_curve(
+    spec: PrinterSpec,
+    filament_id: str = "pla",
+    target_temp_c: float | None = None,
+    nozzle_type: str = "standard",
+    flow_points_mm3_s: list[float] | None = None,
+) -> list[dict[str, float]]:
+    """Evaluate coupled Cross-WLF + Graetz extruder push-force curve F(Q) over volumetric flows."""
+    he = spec.toolhead.hotend
+    ext = spec.toolhead.extruder
+    fil = get_filament(filament_id)
+    block_mat = get_material(he.block_material)
+    nozzle_mat = get_material(he.nozzle_material)
+
+    t_target = target_temp_c if target_temp_c is not None else fil.print_temp_c
+    t_amb = max(he.ambient_temp_c, spec.frame.chamber_temp_c)
+    fil_diameter_m = ext.filament_diameter_mm * 1e-3
+    fil_area_m2 = math.pi * (0.5 * fil_diameter_m) ** 2
+    nozzle_d_m = he.nozzle_diameter_mm * 1e-3
+    chamber_d_m = he.heatbreak_id_mm * 1e-3
+    melt_l_m = he.melt_zone_length_mm * 1e-3
+
+    q_th_char = graetz_characteristic_flow_m3_s(
+        melt_zone_length_m=melt_l_m,
+        thermal_diffusivity_m2_s=fil.thermal_diffusivity_m2_s,
+        k_block_w_mk=block_mat.thermal_conductivity_w_mk,
+        k_nozzle_w_mk=nozzle_mat.thermal_conductivity_w_mk,
+        melt_transfer_factor=fil.melt_transfer_factor,
+        nozzle_type=nozzle_type,
+    )
+    if flow_points_mm3_s is None:
+        max_pressure_pa = ext.max_push_force_n / fil_area_m2
+        q_lim_mm3 = (
+            solve_coupled_flow_limit_m3_s(
+                max_pressure_pa=max_pressure_pa,
+                nozzle_diameter_m=nozzle_d_m,
+                melt_zone_length_m=melt_l_m,
+                chamber_diameter_m=chamber_d_m,
+                t_wall_c=t_target,
+                t_inlet_c=t_amb,
+                q_th_char_m3_s=q_th_char,
+                fil=fil,
+                nozzle_type=nozzle_type,
+            )
+            * 1e9
+        )
+        q_span = max(q_lim_mm3, 2.0)
+        flow_points_mm3_s = [q_span * frac for frac in (0.15, 0.30, 0.50, 0.65, 0.80, 0.90, 1.00, 1.12)]
+
+    out: list[dict[str, float]] = []
+    for q_mm3 in flow_points_mm3_s:
+        res = coupled_melt_pressure_drop_pa(
+            q_m3_s=max(q_mm3, 0.0) * 1e-9,
+            nozzle_diameter_m=nozzle_d_m,
+            melt_zone_length_m=melt_l_m,
+            chamber_diameter_m=chamber_d_m,
+            t_wall_c=t_target,
+            t_inlet_c=t_amb,
+            q_th_char_m3_s=q_th_char,
+            fil=fil,
+            nozzle_type=nozzle_type,
+        )
+        dp_pa = res["dp_total_pa"]
+        out.append(
+            {
+                "flow_mm3_s": round(float(q_mm3), 2),
+                "push_force_n": round(float(dp_pa * fil_area_m2), 2),
+                "pressure_drop_mpa": round(float(dp_pa * 1e-6), 2),
+                "melt_exit_temp_c": round(float(res["t_exit_c"]), 1),
+                "apparent_viscosity_pa_s": round(float(res["eta_orifice_pa_s"]), 1),
+            }
+        )
+    return out
 
 
 def arrhenius_viscosity_shift(temp_c: float, t_ref_c: float, ea_j_mol: float) -> float:
@@ -383,14 +795,23 @@ def simulate_hotend_thermal(
     spec: PrinterSpec,
     target_temp_c: float | None = None,
     filament_id: str = "pla",
+    nozzle_type: str | None = None,
 ) -> HotendThermalReport:
-    """Evaluate hotend FVM thermal profile, heat-creep margin, rheology melt flow, and cooling."""
+    """Evaluate hotend FVM thermal profile, heat-creep margin, Cross-WLF melt flow, and cooling."""
     he = spec.toolhead.hotend
     ext = spec.toolhead.extruder
     fil = get_filament(filament_id)
     block_mat = get_material(he.block_material)
     nozzle_mat = get_material(he.nozzle_material)
     hb_mat = get_material(he.heatbreak_material)
+
+    resolved_nozzle_type = (
+        nozzle_type
+        if nozzle_type is not None
+        else str(getattr(he, "nozzle_type", "standard") or "standard")
+    ).lower()
+    if resolved_nozzle_type not in ("standard", "cht"):
+        resolved_nozzle_type = "standard"
 
     t_target = target_temp_c if target_temp_c is not None else fil.print_temp_c
     t_amb = max(he.ambient_temp_c, spec.frame.chamber_temp_c)
@@ -480,8 +901,20 @@ def simulate_hotend_thermal(
     avail_melt_power_w = max(he.heater_power_w * 0.88 - steady_loss_w, 1.0)
     flow_power_m3_s = avail_melt_power_w / max(enthalpy_j_per_m3, 1.0)
 
+    nozzle_d_m = he.nozzle_diameter_mm * 1e-3
+    chamber_d_m = he.heatbreak_id_mm * 1e-3
+    melt_l_m = he.melt_zone_length_mm * 1e-3
+
+    q_th_char_m3_s = graetz_characteristic_flow_m3_s(
+        melt_zone_length_m=melt_l_m,
+        thermal_diffusivity_m2_s=fil.thermal_diffusivity_m2_s,
+        k_block_w_mk=block_mat.thermal_conductivity_w_mk,
+        k_nozzle_w_mk=nozzle_mat.thermal_conductivity_w_mk,
+        melt_transfer_factor=fil.melt_transfer_factor,
+        nozzle_type=resolved_nozzle_type,
+    )
     flow_melt_m3_s = graetz_melt_zone_flow_m3_s(
-        melt_zone_length_m=he.melt_zone_length_mm * 1e-3,
+        melt_zone_length_m=melt_l_m,
         thermal_diffusivity_m2_s=fil.thermal_diffusivity_m2_s,
         t_nozzle_c=t_target,
         t_inlet_c=t_amb,
@@ -489,17 +922,15 @@ def simulate_hotend_thermal(
         k_block_w_mk=block_mat.thermal_conductivity_w_mk,
         k_nozzle_w_mk=nozzle_mat.thermal_conductivity_w_mk,
         melt_transfer_factor=fil.melt_transfer_factor,
+        nozzle_type=resolved_nozzle_type,
     )
 
-    # Non-Newtonian Rabinowitsch power-law capillary flow with Arrhenius T-shift
+    # Isothermal high-shear Rabinowitsch power-law capillary ceiling with Arrhenius TTS shift
     fil_diameter_m = ext.filament_diameter_mm * 1e-3
     fil_area_m2 = math.pi * (0.5 * fil_diameter_m) ** 2
     max_pressure_pa = ext.max_push_force_n / fil_area_m2
     a_t = arrhenius_viscosity_shift(t_target, fil.t_ref_c, fil.arrhenius_ea_j_mol)
     k_melt_pa_sn = fil.power_law_k_pa_sn * (a_t ** fil.power_law_n)
-    nozzle_d_m = he.nozzle_diameter_mm * 1e-3
-    chamber_d_m = he.heatbreak_id_mm * 1e-3
-    melt_l_m = he.melt_zone_length_mm * 1e-3
 
     flow_pressure_m3_s = solve_pressure_limited_flow_m3_s(
         max_pressure_pa=max_pressure_pa,
@@ -510,27 +941,87 @@ def simulate_hotend_thermal(
         n=fil.power_law_n,
     )
 
+    # Coupled Graetz thermal-penetration + Cross-WLF + Osswald core-plug extrusion ceiling
+    flow_coupled_m3_s = solve_coupled_flow_limit_m3_s(
+        max_pressure_pa=max_pressure_pa,
+        nozzle_diameter_m=nozzle_d_m,
+        melt_zone_length_m=melt_l_m,
+        chamber_diameter_m=chamber_d_m,
+        t_wall_c=t_target,
+        t_inlet_c=t_amb,
+        q_th_char_m3_s=q_th_char_m3_s,
+        fil=fil,
+        nozzle_type=resolved_nozzle_type,
+    )
+
     flow_power = flow_power_m3_s * 1e9
     flow_melt = flow_melt_m3_s * 1e9
     flow_pressure = flow_pressure_m3_s * 1e9
+    flow_coupled = flow_coupled_m3_s * 1e9
 
-    limits = {
-        "heater_power": flow_power,
-        "melt_zone_conduction": flow_melt,
-        "extruder_pressure": flow_pressure,
-    }
-    limiting_factor = min(limits, key=limits.get)  # type: ignore[arg-type]
-    max_flow = limits[limiting_factor]
+    coupled_at_limit = coupled_melt_pressure_drop_pa(
+        q_m3_s=flow_coupled_m3_s,
+        nozzle_diameter_m=nozzle_d_m,
+        melt_zone_length_m=melt_l_m,
+        chamber_diameter_m=chamber_d_m,
+        t_wall_c=t_target,
+        t_inlet_c=t_amb,
+        q_th_char_m3_s=q_th_char_m3_s,
+        fil=fil,
+        nozzle_type=resolved_nozzle_type,
+    )
 
-    dp_at_max_pa = nozzle_total_pressure_drop_pa(
+    if flow_power <= flow_coupled:
+        max_flow = flow_power
+        limiting_factor = "heater_power"
+    else:
+        max_flow = flow_coupled
+        limiting_factor = (
+            "melt_zone_conduction"
+            if coupled_at_limit["plug_multiplier"] > 1.25
+            else "extruder_pressure"
+        )
+
+    coupled_at_max = coupled_melt_pressure_drop_pa(
         q_m3_s=max_flow * 1e-9,
         nozzle_diameter_m=nozzle_d_m,
         melt_zone_length_m=melt_l_m,
         chamber_diameter_m=chamber_d_m,
-        k_pa_sn=k_melt_pa_sn,
-        n=fil.power_law_n,
+        t_wall_c=t_target,
+        t_inlet_c=t_amb,
+        q_th_char_m3_s=q_th_char_m3_s,
+        fil=fil,
+        nozzle_type=resolved_nozzle_type,
     )
+    dp_at_max_pa = coupled_at_max["dp_total_pa"]
     req_push_force_n = dp_at_max_pa * fil_area_m2
+
+    # Sample coupled push-force curve F(Q) across operating envelope
+    q_span = max(max_flow, 2.0)
+    push_force_curve: list[dict[str, float]] = []
+    for frac in (0.15, 0.30, 0.50, 0.65, 0.80, 0.90, 1.00, 1.12):
+        q_pt = q_span * frac
+        pt = coupled_melt_pressure_drop_pa(
+            q_m3_s=q_pt * 1e-9,
+            nozzle_diameter_m=nozzle_d_m,
+            melt_zone_length_m=melt_l_m,
+            chamber_diameter_m=chamber_d_m,
+            t_wall_c=t_target,
+            t_inlet_c=t_amb,
+            q_th_char_m3_s=q_th_char_m3_s,
+            fil=fil,
+            nozzle_type=resolved_nozzle_type,
+        )
+        dp_pt = pt["dp_total_pa"]
+        push_force_curve.append(
+            {
+                "flow_mm3_s": round(q_pt, 2),
+                "push_force_n": round(dp_pt * fil_area_m2, 2),
+                "pressure_drop_mpa": round(dp_pt * 1e-6, 2),
+                "melt_exit_temp_c": round(pt["t_exit_c"], 1),
+                "apparent_viscosity_pa_s": round(pt["eta_orifice_pa_s"], 1),
+            }
+        )
 
     pressure_margin = flow_pressure / max(min(flow_power, flow_melt), 1.0)
     max_lin_speed = max_flow / (0.20 * 0.40)
@@ -574,8 +1065,14 @@ def simulate_hotend_thermal(
         melt_zone_flow_limit_mm3_s=flow_melt,
         heater_power_flow_limit_mm3_s=flow_power,
         extruder_pressure_flow_limit_mm3_s=flow_pressure,
+        coupled_flow_limit_mm3_s=flow_coupled,
         required_push_force_n=req_push_force_n,
         nozzle_pressure_drop_mpa=dp_at_max_pa * 1e-6,
+        melt_exit_temp_c=coupled_at_max["t_exit_c"],
+        apparent_viscosity_pa_s=coupled_at_max["eta_orifice_pa_s"],
+        wall_shear_rate_s1=coupled_at_max["gamma_w_orifice_s1"],
+        nozzle_type=resolved_nozzle_type,
+        push_force_curve=push_force_curve,
         chamber_cpap=chamber_rep.to_dict(),
     )
 

@@ -116,16 +116,7 @@ def _build_cartesian_bedslinger(
     _b._add_member(members, "x_gantry_l", "z_l", "toolhead", xp, xm, role="gantry")
     _b._add_member(members, "x_gantry_r", "toolhead", "z_r", xp, xm, role="gantry")
 
-    # Portal diagonal braces (corner_gussets only stiffens joints via _apply_corner_joint_compliance)
-    if spec.frame.bracing in ("rear_cross", "full_truss"):
-        _b._add_member(members, "brace_l_rear", "b_rl", "p_tl", bp, bm, role="brace", is_truss=True)
-        _b._add_member(members, "brace_r_rear", "b_rr", "p_tr", bp, bm, role="brace", is_truss=True)
-        _b._add_member(members, "brace_portal_x1", "p_bl", "p_tr", bp, bm, role="brace", is_truss=True)
-    if spec.frame.bracing == "full_truss":
-        _b._add_member(members, "brace_l_front", "b_fl", "p_tl", bp, bm, role="brace", is_truss=True)
-        _b._add_member(members, "brace_r_front", "b_fr", "p_tr", bp, bm, role="brace", is_truss=True)
-        _b._add_member(members, "brace_portal_x2", "p_br", "p_tl", bp, bm, role="brace", is_truss=True)
-
+    # Modeled & simulated frame bracing is attached below via add_modeled_frame_bracing()
     nmap = {n.id: n for n in nodes}
     rail_mat = get_material(spec.gantry.rail_material)
     x_rail_prof = get_profile(spec.gantry.x_rail_profile)
@@ -314,6 +305,19 @@ def _build_cartesian_bedslinger(
             )
         )
 
+    from printsim.geometry._builder_bracing import add_modeled_frame_bracing
+
+    frame_superelements: list[_b.AttachedSuperelement] = []
+    frame_brace_res = add_modeled_frame_bracing(
+        spec=spec,
+        nodes=nodes,
+        nmap=nmap,
+        members=members,
+        springs=fastener_springs,
+        superelements=frame_superelements,
+        allow_gantry=False,
+    )
+
     stage_stiffnesses = _b._attach_toolhead_cog_and_nozzle(
         nodes, members, spec, base_node_id="toolhead", fastener_springs=fastener_springs
     )
@@ -325,6 +329,13 @@ def _build_cartesian_bedslinger(
         nodes=nodes,
         members=members,
         fastener_springs=fastener_springs,
+        superelements=frame_superelements,
+        frame_brace_cad_mass_kg=float(frame_brace_res["cad_mass_kg"]),
+        frame_brace_flat_bar_mass_kg=float(frame_brace_res["flat_bar_mass_kg"]),
+        frame_brace_cost_usd=float(frame_brace_res["cost_usd"]),
+        frame_brace_cad_count=int(frame_brace_res["cad_count"]),
+        frame_brace_cad_asset_id=frame_brace_res["cad_asset_id"],
+        frame_brace_visuals=list(frame_brace_res["visuals"]),
         toolhead_node_id="toolhead",
         toolhead_cog_node_id="toolhead_cog",
         nozzle_node_id="nozzle_tip",

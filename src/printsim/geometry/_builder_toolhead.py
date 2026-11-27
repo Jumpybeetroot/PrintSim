@@ -51,7 +51,12 @@ def resolve_toolhead_hardware_accessories(spec: PrinterSpec) -> dict[str, Any]:
     he_pid = (spec.toolhead.hotend.preset_id or "").lower().strip()
     is_mbt = th_pid == "microwaved_bowden"
     is_tricorn = he_pid.startswith("tricorn_")
-    brace_compatible = is_mbt and he_pid == "tricorn_long"
+    mbt_brace_compatible = is_mbt and he_pid == "tricorn_long"
+    trinity_brace_compatible = (
+        (th_pid == "trinity_1_6_dav" and he_pid == "trianglelab_dragon_ace_volcano")
+        or (th_pid == "trinity_1_6_chube" and he_pid == "chube_compact")
+    )
+    brace_compatible = mbt_brace_compatible or trinity_brace_compatible
     shield_compatible = is_mbt and (is_tricorn or not he_pid)
 
     use_brace = bool(getattr(spec.toolhead, "use_hotend_bottom_brace", True))
@@ -86,7 +91,8 @@ def resolve_toolhead_hardware_accessories(spec: PrinterSpec) -> dict[str, Any]:
 
     # Microwaved dressed preset baseline (130 g) includes its Ti bottom brace (1.67 g) and optional Ti shield (1.27 g).
     # Only include the Ti bottom brace toggle delta when paired with the matching 66 mm Tricorn Long envelope.
-    if brace_compatible and not use_brace:
+    # (Trinity's unibody heatsink/shell brace is integral to the main printed chassis — 0 g mass delta.)
+    if mbt_brace_compatible and not use_brace:
         body_delta_g -= _MBT_TI_BRACE_MASS_G
         moment_delta_g_mm -= _MBT_TI_BRACE_MASS_G * (noz_mm + _MBT_TI_BRACE_REL_NOZ_MM)
 
@@ -645,19 +651,28 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             # - CNC/SLM metals (>= 25 GPa): drop the FDM infill penalty but retain the 0.58x
             #   multi-piece bolted clamshell seam compliance (not a welded one-piece monoblock).
             eff_body_mat = get_material(spec.toolhead.effective_body_material)
-            # Bolted multi-plate CNC cages baked as one fused solid (VzBot Vz-Printhead CNC) keep
-            # the same 0.58x bolted-seam compliance even though they were not FDM-printed.
+            # Monolithic printed unibody toolheads (e.g. WV-Design Trinity 1.6, is_unibody=True) have
+            # zero split-clamshell seam: apply ONLY the 0.55x FDM infill/layer-line anisotropy knockdown
+            # for printed polymers (< 25 GPa) and 1.0x for CNC/SLM metal upgrades.
+            # Bolted multi-piece FDM/CNC cages (StealthBurner, Vz-Printhead) retain 0.32x / 0.58x.
+            is_unibody_cad = bool(asset_th.manifest.get("is_unibody", False))
             if bool(asset_th.manifest.get("is_fdm_anisotropic", False)) or bool(
                 asset_th.manifest.get("multi_piece_bolted", False)
             ):
-                clamshell_mult = (
-                    0.32 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 0.58
-                )
-                asset_th.K_bb = asset_th.K_bb * clamshell_mult
-                asset_th.K_cb = asset_th.K_cb * clamshell_mult
-                asset_th.stiffness_scale_applied = (
-                    float(getattr(asset_th, "stiffness_scale_applied", 1.0)) * clamshell_mult
-                )
+                if is_unibody_cad:
+                    clamshell_mult = (
+                        0.55 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 1.0
+                    )
+                else:
+                    clamshell_mult = (
+                        0.32 if float(eff_body_mat.youngs_modulus_pa) < 25e9 else 0.58
+                    )
+                if abs(clamshell_mult - 1.0) > 1e-6:
+                    asset_th.K_bb = asset_th.K_bb * clamshell_mult
+                    asset_th.K_cb = asset_th.K_cb * clamshell_mult
+                    asset_th.stiffness_scale_applied = (
+                        float(getattr(asset_th, "stiffness_scale_applied", 1.0)) * clamshell_mult
+                    )
             dp_asm_th = p_junc - p_base
             # Only Hertzian MGN linear rail carriage ball-raceway compliance in series
             # (do NOT double-count generic Stage 1 backplate compliance on self-contained CAD toolheads).

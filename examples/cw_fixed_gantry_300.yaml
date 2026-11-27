@@ -17,7 +17,7 @@ frame:
   profile: extrusion_2020
   upright_profile: extrusion_4040
   material: aluminum_6063_t5
-  bracing: corner_gussets
+  bracing: cnc_corner_gussets
   corner_joint_type: corner_cube
   enclosed_panels: true
   top_panel: true

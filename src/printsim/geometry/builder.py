@@ -198,6 +198,12 @@ class AssemblyModel:
     front_brace_cost_usd: float = 0.0
     front_brace_active: bool = False
     front_brace_is_shell: bool = False
+    frame_brace_cad_mass_kg: float = 0.0
+    frame_brace_flat_bar_mass_kg: float = 0.0
+    frame_brace_cost_usd: float = 0.0
+    frame_brace_cad_count: int = 0
+    frame_brace_cad_asset_id: str | None = None
+    frame_brace_visuals: list[dict[str, Any]] = field(default_factory=list)
     extrusion_fill_mass_kg: float = 0.0
     x_rail_ei_y_boost_pct: float = 0.0
     x_rail_ei_z_boost_pct: float = 0.0
@@ -716,14 +722,23 @@ class AssemblyModel:
                 "mounting": self.spec.frame.panel_mounting if panels_active else "none",
                 "material_id": self.spec.frame.panel_material,
                 "material_name": pmat.name,
-                "side_material_id": self.spec.frame.side_panel_material or self.spec.frame.panel_material,
-                "side_material_name": (
-                    get_material(self.spec.frame.side_panel_material).name
-                    if self.spec.frame.side_panel_material
-                    else pmat.name
-                ),
+                "side_material_id": self.spec.frame.effective_panel_spec("left")[0],
+                "side_material_name": get_material(
+                    self.spec.frame.effective_panel_spec("left")[0]
+                ).name,
                 "thickness_mm": self.spec.frame.panel_thickness_mm,
                 "color_hex": pmat.color_hex,
+                "faces": {
+                    face: {
+                        "material_id": f_mat_id,
+                        "material_name": f_mat.name,
+                        "thickness_mm": f_thick_mm,
+                        "color_hex": f_mat.color_hex,
+                    }
+                    for face in ("rear", "left", "right", "top")
+                    for f_mat_id, f_thick_mm in (self.spec.frame.effective_panel_spec(face),)
+                    for f_mat in (get_material(f_mat_id),)
+                },
                 "bolted_to_gantry": self.spec.panels_bolted_to_gantry_effective,
                 "is_flying_gantry": self.spec.is_flying_gantry,
                 "effective_shear_gt_kn_mm": (
@@ -904,7 +919,11 @@ class AssemblyModel:
                 "cad_includes_backplate": bool(
                     any(se.category == "toolheads" for se in self.superelements)
                 ),
-                "cad_superelements_active": [se.to_summary_dict() for se in self.superelements],
+                "cad_superelements_active": [
+                    se.to_summary_dict()
+                    for se in self.superelements
+                    if se.category != "frame_braces"
+                ],
                 "hotend_visual_glb_url": (
                     f"/api/assets/hardware/hotends/{hid_vis}/visual.glb"
                     if (hid_vis and _has_cad_visual("hotends", hid_vis))
@@ -919,6 +938,20 @@ class AssemblyModel:
                 # e.g. the printed-geometry VzBot Vz-Printhead on a top-mounted MGN9H
                 "toolhead_visual_ports_mm": _cad_visual_ports_mm("toolheads", tid_vis),
             },
+            "frame_bracing": {
+                "type": self.spec.frame.bracing,
+                "active": self.spec.frame.bracing != "none",
+                "cad_count": int(self.frame_brace_cad_count),
+                "cad_asset_id": self.frame_brace_cad_asset_id,
+                "cad_mass_kg": round(float(self.frame_brace_cad_mass_kg), 4),
+                "flat_bar_mass_kg": round(float(self.frame_brace_flat_bar_mass_kg), 4),
+                "total_mass_kg": round(
+                    float(self.frame_brace_cad_mass_kg + self.frame_brace_flat_bar_mass_kg), 4
+                ),
+                "cost_usd": round(float(self.frame_brace_cost_usd), 2),
+                "visuals": self.frame_brace_visuals,
+            },
+            "x_beam_visual": _cad_xbeam_visual_dict(self.spec.gantry.x_beam_profile),
             "nodes": [
                 {
                     "id": n.id,
@@ -1111,11 +1144,11 @@ def _apply_corner_joint_compliance(
         e_fill = float(fill_cfg["youngs_modulus_pa"])
         # Bonded cast mineral/epoxy core backs up hollow T-slot corner flanges against bolt-bearing ovalization
         joint_fill_boost = 1.0 + 0.45 * min(1.0, e_fill / 25.0e9)
-    kr_in = float(cj["k_r_inplane_nm_rad"]) * joint_fill_boost
-    kr_tor = float(cj["k_r_torsion_nm_rad"]) * joint_fill_boost
-    if spec.frame.bracing == "corner_gussets":
-        kr_in *= 1.50
-        kr_tor *= 1.40
+    from printsim.geometry._builder_bracing import compute_cad_corner_brace_stiffness
+
+    kr_cad_in, kr_cad_tor = compute_cad_corner_brace_stiffness(spec)
+    kr_in = float(cj["k_r_inplane_nm_rad"]) * joint_fill_boost + kr_cad_in
+    kr_tor = float(cj["k_r_torsion_nm_rad"]) * joint_fill_boost + kr_cad_tor
     backbone_lower_col_boost = (
         spec.architecture == "corexy"
         and bool(spec.frame.trident_backbone)
@@ -1176,23 +1209,31 @@ def _apply_extrusion_filling(model: AssemblyModel) -> None:
     filled_count = 0
 
     if fill_cfg["is_active"]:
+        from printsim.fea.components import extrusion_filling_composite_properties
+
         rho_fill = float(fill_cfg["density_kg_m3"])
         e_fill = float(fill_cfg["youngs_modulus_pa"])
         is_bonded = bool(fill_cfg["bonded"])
-        g_fill = e_fill / (2.0 * (1.0 + 0.25))  # mineral/grout Poisson ~0.25
+        fill_id = str(model.spec.frame.extrusion_filling)
 
         for member in model.members:
             if member.profile.shape != "extrusion" or member.role not in ("frame", "rail", "tower"):
                 continue
 
             raw_prof = PROFILE_CATALOG.get(member.profile.id, member.profile)
-            w = raw_prof.width_m
-            h = raw_prof.height_m
+            comp = extrusion_filling_composite_properties(
+                profile_id=raw_prof.id,
+                fill_id=fill_id,
+                base_e_pa=member.material.youngs_modulus_pa,
+                base_g_pa=member.material.effective_shear_modulus_pa,
+                base_rho_kg_m3=member.material.density_kg_m3,
+                density_override_kg_m3=rho_fill,
+                modulus_override_pa=e_fill,
+                bonded_override=is_bonded,
+                damping_override=float(fill_cfg["damping_boost"]),
+            )
             a_ext = raw_prof.area_m2
-            a_void = max(w * h - a_ext, 0.0)
-            a_cav = 0.58 * a_void
-            i_cav_y = 0.52 * max((w * (h**3)) / 12.0 - raw_prof.iy_m4, 0.0)
-            i_cav_z = 0.52 * max((h * (w**3)) / 12.0 - raw_prof.iz_m4, 0.0)
+            a_cav = comp["a_cav_m2"]
 
             length = member.length_m(nmap)
             filled_count += 1
@@ -1206,13 +1247,11 @@ def _apply_extrusion_filling(model: AssemblyModel) -> None:
                 )
 
             if is_bonded and e_fill > 0.0:
-                n_e = e_fill / max(member.material.youngs_modulus_pa, 1e6)
-                n_g = g_fill / max(member.material.effective_shear_modulus_pa, 1e6)
                 member.profile = member.profile.model_copy(
                     update={
-                        "iy_m4": member.profile.iy_m4 + n_e * i_cav_y,
-                        "iz_m4": member.profile.iz_m4 + n_e * i_cav_z,
-                        "j_m4": member.profile.j_m4 + n_g * 0.7 * (i_cav_y + i_cav_z),
+                        "iy_m4": member.profile.iy_m4 + comp["delta_iy_m4"],
+                        "iz_m4": member.profile.iz_m4 + comp["delta_iz_m4"],
+                        "j_m4": member.profile.j_m4 + comp["delta_j_m4"],
                     }
                 )
 
@@ -1539,6 +1578,23 @@ def _cad_visual_ports_mm(category: str, asset_id: str | None) -> dict[str, list[
     if not (isinstance(p0, list) and isinstance(p1, list) and len(p0) == 3 and len(p1) == 3):
         return None
     return {"port0_mm": [float(v) for v in p0], "port1_mm": [float(v) for v in p1]}
+
+
+def _cad_xbeam_visual_dict(profile_id: str | None) -> dict[str, Any] | None:
+    """Return baked visual GLB metadata for a CAD-backed milled X-beam profile, else ``None``."""
+    if not profile_id or not _has_cad_visual("x_beams", profile_id):
+        return None
+    try:
+        from printsim.cad_assets.registry import get_hardware_asset_manifest
+    except ImportError:
+        return None
+    man = get_hardware_asset_manifest("x_beams", profile_id)
+    length_mm = float(man.get("length_mm", 380.0)) if man else 380.0
+    return {
+        "asset_id": profile_id,
+        "visual_glb_url": f"/api/assets/hardware/x_beams/{profile_id}/visual.glb",
+        "length_mm": length_mm,
+    }
 
 
 def corexy_frame_centerlines_m(spec: PrinterSpec) -> tuple[float, float, float]:
@@ -2158,39 +2214,8 @@ def _build_corexy(
         _add_member(members, "x_gantry_l", "y_car_l", "toolhead", xp, xm, role="gantry")
         _add_member(members, "x_gantry_r", "toolhead", "y_car_r", xp, xm, role="gantry")
 
-    # Bracing strategies (corner_gussets stiffens corner joints via _apply_corner_joint_compliance,
-    # reserving full-face diagonal rods for explicit truss/cross modes)
-    bracing = spec.frame.bracing
-    brace_g = "col_g_" if is_flying else "g_"
-    if bracing == "top_cross":
-        _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_top_2", "t_fr", "t_rl", bp, bm, role="brace", is_truss=True)
-    elif bracing == "rear_cross":
-        _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
-    elif bracing == "side_cross":
-        _add_member(members, "brace_left_1", "b_fl", f"{brace_g}rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_2", "b_rl", f"{brace_g}fl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_1", "b_fr", f"{brace_g}rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_2", "b_rr", f"{brace_g}fr", bp, bm, role="brace", is_truss=True)
-    elif bracing == "rear_and_sides":
-        _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_1", "b_fl", f"{brace_g}rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_2", "b_rl", f"{brace_g}fl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_1", "b_fr", f"{brace_g}rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_2", "b_rr", f"{brace_g}fr", bp, bm, role="brace", is_truss=True)
-    elif bracing == "full_truss":
-        _add_member(members, "brace_rear_1", "b_rl", "t_rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_rear_2", "b_rr", "t_rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_1", "b_fl", f"{brace_g}rl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_left_2", "b_rl", f"{brace_g}fl", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_1", "b_fr", f"{brace_g}rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_right_2", "b_rr", f"{brace_g}fr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_top_1", "t_fl", "t_rr", bp, bm, role="brace", is_truss=True)
-        _add_member(members, "brace_top_2", "t_fr", "t_rl", bp, bm, role="brace", is_truss=True)
-
+    # Modeled & simulated frame bracing (3D CAD corner superelements + bolted flat-bar X-braces)
+    # is attached after rails, panels, and open-center top/front braces via add_modeled_frame_bracing().
     nmap = {n.id: n for n in nodes}
 
 
@@ -2296,6 +2321,18 @@ def _build_corexy(
     shell_elements.extend(brace_res["shells"])
     fastener_springs.extend(brace_res["springs"])
 
+    from printsim.geometry._builder_bracing import add_modeled_frame_bracing
+
+    frame_brace_res = add_modeled_frame_bracing(
+        spec=spec,
+        nodes=nodes,
+        nmap=nmap,
+        members=members,
+        springs=fastener_springs,
+        superelements=gantry_superelements,
+        allow_gantry=not is_flying,
+    )
+
     # Calculate moving masses (strip composite rail, backer & insert mass from gantry beam before adding x_rail_mass)
     x_beam_mass = sum(
         max(
@@ -2369,6 +2406,12 @@ def _build_corexy(
         front_brace_cost_usd=float(brace_res["front_brace_cost_usd"]),
         front_brace_active=bool(brace_res["front_brace_active"]),
         front_brace_is_shell=bool(brace_res["front_brace_is_shell"]),
+        frame_brace_cad_mass_kg=float(frame_brace_res["cad_mass_kg"]),
+        frame_brace_flat_bar_mass_kg=float(frame_brace_res["flat_bar_mass_kg"]),
+        frame_brace_cost_usd=float(frame_brace_res["cost_usd"]),
+        frame_brace_cad_count=int(frame_brace_res["cad_count"]),
+        frame_brace_cad_asset_id=frame_brace_res["cad_asset_id"],
+        frame_brace_visuals=list(frame_brace_res["visuals"]),
         x_rail_ei_y_boost_pct=x_rail_ei_y_boost_pct,
         x_rail_ei_z_boost_pct=x_rail_ei_z_boost_pct,
         x_rail_gj_boost_pct=x_rail_gj_boost_pct,
@@ -2396,7 +2439,7 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     for m in model.members:
         mk = m.mass_kg(nmap)
         frame_mass += mk
-        if m.id.startswith(("brace_top_open_", "brace_front_open_")):
+        if m.id.startswith(("brace_top_open_", "brace_front_open_", "brace_flat_")):
             continue
         base_mk = max(
             mk - m.fill_mass_kg - m.rail_mass_kg - m.backer_mass_kg - m.insert_mass_kg, 0.0
@@ -2440,6 +2483,8 @@ def _finalize_mass_and_cost(model: AssemblyModel) -> None:
     model.total_mass_kg = (
         frame_mass + lumped_mass + shell_panel_mass + max(bed_mass - bed_node_mass, 0.0)
     )
+    if model.frame_brace_cost_usd > 0.0:
+        cost += float(model.frame_brace_cost_usd)
     if model.panel_mass_kg > 0.0:
         pmat = get_material(model.spec.frame.panel_material)
         cost += model.panel_mass_kg * pmat.cost_per_kg_usd

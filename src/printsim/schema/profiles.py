@@ -228,6 +228,47 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         iz_m4=0.64e-8,
         j_m4=0.68e-8,  # closed box torsional stiffness > open T-slot
     ),
+    # 3D Tet4 continuum FEA-calibrated CNC-milled lightweight aluminum X-beams (exact CAD volume + pocket shear-lag):
+    # PrintSim parametric build123d 20x20x380mm semi-monocoque Warren-truss (solid 2mm MGN12H front flange + 3-face pockets,
+    # 90.46 g @ 380 mm in Al 6061-T6 = 238.0 g/m; 141,182-tet cantilever bending/torsion FEA).
+    "cnc_al_monocoque_20x20": ProfileSpec(
+        id="cnc_al_monocoque_20x20",
+        name="PrintSim CNC Monocoque Truss 20x20 Al X-Beam (238 g/m)",
+        shape="tube",
+        width_m=0.020,
+        height_m=0.020,
+        area_m2=0.8816e-4,
+        iy_m4=0.344e-8,
+        iz_m4=0.409e-8,
+        j_m4=0.188e-8,
+        wall_thickness_m=0.002,
+    ),
+    # GrabCAD Emil Wallberg Voron 2.4 Lightweight X-Axis (Voron_XAxis_LW_300.STEP, 19.6x19.6x380mm,
+    # 4-face skeletonized truss; 64.75 g @ 380 mm in Al 6061-T6 = 170.4 g/m; 95,649-tet FEA).
+    "cnc_al_truss_voron24_lw": ProfileSpec(
+        id="cnc_al_truss_voron24_lw",
+        name="Voron 2.4 LW Milled Truss 20x20 Al X-Beam (170 g/m)",
+        shape="tube",
+        width_m=0.0196,
+        height_m=0.0196,
+        area_m2=0.6311e-4,
+        iy_m4=0.179e-8,
+        iz_m4=0.187e-8,
+        j_m4=0.150e-8,
+    ),
+    # GrabCAD Nicotina52 FYSETC Hollow CNC X-Beam Voron 0 (15.0x15.13x200mm Warren-truss hollow beam;
+    # 17.43 g @ 200 mm in Al 6061-T6 = 87.1 g/m; 93,440-tet FEA).
+    "cnc_al_fysetc_v0_15x15": ProfileSpec(
+        id="cnc_al_fysetc_v0_15x15",
+        name="FYSETC Hollow CNC 15x15 Al X-Beam (87 g/m, Voron 0)",
+        shape="tube",
+        width_m=0.0150,
+        height_m=0.01513,
+        area_m2=0.3228e-4,
+        iy_m4=0.072e-8,
+        iz_m4=0.073e-8,
+        j_m4=0.037e-8,
+    ),
     # Roll-wrapped / molded Carbon Fiber X-gantry square & rectangular tubes with realistic
     # mandrel corner radii (R1.5-R2.5 mm; fibers cannot wrap 0 mm sharp corners without voids).
     "cf_tube_20x20x1": _hollow_square_tube(
@@ -251,6 +292,15 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         "Carbonara 20x20mm CF X-Beam (196 g/m)",
         20.0,
         1.8,
+        corner_radius_mm=2.5,
+    ),
+    # Theoretical thick-walled Carbonara (PrintSim wall-sweep optimum: 2.5 mm wall, R2.5 mm corners,
+    # 15.0 mm inner bore clearing two-wall clamped PET-CF inserts + M5 standoffs; +26% I, +23% J, ~0 Hz Y-shaper penalty)
+    "cf_tube_20x20_carbonara_2_5": _hollow_square_tube(
+        "cf_tube_20x20_carbonara_2_5",
+        "Carbonara 20x20x2.5mm CF X-Beam (Theoretical, 264 g/m)",
+        20.0,
+        2.5,
         corner_radius_mm=2.5,
     ),
     "cf_tube_20x20x2": _hollow_square_tube(
@@ -279,11 +329,17 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "ti_tube_20x20x1_2": _hollow_square_tube(
         "ti_tube_20x20x1_2", "Titanium Square Tube 20x20x1.2mm", 20.0, 1.2
     ),
+    "ti_tube_20x20x2": _hollow_square_tube(
+        "ti_tube_20x20x2", "Titanium Square Tube 20x20x2.0mm", 20.0, 2.0
+    ),
     "al_tube_12x12x1": _hollow_square_tube(
         "al_tube_12x12x1", "Aluminum Square Tube 12x12x1.0mm (Monolith Zero)", 12.0, 1.0
     ),
     "al_tube_20x20x2": _hollow_square_tube(
         "al_tube_20x20x2", "Aluminum Square Tube 20x20x2.0mm", 20.0, 2.0
+    ),
+    "al_tube_20x20x3": _hollow_square_tube(
+        "al_tube_20x20x3", "Aluminum Square Tube 20x20x3.0mm", 20.0, 3.0
     ),
     "al_tube_30x30x3": _hollow_square_tube(
         "al_tube_30x30x3", "Aluminum Square Tube 30x30x3.0mm", 30.0, 3.0

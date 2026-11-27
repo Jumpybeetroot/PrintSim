@@ -287,13 +287,13 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
                 )
             return "Main limit: outer frame column bending/torsional stiffness and corner-joint rigidity."
         if spec.architecture == "cartesian_bedslinger":
-            if spec.frame.bracing != "full_truss":
+            if spec.frame.bracing != "gussets_and_flat_bars":
                 return "Main limit: portal frame fore-aft/lateral bending stiffness and diagonal racking rigidity."
             return "Main limit: portal frame column bending/torsional stiffness and base-joint rigidity."
         return "Main limit: vertical tower bending/torsional stiffness and perimeter triangulation rigidity."
 
     if group_id == "z_gantry_uprights":
-        if spec.frame.bracing != "full_truss":
+        if spec.frame.bracing != "gussets_and_flat_bars":
             return "Main limit: Z-upright portal bending stiffness and fore-aft diagonal racking rigidity."
         return "Main limit: Z-upright extrusion bending/torsional stiffness and corner-joint rigidity."
 
@@ -301,7 +301,7 @@ def _stiffen_hint(group_id: str, role: str, spec: PrinterSpec | None = None) -> 
         return "Main limit: flying-gantry Z-belt/carriage joint compliance coupling the gantry to the 4 corner columns."
 
     if group_id == "delta_towers":
-        if spec.frame.bracing != "full_truss":
+        if spec.frame.bracing != "gussets_and_flat_bars":
             return "Main limit: delta tower bending stiffness and perimeter triangulation rigidity."
         return "Main limit: delta tower extrusion bending and torsional stiffness."
 

@@ -13,6 +13,7 @@ from .diagnostics import (
 from .evaluator import ScoreBreakdown, SimulationReport, evaluate_printer
 from .optimizer import OptimizationCandidate, OptimizationResult, optimize_design
 from .pareto import ParetoPoint, ParetoResult, is_pymoo_available, optimize_pareto_front
+from .signoff import run_signoff_verification
 
 _LAZY_SWEEP_EXPORTS = frozenset({"SweepCaseResult", "SweepReport", "run_sweep"})
 
@@ -44,5 +45,6 @@ __all__ = [
     "ParetoPoint",
     "ParetoResult",
     "optimize_pareto_front",
+    "run_signoff_verification",
     "run_sweep",
 ]

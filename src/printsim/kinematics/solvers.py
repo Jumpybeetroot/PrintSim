@@ -431,6 +431,156 @@ def compute_bracket_stiffness_n_per_m(assembly: AssemblyModel) -> float:
     return float(resolve_gantry_bracket(assembly.spec)["stiffness_n_m"])
 
 
+def compute_per_idler_stiffness_n_m(
+    belt: BeltSpec,
+    shaft_architecture: str,
+    bracket_e_pa: float,
+    z_overhang_extra_m: float = 0.0,
+    wrap_angle_deg: float = 90.0,
+    thermal_clearance_um: float = 0.0,
+    axial_preload_active: bool = False,
+) -> dict[str, float]:
+    """Compute exact per-idler Euler-Bernoulli shaft/bolt bending + root + Harris Hertzian bearing stiffness.
+
+    Distinguishes:
+      - ``single_shear_bolt`` / ``motor_single_shear``: cantilevered shaft with explicit stacked
+        upper/lower belt-plane overhang ``z_overhang_extra_m`` (``k_beam = 3*EI / L_cant^3``).
+      - ``double_shear_bolt`` / ``motor_double_shear``: simply-supported span ``L = a + b`` with
+        eccentric load station ``(a, b)`` (``k_beam = 3*EI*L / (a^2 * b^2)``) and M5 bolt
+        effective bending diameter ``0.94 * d_nom`` + 15% thread/shank clearance knockdown.
+      - ``live_shaft`` (Monolith press-fit 5 mm ground dowel pin): full ground diameter ``d_nom``,
+        short single-plane straddle span ``w_belt + 5.5 mm`` between housing-seated F695/695
+        bearings, partial rotational end restraint (``c_end = 0.35``), and press-fit housing seat.
+    """
+    d_nom = max(float(belt.idler_shaft_diameter_mm), 2.0) * 1e-3
+    w_m = float(belt.hardware_width_mm) * 1e-3
+    e_steel = 205.0e9
+    e_bkt = max(float(bracket_e_pa), 1.0e8)
+
+    d_eff = (
+        0.94 * d_nom
+        if shaft_architecture in ("single_shear_bolt", "double_shear_bolt")
+        else d_nom
+    )
+    i_shaft = math.pi * (d_eff**4) / 64.0
+    ei_shaft = e_steel * i_shaft
+
+    if shaft_architecture == "live_shaft":
+        l_span = w_m + 0.0055
+        a = 0.5 * l_span
+        b = l_span - a
+        d_pin = (a**2 * b**2) / max(3.0 * ei_shaft * l_span, 1e-18)
+        d_fix = (a**3 * b**3) / max(3.0 * ei_shaft * (l_span**3), 1e-18)
+        k_beam = 1.0 / max(0.65 * d_pin + 0.35 * d_fix, 1e-18)
+        k_root = 18.0 * e_bkt * d_nom
+    elif shaft_architecture in ("double_shear_bolt", "motor_double_shear"):
+        l_span = 0.008 + 0.7 * w_m + abs(float(z_overhang_extra_m))
+        a = min(
+            max(0.5 * l_span + 0.5 * float(z_overhang_extra_m), 0.25 * l_span),
+            0.75 * l_span,
+        )
+        b = l_span - a
+        k_beam = 3.0 * ei_shaft * l_span / max((a**2) * (b**2), 1e-18)
+        k_root = 12.0 * e_bkt * d_nom
+        if shaft_architecture == "double_shear_bolt":
+            k_beam *= 0.85
+    else:
+        l_cant = 0.009 + 0.5 * w_m + max(float(z_overhang_extra_m), 0.0)
+        k_beam = 3.0 * ei_shaft / max(l_cant**3, 1e-18)
+        k_root = 1.2 * e_bkt * d_nom
+        if shaft_architecture == "single_shear_bolt":
+            k_beam *= 0.88
+
+    k_shaft = (k_beam * k_root) / max(k_beam + k_root, 1e-9)
+
+    wrap_rad = math.radians(max(float(wrap_angle_deg), 10.0))
+    f_pulley = max(2.0 * float(belt.pretension_n) * math.sin(0.5 * wrap_rad), 0.5)
+    shaft_deflection_um = (f_pulley / max(k_shaft, 1.0)) * 1e6
+
+    # Paired F695 (5 mm) / 626 (6 mm) deep-groove ball bearing radial stiffness (Harris Hertzian).
+    # Axial disc-spring preload closes internal radial play (full 360-deg ball load zone, ~1.8x
+    # Hertzian radial stiffness); double-shear motor shafts ride on 3 bearings (nose + 2 internal).
+    z_balls = 8.0
+    d_ball_mm = 2.0 if belt.idler_shaft_diameter_mm <= 5.2 else 2.38
+    f_brg = max(0.5 * f_pulley, 1.0)
+    q_max = 5.0 * f_brg / z_balls
+    delta_r_m = 0.00044e-3 * (q_max ** (2.0 / 3.0)) / (d_ball_mm ** (1.0 / 3.0))
+    n_brg_eff = 3.0 if shaft_architecture == "motor_double_shear" else 2.0
+    preload_mult = 1.8 if (axial_preload_active and shaft_architecture == "live_shaft") else 1.0
+    k_bearing = n_brg_eff * preload_mult * (1.5 * f_brg / max(delta_r_m, 1e-9))
+    cte_play_um = max(float(thermal_clearance_um), 0.0)
+    if cte_play_um > 0.0:
+        k_bearing /= 1.0 + 0.08 * cte_play_um
+
+    k_total = (k_shaft * k_bearing) / max(k_shaft + k_bearing, 1e-9)
+    return {
+        "k_shaft_n_m": k_shaft,
+        "k_bearing_n_m": k_bearing,
+        "k_idler_n_m": k_total,
+        "shaft_deflection_um": shaft_deflection_um,
+        "f_pulley_n": f_pulley,
+    }
+
+
+def compute_branch_idler_stiffness_n_m(
+    branch: object,
+    pulleys: dict[str, object],
+    belt: BeltSpec,
+    e_bkt_motor_pa: float,
+    e_bkt_chamber_pa: float,
+    thermal_clearance_um: float = 0.0,
+    include_drive_pulley: bool = True,
+    axial_preload_active: bool = False,
+) -> dict[str, float]:
+    """Combine per-idler and drive-pulley shaft compliances along a 3D CoreXY belt branch.
+
+    Projects each intermediate frictionless idler onto the belt line via Castigliano virtual work
+    ``alpha_i^2 / k_i`` where ``alpha_i = 2 * sin(wrap_i / 2)`` (and ``1.0 / k_drive`` for the
+    terminal drive pulley carrying incremental branch tension ``dT``).
+    """
+    c_total = 0.0
+    max_defl_um = 0.0
+
+    for nid in branch.idler_node_ids:  # type: ignore[attr-defined]
+        node = pulleys[nid]
+        wrap_deg = float(node.wrap_angle_deg)  # type: ignore[attr-defined]
+        if wrap_deg < 5.0:
+            continue
+        is_motor_corner = str(node.station) in ("rl", "rr")  # type: ignore[attr-defined]
+        e_bkt = e_bkt_motor_pa if is_motor_corner else e_bkt_chamber_pa
+        res = compute_per_idler_stiffness_n_m(
+            belt=belt,
+            shaft_architecture=str(node.shaft_architecture),  # type: ignore[attr-defined]
+            bracket_e_pa=e_bkt,
+            z_overhang_extra_m=float(node.z_overhang_extra_m),  # type: ignore[attr-defined]
+            wrap_angle_deg=wrap_deg,
+            thermal_clearance_um=thermal_clearance_um,
+            axial_preload_active=axial_preload_active,
+        )
+        alpha = 2.0 * math.sin(0.5 * math.radians(wrap_deg))
+        c_total += (alpha * alpha) / max(res["k_idler_n_m"], 1.0)
+        max_defl_um = max(max_defl_um, res["shaft_deflection_um"])
+
+    if include_drive_pulley:
+        drv = pulleys[branch.drive_node_id]  # type: ignore[attr-defined]
+        res_drv = compute_per_idler_stiffness_n_m(
+            belt=belt,
+            shaft_architecture=str(drv.shaft_architecture),  # type: ignore[attr-defined]
+            bracket_e_pa=e_bkt_motor_pa,
+            z_overhang_extra_m=float(drv.z_overhang_extra_m),  # type: ignore[attr-defined]
+            wrap_angle_deg=float(drv.wrap_angle_deg),  # type: ignore[attr-defined]
+            thermal_clearance_um=thermal_clearance_um,
+            axial_preload_active=axial_preload_active,
+        )
+        c_total += 1.0 / max(res_drv["k_idler_n_m"], 1.0)
+        max_defl_um = max(max_defl_um, res_drv["shaft_deflection_um"])
+
+    return {
+        "k_branch_idler_n_m": 1.0 / max(c_total, 1e-18),
+        "max_shaft_deflection_um": max_defl_um,
+    }
+
+
 def compute_drive_stiffness_details_n_per_m(
     assembly: AssemblyModel,
     axis: str = "X",
@@ -438,13 +588,14 @@ def compute_drive_stiffness_details_n_per_m(
     v_rel: float | None = None,
     belt_override: BeltSpec | None = None,
 ) -> dict[str, object]:
-    """Compute detailed series drive-train stiffness components using exact pulley-to-pulley free spans.
+    """Compute detailed series drive-train stiffness components using exact 3D pulley-to-pulley free spans.
 
-    ``belt_override`` evaluates the same drive with a different belt state (e.g. the A or B
-    loop of a CoreXY with mismatched tension); by default the belt runs at its operating
-    pretension (installed tension + chamber CTE-mismatch rise). ``u_rel`` / ``v_rel`` default to
-    the toolhead position the assembly was built at, so belt branch lengths follow the same
-    position as the structural model.
+    For CoreXY architectures, builds the explicit 3D pulley-coordinate belt routing graph
+    (``build_corexy_belt_routing_graph_3d``) with stacked upper/lower belt planes, CAD corner
+    stations when present, and per-idler Euler-Bernoulli bolt cantilever vs live-shaft
+    compliance. ``belt_override`` evaluates the same drive with a different belt state (e.g.
+    the A or B loop of a CoreXY with mismatched tension); ``u_rel`` / ``v_rel`` default to
+    the toolhead position the assembly was built at.
     """
     from printsim.fea.components import (
         operating_belt,
@@ -463,7 +614,7 @@ def compute_drive_stiffness_details_n_per_m(
     d = spec.frame.depth_mm * 1e-3
     bx, by, _ = [v * 1e-3 for v in kin.build_volume_mm]
     b_ext = get_profile(spec.frame.profile).width_m
-    # Exact inner pulley-to-pulley free-span envelope (excludes frame extrusion width + 25 mm corner mount inset per side)
+    # Inner pulley-to-pulley envelope used by non-CoreXY architectures (Cartesian bedslinger)
     wp = max(w - 2.0 * (b_ext + 0.025), bx + 0.04)
     dp = max(d - 2.0 * (b_ext + 0.025), by + 0.04)
     rel_pos = getattr(assembly, "toolhead_rel_pos", (0.5, 0.5, 0.5))
@@ -473,6 +624,7 @@ def compute_drive_stiffness_details_n_per_m(
     motor_mount_temp_c, _ = compute_stepper_mount_temp_c(spec)
     bkt_mat = get_material(spec.gantry.bracket_material)
     e_bkt_eff = bkt_mat.effective_modulus_pa(motor_mount_temp_c)
+    e_bkt_ch = bkt_mat.effective_modulus_pa(t_ch)
 
     belt_cfg = resolve_belt(spec)
     belt_ea_n = float(belt_cfg["stiffness_ea_n"])
@@ -480,9 +632,14 @@ def compute_drive_stiffness_details_n_per_m(
     belt_mu_kg_m = float(belt_cfg["linear_mass_kg_m"])
 
     routing_cfg = resolve_belt_routing(spec)
-    span_factor = float(routing_cfg["span_factor"])
-    idler_factor = float(routing_cfg["idler_stiffness_factor"])
-    idler_stiffness_mult = idler_factor if spec.architecture == "corexy" else 1.0
+    # Only apply user-explicit model_overrides.belt_routing ratios; baseline routing physics
+    # come directly from the 3D pulley-coordinate belt graph (zero scalar 0.86x/1.45x fudge).
+    ov_span_scale = float(routing_cfg["span_factor"]) / max(
+        float(routing_cfg["baseline_span_factor"]), 1e-6
+    )
+    ov_idler_scale = float(routing_cfg["idler_stiffness_factor"]) / max(
+        float(routing_cfg["baseline_idler_stiffness_factor"]), 1e-6
+    )
     bc_cfg = resolve_bearing_clearance(spec)
     cte_clearance_um, _ = compute_bearing_cte_clearance_um(spec, t_ch)
     idler_info = idler_shaft_and_bearing_stiffness(
@@ -492,100 +649,101 @@ def compute_drive_stiffness_details_n_per_m(
         radial_play_um_override=float(bc_cfg["radial_play_um"]),
         thermal_clearance_um=cte_clearance_um,
     )
-    k_idler_single = float(idler_info["k_idler_n_m"]) * idler_stiffness_mult
-    if idler_stiffness_mult != 1.0:
-        idler_info = dict(idler_info)
-        idler_info["idler_shaft_deflection_um"] = (
-            idler_info["idler_shaft_deflection_um"] / idler_stiffness_mult
-        )
+    k_idler_single = float(idler_info["k_idler_n_m"])
+
+    belt_graph_3d = None
+    idler_arch_summary = "live_shaft" if spec.gantry.belt_routing == "monolith_short" else (
+        "double_shear_bolt" if spec.gantry.double_shear_pulleys else "single_shear_bolt"
+    )
 
     if spec.architecture == "corexy":
+        from printsim.geometry._builder_gantry import build_corexy_belt_routing_graph_3d
+
+        belt_graph_3d = build_corexy_belt_routing_graph_3d(
+            assembly,
+            u_rel=u,
+            v_rel=v,
+        )
+        br_a1 = belt_graph_3d.branches["A1"]
+        br_a2 = belt_graph_3d.branches["A2"]
+        br_b1 = belt_graph_3d.branches["B1"]
+        br_b2 = belt_graph_3d.branches["B2"]
+
+        min_span = 0.12 if spec.gantry.drive_mode == "awd" else 0.20
+        l_a1 = max(br_a1.total_length_m * ov_span_scale, min_span)
+        l_a2 = max(br_a2.total_length_m * ov_span_scale, min_span)
+        l_b1 = max(br_b1.total_length_m * ov_span_scale, min_span)
+        l_b2 = max(br_b2.total_length_m * ov_span_scale, min_span)
+
+        ea_a1 = belt_effective_ea_n(
+            belt, l_a1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
+            n_pulley_tangents=br_a1.n_pulley_tangents, chamber_temp_c=t_ch,
+        )
+        ea_a2 = belt_effective_ea_n(
+            belt, l_a2, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
+            n_pulley_tangents=br_a2.n_pulley_tangents, chamber_temp_c=t_ch,
+        )
+        ea_b1 = belt_effective_ea_n(
+            belt, l_b1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
+            n_pulley_tangents=br_b1.n_pulley_tangents, chamber_temp_c=t_ch,
+        )
+        ea_b2 = belt_effective_ea_n(
+            belt, l_b2, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
+            n_pulley_tangents=br_b2.n_pulley_tangents, chamber_temp_c=t_ch,
+        )
+        kc_a1, kc_a2 = ea_a1 / l_a1, ea_a2 / l_a2
+        kc_b1, kc_b2 = ea_b1 / l_b1, ea_b2 / l_b2
+        k_belt_cord = (kc_a1 + kc_a2) + (kc_b1 + kc_b2)
+        inv_len_sum = 1.0 / l_a1 + 1.0 / l_a2 + 1.0 / l_b1 + 1.0 / l_b2
+        ea_eff = 0.25 * (ea_a1 + ea_a2 + ea_b1 + ea_b2)
+
+        axial_preload = spec.gantry.effective_idler_axial_preload == "disc_spring_m5"
         if spec.gantry.drive_mode == "awd":
-            # 4-motor AWD: exact toolhead-to-motor free spans at (u, v) on Belt A and Belt B
-            # Each carriage-to-motor branch wraps ~2 pulleys/idlers (4 tangent points)
-            n_tan_awd = 4.0
-            l_a1 = max(((1.0 - u) * wp + (1.0 - v) * dp) * span_factor, 0.12)
-            l_a2 = max((u * wp + v * dp) * span_factor, 0.12)
-            l_b1 = max((u * wp + (1.0 - v) * dp) * span_factor, 0.12)
-            l_b2 = max(((1.0 - u) * wp + v * dp) * span_factor, 0.12)
-            ea_a1 = belt_effective_ea_n(
-                belt, l_a1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_awd, chamber_temp_c=t_ch,
-            )
-            ea_a2 = belt_effective_ea_n(
-                belt, l_a2, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_awd, chamber_temp_c=t_ch,
-            )
-            ea_b1 = belt_effective_ea_n(
-                belt, l_b1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_awd, chamber_temp_c=t_ch,
-            )
-            ea_b2 = belt_effective_ea_n(
-                belt, l_b2, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_awd, chamber_temp_c=t_ch,
-            )
-            kc_a1, kc_a2 = ea_a1 / l_a1, ea_a2 / l_a2
-            kc_b1, kc_b2 = ea_b1 / l_b1, ea_b2 / l_b2
-            k_belt_cord = (kc_a1 + kc_a2) + (kc_b1 + kc_b2)
-            inv_len_sum = 1.0 / l_a1 + 1.0 / l_a2 + 1.0 / l_b1 + 1.0 / l_b2
-            ea_eff = 0.25 * (ea_a1 + ea_a2 + ea_b1 + ea_b2)
             drive_branches = 4.0
-            k_mesh_1 = gerbert_tooth_mesh_stiffness_n_m(
-                belt, ea_eff, t_ch, tooth_shear_override=belt_tooth_k
+            k_mesh_a1 = gerbert_tooth_mesh_stiffness_n_m(
+                belt, ea_a1, t_ch, tooth_shear_override=belt_tooth_k
             )
-            kb_a1 = 1.0 / (1.0 / kc_a1 + 1.0 / k_mesh_1 + 1.0 / k_idler_single)
-            kb_a2 = 1.0 / (1.0 / kc_a2 + 1.0 / k_mesh_1 + 1.0 / k_idler_single)
-            kb_b1 = 1.0 / (1.0 / kc_b1 + 1.0 / k_mesh_1 + 1.0 / k_idler_single)
-            kb_b2 = 1.0 / (1.0 / kc_b2 + 1.0 / k_mesh_1 + 1.0 / k_idler_single)
+            k_mesh_a2 = gerbert_tooth_mesh_stiffness_n_m(
+                belt, ea_a2, t_ch, tooth_shear_override=belt_tooth_k
+            )
+            k_mesh_b1 = gerbert_tooth_mesh_stiffness_n_m(
+                belt, ea_b1, t_ch, tooth_shear_override=belt_tooth_k
+            )
+            k_mesh_b2 = gerbert_tooth_mesh_stiffness_n_m(
+                belt, ea_b2, t_ch, tooth_shear_override=belt_tooth_k
+            )
+            id_a1 = compute_branch_idler_stiffness_n_m(
+                br_a1, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, True, axial_preload
+            )
+            id_a2 = compute_branch_idler_stiffness_n_m(
+                br_a2, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, True, axial_preload
+            )
+            id_b1 = compute_branch_idler_stiffness_n_m(
+                br_b1, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, True, axial_preload
+            )
+            id_b2 = compute_branch_idler_stiffness_n_m(
+                br_b2, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, True, axial_preload
+            )
+            ki_a1 = id_a1["k_branch_idler_n_m"] * ov_idler_scale
+            ki_a2 = id_a2["k_branch_idler_n_m"] * ov_idler_scale
+            ki_b1 = id_b1["k_branch_idler_n_m"] * ov_idler_scale
+            ki_b2 = id_b2["k_branch_idler_n_m"] * ov_idler_scale
+            kb_a1 = 1.0 / (1.0 / kc_a1 + 1.0 / k_mesh_a1 + 1.0 / ki_a1)
+            kb_a2 = 1.0 / (1.0 / kc_a2 + 1.0 / k_mesh_a2 + 1.0 / ki_a2)
+            kb_b1 = 1.0 / (1.0 / kc_b1 + 1.0 / k_mesh_b1 + 1.0 / ki_b1)
+            kb_b2 = 1.0 / (1.0 / kc_b2 + 1.0 / k_mesh_b2 + 1.0 / ki_b2)
             k_a_loop = kb_a1 + kb_a2
             k_b_loop = kb_b1 + kb_b2
             branch_stiffnesses = (kb_a1, kb_a2, kb_b1, kb_b2)
-            # Rayleigh moving-belt inertia across the 4 carriage-to-motor spans: (1/3)*mu*sum(L)
-            belt_moving_mass_kg = (1.0 / 3.0) * belt_mu_kg_m * (l_a1 + l_a2 + l_b1 + l_b2)
-            longest_free_span_m = max(wp, dp) * span_factor
-            # Equal carriage-to-motor branches at center -> 50/50 tight/slack split
-            slack_load_share = max(
-                max(kc_a1, kc_a2) / max(kc_a1 + kc_a2, 1e-9),
-                max(kc_b1, kc_b2) / max(kc_b1 + kc_b2, 1e-9),
-            )
+            k_tooth_mesh = k_mesh_a1 + k_mesh_a2 + k_mesh_b1 + k_mesh_b2
+            k_idler_shaft = ki_a1 + ki_a2 + ki_b1 + ki_b2
+            worst_defl_um = max(
+                id_a1["max_shaft_deflection_um"],
+                id_a2["max_shaft_deflection_um"],
+                id_b1["max_shaft_deflection_um"],
+                id_b2["max_shaft_deflection_um"],
+            ) / max(ov_idler_scale, 1e-6)
         else:
-            # 2WD CoreXY perimeter routing (Voron / Monolith / classic CoreXY): both motors sit at the
-            # rear, and neither belt branch runs straight from the gantry to its motor. From the
-            # toolhead, one branch goes to the gantry joint on the motor's side, forward to the front
-            # idler, and back along the frame side to the motor; the other goes to the opposite joint,
-            # rearward to the far rear idler, and across the rear to the motor. The two branches are
-            # therefore about equal at bed centre (each ~ wp + dp for a square frame), half as stiff
-            # together as the four short branches of an AWD layout. Measured on one machine switched
-            # between AWD and 2WD (CloakedWayne testbed, 2025-07-10): 178.6 / 114.4 Hz vs
-            # 129.0 / 83.2 Hz, a compliance ratio of 1.9 on both axes.
-            # Each branch passes two idlers and leaves the pulley once (~5 tangent points).
-            n_tan_short = 5.0
-            n_tan_long = 5.0
-            l_a1 = max(((1.0 - u) * wp + v * dp + dp) * span_factor, 0.20)
-            l_a2 = max((u * wp + (1.0 - v) * dp + wp) * span_factor, 0.20)
-            l_b1 = max((u * wp + v * dp + dp) * span_factor, 0.20)
-            l_b2 = max(((1.0 - u) * wp + (1.0 - v) * dp + wp) * span_factor, 0.20)
-            ea_a1 = belt_effective_ea_n(
-                belt, l_a1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_short, chamber_temp_c=t_ch,
-            )
-            ea_a2 = belt_effective_ea_n(
-                belt, l_a2, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_long, chamber_temp_c=t_ch,
-            )
-            ea_b1 = belt_effective_ea_n(
-                belt, l_b1, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_short, chamber_temp_c=t_ch,
-            )
-            ea_b2 = belt_effective_ea_n(
-                belt, l_b2, ea_override_n=belt_ea_n, linear_mass_override_kg_m=belt_mu_kg_m,
-                n_pulley_tangents=n_tan_long, chamber_temp_c=t_ch,
-            )
-            kc_a1, kc_a2 = ea_a1 / l_a1, ea_a2 / l_a2
-            kc_b1, kc_b2 = ea_b1 / l_b1, ea_b2 / l_b2
-            k_belt_cord = (kc_a1 + kc_a2) + (kc_b1 + kc_b2)
-            inv_len_sum = 1.0 / l_a1 + 1.0 / l_a2 + 1.0 / l_b1 + 1.0 / l_b2
-            ea_eff = 0.25 * (ea_a1 + ea_a2 + ea_b1 + ea_b2)
             drive_branches = 2.0
             k_mesh_a = gerbert_tooth_mesh_stiffness_n_m(
                 belt, 0.5 * (ea_a1 + ea_a2), t_ch, tooth_shear_override=belt_tooth_k
@@ -593,16 +751,67 @@ def compute_drive_stiffness_details_n_per_m(
             k_mesh_b = gerbert_tooth_mesh_stiffness_n_m(
                 belt, 0.5 * (ea_b1 + ea_b2), t_ch, tooth_shear_override=belt_tooth_k
             )
-            k_a_loop = 1.0 / (1.0 / max(kc_a1 + kc_a2, 1e-9) + 1.0 / k_mesh_a + 1.0 / k_idler_single)
-            k_b_loop = 1.0 / (1.0 / max(kc_b1 + kc_b2, 1e-9) + 1.0 / k_mesh_b + 1.0 / k_idler_single)
-            branch_stiffnesses = (k_a_loop, k_b_loop)
-            belt_moving_mass_kg = (1.0 / 3.0) * belt_mu_kg_m * (l_a1 + l_a2 + l_b1 + l_b2)
-            longest_free_span_m = max(wp, dp) * span_factor
-            # Compatibility split on unequal 2WD branches: short stiff span carries k1/(k1+k2) (~0.72-0.75)
-            slack_load_share = max(
-                max(kc_a1, kc_a2) / max(kc_a1 + kc_a2, 1e-9),
-                max(kc_b1, kc_b2) / max(kc_b1 + kc_b2, 1e-9),
+            # In 2WD, each loop's two branches act in parallel between toolhead and shared rear motor:
+            # per-branch idler compliance is in series with each branch cord, while the shared motor
+            # shaft + tooth mesh sit in series with the parallel sum of the two branches.
+            id_a1 = compute_branch_idler_stiffness_n_m(
+                br_a1, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, False, axial_preload
             )
+            id_a2 = compute_branch_idler_stiffness_n_m(
+                br_a2, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, False, axial_preload
+            )
+            id_b1 = compute_branch_idler_stiffness_n_m(
+                br_b1, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, False, axial_preload
+            )
+            id_b2 = compute_branch_idler_stiffness_n_m(
+                br_b2, belt_graph_3d.pulleys, belt, e_bkt_eff, e_bkt_ch, cte_clearance_um, False, axial_preload
+            )
+            drv_a = belt_graph_3d.pulleys[br_a1.drive_node_id]
+            drv_b = belt_graph_3d.pulleys[br_b1.drive_node_id]
+            res_drv_a = compute_per_idler_stiffness_n_m(
+                belt, drv_a.shaft_architecture, e_bkt_eff, drv_a.z_overhang_extra_m,
+                drv_a.wrap_angle_deg, cte_clearance_um, axial_preload,
+            )
+            res_drv_b = compute_per_idler_stiffness_n_m(
+                belt, drv_b.shaft_architecture, e_bkt_eff, drv_b.z_overhang_extra_m,
+                drv_b.wrap_angle_deg, cte_clearance_um, axial_preload,
+            )
+            ki_a1 = id_a1["k_branch_idler_n_m"] * ov_idler_scale
+            ki_a2 = id_a2["k_branch_idler_n_m"] * ov_idler_scale
+            ki_b1 = id_b1["k_branch_idler_n_m"] * ov_idler_scale
+            ki_b2 = id_b2["k_branch_idler_n_m"] * ov_idler_scale
+            k_drv_a = res_drv_a["k_idler_n_m"] * ov_idler_scale
+            k_drv_b = res_drv_b["k_idler_n_m"] * ov_idler_scale
+
+            ka_br_par = (1.0 / (1.0 / kc_a1 + 1.0 / ki_a1)) + (1.0 / (1.0 / kc_a2 + 1.0 / ki_a2))
+            kb_br_par = (1.0 / (1.0 / kc_b1 + 1.0 / ki_b1)) + (1.0 / (1.0 / kc_b2 + 1.0 / ki_b2))
+            k_a_loop = 1.0 / (1.0 / max(ka_br_par, 1e-9) + 1.0 / k_mesh_a + 1.0 / k_drv_a)
+            k_b_loop = 1.0 / (1.0 / max(kb_br_par, 1e-9) + 1.0 / k_mesh_b + 1.0 / k_drv_b)
+            branch_stiffnesses = (k_a_loop, k_b_loop)
+            k_tooth_mesh = k_mesh_a + k_mesh_b
+            ki_a_eff = 1.0 / (1.0 / max(ki_a1 + ki_a2, 1e-9) + 1.0 / max(k_drv_a, 1e-9))
+            ki_b_eff = 1.0 / (1.0 / max(ki_b1 + ki_b2, 1e-9) + 1.0 / max(k_drv_b, 1e-9))
+            k_idler_shaft = ki_a_eff + ki_b_eff
+            worst_defl_um = max(
+                id_a1["max_shaft_deflection_um"],
+                id_a2["max_shaft_deflection_um"],
+                id_b1["max_shaft_deflection_um"],
+                id_b2["max_shaft_deflection_um"],
+                res_drv_a["shaft_deflection_um"],
+                res_drv_b["shaft_deflection_um"],
+            ) / max(ov_idler_scale, 1e-6)
+
+        k_belt_subsystem = k_a_loop + k_b_loop
+        idler_info = dict(idler_info)
+        idler_info["idler_shaft_deflection_um"] = worst_defl_um
+        idler_info["k_idler_n_m"] = k_idler_shaft / max(drive_branches, 1.0)
+        # Rayleigh moving-belt inertia across the 4 carriage-to-motor spans: (1/3)*mu*sum(L)
+        belt_moving_mass_kg = (1.0 / 3.0) * belt_mu_kg_m * (l_a1 + l_a2 + l_b1 + l_b2)
+        longest_free_span_m = belt_graph_3d.longest_free_span_m * ov_span_scale
+        slack_load_share = max(
+            max(kc_a1, kc_a2) / max(kc_a1 + kc_a2, 1e-9),
+            max(kc_b1, kc_b2) / max(kc_b1 + kc_b2, 1e-9),
+        )
     elif spec.architecture == "delta":
         # Project per-tower parallel upper/lower belt loop stiffness onto Cartesian XY via J_xy^T J_xy.
         # Active pulley-to-pulley span excludes top/bottom housing clearance (~25% of outer height;
@@ -655,17 +864,17 @@ def compute_drive_stiffness_details_n_per_m(
         longest_free_span_m = span_total
         slack_load_share = max(kc1, kc2) / max(kc1 + kc2, 1e-9)
 
-    k_tooth_mesh = drive_branches * gerbert_tooth_mesh_stiffness_n_m(
-        belt, ea_eff, t_ch, tooth_shear_override=belt_tooth_k
-    )
-    k_idler_shaft = drive_branches * k_idler_single
-
-    k_belt_subsystem = 1.0 / (
-        1.0 / max(k_belt_cord, 1e-9)
-        + 1.0 / max(k_tooth_mesh, 1e-9)
-        + 1.0 / max(k_idler_shaft, 1e-9)
-    )
     if spec.architecture != "corexy":
+        k_tooth_mesh = drive_branches * gerbert_tooth_mesh_stiffness_n_m(
+            belt, ea_eff, t_ch, tooth_shear_override=belt_tooth_k
+        )
+        k_idler_shaft = drive_branches * k_idler_single
+
+        k_belt_subsystem = 1.0 / (
+            1.0 / max(k_belt_cord, 1e-9)
+            + 1.0 / max(k_tooth_mesh, 1e-9)
+            + 1.0 / max(k_idler_shaft, 1e-9)
+        )
         k_a_loop = k_belt_subsystem
         k_b_loop = k_belt_subsystem
         branch_stiffnesses = (k_belt_subsystem,)
@@ -705,7 +914,7 @@ def compute_drive_stiffness_details_n_per_m(
         + 1.0 / max(k_motor_axis, 1e-9)
         + 1.0 / max(k_bracket, 1e-9)
     )
-    return {
+    out: dict[str, object] = {
         "k_belt_cord_n_m": k_belt_cord,
         "k_tooth_mesh_n_m": k_tooth_mesh,
         "k_idler_shaft_n_m": k_idler_shaft,
@@ -724,6 +933,28 @@ def compute_drive_stiffness_details_n_per_m(
         # Belt-path geometry factor G [m]: cord compliance on this axis is G / EA for uniform EA
         "cord_geometry_factor_m": 1.0 / max(inv_len_sum, 1e-12),
     }
+    if belt_graph_3d is not None:
+        out.update(
+            {
+                "belt_graph_3d": belt_graph_3d,
+                "belt_graph_uses_cad_stations": belt_graph_3d.uses_cad_stations,
+                "belt_upper_plane_z_mm": round(belt_graph_3d.z_upper_plane_m * 1e3, 2),
+                "belt_lower_plane_z_mm": round(belt_graph_3d.z_lower_plane_m * 1e3, 2),
+                "belt_plane_dz_mm": round(belt_graph_3d.dz_belt_planes_m * 1e3, 2),
+                "belt_upper_z_lever_mm": round(belt_graph_3d.upper_plane_z_lever_mm, 2),
+                "belt_lower_z_lever_mm": round(belt_graph_3d.lower_plane_z_lever_mm, 2),
+                "belt_to_cog_z_lever_mm": round(belt_graph_3d.belt_to_cog_z_lever_mm, 2),
+                "belt_branch_lengths_mm": {
+                    bid: round(br.total_length_m * ov_span_scale * 1e3, 2)
+                    for bid, br in belt_graph_3d.branches.items()
+                },
+                "belt_effective_span_ratio_vs_stock": round(
+                    belt_graph_3d.effective_span_ratio_vs_stock, 4
+                ),
+                "idler_architecture": idler_arch_summary,
+            }
+        )
+    return out
 
 
 def compute_drive_stiffness_n_per_m(

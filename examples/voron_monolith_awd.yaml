@@ -7,13 +7,14 @@ frame:
   height_mm: 500
   profile: extrusion_2020
   material: aluminum_6063_t5
-  bracing: corner_gussets
+  bracing: cnc_corner_gussets
   brace_profile: brace_rod_10mm
   brace_material: aluminum_6063_t5
   enclosed_panels: true
   panel_mounting: bolted_structural
   panel_material: aluminum_5052_sheet
   panel_thickness_mm: 4.0
+  gantry_top_clearance_mm: 120.0
 gantry:
   hardware_kit: monolith_ldo_cnc_awd
   drive_mode: awd

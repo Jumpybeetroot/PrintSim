@@ -518,6 +518,28 @@ TOOLS_SCHEMA = [
         },
     },
     {
+        "name": "run_signoff_verification",
+        "description": (
+            "Run full Sign-Off Verification on a PrintSim YAML printer specification: fine-mesh "
+            "8x8/16x16 MITC4 convergence, true multi-position 3D FEA workspace sweep (XY grid + Z "
+            "extremes), confidence-driven 90% parametric uncertainty bands (lumped stiffness + toolhead "
+            "mass; a lower bound on total error) & ranked drivers, and 5 "
+            "engineering readiness checks."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaml_text": {"type": "string", "description": "Declarative PrintSim YAML specification"},
+                "filament_id": {"type": "string", "default": "pla"},
+                "deep_mesh_n": {"type": "integer", "default": 8, "minimum": 4, "maximum": 10},
+                "deep_bed_mesh_n": {"type": "integer", "default": 16, "minimum": 8, "maximum": 20},
+                "workspace_grid_n": {"type": "integer", "default": 3, "minimum": 2, "maximum": 5},
+                "include_z_extremes": {"type": "boolean", "default": True},
+            },
+            "required": ["yaml_text"],
+        },
+    },
+    {
         "name": "analyze_sensitivity_hotspots",
         "description": (
             "Run analytical structural adjoint and Fox-Kapoor modal sensitivity analysis (with "
@@ -1082,6 +1104,21 @@ def dispatch_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             deep_mesh_n=int(args.get("deep_mesh_n", 8)),
             deep_bed_mesh_n=int(args.get("deep_bed_mesh_n", 16)),
         )
+
+    if name == "run_signoff_verification":
+        from printsim.engine.signoff import run_signoff_verification
+
+        spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))
+        res = run_signoff_verification(
+            spec,
+            filament_id=str(args.get("filament_id", "pla")),
+            deep_mesh_n=int(args.get("deep_mesh_n", 8)),
+            deep_bed_mesh_n=int(args.get("deep_bed_mesh_n", 16)),
+            workspace_grid_n=int(args.get("workspace_grid_n", 3)),
+            include_z_extremes=bool(args.get("include_z_extremes", True)),
+        )
+        # Keep MCP response compact by omitting full deep_simulation blob
+        return {k: v for k, v in res.items() if k != "deep_simulation"}
 
     if name == "analyze_sensitivity_hotspots":
         spec = PrinterSpec.model_validate(yaml.safe_load(args["yaml_text"]))

@@ -17,13 +17,22 @@ from .overrides import (
 Architecture = Literal["corexy", "cartesian_bedslinger", "delta"]
 BracingType = Literal[
     "none",
-    "corner_gussets",
-    "top_cross",
-    "rear_cross",
-    "side_cross",
-    "rear_and_sides",
-    "full_truss",
+    "cast_corner_brackets",
+    "cnc_corner_gussets",
+    "rear_flat_bar_x",
+    "side_flat_bar_x",
+    "rear_and_side_flat_bars",
+    "gussets_and_flat_bars",
 ]
+
+LEGACY_BRACING_ALIASES: dict[str, str] = {
+    "corner_gussets": "cnc_corner_gussets",
+    "top_cross": "cnc_corner_gussets",
+    "rear_cross": "rear_flat_bar_x",
+    "side_cross": "side_flat_bar_x",
+    "rear_and_sides": "rear_and_side_flat_bars",
+    "full_truss": "gussets_and_flat_bars",
+}
 TopBraceType = Literal[
     "none",
     "cnc_halo_ring",
@@ -37,6 +46,22 @@ FrontBraceType = Literal[
     "corner_45_bars",
 ]
 PanelMountingType = Literal["none", "clip_enclosure", "bolted_structural"]
+PanelFaceName = Literal["rear", "left", "right", "top"]
+
+
+class PanelFaceOverride(BaseModel):
+    """Per-face panel material and sheet thickness override for mixed-material enclosures."""
+
+    material: str | None = Field(
+        None,
+        description="Optional material ID override for this panel face",
+    )
+    thickness_mm: float | None = Field(
+        None,
+        ge=1.0,
+        le=12.0,
+        description="Optional panel sheet thickness override (mm) for this panel face",
+    )
 ExtrusionFillingType = Literal[
     "none",
     "pu_foam",
@@ -600,11 +625,13 @@ HOTEND_MOUNT_CLAMP_BASE_N_PER_MM: dict[str, float] = {
     "chube_6bolt_m3_18pcd": 6500.0,
 }
 # Corner joint base stiffness for 2020 Al extrusion: (k_t_n_m, k_r_inplane_nm_rad, k_r_torsion_nm_rad)
+# Calibrated via 100k-184k DOF 3D Tet10 continuum FEA (scripts/calibrate_corner_joints_fea.py)
+# modeling Misumi HFS5-2020 1.65 mm T-slot lip flexure, M5/M6 preload, and Back-Burdekin/Yoshimura contact.
 CORNER_JOINT_BASE_2020: dict[str, tuple[float, float, float]] = {
-    "l_bracket": (3.5e6, 4500.0, 1800.0),
-    "blind_joint": (1.2e7, 22000.0, 7500.0),
-    "gusset_plate": (2.2e7, 42000.0, 14000.0),
-    "corner_cube": (3.8e7, 85000.0, 28000.0),
+    "l_bracket": (6.5e6, 3100.0, 1400.0),
+    "blind_joint": (1.6e7, 13800.0, 4200.0),
+    "gusset_plate": (3.2e7, 36500.0, 7800.0),
+    "corner_cube": (5.2e7, 88500.0, 11200.0),
     "rigid": (1.0e10, 1.0e9, 1.0e9),
 }
 CORNER_JOINT_IWAN_DAMPING: dict[str, float] = {
@@ -966,6 +993,29 @@ HOTEND_CATALOG: dict[str, dict] = {
         "max_temp_c": 350.0,
         "cost_usd": 145.0,
         "notes": "Monolith Toolhead 50 mm + V6 cloverleaf HF meltzone with vertical-preload threadless heatbreak & PT1000; bench-tested to 83 mm³/s LDO ABS @ 300 °C / 85 °C chamber (80 W heater, ~90% PWM).",
+    },
+    "trianglelab_dragon_ace_volcano": {
+        "id": "trianglelab_dragon_ace_volcano",
+        "preset_id": "trianglelab_dragon_ace_volcano",
+        "name": "Trianglelab Dragon Ace Volcano (70W Cu/Ti)",
+        "short_name": "Dragon Ace Volcano",
+        "mount_style": "dragon_4bolt_m25",
+        "structural_stiffness_n_per_mm": 842.0,
+        "mass_g": 45.0,
+        "overall_length_mm": 59.4,
+        "melt_zone_length_mm": 34.0,
+        "heater_power_w": 70.0,
+        "block_material": "copper_c110",
+        "block_mass_g": 22.0,
+        "nozzle_material": "copper_c110",
+        "heatbreak_material": "titanium_grade5",
+        "heatbreak_wall_mm": 0.45,
+        "heatbreak_length_mm": 11.0,
+        "heatbreak_id_mm": 1.9,
+        "heatsink_thermal_resistance_k_w": 3.1,
+        "max_temp_c": 450.0,
+        "cost_usd": 85.0,
+        "notes": "Official default hotend of WV-Design Trinity 1.6 (Trinity DAV 1.6 STEP CAD): 59.4 mm OAL (60.6 mm vendor nominal), 34 mm heated Cu Volcano block + MZE + V6 nozzle, 70W 6×20 mm cartridge (80–120W compatible), thick-walled 0.45 mm Ti heatbreak + 4× Ø2.3×7.5 mm Ti standoffs on 12×12 mm square, 45 g dressed; 43.5k-elem Tet4 FEA calibrated unbraced stiffness 839/845 N/mm (3,126/3,147 N/mm braced inside Trinity unibody).",
     },
 }
 _hydrate_hotend_catalog(HOTEND_CATALOG)
@@ -1568,8 +1618,9 @@ BED_MOUNT_CATALOG: dict[str, dict] = {
 }
 
 # Machine benchtop feet / anti-vibration pad catalog (per-foot vertical & lateral stiffness).
-# `mount_damping_ratio` is the damping ratio of the whole-printer rigid-body modes on the mount
-# (Barry Controls: natural rubber / neoprene 0.05; Sorbothane 50 duro tan(delta) ~0.6 -> ~0.30).
+# Calibrated to Gent/Lindley elastomer shape-factor mechanics, Sorbothane Data Sheet 101
+# (50 Duro tan(delta) = 0.57-0.65 -> zeta ~ 0.28-0.32), HULA F8-22M + 95A TPU omnidirectional
+# isolators, and CNC Kitchen 18 kg concrete paver on 25 mm closed-cell EVA/acoustic foam.
 FRAME_FEET_CATALOG: dict[str, dict] = {
     "rigid_bolted": {
         "id": "rigid_bolted",
@@ -1578,38 +1629,42 @@ FRAME_FEET_CATALOG: dict[str, dict] = {
         "k_axial_n_per_mm": 0.0,
         "k_lateral_n_per_mm": 0.0,
         "damping_delta": 0.0,
+        "loss_factor": 0.0,
         "notes": "Idealized rigidly anchored frame feet",
     },
     "rubber_feet": {
         "id": "rubber_feet",
         "name": "Standard Rubber / TPU Feet",
         "short_name": "Rubber Feet",
-        "k_axial_n_per_mm": 360.0,
-        "k_lateral_n_per_mm": 140.0,
+        "k_axial_n_per_mm": 380.0,
+        "k_lateral_n_per_mm": 148.0,
         "damping_delta": 0.006,
-        "mount_damping_ratio": 0.05,
-        "notes": "Typical Voron/printer rubber feet; allows whole-frame benchtop rocking",
+        "mount_damping_ratio": 0.06,
+        "loss_factor": 0.12,
+        "notes": "Typical Voron 65-70A neoprene/EPDM rubber or 95A TPU feet (SF=0.50, tan(delta)=0.12)",
     },
     "anti_vib_pads": {
         "id": "anti_vib_pads",
         "name": "Soft Anti-Vibration Pads (HULA / Sorbothane)",
         "short_name": "Anti-Vib Pads",
-        "k_axial_n_per_mm": 85.0,
-        "k_lateral_n_per_mm": 32.0,
-        "damping_delta": 0.015,
-        "mount_damping_ratio": 0.30,
-        "notes": "Soft isolators lower whole-frame sway frequency while isolating table noise; frame & bed rock mostly together",
+        "k_axial_n_per_mm": 65.0,
+        "k_lateral_n_per_mm": 22.0,
+        "damping_delta": 0.014,
+        "mount_damping_ratio": 0.28,
+        "loss_factor": 0.56,
+        "notes": "Calibrated to HULA (F8-22M thrust bearing + 95A TPU) & Sorbothane 50D 1.5 in hemispheres (~8-12 Hz lateral isolation, tan(delta)~0.56)",
     },
     "paver_on_foam": {
         "id": "paver_on_foam",
         "name": "Concrete Paver on Foam Pad (18 kg Base)",
         "short_name": "Paver + Foam",
-        "k_axial_n_per_mm": 240.0,
-        "k_lateral_n_per_mm": 95.0,
+        "k_axial_n_per_mm": 215.0,
+        "k_lateral_n_per_mm": 78.0,
         "damping_delta": 0.022,
-        "mount_damping_ratio": 0.10,
+        "mount_damping_ratio": 0.14,
+        "loss_factor": 0.28,
         "base_mass_kg": 18.0,
-        "notes": "Classic 18 kg concrete paver on dense foam: lowers CoG and strongly damps desk vibration while keeping frame & bed moving together",
+        "notes": "400x400x50 mm (18 kg) concrete paver on 25 mm EVA/acoustic foam (~10-15 Hz sway isolation, tan(delta)~0.28, lowers CoG & frame recoil)",
     },
     "suspended_lines": {
         "id": "suspended_lines",
@@ -1692,7 +1747,8 @@ SUSPENSION_LINE_CATALOG: dict[str, dict] = {
     },
 }
 
-# Engineering catalog for frame extrusion cavity fillings (SI units; literature / CNC casting data)
+# Engineering catalog for frame extrusion cavity fillings (SI units; calibrated to Cortes & Castillo 2007,
+# Suh & Lee 2008, Friend & Kinra 2000, Marhadi & Kinra 2005, and Mohring et al. 2015 tap-test literature)
 EXTRUSION_FILLINGS: dict[str, dict] = {
     "none": {
         "id": "none",
@@ -1701,10 +1757,12 @@ EXTRUSION_FILLINGS: dict[str, dict] = {
         "density_kg_m3": 0.0,
         "youngs_modulus_pa": 0.0,
         "bonded": False,
+        "bond_efficiency": 0.0,
+        "core_loss_factor": 0.005,
         "damping_boost": 0.0,
         "cost_per_kg_usd": 0.0,
         "color_hex": "#94a3b8",
-        "notes": "Standard hollow aluminum extrusion (low structural damping)",
+        "notes": "Standard hollow aluminum extrusion (bare Al zeta ~ 0.002-0.003; assembled frame ~0.04)",
     },
     "pu_foam": {
         "id": "pu_foam",
@@ -1713,10 +1771,12 @@ EXTRUSION_FILLINGS: dict[str, dict] = {
         "density_kg_m3": 45.0,
         "youngs_modulus_pa": 0.02e9,
         "bonded": False,
-        "damping_boost": 0.010,
+        "bond_efficiency": 0.0,
+        "core_loss_factor": 0.06,
+        "damping_boost": 0.008,
         "cost_per_kg_usd": 18.0,
         "color_hex": "#fde68a",
-        "notes": "Ultra-light acoustic deadening; negligible added mass or stiffness",
+        "notes": "Ultra-light closed-cell acoustic deadening (delta_zeta=0.008); cuts high-frequency wall ringing with negligible mass or EI",
     },
     "silica_sand": {
         "id": "silica_sand",
@@ -1725,10 +1785,12 @@ EXTRUSION_FILLINGS: dict[str, dict] = {
         "density_kg_m3": 1550.0,
         "youngs_modulus_pa": 0.0,
         "bonded": False,
-        "damping_boost": 0.028,
+        "bond_efficiency": 0.0,
+        "core_loss_factor": 0.08,
+        "damping_boost": 0.022,
         "cost_per_kg_usd": 1.5,
         "color_hex": "#d6b88d",
-        "notes": "Low-cost granular Coulomb friction damping; zero bonded bending stiffness",
+        "notes": "Granular Coulomb particle friction damping (Friend & Kinra / Marhadi & Kinra: delta_zeta=0.022); zero bonded EI",
     },
     "lead_shot": {
         "id": "lead_shot",
@@ -1737,10 +1799,12 @@ EXTRUSION_FILLINGS: dict[str, dict] = {
         "density_kg_m3": 6800.0,
         "youngs_modulus_pa": 0.0,
         "bonded": False,
-        "damping_boost": 0.042,
+        "bond_efficiency": 0.0,
+        "core_loss_factor": 0.14,
+        "damping_boost": 0.038,
         "cost_per_kg_usd": 11.0,
         "color_hex": "#475569",
-        "notes": "Maximum granular impact damping & base inertia; heavy mass lowers raw Hz",
+        "notes": "High-density granular impact & momentum-transfer damping (Marhadi & Kinra: delta_zeta=0.038); heavy mass lowers raw Hz",
     },
     "epoxy_granite": {
         "id": "epoxy_granite",
@@ -1749,22 +1813,26 @@ EXTRUSION_FILLINGS: dict[str, dict] = {
         "density_kg_m3": 2250.0,
         "youngs_modulus_pa": 30.0e9,
         "bonded": True,
-        "damping_boost": 0.036,
+        "bond_efficiency": 0.95,
+        "core_loss_factor": 0.045,
+        "damping_boost": 0.030,
         "cost_per_kg_usd": 9.5,
         "color_hex": "#64748b",
-        "notes": "Mineral casting bonds to cavity walls: +10-16% bending stiffness & strong resin damping",
+        "notes": "Mineral casting adheres strongly to cavity walls (eta_bond=0.95 -> +16-18% EI, Cortes/Suh delta_zeta=0.030)",
     },
     "uhpc_grout": {
         "id": "uhpc_grout",
         "name": "Non-Shrink UHPC / CSA Grout",
         "short_name": "UHPC Grout",
         "density_kg_m3": 2350.0,
-        "youngs_modulus_pa": 40.0e9,
+        "youngs_modulus_pa": 42.0e9,
         "bonded": True,
-        "damping_boost": 0.030,
+        "bond_efficiency": 0.80,
+        "core_loss_factor": 0.032,
+        "damping_boost": 0.025,
         "cost_per_kg_usd": 4.5,
         "color_hex": "#9ca3af",
-        "notes": "High-modulus bonded cementitious grout: highest core EI boost + solid damping",
+        "notes": "High-modulus cementitious grout (E=42 GPa, eta_bond=0.80 accounting for cure-shrinkage micro-slip -> +18-20% EI, delta_zeta=0.025)",
     },
 }
 
@@ -2348,7 +2416,10 @@ GANTRY_WEIGHT_CLASSES: dict[str, dict] = {
 
 
 # Linear rail & carriage manufacturing/grinding precision grade catalog
-# Calibrated to Hertzian ball-sharing across tolerance grades (ISO P / HIWIN C/H / sorted / generic)
+# Backed by HIWIN GW-11-7-EN-2401-K, THK SRS/HSR, and NSK E728 radial clearance, conformity, & ISO 3290 ball tables.
+# `stiffness_mult` is the nominal Z1 MGN12H reference ratio; actual Hertzian stiffness in `components.py`
+# computes preload- and rail-size-dependent active-ball load sharing from `conformity_f`, `ball_raceway_tol_um`,
+# and `clearance_bias_um`.
 RAIL_QUALITY_CATALOG: dict[str, dict] = {
     "budget_generic": {
         "id": "budget_generic",
@@ -2357,7 +2428,11 @@ RAIL_QUALITY_CATALOG: dict[str, dict] = {
         "stiffness_mult": 0.58,
         "drag_mult": 1.45,
         "cost_mult": 0.45,
-        "notes": "Wider ball-diameter tolerance (~60% active load-sharing balls) and rougher raceway grinding; noticeable roll play even with Z0/Z1 preload.",
+        "conformity_f": 0.550,
+        "ball_raceway_tol_um": 1.60,
+        "clearance_bias_um": 0.25,
+        "iso_ball_grade": "G28-G40",
+        "notes": "Unsorted ISO G28-G40 balls (V_Dws=1.60 um scatter, +0.25 um contact bias, loose f=0.550 groove); severe active-ball drop at light ZF/Z0 preload.",
     },
     "midgrade_matched": {
         "id": "midgrade_matched",
@@ -2366,7 +2441,11 @@ RAIL_QUALITY_CATALOG: dict[str, dict] = {
         "stiffness_mult": 0.88,
         "drag_mult": 1.05,
         "cost_mult": 0.85,
-        "notes": "Hand-sorted balls and consistent preload matched for high-speed CoreXY printers.",
+        "conformity_f": 0.532,
+        "ball_raceway_tol_um": 0.55,
+        "clearance_bias_um": 0.08,
+        "iso_ball_grade": "G16",
+        "notes": "Hand-sorted ISO G16 balls (V_Dws=0.55 um scatter, f=0.532 groove) matched for consistent Z0/Z1 CoreXY preload.",
     },
     "hiwin_genuine": {
         "id": "hiwin_genuine",
@@ -2375,7 +2454,11 @@ RAIL_QUALITY_CATALOG: dict[str, dict] = {
         "stiffness_mult": 1.00,
         "drag_mult": 1.00,
         "cost_mult": 1.00,
-        "notes": "Catalog HIWIN Gothic-arch ground raceways and precision-sorted balls (baseline Hertzian stiffness).",
+        "conformity_f": 0.525,
+        "ball_raceway_tol_um": 0.25,
+        "clearance_bias_um": 0.0,
+        "iso_ball_grade": "G10",
+        "notes": "Catalog HIWIN Grade C/H Gothic-arch ground raceways (f=0.525, ISO G10 balls V_Dws=0.25 um) matching Table 3.75/3.77 preload specs.",
     },
     "precision_thk_nsk": {
         "id": "precision_thk_nsk",
@@ -2384,10 +2467,88 @@ RAIL_QUALITY_CATALOG: dict[str, dict] = {
         "stiffness_mult": 1.22,
         "drag_mult": 0.82,
         "cost_mult": 2.10,
-        "notes": "High-conformity ground raceways with G5 ball sorting for near-100% ball sharing, higher roll stiffness, and lower seal drag.",
+        "conformity_f": 0.516,
+        "ball_raceway_tol_um": 0.13,
+        "clearance_bias_um": -0.12,
+        "iso_ball_grade": "G5",
+        "notes": "High-conformity Grade P / P4-P5 ground raceways (f=0.516, ISO G5 balls V_Dws=0.13 um, THK C1 negative-clearance tightening) for near-100% ball sharing.",
     },
 }
 
+
+# Modeled & simulated structural frame bracing catalog (3D CAD superelements + bolted flat-bar FEA)
+FRAME_BRACING_CATALOG: dict[str, dict[str, Any]] = {
+    "none": {
+        "id": "none",
+        "label": "None (Open Frame)",
+        "short_label": "None",
+        "kind": "none",
+        "cad_asset_family": None,
+        "physics_model": "Unbraced baseline extrusions",
+        "description": "Open unbraced extrusion frame relying solely on primary corner joints.",
+        "cost_usd": 0.0,
+    },
+    "cast_corner_brackets": {
+        "id": "cast_corner_brackets",
+        "label": "Cast Al Corner Brackets (HBLFSN5/6/8 — 3D CAD)",
+        "short_label": "Cast Brackets (CAD)",
+        "kind": "cad_superelement",
+        "cad_asset_family": "cast_corner_bracket",
+        "physics_model": "3D Tet4 Craig-Bampton CAD superelements + Huth T-nut compliance",
+        "description": "Die-cast aluminum gusseted 90° L-brackets (Misumi HBLFSN5 2020 / HBLFSN6 3030 / HBLFSN8 4040) modeled as 3D solid-FEM superelements bolted inside every frame corner.",
+        "cost_usd": 34.0,
+    },
+    "cnc_corner_gussets": {
+        "id": "cnc_corner_gussets",
+        "label": "CNC Al 5-Hole Corner Gusset Plates (5–6mm — 3D CAD)",
+        "short_label": "CNC Gussets (CAD)",
+        "kind": "cad_superelement",
+        "cad_asset_family": "cnc_corner_gusset",
+        "physics_model": "3D Tet4 Craig-Bampton CAD superelements + Huth 2-bolt flange compliance",
+        "description": "5–6 mm CNC 6061-T6 aluminum 5-hole L-gusset plates (RatRig / Monolith / DoomCube style, 60–120 mm) modeled as 3D solid-FEM superelements bolted flush onto exterior frame corners.",
+        "cost_usd": 62.0,
+    },
+    "rear_flat_bar_x": {
+        "id": "rear_flat_bar_x",
+        "label": "Bolted Rear Flat-Bar X-Brace (25×5mm Al 6061)",
+        "short_label": "Rear Flat-Bar X",
+        "kind": "flat_bar_fea",
+        "cad_asset_family": None,
+        "physics_model": "12-DOF Timoshenko 25×5mm Al beams + exterior CBUSH bolt springs",
+        "description": "Two 25×5 mm 6061-T6 aluminum flat bars bolted diagonally across the rear face with exterior frame offset and M5 T-nut fastener compliance (open top & front door).",
+        "cost_usd": 18.0,
+    },
+    "side_flat_bar_x": {
+        "id": "side_flat_bar_x",
+        "label": "Bolted Side Flat-Bar X-Braces (25×5mm Al 6061)",
+        "short_label": "Side Flat-Bar X",
+        "kind": "flat_bar_fea",
+        "cad_asset_family": None,
+        "physics_model": "12-DOF Timoshenko 25×5mm Al beams + exterior CBUSH bolt springs",
+        "description": "Four 25×5 mm 6061-T6 aluminum flat bars bolted diagonally across the left and right faces with realistic frame offset and M5 T-nut compliance (open top & front door).",
+        "cost_usd": 32.0,
+    },
+    "rear_and_side_flat_bars": {
+        "id": "rear_and_side_flat_bars",
+        "label": "Bolted Rear + Side Flat-Bar X-Braces (25×5mm Al)",
+        "short_label": "Rear + Side Bars",
+        "kind": "flat_bar_fea",
+        "cad_asset_family": None,
+        "physics_model": "12-DOF Timoshenko 25×5mm Al beams + exterior CBUSH bolt springs",
+        "description": "Six 25×5 mm 6061-T6 aluminum flat bars triangulating rear, left, and right bays with exterior bolt springs while keeping both top and front door completely open.",
+        "cost_usd": 48.0,
+    },
+    "gussets_and_flat_bars": {
+        "id": "gussets_and_flat_bars",
+        "label": "CNC Corner Gussets + Rear/Side Flat-Bar X-Braces",
+        "short_label": "Gussets + X-Bars",
+        "kind": "hybrid_cad_flat_bar",
+        "cad_asset_family": "cnc_corner_gusset",
+        "physics_model": "3D CAD corner gusset superelements + 25×5mm bolted flat-bar X-braces",
+        "description": "Full open-top structural bracing package combining 3D CAD CNC aluminum 5-hole corner gusset plates at all corners with bolted 25×5 mm aluminum rear & side X-braces.",
+        "cost_usd": 108.0,
+    },
+}
 
 # Non-blocking open-center CoreXY top bracing & open-door front bracing catalogs
 TOP_BRACE_CATALOG: dict[str, dict[str, Any]] = {
@@ -2515,7 +2676,10 @@ class FrameSpec(BaseModel):
         description="Optional separate profile for vertical corner uprights/columns (e.g. extrusion_4040 uprights with extrusion_2020 horizontals on DoomCube); defaults to frame.profile",
     )
     material: str = Field("aluminum_6063_t5", description="Primary structural frame material ID")
-    bracing: BracingType = Field("corner_gussets", description="Structural triangulation strategy")
+    bracing: BracingType = Field(
+        "cnc_corner_gussets",
+        description="Modeled & simulated structural frame bracing strategy (CAD corner brackets/gussets or bolted 25x5mm flat-bar X-braces)",
+    )
     brace_profile: str = Field("brace_rod_10mm", description="Profile for diagonal braces")
     brace_material: str = Field("aluminum_6063_t5", description="Material for diagonal braces")
     enclosed_panels: bool = Field(
@@ -2541,6 +2705,39 @@ class FrameSpec(BaseModel):
             "(e.g. VzBot 3 mm aluminium rear + polycarbonate sides); None = same as panel_material"
         ),
     )
+    panel_overrides: dict[PanelFaceName, PanelFaceOverride] = Field(
+        default_factory=dict,
+        description=(
+            "Optional per-face panel material and thickness overrides (rear, left, right, top) "
+            "for mixed-material enclosures"
+        ),
+    )
+
+    def effective_panel_spec(self, bay: str) -> tuple[str, float]:
+        """Return resolved (material_id, thickness_mm) for a panel face or split sub-bay."""
+        face = bay[:-4] if bay.endswith(("_low", "_top")) else bay
+        ov = self.panel_overrides.get(face) if face in ("rear", "left", "right", "top") else None
+        mat_id = (
+            (ov.material if ov and ov.material else None)
+            or (self.side_panel_material if face in ("left", "right") and self.side_panel_material else None)
+            or self.panel_material
+        )
+        thick_mm = (
+            ov.thickness_mm
+            if ov is not None and ov.thickness_mm is not None
+            else self.panel_thickness_mm
+        )
+        return mat_id, float(thick_mm)
+
+    @property
+    def has_mixed_panels(self) -> bool:
+        """True if any panel face overrides the base panel material or thickness."""
+        if self.side_panel_material:
+            return True
+        return any(
+            ov.material is not None or ov.thickness_mm is not None
+            for ov in self.panel_overrides.values()
+        )
     bolt_panels_to_gantry: bool = Field(
         True,
         description="On non-flying-gantry CoreXY machines, bolt structural panels directly to fixed Y-rail & rear gantry beams",
@@ -2622,6 +2819,14 @@ class FrameSpec(BaseModel):
     )
     custom_nodes: list[FrameNodeSpec] = Field(default_factory=list)
     custom_members: list[FrameMemberSpec] = Field(default_factory=list)
+
+    @field_validator("bracing", mode="before")
+    @classmethod
+    def _normalize_legacy_bracing(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            key = v.strip().lower()
+            return LEGACY_BRACING_ALIASES.get(key, key)
+        return v
 
     @property
     def effective_upright_profile(self) -> str:
@@ -2967,7 +3172,7 @@ class GantrySpec(BaseModel):
         if self.cf_rail_mounting == "auto":
             return (
                 "two_wall_clamped_inserts"
-                if self.x_beam_profile == "cf_tube_20x20_carbonara"
+                if self.x_beam_profile.startswith("cf_tube_20x20_carbonara")
                 else "single_wall_bare"
             )
         return self.cf_rail_mounting
@@ -4047,6 +4252,60 @@ TOOLHEAD_PRESETS: dict[str, dict] = {
             "screws (~8 g); same HextrudORT Low / CPAP / Beacon dressing as the CNC head = 248 g on-rail w/ "
             "the real MGN9H (276 g in the MGN12H convention) excl. hotend; 344 g dressed w/ Goliath Air. "
             "Tet4 CMS of the exact printed cage (0.32x printed multi-piece knockdown)."
+        ),
+    },
+    "trinity_1_6_dav": {
+        "preset_id": "trinity_1_6_dav",
+        "name": "WV-Design Trinity 1.6 (Dragon Ace Volcano + Dual-3628)",
+        "total_mass_g": 382.0,
+        "cog_offset_mm": [0.0, -28.2, 3.6],
+        "nozzle_offset_mm": [0.0, -32.74, -81.0],
+        "mount_material": "ppa_cf_printed",
+        "body_construction": "compact_cage",
+        "internal_stiffness_n_per_mm": 1350.0,
+        "z_probe_type": "static_eddy",
+        "belt_plane_z_offset_mm": -0.3,
+        "cpap_blower_id": "none",
+        "extruder_type": "direct_drive",
+        "extruder_gear_ratio": 6.25,
+        "default_hotend_preset_id": "trianglelab_dragon_ace_volcano",
+        "part_cooling_cfm": 20.0,
+        "envelope_mm": [114.3, 62.9, 155.0],
+        "default_hardware_summary": (
+            "Official WV-design/Trinity-toolhead 1.6-stable STEP (Trinity DAV 1.6 - 10mm belts.STEP): "
+            "monolithic unibody (65.94 cm³) + ducts_v3 (24.44 cm³) = 88.9 g in ABS-GF/PPA-CF (77.1 g ABS), "
+            "FYSETC CNC Sherpa Mini v3 + Moons 36 mm pancake (135 g, 6.25:1), dual Delta FFB03612EHNYCL "
+            "3628 12V 25 kHz PWM fans (64.4 g, ~20 CFM effective), Delta ASB02505SHA-AY6B 2510 HEF (6.4 g), "
+            "Monolith SLM Al belt clamp (6.6 g), Beacon Rev H (8 g), fasteners/Apex clips (18 g) + HIWIN MGN12H "
+            "(54 g) = 382 g on-rail excl. hotend (373 g off-rail dressed w/ 45 g DAV; dressed CoG Z -1.9 mm "
+            "dead between MGN12H rail balls). Unibody wraps entire 23 mm DAV heatsink (Tet4 CMS w/ 0.55× FDM unibody)."
+        ),
+    },
+    "trinity_1_6_chube": {
+        "preset_id": "trinity_1_6_chube",
+        "name": "WV-Design Trinity 1.6 (Chube Compact + Dual-3628)",
+        "total_mass_g": 394.0,
+        "cog_offset_mm": [0.0, -28.5, 1.8],
+        "nozzle_offset_mm": [0.0, -32.74, -81.18],
+        "mount_material": "ppa_cf_printed",
+        "body_construction": "compact_cage",
+        "internal_stiffness_n_per_mm": 1350.0,
+        "z_probe_type": "static_eddy",
+        "belt_plane_z_offset_mm": -0.3,
+        "cpap_blower_id": "none",
+        "extruder_type": "direct_drive",
+        "extruder_gear_ratio": 6.25,
+        "default_hotend_preset_id": "chube_compact",
+        "part_cooling_cfm": 20.0,
+        "envelope_mm": [119.2, 60.9, 155.0],
+        "default_hardware_summary": (
+            "Official WV-design/Trinity-toolhead 1.6-stable STEP (Trinity Chube 1.6 - 10mm belts.step, "
+            "Prooda/Martin Chube Compact variant): monolithic unibody (78.08 cm³) + wider ducts (24.23 cm³) "
+            "= 100.7 g in ABS-GF/PPA-CF, FYSETC CNC Sherpa Mini v3 + Moons 36 mm pancake (135 g, 6.25:1), "
+            "dual Delta FFB03612EHNYCL 3628 12V PWM fans (64.4 g, ~20 CFM effective), Delta 2510 HEF (6.4 g), "
+            "Monolith SLM Al belt clamp (6.6 g), Beacon Rev H (8 g), fasteners/Apex clips (18 g) + HIWIN MGN12H "
+            "(54 g) = 394 g on-rail excl. hotend (403 g off-rail dressed w/ 63 g Chube Compact; dressed CoG Z -5.9 mm). "
+            "Unibody wraps upper 25.7 mm of Chube Compact Ti shell below its cooling cutouts (Tet4 CMS w/ 0.55× FDM unibody)."
         ),
     },
     "heavy_uhf_long": {

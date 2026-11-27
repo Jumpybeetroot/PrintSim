@@ -361,6 +361,195 @@ def _compute_flying_z_joint_spring_stiffness(
     return float(k_normal), float(k_shear), float(k_rot)
 
 
+def _resolve_cad_z_drive_mount_assets(spec: PrinterSpec) -> dict[str, object]:
+    """Load baked 3D CAD Z-drive / Z-motor-mount superelements for CoreXY CAD hardware kits.
+
+    Maps physical Z corners to their baked Tet4 Craig-Bampton assets:
+    - Flying-gantry quad-Z (``belted_quad_z``): ``fl``/``rl`` -> ``z_drive_left``
+      (``voron_24_z_drive_left``), ``fr``/``rr`` -> ``z_drive_right`` (``voron_24_z_drive_right``).
+    - Triple-Z leadscrew (``leadscrew_triple``): ``fl`` -> ``trident_z_mount_left``,
+      ``fr`` -> ``trident_z_mount_right``, ``r`` -> ``trident_z_mount_rear``.
+    """
+    if (
+        spec.architecture != "corexy"
+        or not bool(getattr(spec, "use_cad_superelements", True))
+    ):
+        return {}
+    kit_id = spec.resolve_effective_gantry_hardware_kit()
+    if kit_id == "procedural":
+        return {}
+
+    from printsim.schema.printer import GANTRY_HARDWARE_KIT_CATALOG
+
+    stations = dict((GANTRY_HARDWARE_KIT_CATALOG.get(kit_id) or {}).get("stations") or {})
+    if not stations:
+        return {}
+    try:
+        from printsim.cad_assets.registry import has_hardware_asset, load_superelement
+    except ImportError:
+        return {}
+
+    chamber_c = float(spec.frame.chamber_temp_c)
+    bkt_mat_id = spec.gantry.bracket_material
+    if spec.is_flying_gantry:
+        station_pairs: tuple[tuple[str, str, str | None], ...] = (
+            ("fl", "z_drive_left", None),
+            ("fr", "z_drive_right", None),
+            ("rl", "z_drive_left", None),
+            ("rr", "z_drive_right", None),
+        )
+    elif spec.bed.z_drive == "leadscrew_triple":
+        station_pairs = (
+            ("fl", "trident_z_mount_left", "trident_z_mount"),
+            ("fr", "trident_z_mount_right", "trident_z_mount"),
+            ("r", "trident_z_mount_rear", "trident_z_mount"),
+        )
+    else:
+        return {}
+
+    loaded_by_aid: dict[str, object] = {}
+    out: dict[str, object] = {}
+    for tag, st_key, fallback_key in station_pairs:
+        aid = stations.get(st_key) or (stations.get(fallback_key) if fallback_key else None)
+        if not aid or not has_hardware_asset("gantry_brackets", aid):
+            continue
+        if aid not in loaded_by_aid:
+            se = load_superelement(
+                "gantry_brackets",
+                aid,
+                material_id=bkt_mat_id,
+                chamber_temp_c=chamber_c,
+            )
+            if se is not None:
+                loaded_by_aid[aid] = se
+        if aid in loaded_by_aid:
+            out[tag] = loaded_by_aid[aid]
+    return out
+
+
+def _extract_cad_z_mount_vertical_stiffness_n_m(
+    asset: object,
+    spec: PrinterSpec,
+    trident_backbone_active: bool = False,
+) -> float:
+    """Extract exact coupled vertical stiffness ``1 / C_11[2, 2]`` (N/m) from a baked Z-mount CMS."""
+    bkt_mat = get_material(spec.gantry.bracket_material)
+    bolt_factor = max(float(bkt_mat.bolted_joint_stiffness_factor), 1e-4)
+    K_bb = np.asarray(asset.K_bb, dtype=float) * bolt_factor  # type: ignore[attr-defined]
+    K_11 = 0.5 * (K_bb[6:12, 6:12] + K_bb[6:12, 6:12].T)
+    diag_k = np.maximum(np.diag(K_11), 1e-12)
+    s_inv = 1.0 / np.sqrt(diag_k)
+    k_sc = (s_inv[:, None] * K_11) * s_inv[None, :]
+    try:
+        c_sc = np.linalg.inv(k_sc)
+    except np.linalg.LinAlgError:
+        c_sc = np.linalg.pinv(k_sc, rcond=1e-10)
+    c_zz = float(c_sc[2, 2]) * float(s_inv[2] ** 2)
+    k_z_cms = 1.0 / max(c_zz, 1e-12)
+    if trident_backbone_active and not spec.is_flying_gantry:
+        # Clee's 3.18 mm mild-steel Trident Backbone bolts directly across the Z-motor flange
+        # in parallel with the printed motor mount, shunting vertical motor reaction into steel.
+        k_z_cms += 1.2e7
+    return float(k_z_cms)
+
+
+def resolve_cad_z_drive_mount_stiffness_n_m(
+    spec: PrinterSpec,
+    trident_backbone_active: bool = False,
+) -> dict[str, float]:
+    """Return per-corner baked CAD Z-drive / Z-mount vertical stiffness (N/m) when available."""
+    assets = _resolve_cad_z_drive_mount_assets(spec)
+    return {
+        tag: _extract_cad_z_mount_vertical_stiffness_n_m(
+            asset, spec, trident_backbone_active=trident_backbone_active
+        )
+        for tag, asset in assets.items()
+    }
+
+
+def _compute_corexy_z_drive_corner_stiffnesses(
+    spec: PrinterSpec,
+    z_gantry: float,
+    z_bed: float,
+    is_flying: bool,
+    trident_backbone_active: bool,
+) -> dict[str, float]:
+    """Compute per-corner axial Z-drive vertical stiffness (N/m) including baked Z-mount CMS.
+
+    Combines in series at each Z corner:
+    - Belted-Z: two-span parallel GT2 Z-belt elasticity ``k_belt(z, H)`` (normalized to the
+      300 mm reference envelope ``H_ref=0.48 m, z_ref=0.24 m``), reflected reduction/motor
+      torsional stiffness, and baked ``voron_24_z_drive_{left,right}`` CAD CMS pod compliance.
+    - Leadscrew/Ballscrew: steel screw shaft ``EA/L``, thermally adjusted POM/brass/ballnut
+      flank stiffness, stepper wave-washer / BK10 thrust bearing, and baked
+      ``voron_trident_z_mount_{left,right,rear}`` CAD CMS motor-mount flange compliance.
+    """
+    z_mech = resolve_z_drive_mechanism(spec)
+    z_drive = spec.bed.z_drive
+    if is_flying:
+        tags: tuple[str, ...] = ("fl", "fr", "rl", "rr")
+    elif z_drive == "leadscrew_triple":
+        tags = ("fl", "fr", "r")
+    elif z_drive in ("leadscrew_dual", "leadscrew_dual_belt_sync"):
+        tags = ("l", "r")
+    else:
+        tags = ("r",)
+
+    cms_mount_k = resolve_cad_z_drive_mount_stiffness_n_m(
+        spec, trident_backbone_active=trident_backbone_active
+    )
+
+    if str(z_mech["kind"]) == "belt":
+        k_belt_ref = max(float(z_mech["k_drive_n_per_um_per_corner"] or 0.18) * 1.0e6, 1.0e4)
+        h_m = max(float(spec.frame.height_mm) * 1e-3, 0.25)
+        z_active = max(float(z_gantry if is_flying else z_bed), 0.06)
+        # Parallel two-span closed-loop Z-belt stiffness: lower drive span L1 + upper return span L2
+        l1_m = max(z_active, 0.06)
+        l2_m = max(2.0 * h_m - z_active, 0.12)
+        geom_ref = (1.0 / 0.24) + (1.0 / (2.0 * 0.48 - 0.24))
+        geom_cur = (1.0 / l1_m) + (1.0 / l2_m)
+        # Mild bounded height/Z-elevation scaling (tooth-shear + pulley compliance limit extreme ends)
+        span_mult = float(np.clip(0.65 + 0.35 * (geom_cur / geom_ref), 0.78, 1.28))
+        k_belt_eff = k_belt_ref * span_mult
+        gear_ratio = max(float(z_mech.get("gear_ratio", 5.0)), 1.0)
+        # Reflected stepper holding torsional stiffness + 80:16 reduction belt/gearbox stage
+        k_red_motor = (2.5e7 if gear_ratio >= 15.0 else 9.5e6) * (gear_ratio / 5.0)
+        k_base_col = 1.0 / (1.0 / k_belt_eff + 1.0 / k_red_motor)
+        out: dict[str, float] = {}
+        for tag in tags:
+            k_mount = cms_mount_k.get(tag)
+            out[tag] = (
+                1.0 / (1.0 / k_base_col + 1.0 / k_mount)
+                if (k_mount is not None and k_mount > 0.0)
+                else k_base_col
+            )
+        return out
+
+    e_steel_z = 200.0e9
+    l_screw_m = max(z_gantry if is_flying else z_bed, 0.05)
+    k_shaft = e_steel_z * float(z_mech["root_area_m2"]) / l_screw_m
+    k_nut = max(float(z_mech["k_nut_n_per_um"]) * 1.0e6, 1.0e5)
+    mech_id = str(z_mech.get("id", ""))
+    if "pom" in mech_id or "wobblex" in mech_id and str(z_mech["kind"]) == "leadscrew":
+        # Acetal/POM thread-flank modulus softens ~0.45%/C above 25 C in enclosed chambers
+        dt_ch = max(0.0, float(spec.frame.chamber_temp_c) - 25.0)
+        k_nut /= 1.0 + 0.0045 * dt_ch
+    k_thrust = max(float(z_mech["k_thrust_n_per_um"]) * 1.0e6, 1.0e5)
+    if trident_backbone_active:
+        k_thrust *= 2.4
+    k_base_col = 1.0 / (1.0 / k_shaft + 1.0 / k_nut + 1.0 / k_thrust)
+
+    out = {}
+    for tag in tags:
+        k_mount = cms_mount_k.get(tag)
+        out[tag] = (
+            1.0 / (1.0 / k_base_col + 1.0 / k_mount)
+            if (k_mount is not None and k_mount > 0.0)
+            else k_base_col
+        )
+    return out
+
+
 def _compute_corexy_z_drive_stiffness(
     spec: PrinterSpec,
     z_gantry: float,
@@ -368,18 +557,13 @@ def _compute_corexy_z_drive_stiffness(
     is_flying: bool,
     trident_backbone_active: bool,
 ) -> float:
-    """Compute axial Z-drive column/screw/nut/thrust stiffness (N/m) for CoreXY architectures."""
-    z_mech = resolve_z_drive_mechanism(spec)
-    if str(z_mech["kind"]) == "belt":
-        return float(z_mech["k_drive_n_per_um_per_corner"] or 0.18) * 1.0e6
-    e_steel_z = 200.0e9
-    l_screw_m = max(z_gantry if is_flying else z_bed, 0.05)
-    k_shaft = e_steel_z * float(z_mech["root_area_m2"]) / l_screw_m
-    k_nut = max(float(z_mech["k_nut_n_per_um"]) * 1.0e6, 1.0e5)
-    k_thrust = max(float(z_mech["k_thrust_n_per_um"]) * 1.0e6, 1.0e5)
-    if trident_backbone_active:
-        k_thrust *= 2.4
-    return 1.0 / (1.0 / k_shaft + 1.0 / k_nut + 1.0 / k_thrust)
+    """Compute mean per-corner axial Z-drive vertical stiffness (N/m) for CoreXY architectures."""
+    corner_k = _compute_corexy_z_drive_corner_stiffnesses(
+        spec, z_gantry, z_bed, is_flying, trident_backbone_active
+    )
+    if not corner_k:
+        return 1.8e5
+    return float(sum(corner_k.values()) / len(corner_k))
 
 
 def _setup_corexy_z_drive_nodes_and_bed(
@@ -405,9 +589,22 @@ def _setup_corexy_z_drive_nodes_and_bed(
     k_z_car_normal, k_z_car_shear, k_z_car_rot = _compute_z_carriage_spring_stiffness(
         spec, z_drive, k_z_drive_col_n_m
     )
+    trident_backbone_active = bool(spec.frame.trident_backbone and not spec.is_flying_gantry)
+    per_corner_z_k = (
+        _compute_corexy_z_drive_corner_stiffnesses(
+            spec,
+            z_gantry=z_gantry,
+            z_bed=float(bed_center[2]),
+            is_flying=False,
+            trident_backbone_active=trident_backbone_active,
+        )
+        if z_drive == "leadscrew_triple"
+        else {}
+    )
 
     def _add_z_drive_springs(tags: tuple[str, ...]) -> None:
         for tag in tags:
+            k_norm_tag = float(per_corner_z_k.get(tag, k_z_car_normal))
             fastener_springs.append(
                 _b.FastenerSpring(
                     id=f"z_bed_drive_{tag}",
@@ -415,7 +612,7 @@ def _setup_corexy_z_drive_nodes_and_bed(
                     shell_node_id=f"z_col_bed_{tag}",
                     frame_node_id=f"z_bed_{tag}",
                     k_shear_n_m=k_z_car_shear,
-                    k_normal_n_m=k_z_car_normal,
+                    k_normal_n_m=k_norm_tag,
                     k_rot_nm_rad=k_z_car_rot,
                     normal_vec=(0.0, 0.0, 1.0),
                     offset_m=(0.0, 0.0, 0.0),

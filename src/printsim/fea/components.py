@@ -99,6 +99,90 @@ _IWAN_DAMPING_DELTA: dict[str, float] = CORNER_JOINT_IWAN_DAMPING
 
 _ISO_5753_RADIAL_PLAY_UM: dict[str, float] = BEARING_RADIAL_PLAY_UM
 
+# Catalog radial internal clearance c_rad (um; negative = interference preload) by rail series & preload class.
+# Sources: HIWIN GW-11-7-EN-2401-K Tables 3.3 & 3.75 (MGN ZF +4..+10 um, Z0 0..+3 um, Z1 0..0.02 Cdyn;
+# HG Z0/ZA/ZB) and THK General Catalog SRS/HSR radial clearance tables (SRS9 C1 -4..0, SRS12 C1 -6..0,
+# SRS15 C1 -10..0, HSR15 Normal -2..+2, C1 -5..-1 um).
+RAIL_RADIAL_CLEARANCE_UM_TABLE: dict[str, dict[str, float]] = {
+    "mgn9_rail": {"ZF": 6.0, "Z0": 1.0, "Z1": -2.0, "ZA": -4.0, "ZB": -6.0},
+    "mgn12_rail": {"ZF": 7.0, "Z0": 1.5, "Z1": -3.0, "ZA": -5.5, "ZB": -8.0},
+    "mgn12_hollow_rail": {"ZF": 7.0, "Z0": 1.5, "Z1": -3.0, "ZA": -5.5, "ZB": -8.0},
+    "mgn15_rail": {"ZF": 7.5, "Z0": 1.5, "Z1": -4.5, "ZA": -7.5, "ZB": -11.0},
+    "hgh15_rail": {"ZF": 5.0, "Z0": 0.0, "Z1": -3.0, "ZA": -7.0, "ZB": -12.0},
+    "steel_rod_8mm": {"ZF": 10.0, "Z0": 3.0, "Z1": -1.0, "ZA": -3.0, "ZB": -5.0},
+    "steel_rod_10mm": {"ZF": 10.0, "Z0": 3.0, "Z1": -1.0, "ZA": -3.0, "ZB": -5.0},
+    "steel_rod_12mm": {"ZF": 10.0, "Z0": 3.0, "Z1": -1.0, "ZA": -3.0, "ZB": -5.0},
+}
+
+
+def _profiled_rail_c_hertz(d_b_m: float, e_star_pa: float, conformity_f: float) -> float:
+    """Compute single-contact Hertzian compliance constant c_hertz (m / N^(2/3)) vs groove conformity f.
+
+    Follows NSK Technical Report CAT. No. E728 §5.2 & §5.4 and Harris & Kotzalas (2006):
+    straight-raceway transverse groove radius r_g = f * d_b gives equivalent radius
+    R_e(f) = (d_b / 2) * sqrt(f / (2*f - 1)), calibrated to baseline f = 0.525 (R_e = d_b*sqrt(5.25)/2
+    with elliptical factor F2 = 0.68).
+    """
+    f_clamped = min(max(float(conformity_f), 0.505), 0.65)
+    # Match exact existing f=0.525 baseline c_hertz while varying physically with conformity f
+    r_e_ref = d_b_m * math.sqrt(5.25)
+    c_ref = ((9.0 / (16.0 * r_e_ref * (e_star_pa**2))) ** (1.0 / 3.0)) * 0.68
+    if abs(f_clamped - 0.525) < 1e-9:
+        return c_ref
+    ratio_re = math.sqrt((f_clamped / (2.0 * f_clamped - 1.0)) / (0.525 / (2.0 * 0.525 - 1.0)))
+    # Harris & Kotzalas elliptical integral F2 scales gently with osculation ratio (2f - 1)
+    ratio_f2 = ((2.0 * f_clamped - 1.0) / 0.050) ** 0.095
+    return c_ref * (ratio_re ** (-1.0 / 3.0)) * ratio_f2
+
+
+def _rail_grade_ball_sharing(
+    n_b: int,
+    q_ball_n: float,
+    c_hertz_base: float,
+    c_hertz_grade: float,
+    ball_tol_um: float,
+    clearance_bias_um: float,
+    base_ball_tol_um: float = 0.25,
+) -> tuple[float, float]:
+    """Compute preload-dependent Hertzian ball-sharing stiffness ratio and active ball fraction.
+
+    Integrates local Hertzian tangent stiffness k_i ~ delta_i^(1/2) / c_hertz across n_b balls
+    whose diameter + raceway grinding scatter spans [-ball_tol_um, +ball_tol_um] (ISO 3290
+    G5/G10/G16/G28-G40), shifted by the grade's radial clearance bias projected onto the 45-deg
+    contact normal. Normalized to the HIWIN Grade C/H baseline so `hiwin_genuine` returns 1.000.
+    """
+    sin45 = math.sin(math.radians(45.0))
+    # Nominal double-contact (rail + carriage) Hertzian elastic approach per ball (um)
+    delta0_base_um = 2.0 * c_hertz_base * (max(q_ball_n, 0.15) ** (2.0 / 3.0)) * 1e6
+    delta0_grade_um = 2.0 * c_hertz_grade * (max(q_ball_n, 0.15) ** (2.0 / 3.0)) * 1e6
+
+    def _sum_k_and_active(delta0_um: float, tol_um: float, bias_um: float, c_h: float) -> tuple[float, float]:
+        # Largest ball (i = 0) sets the zero-gap reference contact; smaller balls sit at a
+        # non-negative gap g_i in [0, tol_um] behind it, so larger ISO 3290 scatter monotonically
+        # reduces active-ball load sharing (never adding artificial interference on oversized balls).
+        d_mean = max(delta0_um - bias_um * sin45, 0.15)
+        d_floor = 0.22 * delta0_um  # minimum loaded contact on tightest balls under working load
+        k_sum = 0.0
+        n_act = 0
+        denom = max(n_b - 1, 1)
+        for i in range(n_b):
+            g_i = tol_um * (i / denom)
+            d_i = d_mean - g_i
+            if d_i > 0.0:
+                n_act += 1
+                k_sum += math.sqrt(d_i)
+            elif i < 2:
+                # At least 2 tightest balls seat under external radial/moment working load
+                n_act += 1
+                k_sum += math.sqrt(d_floor)
+        return (k_sum / max(c_h, 1e-18)), (n_act / max(n_b, 1))
+
+    k_grade, active_frac = _sum_k_and_active(
+        delta0_grade_um, ball_tol_um, clearance_bias_um, c_hertz_grade
+    )
+    k_base, _ = _sum_k_and_active(delta0_base_um, base_ball_tol_um, 0.0, c_hertz_base)
+    return float(k_grade / max(k_base, 1e-18)), float(active_frac)
+
 
 def hertzian_rail_carriage_stiffness(
     rail_profile_id: str,
@@ -111,9 +195,9 @@ def hertzian_rail_carriage_stiffness(
 ) -> dict[str, float]:
     """Compute 6-DOF Hertzian ball-raceway contact stiffness & drag for a linear rail carriage.
 
-    Includes 15% Hung et al. (2011) carriage-skirt structural compliance in series with the
-    Hertzian elliptical point-contact stiffness (conformity f = 0.525, 45 deg contact angle),
-    scaled by ``rail_quality`` raceway grinding & ball-sorting load-sharing multipliers.
+    Uses HIWIN (ZF/Z0/Z1/ZA/ZB) & THK/NSK Grade P radial clearance, groove conformity
+    (``f = r_g / d_b``), and ISO 3290 ball-diameter tolerance load-sharing tables rather than
+    a flat scalar multiplier, in series with 15% Hung et al. (2011) carriage-skirt compliance.
     """
     key = rail_profile_id.lower().strip()
     if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
@@ -138,16 +222,15 @@ def hertzian_rail_carriage_stiffness(
 
     qual_key = str(rail_quality).lower().strip() if rail_quality else "hiwin_genuine"
     qual_cfg = RAIL_QUALITY_CATALOG.get(qual_key, RAIL_QUALITY_CATALOG["hiwin_genuine"])
-    stiffness_mult = (
-        float(stiffness_mult_override)
-        if stiffness_mult_override is not None
-        else float(qual_cfg["stiffness_mult"])
-    )
+    cat_stiff_ref = float(qual_cfg["stiffness_mult"])
     drag_mult = (
         float(drag_mult_override)
         if drag_mult_override is not None
         else float(qual_cfg["drag_mult"])
     )
+    conformity_f = float(qual_cfg.get("conformity_f", 0.525))
+    ball_tol_um = float(qual_cfg.get("ball_raceway_tol_um", 0.25))
+    clearance_bias_um = float(qual_cfg.get("clearance_bias_um", 0.0))
 
     # Active balls in the loaded raceway zone along L1 (~1.05 * d_b pitch)
     n_b = max(4, int(round(l1 / (1.05 * d_b))))
@@ -165,28 +248,41 @@ def hertzian_rail_carriage_stiffness(
         r_e_out = 0.5 * d_b * math.sqrt((d_shaft + 2.0 * d_b) / (d_shaft + d_b))
         c_in = (9.0 / (16.0 * r_e_in * (e_star**2))) ** (1.0 / 3.0)
         c_out = (9.0 / (16.0 * r_e_out * (e_star**2))) ** (1.0 / 3.0)
-        # Series compliance (c_in + c_out) represented via single-contact c_n = 0.5*(c_in+c_out)
-        c_hertz = 0.5 * (c_in + c_out)
+        c_hertz_base = 0.5 * (c_in + c_out)
+        c_hertz_grade = c_hertz_base
     else:
-        # Profiled rail elliptical groove contact (f=0.525 -> R_e=d_b*sqrt(5.25), F2=0.68)
-        r_e = d_b * math.sqrt(5.25)
-        f2_ellip = 0.68
-        c_hertz = ((9.0 / (16.0 * r_e * (e_star**2))) ** (1.0 / 3.0)) * f2_ellip
+        c_hertz_base = _profiled_rail_c_hertz(d_b, e_star, 0.525)
+        c_hertz_grade = _profiled_rail_c_hertz(d_b, e_star, conformity_f)
 
     def _raw_hertz_radial(f_frac: float) -> float:
         q_ball = max((f_frac * c_dyn) / (n_rows * n_b * sin_alpha), 0.15)
-        k_n = (1.5 / c_hertz) * (q_ball ** (1.0 / 3.0))
+        k_n = (1.5 / c_hertz_base) * (q_ball ** (1.0 / 3.0))
         # B-12: Each ball has two contacts in series (k_n/2).
         # 2-row Gothic arch (mgn*, n_rows=2): 4-pt contact has 2 active diagonals -> 0.5 * n_rows = 1.0
         # 4-row circular-arc (hgh15, steel_rod_*, n_rows=4): 2-pt contact per row -> 0.25 * n_rows = 1.0
         row_factor = 0.25 * n_rows if n_rows >= 4 else 0.5 * n_rows
         return row_factor * n_b * k_n
 
+    q_ball_op = max((f_pre * c_dyn) / (n_rows * n_b * sin_alpha), 0.15)
+    grade_ratio, active_ball_frac = _rail_grade_ball_sharing(
+        n_b=n_b,
+        q_ball_n=q_ball_op,
+        c_hertz_base=c_hertz_base,
+        c_hertz_grade=c_hertz_grade,
+        ball_tol_um=ball_tol_um,
+        clearance_bias_um=clearance_bias_um,
+    )
+    # Honor explicit user model_overrides.rail_quality.stiffness_mult whenever it differs from catalog default
+    if stiffness_mult_override is not None and abs(float(stiffness_mult_override) - cat_stiff_ref) > 1e-9:
+        stiffness_mult = grade_ratio * (float(stiffness_mult_override) / max(cat_stiff_ref, 1e-6))
+    else:
+        stiffness_mult = grade_ratio
+
     k_hertz_raw = _raw_hertz_radial(f_pre)
     # Slight clearance ZF unloads opposing ball row under initial load -> ~55% contact stiffness
     if preload_fraction_override is None and pre_key == "ZF":
         k_hertz_raw *= 0.55
-    # Ball-tolerance load sharing and raceway grinding conformity scale Hertzian contact stiffness
+    # Apply preload- and grade-dependent Hertzian ball-sharing & conformity factor
     k_hertz_raw *= stiffness_mult
 
     # 15% Hung carriage-skirt structural compliance referenced to Z1 nominal block stiffness
@@ -212,6 +308,11 @@ def hertzian_rail_carriage_stiffness(
     seal_drag_eff = seal_drag * drag_mult
     breakaway_friction = 1.6 * rolling_friction + 1.35 * seal_drag_eff
 
+    base_clearance_um = RAIL_RADIAL_CLEARANCE_UM_TABLE.get(key, RAIL_RADIAL_CLEARANCE_UM_TABLE["mgn12_rail"]).get(
+        pre_key, -3.0
+    )
+    eff_radial_clearance_um = float(base_clearance_um + clearance_bias_um)
+
     return {
         "k_yy_n_m": k_yy,
         "k_zz_n_m": k_zz,
@@ -222,6 +323,10 @@ def hertzian_rail_carriage_stiffness(
         "seal_drag_n": seal_drag_eff,
         "breakaway_friction_n": breakaway_friction,
         "block_mass_g": block_mass_g,
+        "effective_radial_clearance_um": eff_radial_clearance_um,
+        "active_ball_fraction": active_ball_frac,
+        "groove_conformity_f": conformity_f,
+        "effective_quality_stiffness_ratio": float(stiffness_mult),
     }
 
 
@@ -542,7 +647,13 @@ def corner_joint_stiffness(
     k_r_inplane_override_nm_rad: float | None = None,
     k_r_torsion_override_nm_rad: float | None = None,
 ) -> dict[str, float]:
-    """Compute semi-rigid frame corner joint translational & rotational stiffnesses (SI)."""
+    """Compute semi-rigid frame corner joint translational & rotational stiffnesses (SI).
+
+    2020 aluminum baselines in ``CORNER_JOINT_BASE_2020`` are calibrated against 100k-184k DOF
+    3D Tet10 continuum FEA submodels (``scripts/calibrate_corner_joints_fea.py``) capturing
+    Misumi HFS5-2020 1.65 mm T-slot lip flexure, M5/M6 preload, and Back-Burdekin/Yoshimura
+    bolted contact compliance, scaled to other profile sizes via ``width_m`` and ``I_avg^0.65``.
+    """
     jkey = joint_type.lower().strip()
     if jkey not in _CORNER_JOINT_BASE_2020:
         jkey = "blind_joint"
@@ -590,6 +701,139 @@ def iwan_joint_damping_delta(
     if damping_override is not None:
         return float(damping_override)
     return _IWAN_DAMPING_DELTA.get(joint_type.lower().strip(), 0.003)
+
+
+def frame_feet_isolator_mechanics(
+    feet_type: str,
+    printer_mass_kg: float = 20.0,
+    n_feet: int = 4,
+) -> dict[str, float]:
+    """Compute calibrated benchtop isolator stiffness, loss factor, and whole-printer mount frequencies (SI).
+
+    Calibrated against:
+      - Gent (1958) & Lindley (1974) elastomer shape-factor compression/shear (65A rubber/TPU feet)
+      - Sorbothane Data Sheet 101 (50 Duro tan(delta) = 0.57-0.65, 1.5 in hemisphere 6-12 Hz isolation)
+      - HULA Omnidirectional Feet (thrutheframe/VoxelPLA: F8-22M thrust bearing + 95A TPU flex ring)
+      - CNC Kitchen 18 kg concrete paver (400x400x50 mm) on 25 mm closed-cell EVA/acoustic foam
+    """
+    from printsim.schema.printer import FRAME_FEET_CATALOG
+
+    key = str(feet_type).lower().strip()
+    cfg = FRAME_FEET_CATALOG.get(key, FRAME_FEET_CATALOG["rigid_bolted"])
+    k_ax_n_m = float(cfg.get("k_axial_n_per_mm", 0.0)) * 1e3
+    k_lat_n_m = float(cfg.get("k_lateral_n_per_mm", 0.0)) * 1e3
+    base_mass_kg = float(cfg.get("base_mass_kg", 0.0))
+    zeta_m = float(cfg.get("mount_damping_ratio", 0.05))
+    loss_factor = float(cfg.get("loss_factor", 2.0 * zeta_m))
+    damping_delta = float(cfg.get("damping_delta", 0.0))
+
+    m_tot = max(float(printer_mass_kg) + base_mass_kg, 1.0)
+    nf = max(int(n_feet), 1)
+    if k_ax_n_m > 0.0:
+        f_bounce_hz = (1.0 / (2.0 * math.pi)) * math.sqrt((nf * k_ax_n_m) / m_tot)
+    else:
+        f_bounce_hz = float("inf")
+    if k_lat_n_m > 0.0:
+        f_sway_hz = (1.0 / (2.0 * math.pi)) * math.sqrt((nf * k_lat_n_m) / m_tot)
+    else:
+        f_sway_hz = float("inf")
+
+    return {
+        "k_axial_n_m": k_ax_n_m,
+        "k_lateral_n_m": k_lat_n_m,
+        "loss_factor": loss_factor,
+        "mount_damping_ratio": zeta_m,
+        "damping_delta": damping_delta,
+        "base_mass_kg": base_mass_kg,
+        "effective_isolated_mass_kg": m_tot,
+        "f_bounce_hz": f_bounce_hz,
+        "f_sway_hz": f_sway_hz,
+    }
+
+
+def extrusion_filling_composite_properties(
+    profile_id: str,
+    fill_id: str,
+    base_e_pa: float = 69.0e9,
+    base_g_pa: float = 25.9e9,
+    base_rho_kg_m3: float = 2700.0,
+    density_override_kg_m3: float | None = None,
+    modulus_override_pa: float | None = None,
+    bonded_override: bool | None = None,
+    damping_override: float | None = None,
+) -> dict[str, float]:
+    """Compute composite EI_eff, GJ_eff, mass/m, and tap-test damping boost for a filled extrusion (SI).
+
+    Calibrated to published aluminum extrusion / tube tap-test & mineral-cast literature
+    (Cortes & Castillo 2007; Suh & Lee 2008; Friend & Kinra 2000; Marhadi & Kinra 2005;
+    Mohring et al. 2015):
+      - Bonded cores apply ``bond_efficiency`` (0.90 epoxy granite adhesive bond; 0.80 UHPC
+        accounting for cementitious cure-shrinkage micro-slip against anodized Al cavity walls).
+      - Unbonded granular fills (silica sand, lead shot) and low-modulus PU foam contribute zero
+        bonded bending stiffness while providing Coulomb/impact particle damping or acoustic loss.
+    """
+    from printsim.schema.printer import EXTRUSION_FILLINGS
+
+    prof = get_profile(profile_id)
+    entry = EXTRUSION_FILLINGS.get(str(fill_id).lower().strip(), EXTRUSION_FILLINGS["none"])
+
+    rho_fill = float(density_override_kg_m3) if density_override_kg_m3 is not None else float(entry["density_kg_m3"])
+    e_fill = float(modulus_override_pa) if modulus_override_pa is not None else float(entry["youngs_modulus_pa"])
+    is_bonded = bool(bonded_override) if bonded_override is not None else bool(entry["bonded"])
+    damping_boost = float(damping_override) if damping_override is not None else float(entry["damping_boost"])
+    if bonded_override is not None and bonded_override and not bool(entry["bonded"]):
+        eta_bond = 0.85
+    else:
+        eta_bond = float(entry.get("bond_efficiency", 0.90 if is_bonded else 0.0))
+    core_loss_factor = float(entry.get("core_loss_factor", 0.04))
+
+    w = float(prof.width_m)
+    h = float(prof.height_m)
+    a_ext = max(float(prof.area_m2), 1e-12)
+    a_void = max(w * h - a_ext, 0.0)
+    a_cav = 0.58 * a_void
+    i_cav_y = 0.52 * max((w * (h**3)) / 12.0 - float(prof.iy_m4), 0.0)
+    i_cav_z = 0.52 * max((h * (w**3)) / 12.0 - float(prof.iz_m4), 0.0)
+    j_cav = 0.70 * (i_cav_y + i_cav_z)
+
+    if is_bonded and e_fill > 0.0 and eta_bond > 0.0:
+        g_fill = e_fill / (2.0 * (1.0 + 0.25))
+        n_e = eta_bond * (e_fill / max(float(base_e_pa), 1e6))
+        n_g = eta_bond * (g_fill / max(float(base_g_pa), 1e6))
+        delta_iy = n_e * i_cav_y
+        delta_iz = n_e * i_cav_z
+        delta_j = n_g * j_cav
+    else:
+        delta_iy = 0.0
+        delta_iz = 0.0
+        delta_j = 0.0
+
+    iy_eff = float(prof.iy_m4) + delta_iy
+    iz_eff = float(prof.iz_m4) + delta_iz
+    j_eff = float(prof.j_m4) + delta_j
+    ei_gain_ratio = delta_iy / max(float(prof.iy_m4), 1e-18)
+    fill_mass_ratio = (rho_fill * a_cav) / max(float(base_rho_kg_m3) * a_ext, 1e-12)
+    # Ungar-Kerwin modal strain-energy viscoelastic loss share from bonded core
+    visco_strain_energy_zeta = 0.5 * core_loss_factor * (delta_iy / max(iy_eff, 1e-18))
+
+    return {
+        "a_cav_m2": a_cav,
+        "i_cav_y_m4": i_cav_y,
+        "i_cav_z_m4": i_cav_z,
+        "j_cav_m4": j_cav,
+        "bond_efficiency": eta_bond if is_bonded else 0.0,
+        "delta_iy_m4": delta_iy,
+        "delta_iz_m4": delta_iz,
+        "delta_j_m4": delta_j,
+        "iy_eff_m4": iy_eff,
+        "iz_eff_m4": iz_eff,
+        "j_eff_m4": j_eff,
+        "ei_gain_pct": 100.0 * ei_gain_ratio,
+        "fill_mass_kg_per_m": rho_fill * a_cav,
+        "fill_mass_ratio": fill_mass_ratio,
+        "visco_strain_energy_zeta": visco_strain_energy_zeta,
+        "damping_boost": damping_boost,
+    }
 
 
 def belt_flexural_rigidity_nm2(

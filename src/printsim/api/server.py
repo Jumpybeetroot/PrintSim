@@ -24,7 +24,12 @@ from printsim.api.session import (
     save_snapshots,
 )
 
-from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.engine import (
+    evaluate_printer,
+    optimize_design,
+    optimize_pareto_front,
+    run_signoff_verification,
+)
 from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.adxl_calibration import calibrate_printer_against_adxl, fit_printer_to_adxl
 from printsim.fea.solid_fem import (
@@ -89,7 +94,7 @@ from printsim.thermal import FILAMENT_CATALOG
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
 _ALLOWED_HARDWARE_CATEGORIES = frozenset(
-    {"hotends", "toolheads", "gantry_brackets", "assemblies"}
+    {"hotends", "toolheads", "gantry_brackets", "assemblies", "frame_braces", "x_beams"}
 )
 _VALID_ASSET_ID_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
@@ -114,6 +119,19 @@ class DeepVerifyRequest(BaseModel):
     toolhead_rel_pos: tuple[float, float, float] = (0.5, 0.5, 0.5)
     deep_mesh_n: int = Field(8, ge=4, le=10)
     deep_bed_mesh_n: int = Field(16, ge=8, le=20)
+
+
+class SignoffVerifyRequest(BaseModel):
+    spec: PrinterSpec | None = None
+    yaml_text: str | None = None
+    gcode_text: str | None = None
+    filament_id: str = "pla"
+    deep_mesh_n: int = Field(8, ge=4, le=10)
+    deep_bed_mesh_n: int = Field(16, ge=8, le=20)
+    workspace_grid_n: int = Field(3, ge=2, le=5)
+    include_z_extremes: bool = True
+    # None perturbs every uncertain group; a cap keeps only the lowest-trust ones.
+    max_uncertainty_groups: int | None = Field(None, ge=1, le=12)
 
 
 class AdxlCalibrationRequest(BaseModel):
@@ -573,6 +591,28 @@ def create_app() -> FastAPI:
                 filament_id=req.filament_id,
                 deep_mesh_n=req.deep_mesh_n,
                 deep_bed_mesh_n=req.deep_bed_mesh_n,
+            )
+            deep_sim = result.get("deep_simulation")
+            if isinstance(deep_sim, dict):
+                deep_sim.setdefault("spec", spec.model_dump(mode="json"))
+                deep_sim.setdefault("yaml_text", spec.to_yaml())
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/api/verify/signoff")
+    def run_signoff_verify(req: SignoffVerifyRequest) -> dict:
+        spec = _resolve_spec(req.spec, req.yaml_text)
+        try:
+            result = run_signoff_verification(
+                spec,
+                gcode_text=req.gcode_text,
+                filament_id=req.filament_id,
+                deep_mesh_n=req.deep_mesh_n,
+                deep_bed_mesh_n=req.deep_bed_mesh_n,
+                workspace_grid_n=req.workspace_grid_n,
+                include_z_extremes=req.include_z_extremes,
+                max_uncertainty_groups=req.max_uncertainty_groups,
             )
             deep_sim = result.get("deep_simulation")
             if isinstance(deep_sim, dict):

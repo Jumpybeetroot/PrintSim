@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -1432,6 +1433,7 @@ def _build_cad_z_joint_superelement(
     )
 
 
+
 def _resolve_cad_trident_bed_arm_assets(spec: PrinterSpec) -> dict[str, object]:
     """Load baked 3D CAD Trident Z bed-arm superelements (FL/FR/Rear) for triple-Z CoreXY."""
     if (
@@ -1567,4 +1569,603 @@ def _build_cad_trident_bed_arm_superelement(
         manifest=dict(asset.manifest),  # type: ignore[attr-defined]
         visual_glb_url=f"/api/assets/hardware/gantry_brackets/{aid}/visual.glb",
         cad_trust_pct=int(asset.manifest.get("cad_trust_pct", 88)),  # type: ignore[attr-defined]
+    )
+
+
+# ---------------------------------------------------------------------------
+# CAL-13: Explicit 3D Pulley-Coordinate Belt Path & Idler Routing Graph
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PulleyNode3D:
+    """Physical 3D pulley, idler, or belt-clamp station in the CoreXY belt routing graph."""
+
+    id: str
+    station: str  # "fl" | "fr" | "rl" | "rr" | "xy_l" | "xy_r" | "toolhead"
+    role: str  # "drive" | "corner_idler" | "xy_joint_idler" | "guide_idler" | "clamp"
+    belt_plane: str  # "A" (upper) | "B" (lower)
+    position_m: tuple[float, float, float]
+    shaft_architecture: str  # "motor_single_shear" | "motor_double_shear" | "single_shear_bolt" | "double_shear_bolt" | "live_shaft" | "clamp"
+    z_overhang_extra_m: float
+    wrap_angle_deg: float
+    pulley_radius_m: float
+    source: str  # "cad_station" | "parametric"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "station": self.station,
+            "role": self.role,
+            "belt_plane": self.belt_plane,
+            "position_mm": [round(v * 1e3, 2) for v in self.position_m],
+            "shaft_architecture": self.shaft_architecture,
+            "z_overhang_extra_mm": round(self.z_overhang_extra_m * 1e3, 2),
+            "wrap_angle_deg": round(self.wrap_angle_deg, 1),
+            "pulley_radius_mm": round(self.pulley_radius_m * 1e3, 2),
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
+class BeltSegment3D:
+    """Directed straight 3D belt segment between two adjacent stations on a branch."""
+
+    branch_id: str
+    belt_plane: str
+    start_id: str
+    end_id: str
+    start_m: tuple[float, float, float]
+    end_m: tuple[float, float, float]
+    length_m: float
+    direction_unit: tuple[float, float, float]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "branch_id": self.branch_id,
+            "belt_plane": self.belt_plane,
+            "start_id": self.start_id,
+            "end_id": self.end_id,
+            "length_mm": round(self.length_m * 1e3, 2),
+            "direction_unit": [round(v, 4) for v in self.direction_unit],
+        }
+
+
+@dataclass(frozen=True)
+class BeltBranch3D:
+    """One carriage-to-motor belt branch in the CoreXY 3D belt routing graph."""
+
+    branch_id: str  # "A1" | "A2" | "B1" | "B2"
+    belt_plane: str  # "A" (upper) | "B" (lower)
+    node_ids: tuple[str, ...]
+    segments: tuple[BeltSegment3D, ...]
+    total_length_m: float
+    n_pulley_tangents: float
+    idler_node_ids: tuple[str, ...]
+    drive_node_id: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "branch_id": self.branch_id,
+            "belt_plane": self.belt_plane,
+            "node_ids": list(self.node_ids),
+            "total_length_mm": round(self.total_length_m * 1e3, 2),
+            "n_pulley_tangents": round(self.n_pulley_tangents, 1),
+            "idler_count": len(self.idler_node_ids),
+            "drive_node_id": self.drive_node_id,
+            "segments": [s.to_dict() for s in self.segments],
+        }
+
+
+@dataclass(frozen=True)
+class CoreXYBeltGraph3D:
+    """Explicit 3D pulley-coordinate CoreXY belt graph with stacked A/B planes & idler metadata."""
+
+    routing: str
+    drive_mode: str
+    hardware_kit: str
+    uses_cad_stations: bool
+    u_rel: float
+    v_rel: float
+    z_gantry_m: float
+    z_belt_mid_m: float
+    z_upper_plane_m: float
+    z_lower_plane_m: float
+    dz_belt_planes_m: float
+    upper_plane_z_lever_mm: float
+    lower_plane_z_lever_mm: float
+    belt_to_cog_z_lever_mm: float
+    stacked_belt_twist_moment_nm_per_n: float
+    pulleys: dict[str, PulleyNode3D]
+    branches: dict[str, BeltBranch3D]
+    longest_free_span_m: float
+    total_active_belt_length_m: float
+    effective_span_ratio_vs_stock: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "routing": self.routing,
+            "drive_mode": self.drive_mode,
+            "hardware_kit": self.hardware_kit,
+            "uses_cad_stations": self.uses_cad_stations,
+            "u_rel": round(self.u_rel, 4),
+            "v_rel": round(self.v_rel, 4),
+            "z_gantry_mm": round(self.z_gantry_m * 1e3, 2),
+            "z_belt_mid_mm": round(self.z_belt_mid_m * 1e3, 2),
+            "z_upper_plane_mm": round(self.z_upper_plane_m * 1e3, 2),
+            "z_lower_plane_mm": round(self.z_lower_plane_m * 1e3, 2),
+            "dz_belt_planes_mm": round(self.dz_belt_planes_m * 1e3, 2),
+            "upper_plane_z_lever_mm": round(self.upper_plane_z_lever_mm, 2),
+            "lower_plane_z_lever_mm": round(self.lower_plane_z_lever_mm, 2),
+            "belt_to_cog_z_lever_mm": round(self.belt_to_cog_z_lever_mm, 2),
+            "stacked_belt_twist_moment_nm_per_n": round(self.stacked_belt_twist_moment_nm_per_n, 5),
+            "longest_free_span_mm": round(self.longest_free_span_m * 1e3, 2),
+            "total_active_belt_length_mm": round(self.total_active_belt_length_m * 1e3, 2),
+            "effective_span_ratio_vs_stock": round(self.effective_span_ratio_vs_stock, 4),
+            "branch_lengths_mm": {
+                bid: round(br.total_length_m * 1e3, 2) for bid, br in self.branches.items()
+            },
+            "pulleys": {pid: p.to_dict() for pid, p in self.pulleys.items()},
+            "branches": {bid: br.to_dict() for bid, br in self.branches.items()},
+        }
+
+
+def _segment_turn_wrap_deg(
+    p_prev: np.ndarray,
+    p_curr: np.ndarray,
+    p_next: np.ndarray,
+) -> float:
+    """Exact 3D belt deflection/wrap angle (deg) at an interior pulley node."""
+    v_in = p_curr - p_prev
+    v_out = p_next - p_curr
+    n_in = float(np.linalg.norm(v_in))
+    n_out = float(np.linalg.norm(v_out))
+    if n_in <= 1e-9 or n_out <= 1e-9:
+        return 0.0
+    cos_turn = max(-1.0, min(1.0, float(np.dot(v_in, v_out)) / (n_in * n_out)))
+    return float(math.degrees(math.acos(cos_turn)))
+
+
+def _resolve_corexy_corner_pulley_coords_m(
+    assembly: AssemblyModel,
+    routing: str,
+    use_cad_override: bool | None = None,
+) -> tuple[dict[str, np.ndarray], bool]:
+    """Resolve physical 3D corner pulley shaft coordinates ``{fl, fr, rl, rr}`` in meters.
+
+    Uses baked CAD corner-mount stations (``pulley_fl``..``pulley_rr``) when present on the
+    assembly and consistent with ``routing``, shifting 2020-baked stations inboard by
+    ``0.5 * (b_upright - 20 mm)`` on wider 3030/4040 columns so pulley shafts clear the inner
+    upright face. Falls back cleanly to parametric Voron/Monolith station geometry when
+    procedural hardware is active or when evaluating a routing counterfactual.
+    """
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    spec = assembly.spec
+    nm = assembly.node_map
+    w, d, h = corexy_frame_centerlines_m(spec)
+    bx, by, _ = [float(v) * 1e-3 for v in spec.kinematics.build_volume_mm]
+    z_g = (
+        float(nm["y_rail_car_l"].position_m[2])
+        if "y_rail_car_l" in nm
+        else max(h - float(spec.frame.gantry_top_clearance_mm) * 1e-3, 0.08)
+    )
+    b_up = float(get_profile(spec.frame.effective_upright_profile).width_m)
+    extra_up_in = max(0.0, 0.5 * (b_up - 0.020))
+    is_awd = spec.gantry.drive_mode == "awd"
+
+    has_cad_nodes = all(f"pulley_{t}" in nm for t in ("fl", "fr", "rl", "rr"))
+    use_cad = has_cad_nodes if use_cad_override is None else (use_cad_override and has_cad_nodes)
+
+    if use_cad:
+        p_fl = np.asarray(nm["pulley_fl"].position_m, dtype=float).copy()
+        p_fr = np.asarray(nm["pulley_fr"].position_m, dtype=float).copy()
+        p_rl = np.asarray(nm["pulley_rl"].position_m, dtype=float).copy()
+        p_rr = np.asarray(nm["pulley_rr"].position_m, dtype=float).copy()
+        if extra_up_in > 1e-6:
+            p_fl[0] += extra_up_in
+            p_fl[1] += extra_up_in
+            p_fr[0] -= extra_up_in
+            p_fr[1] += extra_up_in
+            p_rl[0] += extra_up_in
+            p_rl[1] -= extra_up_in
+            p_rr[0] -= extra_up_in
+            p_rr[1] -= extra_up_in
+    else:
+        if routing == "monolith_short":
+            dx_f = 0.0450 + extra_up_in
+            dx_r = 0.0450 + extra_up_in
+            dy_f = 0.0450 + extra_up_in
+            dy_r = 0.0450 + extra_up_in
+        else:
+            # Voron 2.4 / Trident stock printed front-idler & rear A/B drive station offsets
+            dx_f = 0.0190 + extra_up_in
+            dy_f = 0.0240 + extra_up_in
+            dx_r = 0.0490 + extra_up_in
+            dy_r = 0.0140 + extra_up_in
+        p_fl = np.array([dx_f, dy_f, z_g], dtype=float)
+        p_fr = np.array([w - dx_f, dy_f, z_g], dtype=float)
+        p_rl = np.array([dx_r, d - dy_r, z_g], dtype=float)
+        p_rr = np.array([w - dx_r, d - dy_r, z_g], dtype=float)
+
+    if routing == "monolith_short":
+        # Monolith short-path (No-Protrusion / inboard pulley pocket) tucks corner motor/idler
+        # centers inside the 45 mm CAD corner bracket envelope (monolith_awd_front_left/xy_left)
+        # and aligns front & rear stations collinearly on the Y-rail axis for both 2WD and AWD
+        # while preserving build travel clearance.
+        max_y_in = max(0.015, 0.5 * (d - by) - 0.012)
+        target_y_in = min(0.0450 + extra_up_in, max_y_in)
+        if float(p_fl[1]) < target_y_in:
+            p_fl[1] = target_y_in
+            p_fr[1] = target_y_in
+        if (d - float(p_rl[1])) < target_y_in:
+            p_rl[1] = d - target_y_in
+            p_rr[1] = d - target_y_in
+        max_x_in = max(0.020, 0.5 * (w - bx) - 0.012)
+        target_x_in = min(0.0450 + extra_up_in, max_x_in)
+        x_col = min(max(float(p_fl[0]), float(p_rl[0]), target_x_in), max_x_in)
+        p_fl[0] = x_col
+        p_rl[0] = x_col
+        p_fr[0] = w - x_col
+        p_rr[0] = w - x_col
+
+    # Physical inner-envelope safety clamp for very tight custom frames
+    for pt_l, pt_r in ((p_fl, p_fr), (p_rl, p_rr)):
+        x_l = float(np.clip(pt_l[0], 0.010, max(0.5 * w - 0.03, 0.015)))
+        x_r = float(np.clip(pt_r[0], min(0.5 * w + 0.03, w - 0.015), max(w - 0.010, 0.02)))
+        pt_l[0] = x_l
+        pt_r[0] = x_r
+    for pt_f in (p_fl, p_fr):
+        pt_f[1] = float(np.clip(pt_f[1], 0.004, max(0.5 * d - 0.03, 0.010)))
+    for pt_r in (p_rl, p_rr):
+        pt_r[1] = float(np.clip(pt_r[1], min(0.5 * d + 0.03, d - 0.010), max(d - 0.004, 0.02)))
+
+    return {"fl": p_fl, "fr": p_fr, "rl": p_rl, "rr": p_rr}, use_cad
+
+
+def build_corexy_belt_routing_graph_3d(
+    assembly: AssemblyModel,
+    u_rel: float | None = None,
+    v_rel: float | None = None,
+    routing_override: str | None = None,
+    include_stock_comparison: bool = True,
+) -> CoreXYBeltGraph3D:
+    """Build the explicit 3D pulley-coordinate CoreXY belt routing graph at ``(u_rel, v_rel)``.
+
+    Models:
+      - Stacked upper (Belt A, ``z_A = z_belt_mid + 0.5 * dz_belt``) and lower (Belt B,
+        ``z_B = z_belt_mid - 0.5 * dz_belt``) belt planes and exact vertical Z lever arms
+        relative to the gantry neutral axis and toolhead CoG.
+      - Exact 3D ``(x, y, z)`` pulley/idler/clamp coordinates from CAD corner stations when
+        present (falling back to parametric Voron/Monolith station geometry otherwise).
+      - ``stock_corexy`` rear A/B drive guide-idler S-wrap vs ``monolith_short`` direct-entry
+        collinear live-shaft routing (replacing the legacy scalar ``0.86x`` span factor).
+      - Per-station shaft architecture (single-shear vs double-shear motor shaft, single-shear
+        vs double-shear M5 bolt idlers, and Monolith press-fit live-shaft idlers) with exact
+        3D wrap angles and upper/lower Z overhang lever arms.
+    """
+    from printsim.geometry.builder import corexy_frame_centerlines_m
+
+    spec = assembly.spec
+    nm = assembly.node_map
+    w, d, h = corexy_frame_centerlines_m(spec)
+    bx, by, _ = [float(v) * 1e-3 for v in spec.kinematics.build_volume_mm]
+    rel_pos = getattr(assembly, "toolhead_rel_pos", (0.5, 0.5, 0.5))
+    u = float(min(max(rel_pos[0] if u_rel is None else u_rel, 0.05), 0.95))
+    v = float(min(max(rel_pos[1] if v_rel is None else v_rel, 0.05), 0.95))
+
+    orig_x = 0.5 * (w - bx)
+    orig_y = 0.5 * (d - by)
+    x_th = orig_x + u * bx
+    y_th = orig_y + v * by
+
+    z_g = (
+        float(nm["y_rail_car_l"].position_m[2])
+        if "y_rail_car_l" in nm
+        else max(h - float(spec.frame.gantry_top_clearance_mm) * 1e-3, 0.08)
+    )
+    belt = spec.gantry.belt
+    r_p = float(belt.pitch_radius_m)
+    dz_belt = (float(belt.width_mm) + 3.0) * 1e-3  # belt width + 3.0 mm flange/washer gap
+    z_belt_mid = z_g + float(spec.toolhead.belt_plane_z_offset_mm) * 1e-3
+    z_a = z_belt_mid + 0.5 * dz_belt
+    z_b = z_belt_mid - 0.5 * dz_belt
+    z_cog = z_g + float(spec.toolhead.cog_offset_mm[2]) * 1e-3
+
+    routing = routing_override if routing_override is not None else spec.gantry.belt_routing
+    is_awd = spec.gantry.drive_mode == "awd"
+    hw_kit = spec.resolve_effective_gantry_hardware_kit()
+    use_cad_override = None if routing_override is None else False
+    corners, uses_cad = _resolve_corexy_corner_pulley_coords_m(
+        assembly, routing=routing, use_cad_override=use_cad_override
+    )
+    p_fl, p_fr, p_rl, p_rr = corners["fl"], corners["fr"], corners["rl"], corners["rr"]
+
+    # Inner Y-run tangent line aligned with front corner pulley inner pitch tangent
+    x_yrun_l = min(float(p_fl[0]) + r_p, max(orig_x - 0.005, float(p_fl[0])))
+    x_yrun_r = max(float(p_fr[0]) - r_p, min(orig_x + bx + 0.005, float(p_fr[0])))
+
+    # Rear drive pulley pitch-tangent X coordinate: collinear with Y-run when motor shafts align
+    # (Monolith AWD), or exact CAD rear motor shaft X when laterally inset (Voron Stock / Siboor / VzBot).
+    x_drive_rl = x_yrun_l if abs(float(p_rl[0]) - float(p_fl[0])) < 1.5e-3 else float(p_rl[0])
+    x_drive_rr = x_yrun_r if abs(float(p_rr[0]) - float(p_fr[0])) < 1.5e-3 else float(p_rr[0])
+
+    # Compact carriage belt-clamp half-spacing (belt teeth lock ±6 mm from carriage center)
+    x_clamp = 0.006
+
+    # CAD station Z offsets (e.g. VzBot rear motor at -2.0 mm relative to gantry plane)
+    dz_fl = float(p_fl[2]) - z_g
+    dz_fr = float(p_fr[2]) - z_g
+    dz_rl = float(p_rl[2]) - z_g
+    dz_rr = float(p_rr[2]) - z_g
+
+    has_rear_swrap = routing == "stock_corexy"
+    swrap_dx = 0.010
+    swrap_dy = 0.006
+
+    motor_arch = "motor_double_shear" if spec.gantry.double_shear_pulleys else "motor_single_shear"
+    if routing == "monolith_short":
+        idler_arch = "live_shaft"
+        guide_arch = "live_shaft"
+    elif spec.gantry.double_shear_pulleys:
+        idler_arch = "double_shear_bolt"
+        guide_arch = "double_shear_bolt"
+    else:
+        # Stock Voron XY-joint & front-idler clevis pockets capture both ends of the M5 bolt
+        # inside printed ABS ears (double-shear bolt with ABS root & stacked overhang), whereas
+        # single-shear rear A/B drive guide posts and NEMA 17 motor shafts act as cantilevers.
+        idler_arch = "double_shear_bolt"
+        guide_arch = "single_shear_bolt"
+
+    src_corner = "cad_station" if uses_cad else "parametric"
+    src_xy = "cad_station" if (uses_cad and "x_beam_l" in nm) else "parametric"
+
+    # Build per-branch ordered 3D waypoint descriptors:
+    # (node_id, station, role, xyz_np, shaft_arch, z_overhang_extra_m, source)
+    def _branch_specs(bid: str, plane: str, pz: float) -> list[tuple[str, str, str, np.ndarray, str, float, str]]:
+        # Upper belt plane (A) sits dz_belt further along a bottom-rooted single-shear motor shaft
+        # on stock Voron A/B drives, and +0.5*dz_belt on Monolith's compact inverted hub or a
+        # stacked dual-plane M5 bolt; live-shafts straddle each belt plane individually (0 extra).
+        if motor_arch == "motor_single_shear":
+            if plane == "A":
+                z_extra_motor = 0.5 * dz_belt if routing == "monolith_short" else dz_belt
+            else:
+                z_extra_motor = 0.0
+        elif motor_arch == "motor_double_shear" and routing == "stock_corexy":
+            z_extra_motor = 0.5 * dz_belt
+        else:
+            z_extra_motor = 0.0
+        z_extra_idler = (
+            0.0
+            if idler_arch == "live_shaft"
+            else (0.5 * dz_belt if plane == "A" else 0.0)
+        )
+
+        th_l = np.array([x_th - x_clamp, y_th, pz], dtype=float)
+        th_r = np.array([x_th + x_clamp, y_th, pz], dtype=float)
+        # Exact orthogonal 90-deg belt-tangent intersection at left/right XY-joint idlers
+        xy_lf = np.array([x_yrun_l, y_th, pz], dtype=float)
+        xy_lr = np.array([x_yrun_l, y_th, pz], dtype=float)
+        xy_rf = np.array([x_yrun_r, y_th, pz], dtype=float)
+        xy_rr = np.array([x_yrun_r, y_th, pz], dtype=float)
+
+        # Inner pitch-tangent stations at front/rear corner pulleys (offset inboard by r_p along Y)
+        y_tan_fl = min(float(p_fl[1]) + r_p, orig_y - 0.002)
+        y_tan_fr = min(float(p_fr[1]) + r_p, orig_y - 0.002)
+        y_tan_rl = max(float(p_rl[1]) - r_p, orig_y + by + 0.002)
+        y_tan_rr = max(float(p_rr[1]) - r_p, orig_y + by + 0.002)
+        c_fl = np.array([x_yrun_l, y_tan_fl, pz + dz_fl], dtype=float)
+        c_fr = np.array([x_yrun_r, y_tan_fr, pz + dz_fr], dtype=float)
+        c_rl = np.array([x_drive_rl, y_tan_rl, pz + dz_rl], dtype=float)
+        c_rr = np.array([x_drive_rr, y_tan_rr, pz + dz_rr], dtype=float)
+        rg_l = np.array([x_yrun_l, y_tan_rl, pz + dz_rl], dtype=float)
+        rg_r = np.array([x_yrun_r, y_tan_rr, pz + dz_rr], dtype=float)
+        sw_l_in = np.array([x_drive_rl + swrap_dx, y_tan_rl + swrap_dy, pz + dz_rl], dtype=float)
+        sw_l_out = np.array([x_drive_rl - swrap_dx, y_tan_rl + swrap_dy, pz + dz_rl], dtype=float)
+        sw_r_in = np.array([x_drive_rr - swrap_dx, y_tan_rr + swrap_dy, pz + dz_rr], dtype=float)
+        sw_r_out = np.array([x_drive_rr + swrap_dx, y_tan_rr + swrap_dy, pz + dz_rr], dtype=float)
+
+        need_rg_l = abs(x_drive_rl - x_yrun_l) > 1e-4 or has_rear_swrap
+        need_rg_r = abs(x_drive_rr - x_yrun_r) > 1e-4 or has_rear_swrap
+
+        if is_awd:
+            if bid == "A1":
+                pts = [
+                    ("clamp_r_A", "toolhead", "clamp", th_r, "clamp", 0.0, "parametric"),
+                    ("xy_rr_A", "xy_r", "xy_joint_idler", xy_rr, idler_arch, z_extra_idler, src_xy),
+                ]
+                if need_rg_r:
+                    pts.append(("rear_guide_r_A", "rr", "guide_idler", rg_r, guide_arch, z_extra_idler, src_corner))
+                if has_rear_swrap:
+                    pts.append(("rear_swrap_r_A1", "rr", "guide_idler", sw_r_in, guide_arch, z_extra_idler, src_corner))
+                pts.append(("drive_rr_A", "rr", "drive", c_rr, motor_arch, z_extra_motor, src_corner))
+                return pts
+            if bid == "A2":
+                return [
+                    ("clamp_l_A", "toolhead", "clamp", th_l, "clamp", 0.0, "parametric"),
+                    ("xy_lf_A", "xy_l", "xy_joint_idler", xy_lf, idler_arch, z_extra_idler, src_xy),
+                    ("drive_fl_A", "fl", "drive", c_fl, motor_arch, z_extra_motor, src_corner),
+                ]
+            if bid == "B1":
+                pts = [
+                    ("clamp_l_B", "toolhead", "clamp", th_l, "clamp", 0.0, "parametric"),
+                    ("xy_lr_B", "xy_l", "xy_joint_idler", xy_lr, idler_arch, z_extra_idler, src_xy),
+                ]
+                if need_rg_l:
+                    pts.append(("rear_guide_l_B", "rl", "guide_idler", rg_l, guide_arch, z_extra_idler, src_corner))
+                if has_rear_swrap:
+                    pts.append(("rear_swrap_l_B1", "rl", "guide_idler", sw_l_in, guide_arch, z_extra_idler, src_corner))
+                pts.append(("drive_rl_B", "rl", "drive", c_rl, motor_arch, z_extra_motor, src_corner))
+                return pts
+            return [
+                ("clamp_r_B", "toolhead", "clamp", th_r, "clamp", 0.0, "parametric"),
+                ("xy_rf_B", "xy_r", "xy_joint_idler", xy_rf, idler_arch, z_extra_idler, src_xy),
+                ("drive_fr_B", "fr", "drive", c_fr, motor_arch, z_extra_motor, src_corner),
+            ]
+
+        # 2WD perimeter CoreXY routing: motors at Rear-Right (Belt A) and Rear-Left (Belt B)
+        if bid == "A1":
+            pts = [
+                ("clamp_r_A", "toolhead", "clamp", th_r, "clamp", 0.0, "parametric"),
+                ("xy_rf_A", "xy_r", "xy_joint_idler", xy_rf, idler_arch, z_extra_idler, src_xy),
+                ("corner_fr_A", "fr", "corner_idler", c_fr, idler_arch, z_extra_idler, src_corner),
+            ]
+            if need_rg_r:
+                pts.append(("rear_guide_r_A", "rr", "guide_idler", rg_r, guide_arch, z_extra_idler, src_corner))
+            if has_rear_swrap:
+                pts.append(("rear_swrap_r_A1", "rr", "guide_idler", sw_r_in, guide_arch, z_extra_idler, src_corner))
+            pts.append(("drive_rr_A", "rr", "drive", c_rr, motor_arch, z_extra_motor, src_corner))
+            return pts
+        if bid == "A2":
+            pts = [
+                ("clamp_l_A", "toolhead", "clamp", th_l, "clamp", 0.0, "parametric"),
+                ("xy_lr_A", "xy_l", "xy_joint_idler", xy_lr, idler_arch, z_extra_idler, src_xy),
+                ("corner_rl_A", "rl", "corner_idler", rg_l, idler_arch, z_extra_idler, src_corner),
+            ]
+            if has_rear_swrap:
+                pts.append(("rear_swrap_r_A2", "rr", "guide_idler", sw_r_out, guide_arch, z_extra_idler, src_corner))
+            pts.append(("drive_rr_A", "rr", "drive", c_rr, motor_arch, z_extra_motor, src_corner))
+            return pts
+        if bid == "B1":
+            pts = [
+                ("clamp_l_B", "toolhead", "clamp", th_l, "clamp", 0.0, "parametric"),
+                ("xy_lf_B", "xy_l", "xy_joint_idler", xy_lf, idler_arch, z_extra_idler, src_xy),
+                ("corner_fl_B", "fl", "corner_idler", c_fl, idler_arch, z_extra_idler, src_corner),
+            ]
+            if need_rg_l:
+                pts.append(("rear_guide_l_B", "rl", "guide_idler", rg_l, guide_arch, z_extra_idler, src_corner))
+            if has_rear_swrap:
+                pts.append(("rear_swrap_l_B1", "rl", "guide_idler", sw_l_in, guide_arch, z_extra_idler, src_corner))
+            pts.append(("drive_rl_B", "rl", "drive", c_rl, motor_arch, z_extra_motor, src_corner))
+            return pts
+        pts = [
+            ("clamp_r_B", "toolhead", "clamp", th_r, "clamp", 0.0, "parametric"),
+            ("xy_rr_B", "xy_r", "xy_joint_idler", xy_rr, idler_arch, z_extra_idler, src_xy),
+            ("corner_rr_B", "rr", "corner_idler", rg_r, idler_arch, z_extra_idler, src_corner),
+        ]
+        if has_rear_swrap:
+            pts.append(("rear_swrap_l_B2", "rl", "guide_idler", sw_l_out, guide_arch, z_extra_idler, src_corner))
+        pts.append(("drive_rl_B", "rl", "drive", c_rl, motor_arch, z_extra_motor, src_corner))
+        return pts
+
+    pulleys: dict[str, PulleyNode3D] = {}
+    branches: dict[str, BeltBranch3D] = {}
+    drive_wrap_deg = float(belt.wrap_angle_deg)
+    longest_seg = 0.0
+
+    for bid, plane, pz in (("A1", "A", z_a), ("A2", "A", z_a), ("B1", "B", z_b), ("B2", "B", z_b)):
+        raw_pts = _branch_specs(bid, plane, pz)
+        segments: list[BeltSegment3D] = []
+        idler_ids: list[str] = []
+        node_ids: list[str] = []
+        total_len = 0.0
+        n_pts = len(raw_pts)
+
+        for i, (nid, st, role, xyz, s_arch, z_ex, src) in enumerate(raw_pts):
+            node_ids.append(nid)
+            if role == "drive":
+                w_deg = drive_wrap_deg
+            elif role == "clamp":
+                w_deg = 0.0
+            elif 0 < i < n_pts - 1:
+                w_deg = _segment_turn_wrap_deg(raw_pts[i - 1][3], xyz, raw_pts[i + 1][3])
+                idler_ids.append(nid)
+            else:
+                w_deg = 90.0
+                idler_ids.append(nid)
+            # Keep maximum wrap angle if a drive node is shared by both branches in 2WD
+            prev_node = pulleys.get(nid)
+            if prev_node is None or w_deg > prev_node.wrap_angle_deg:
+                pulleys[nid] = PulleyNode3D(
+                    id=nid,
+                    station=st,
+                    role=role,
+                    belt_plane=plane,
+                    position_m=(float(xyz[0]), float(xyz[1]), float(xyz[2])),
+                    shaft_architecture=s_arch,
+                    z_overhang_extra_m=float(z_ex),
+                    wrap_angle_deg=float(w_deg),
+                    pulley_radius_m=r_p,
+                    source=src,
+                )
+
+        for i in range(n_pts - 1):
+            nid0, _, _, p0, _, _, _ = raw_pts[i]
+            nid1, _, _, p1, _, _, _ = raw_pts[i + 1]
+            diff = p1 - p0
+            seg_len = float(np.linalg.norm(diff))
+            u_vec = diff / max(seg_len, 1e-12)
+            segments.append(
+                BeltSegment3D(
+                    branch_id=bid,
+                    belt_plane=plane,
+                    start_id=nid0,
+                    end_id=nid1,
+                    start_m=(float(p0[0]), float(p0[1]), float(p0[2])),
+                    end_m=(float(p1[0]), float(p1[1]), float(p1[2])),
+                    length_m=seg_len,
+                    direction_unit=(float(u_vec[0]), float(u_vec[1]), float(u_vec[2])),
+                )
+            )
+            total_len += seg_len
+            if seg_len > longest_seg:
+                longest_seg = seg_len
+
+        # Pulley tangent points contributing Euler-Bernoulli wrap flexural-fillet compliance:
+        # 2 tangents per active 90/180-deg idler (entry + exit) + drive entry + clamp exit
+        active_idlers = sum(1 for iid in idler_ids if pulleys[iid].wrap_angle_deg >= 15.0)
+        n_tangents = max(2.0 * float(active_idlers) + 2.0, 4.0)
+        branches[bid] = BeltBranch3D(
+            branch_id=bid,
+            belt_plane=plane,
+            node_ids=tuple(node_ids),
+            segments=tuple(segments),
+            total_length_m=max(total_len, 0.12 if is_awd else 0.20),
+            n_pulley_tangents=n_tangents,
+            idler_node_ids=tuple(idler_ids),
+            drive_node_id=raw_pts[-1][0],
+        )
+
+    total_active_len = sum(br.total_length_m for br in branches.values())
+    # Exact longest unobstructed Y or X free span between corner stations for pluck/whip diagnostics
+    span_x_free = max(x_yrun_r - x_yrun_l, 0.10)
+    span_y_free = max(
+        float(p_rl[1]) - float(p_fl[1]),
+        float(p_rr[1]) - float(p_fr[1]),
+        0.10,
+    )
+    longest_free_span = max(longest_seg, span_x_free, span_y_free)
+
+    eff_ratio_vs_stock = 1.0
+    if include_stock_comparison and routing != "stock_corexy":
+        ref_stock = build_corexy_belt_routing_graph_3d(
+            assembly,
+            u_rel=u,
+            v_rel=v,
+            routing_override="stock_corexy",
+            include_stock_comparison=False,
+        )
+        eff_ratio_vs_stock = total_active_len / max(ref_stock.total_active_belt_length_m, 1e-6)
+
+    return CoreXYBeltGraph3D(
+        routing=routing,
+        drive_mode="awd" if is_awd else "2wd",
+        hardware_kit=hw_kit,
+        uses_cad_stations=uses_cad,
+        u_rel=u,
+        v_rel=v,
+        z_gantry_m=z_g,
+        z_belt_mid_m=z_belt_mid,
+        z_upper_plane_m=z_a,
+        z_lower_plane_m=z_b,
+        dz_belt_planes_m=dz_belt,
+        upper_plane_z_lever_mm=(z_a - z_g) * 1e3,
+        lower_plane_z_lever_mm=(z_b - z_g) * 1e3,
+        belt_to_cog_z_lever_mm=(z_cog - z_belt_mid) * 1e3,
+        stacked_belt_twist_moment_nm_per_n=dz_belt,
+        pulleys=pulleys,
+        branches=branches,
+        longest_free_span_m=longest_free_span,
+        total_active_belt_length_m=total_active_len,
+        effective_span_ratio_vs_stock=eff_ratio_vs_stock,
     )

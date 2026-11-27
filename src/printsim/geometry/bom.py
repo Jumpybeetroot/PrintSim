@@ -23,6 +23,7 @@ from printsim.schema import (
     CHAMBER_HEATER_CATALOG,
     CPAP_BLOWER_CATALOG,
     EXTRUSION_FILLINGS,
+    FRAME_BRACING_CATALOG,
     FRONT_BRACE_CATALOG,
     GANTRY_BRACKET_CATALOG,
     STEPPER_CATALOG,
@@ -904,6 +905,33 @@ def generate_bom(
             unit="kg",
             unit_cost_usd=fill_cost_per_kg,
             unit_mass_g=1000.0,
+        )
+
+    if spec.frame.bracing != "none" and (
+        assembly.frame_brace_cad_count > 0 or assembly.frame_brace_flat_bar_mass_kg > 0.0
+    ):
+        br_id = spec.frame.bracing
+        br_info = FRAME_BRACING_CATALOG.get(br_id, FRAME_BRACING_CATALOG["none"])
+        br_spec_parts: list[str] = []
+        if assembly.frame_brace_cad_count > 0 and assembly.frame_brace_cad_asset_id:
+            br_spec_parts.append(
+                f"{assembly.frame_brace_cad_count}x {assembly.frame_brace_cad_asset_id.replace('_', ' ')} (CAD)"
+            )
+        if assembly.frame_brace_flat_bar_mass_kg > 0.0:
+            br_spec_parts.append("25x5 mm Al 6061-T6 bolted diagonal flat bars + M5 T-nuts")
+        _add_bom_item(
+            items,
+            sku=f"FRM-BRACE-{br_id.upper().replace('_', '-')}",
+            category="frame",
+            name=f"Frame Bracing — {br_info['label']}",
+            specification="; ".join(br_spec_parts) or str(br_info.get("physics_model", "")),
+            quantity=1,
+            unit="kit",
+            unit_cost_usd=float(assembly.frame_brace_cost_usd),
+            unit_mass_g=(
+                float(assembly.frame_brace_cad_mass_kg + assembly.frame_brace_flat_bar_mass_kg)
+                * 1000.0
+            ),
         )
 
     if arch == "corexy" and spec.frame.top_brace != "none" and assembly.top_brace_active:
@@ -1956,23 +1984,27 @@ def generate_bom(
                 ("ENC-DOOR", "Front Door Enclosure Panel (w/ Hinges & Latch)", w, h, 1.0),
             ]
 
-        side_mat = (
-            get_material(spec.frame.side_panel_material)
-            if spec.frame.side_panel_material
-            else pmat
-        )
+        sku_to_face = {
+            "ENC-LEFT": "left",
+            "ENC-RIGHT": "right",
+            "ENC-REAR": "rear",
+            "ENC-TOP": "top",
+        }
         for sku, pname, dim_a, dim_b, area_factor in panel_defs:
             is_door = sku == "ENC-DOOR"
             if is_door:
                 active_mat = door_mat
-            elif sku in ("ENC-LEFT", "ENC-RIGHT"):
-                active_mat = side_mat
+                active_pt = pt
+            elif sku in sku_to_face:
+                face_mat_id, active_pt = spec.frame.effective_panel_spec(sku_to_face[sku])
+                active_mat = get_material(face_mat_id)
             else:
                 active_mat = pmat
+                active_pt = pt
             area_m2 = (dim_a * 1e-3) * (dim_b * 1e-3) * area_factor
             panel_props = panel_mechanical_properties(
                 active_mat,
-                pt * 1e-3,
+                active_pt * 1e-3,
                 dim_a * 1e-3,
                 dim_b * 1e-3,
                 spec.frame.panel_mounting,
@@ -1989,12 +2021,12 @@ def generate_bom(
                     else f"{mount_label} / Hinged Door"
                 )
                 panel_spec = (
-                    f"{active_mat.name}, {pt:.1f} mm, {door_note}, "
+                    f"{active_mat.name}, {active_pt:.1f} mm, {door_note}, "
                     f"{dim_a:.0f}x{dim_b:.0f} mm"
                 )
             else:
                 panel_spec = (
-                    f"{active_mat.name}, {pt:.1f} mm, {mount_label}, "
+                    f"{active_mat.name}, {active_pt:.1f} mm, {mount_label}, "
                     f"{dim_a:.0f}x{dim_b:.0f} mm"
                 )
             _add_bom_item(

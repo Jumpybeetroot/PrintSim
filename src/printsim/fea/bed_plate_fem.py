@@ -29,6 +29,25 @@ _CORNER_Z_DRIVE_COUNTS: dict[str, int] = {
     "leadscrew_single": 1,
 }
 
+# CAL-08: Klipper BED_MESH_OUTPUT cold (25 C) vs 110 C calibrated thermal restraint stiffnesses (N/m)
+# accounting for bolted-standoff frictional lock, slotted-tab sliding friction, and M3 through-bolt
+# clearance take-up. Explicit user overrides in `spec.model_overrides.bed_mount` take precedence.
+CAL_BED_MOUNT_K_THERM_N_PER_M: dict[str, float] = {
+    "kinematic_3pt": 0.0,
+    "whopping_pochard_kinematic": 0.0,
+    "cnc_kelvin_magnetic": 0.0,
+    "captive_belleville_kinematic": 0.0,
+    "dual_leaf_ti_kinematic": 0.0,
+    "craz_kinematic_ge5c": 0.0,
+    "springs_4pt": 9_000.0,
+    "silicone_4pt": 32_000.0,
+    "silicone_4pt_clamped": 850_000.0,
+    "spherical_3pt_ratrig": 1_500_000.0,
+    "floating_4pt": 3_200_000.0,
+    "trident_3pt_standoffs": 5_200_000.0,
+    "rigid_4pt": 80_000_000.0,
+}
+
 
 @dataclass
 class BedPlateFEAResult:
@@ -91,7 +110,7 @@ class BedPlateFEAResult:
 
 
 def _compute_carrier_z_stiffness(spec: PrinterSpec) -> float:
-    """Compute effective Z-carrier vertical stiffness (N/m) from Z_DRIVE_MECHANISM_CATALOG."""
+    """Compute effective Z-carrier vertical stiffness (N/m) including baked Z-mount CMS."""
     arch = spec.architecture
     z_drive = spec.bed.z_drive
     if arch == "delta":
@@ -104,32 +123,32 @@ def _compute_carrier_z_stiffness(spec: PrinterSpec) -> float:
         # Flying-gantry CoreXY bed bolts directly to 4x 2020 base extrusions (belts lift gantry).
         return 2.0e7
 
-    if str(z_mech["kind"]) == "belt":
-        k_col = float(z_mech["k_drive_n_per_um_per_corner"] or 0.18) * 1.0e6
-    else:
-        e_steel_z = 200.0e9
-        h_m = max(float(spec.frame.height_mm) * 1e-3, 0.25)
-        bz_m = max(float(spec.kinematics.build_volume_mm[2]) * 1e-3, 0.10)
-        top_clear_m = min(
-            float(spec.frame.gantry_top_clearance_mm) * 1e-3,
-            max(h_m - 0.16, 0.025),
-        )
-        z_gantry = h_m - top_clear_m
-        z_min = min(0.08, 0.5 * z_gantry)
-        z_max = max(z_min + 0.01, z_gantry - 0.045)
-        z_stroke = min(bz_m, max(z_gantry - 0.14, 0.02))
-        z_bed = float(np.clip(z_gantry - 0.045 - 0.5 * z_stroke, z_min, z_max))
-        l_screw_m = max(z_gantry if spec.is_flying_gantry else z_bed, 0.05)
+    from printsim.geometry._builder_bed import _compute_corexy_z_drive_corner_stiffnesses
 
-        k_shaft = e_steel_z * float(z_mech["root_area_m2"]) / l_screw_m
-        k_nut = max(float(z_mech["k_nut_n_per_um"]) * 1.0e6, 1.0e5)
-        k_thrust = max(float(z_mech["k_thrust_n_per_um"]) * 1.0e6, 1.0e5)
-        if spec.frame.trident_backbone and z_drive == "leadscrew_triple":
-            k_thrust *= 2.4
-        k_col = 1.0 / (1.0 / k_shaft + 1.0 / k_nut + 1.0 / k_thrust)
+    h_m = max(float(spec.frame.height_mm) * 1e-3, 0.25)
+    bz_m = max(float(spec.kinematics.build_volume_mm[2]) * 1e-3, 0.10)
+    top_clear_m = min(
+        float(spec.frame.gantry_top_clearance_mm) * 1e-3,
+        max(h_m - 0.16, 0.025),
+    )
+    z_gantry = h_m - top_clear_m
+    z_min = min(0.08, 0.5 * z_gantry)
+    z_max = max(z_min + 0.01, z_gantry - 0.045)
+    z_stroke = min(bz_m, max(z_gantry - 0.14, 0.02))
+    z_bed = float(np.clip(z_gantry - 0.045 - 0.5 * z_stroke, z_min, z_max))
+    trident_bb = bool(spec.frame.trident_backbone and z_drive == "leadscrew_triple")
 
+    corner_k = _compute_corexy_z_drive_corner_stiffnesses(
+        spec,
+        z_gantry=z_gantry,
+        z_bed=z_bed,
+        is_flying=bool(spec.is_flying_gantry),
+        trident_backbone_active=trident_bb,
+    )
+    if corner_k:
+        return float(sum(corner_k.values()))
     n_corners = _CORNER_Z_DRIVE_COUNTS.get(z_drive, 3)
-    return float(n_corners) * k_col
+    return float(n_corners) * 1.8e5
 
 
 def _resolve_mount_layout(
@@ -319,6 +338,136 @@ def _apply_mount_springs(
         k_mat[base + 5, base + 5] += (0.5 * k_clamp_local if k_clamp_local > 0.0 else 0.0) + _ROT_REG_NM_RAD
 
 
+def compute_bed_bimetallic_pei_bow_um(spec: PrinterSpec) -> float:
+    """Compute Timoshenko + Volkersen shear-lag bimetallic bow (um) of bed plate + magnetic PEI stack.
+
+    Models a 0.40 mm spring-steel PEI flex sheet (alpha = 11.5 ppm/K, E = 200 GPa) coupled
+    through a 2.0 mm ferrite-loaded CPE magnetic rubber sheet (G_mag(25 C) = 0.45 MPa,
+    thermal softening above 25 C) to the heated tooling plate. Returns the center-to-edge
+    parabolic bow amplitude in micrometers (zero when T_bed <= 25 C; mount-independent).
+    """
+    dt_bed = max(0.0, float(spec.bed.target_temp_c) - 25.0)
+    if dt_bed <= 0.0:
+        return 0.0
+    bed_mat = get_material(spec.bed.plate_material)
+    alpha_steel = 11.5e-6
+    delta_alpha = float(bed_mat.thermal_expansion_1_k) - alpha_steel
+    if abs(delta_alpha) <= 1e-12:
+        return 0.0
+
+    lx_m = max(float(spec.bed.size_mm[0]) * 1e-3, 0.05)
+    ly_m = max(float(spec.bed.size_mm[1]) * 1e-3, 0.05)
+    l_bed = max(lx_m, ly_m)
+    t_a = max(float(spec.bed.plate_thickness_mm) * 1e-3, 1e-4)
+    e_a = float(bed_mat.youngs_modulus_pa)
+    nu_a = float(bed_mat.poisson_ratio)
+
+    t_s = 0.00035  # 0.35 mm spring steel PEI flex sheet
+    e_s = 200.0e9
+    h_mag = 0.0020  # 2.0 mm ferrite-loaded CPE magnetic rubber sheet + 3M 468MP adhesive
+    g_mag = 0.36e6 / (1.0 + 0.012 * dt_bed)
+
+    inv_ea = 1.0 / (e_s * t_s) + 1.0 / (e_a * t_a)
+    beta = math.sqrt((g_mag / h_mag) * inv_ea)
+    beta_half = beta * (0.5 * l_bed)
+    gamma_mag = (
+        1.0 - math.tanh(beta_half) / beta_half
+        if beta_half > 1e-4
+        else (beta_half**2) / 3.0
+    )
+
+    f_s = gamma_mag * (delta_alpha * dt_bed) / inv_ea
+    c_arm = 0.5 * t_a + h_mag + 0.5 * t_s
+    m_b = f_s * c_arm
+    d_plate = e_a * (t_a**3) / (12.0 * (1.0 - nu_a**2))
+    kappa_b = m_b / (d_plate * (1.0 + nu_a))
+    return float(kappa_b * (l_bed**2) / 8.0 * 1e6)
+
+
+def _resolve_calibrated_k_therm_n_per_m(spec: PrinterSpec) -> float:
+    """Resolve calibrated bed-mount thermal restraint stiffness (N/m), honoring explicit overrides."""
+    ov = getattr(spec.model_overrides, "bed_mount", None)
+    if ov is not None and getattr(ov, "k_restraint_thermal_n_per_mm", None) is not None:
+        return max(0.0, float(ov.k_restraint_thermal_n_per_mm) * 1e3)
+    if spec.bed.mount_type in CAL_BED_MOUNT_K_THERM_N_PER_M:
+        return float(CAL_BED_MOUNT_K_THERM_N_PER_M[spec.bed.mount_type])
+    return max(0.0, float(resolve_bed_mount(spec)["k_restraint_thermal_n_per_m"]))
+
+
+def _build_eccentric_thermal_restraint_rhs(
+    spec: PrinterSpec,
+    n_dof: int,
+    lx_m: float,
+    ly_m: float,
+    thickness_m: float,
+    anchor_ids: list[int],
+    mount_points_rel: list[list[float]],
+) -> np.ndarray:
+    """Build nodal bending-moment RHS (N*m) from eccentric radial mount thermal restraint.
+
+    When a non-kinematic bed mount resists radial thermal expansion (``Delta L > clearance``),
+    the mount shear force ``F_r`` (bounded by physical M3/M4 bolt-preload friction slip) acts
+    at the plate bottom face eccentricity ``e_z = t_bed / 2``, inducing radial bending moments
+    at the MITC4 anchors aligned with the plate thermal curvature mode.
+    """
+    rhs = np.zeros(n_dof, dtype=float)
+    k_therm = _resolve_calibrated_k_therm_n_per_m(spec)
+    if k_therm <= 0.0 or not anchor_ids:
+        return rhs
+
+    bed_temp = float(spec.bed.target_temp_c)
+    chamber_c = float(spec.frame.chamber_temp_c)
+    bed_mat = get_material(spec.bed.plate_material)
+    frame_mat = get_material(spec.frame.material)
+    mount_cfg = resolve_bed_mount(spec)
+    l_bed = max(lx_m, ly_m)
+    mount_inset_ratio = float(mount_cfg.get("mount_inset_ratio", 0.38))
+    l_mount = 2.0 * mount_inset_ratio * l_bed
+    dl_thermal = (
+        bed_mat.thermal_expansion_1_k * max(0.0, bed_temp - 25.0)
+        - frame_mat.thermal_expansion_1_k * max(0.0, chamber_c - 25.0)
+    ) * l_mount
+    dl_excess = max(0.0, dl_thermal - 0.00015)
+    if dl_excess <= 0.0:
+        return rhs
+
+    k_plate_axial = bed_mat.youngs_modulus_pa * l_bed * thickness_m / max(l_mount, 1e-6)
+    k_ser = (k_therm * k_plate_axial) / max(k_therm + k_plate_axial, 1e-9)
+    n_anc = max(len(anchor_ids), 1)
+    # Physical bolt-preload friction slip limit per anchor (post-buckling lives in w_taco):
+    # slotted 4-pt tabs slip earlier than phenolic Bakelite standoffs or hard-bolted M4 rigid_4pt.
+    radial_mode = str(mount_cfg.get("radial_dof_mode", ""))
+    if radial_mode == "rigid_all":
+        f_slip_per_anchor = 420.0
+    elif radial_mode == "slotted_3pt_bakelite":
+        f_slip_per_anchor = 340.0
+    elif radial_mode == "slotted_1fixed_3float":
+        f_slip_per_anchor = 185.0
+    else:
+        f_slip_per_anchor = 240.0
+    f_r_per_anchor = min((k_ser * dl_excess) / n_anc, f_slip_per_anchor)
+
+    # Bottom-face shear bearing eccentricity e_z = t_bed / 2 (plus slight standoff shoulder clamping)
+    h_standoff_m = float(mount_cfg.get("standoff_height_mm", 12.0)) * 1e-3
+    e_z = 0.5 * thickness_m + 0.25 * h_standoff_m
+    m_per_anchor = f_r_per_anchor * e_z
+
+    for nid, (rx, ry) in zip(anchor_ids, mount_points_rel):
+        px = float(rx) * lx_m
+        py = float(ry) * ly_m
+        rnorm = math.hypot(px, py)
+        if rnorm <= 1e-9:
+            continue
+        r_x = px / rnorm
+        r_y = py / rnorm
+        # MITC4 right-hand-rule convention: theta_x = +dw/dy, theta_y = -dw/dx.
+        # Concave-up radial edge curl (dw/dx ~ +r_x, dw/dy ~ +r_y) aligns with w_grad dome.
+        base = 6 * nid
+        rhs[base + 3] += m_per_anchor * r_y
+        rhs[base + 4] -= m_per_anchor * r_x
+    return rhs
+
+
 def _compute_thermal_warp_field_um(
     spec: PrinterSpec,
     lx_m: float,
@@ -327,29 +476,41 @@ def _compute_thermal_warp_field_um(
     grid_x_rel: np.ndarray,
     grid_y_rel: np.ndarray,
     anchor_ids: list[int],
+    z_ecc_restraint_um: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float, float]:
-    """Compute 2D gradient dome + rigid-mount taco buckling field in micrometers.
+    """Compute 2D gradient + bimetallic PEI dome + eccentric restraint + taco buckling field (um).
 
-    Matches the thermal bow and post-buckling elastica physics in
-    ``printsim.fea.components.compute_thermal_structural_report``.
+    Matches ``taco_buckling_um`` identically to
+    ``printsim.fea.components.compute_bed_thermal_bow_and_taco_um`` while adding
+    Volkersen/Timoshenko magnetic PEI bimetallic curvature and MITC4 eccentric
+    thermal-restraint bending calibrated to Klipper ``BED_MESH_OUTPUT`` cold-vs-110 C deltas.
     """
     del thickness_m
     l_bed = max(lx_m, ly_m)
     bed_grad_bow_um, taco_buckling_um = compute_bed_thermal_bow_and_taco_um(spec)
+    pei_bimetal_bow_um = compute_bed_bimetallic_pei_bow_um(spec)
+    total_dome_bow_um = bed_grad_bow_um + pei_bimetal_bow_um
 
     rx_nodes = np.array([grid_x_rel[i] for _ in grid_y_rel for i in range(len(grid_x_rel))], dtype=float)
     ry_nodes = np.array([ry for ry in grid_y_rel for _ in grid_x_rel], dtype=float)
 
-    # Bottom-heated plate (q_top > 0 => dT/dz = -q_top/k < 0) curves concave-up:
-    # d^2w/dx^2 = d^2w/dy^2 = +alpha * q_top / k > 0 (edges/corners curl upward).
-    w_grad = 4.0 * bed_grad_bow_um * (
+    # Bottom-heated plate + lower-CTE top PEI spring-steel sheet both expand bottom > top,
+    # curving concave-up (edges/corners curl upward relative to center).
+    w_grad = 4.0 * total_dome_bow_um * (
         ((lx_m / l_bed) * rx_nodes) ** 2 + ((ly_m / l_bed) * ry_nodes) ** 2
     )
-    w_taco = taco_buckling_um * (
+    # Post-buckling elastica mode snaps in the direction of the pre-existing concave-up thermal
+    # dome & eccentric anchor moments (center dips relative to edges + saddle asymmetry).
+    w_taco = -taco_buckling_um * (
         np.cos(math.pi * rx_nodes) * np.cos(math.pi * ry_nodes)
         - 0.35 * (rx_nodes**2 - ry_nodes**2)
     )
-    z_thermal = w_grad + w_taco
+    w_ecc = (
+        np.asarray(z_ecc_restraint_um, dtype=float)
+        if z_ecc_restraint_um is not None
+        else np.zeros_like(w_grad)
+    )
+    z_thermal = w_grad + w_ecc + w_taco
     z_thermal -= float(np.mean(z_thermal[anchor_ids]))
     thermal_ptv_um = float(np.max(z_thermal) - np.min(z_thermal))
     return z_thermal, thermal_ptv_um, float(taco_buckling_um)
@@ -362,8 +523,9 @@ def _solve_plate_statics(
     ny: int,
     grid_x_rel: np.ndarray,
     grid_y_rel: np.ndarray,
-) -> tuple[np.ndarray, float, float]:
-    """Solve gravity sag and 2.0 N center & worst-corner probe deflections."""
+    f_thermal_ecc: np.ndarray | None = None,
+) -> tuple[np.ndarray, float, float, np.ndarray]:
+    """Solve gravity sag, 2.0 N center & worst-corner probe deflections, and eccentric thermal warp."""
     n_dof = k_mat.shape[0]
     center_ix = int(np.argmin(np.abs(grid_x_rel)))
     center_iy = int(np.argmin(np.abs(grid_y_rel)))
@@ -377,11 +539,15 @@ def _solve_plate_statics(
         (ny - 1) * nx,  # (-0.5, +0.5) rear-left
     ]
 
-    rhs = np.zeros((n_dof, 2 + len(corner_ids)), dtype=float)
+    has_ecc = f_thermal_ecc is not None and bool(np.any(f_thermal_ecc != 0.0))
+    n_cols = 2 + len(corner_ids) + (1 if has_ecc else 0)
+    rhs = np.zeros((n_dof, n_cols), dtype=float)
     rhs[:, 0] = f_grav
     rhs[6 * center_idx + 2, 1] = -_PROBE_FORCE_N
     for col, cid in enumerate(corner_ids, start=2):
         rhs[6 * cid + 2, col] = -_PROBE_FORCE_N
+    if has_ecc and f_thermal_ecc is not None:
+        rhs[:, -1] = f_thermal_ecc
 
     try:
         cf = cho_factor(k_mat, lower=True, check_finite=False)
@@ -394,7 +560,8 @@ def _solve_plate_statics(
     probe_corner_um = max(
         abs(float(sol[6 * cid + 2, col])) * 1e6 for col, cid in enumerate(corner_ids, start=2)
     )
-    return z_gravity_um, probe_center_um, probe_corner_um
+    z_ecc_um = (sol[2::6, -1] * 1e6) if has_ecc else np.zeros(nx * ny, dtype=float)
+    return z_gravity_um, probe_center_um, probe_corner_um, z_ecc_um
 
 
 def _solve_plate_modes(
@@ -529,13 +696,23 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult
     k_glob = 0.5 * (k_glob + k_glob.T)
     m_glob = 0.5 * (m_glob + m_glob.T)
 
-    z_gravity_um, probe_center_um, probe_corner_um = _solve_plate_statics(
-        k_glob, f_grav, nx, ny, grid_x_rel, grid_y_rel
+    f_thermal_ecc = _build_eccentric_thermal_restraint_rhs(
+        spec, n_dof, lx_m, ly_m, thickness_m, anchor_ids, mount_points_rel
+    )
+    z_gravity_um, probe_center_um, probe_corner_um, z_ecc_um = _solve_plate_statics(
+        k_glob, f_grav, nx, ny, grid_x_rel, grid_y_rel, f_thermal_ecc=f_thermal_ecc
     )
     gravity_sag_um = float(np.max(np.abs(z_gravity_um)))
 
     z_thermal_um, thermal_ptv_um, taco_buckling_um = _compute_thermal_warp_field_um(
-        spec, lx_m, ly_m, thickness_m, grid_x_rel, grid_y_rel, anchor_ids
+        spec,
+        lx_m,
+        ly_m,
+        thickness_m,
+        grid_x_rel,
+        grid_y_rel,
+        anchor_ids,
+        z_ecc_restraint_um=z_ecc_um,
     )
 
     mean_grav_at_anchors = float(np.mean(z_gravity_um[anchor_ids]))
@@ -629,3 +806,70 @@ def solve_bed_plate_fem(spec: PrinterSpec, mesh_n: int = 8) -> BedPlateFEAResult
         first_layer_risk=risk,
         summary=summary,
     )
+
+
+def compute_nozzle_tap_z_deflection_um(
+    spec: PrinterSpec,
+    tap_force_n: float = 6.0,
+) -> dict[str, float]:
+    """Compute nozzle-tap (Voron Tap / load-cell) vertical deflection & Z-backlash budget (um).
+
+    Evaluates elastic vertical deflection under a downward nozzle tap load ``tap_force_n``
+    (default 6.0 N ~ 610 gf, standard Voron Tap 500-800 gf actuation band), combining:
+    - Bed plate + bed mount + moving-bed Z-drive elastic deflection (from MITC4 plate FEM).
+    - On flying-gantry CoreXY (``belted_quad_z``), adds the upward reaction compliance of the
+      4 corner Z-belts + baked ``voron_24_z_drive_*`` CAD pods lifting the gantry.
+    - Checks gravity preload against leadscrew/nut or Z-belt backlash deadband: under downward
+      tap on a gravity-loaded moving bed, POM nut threads remain seated (``active_tap_backlash_um = 0``)
+      while reversal / upward Z-hop exposes ``reversal_backlash_um``.
+    """
+    f_tap = max(float(tap_force_n), 0.1)
+    res = solve_bed_plate_fem(spec)
+    scale = f_tap / _PROBE_FORCE_N
+    bed_center_um = res.probe_center_deflection_um * scale
+    bed_corner_um = res.probe_corner_deflection_um * scale
+
+    z_mech = resolve_z_drive_mechanism(spec)
+    reversal_backlash_um = float(z_mech.get("backlash_um", 0.0))
+
+    gantry_z_belt_um = 0.0
+    if spec.is_flying_gantry:
+        from printsim.geometry._builder_bed import _compute_corexy_z_drive_corner_stiffnesses
+
+        h_m = max(float(spec.frame.height_mm) * 1e-3, 0.25)
+        z_g = min(0.14, 0.5 * h_m)
+        corner_k = _compute_corexy_z_drive_corner_stiffnesses(
+            spec,
+            z_gantry=z_g,
+            z_bed=0.08,
+            is_flying=True,
+            trident_backbone_active=False,
+        )
+        k_z_gantry_tot = max(sum(corner_k.values()), 1.0)
+        gantry_z_belt_um = (f_tap / k_z_gantry_tot) * 1e6
+        # Flying gantry weighs ~2.0-2.8 kg (20-27 N >> 6 N tap), keeping Z-belts in tension
+        gravity_preload_n = 22.0
+    else:
+        gravity_preload_n = max(float(spec.bed.mass_g) * 1e-3 * 9.80665, 0.0)
+
+    # Downward nozzle tap acts WITH gravity on moving beds (threads stay seated) and against
+    # gravity on flying gantries (partially unloads belts, zero slack while f_tap < gravity_preload).
+    active_tap_backlash_um = (
+        0.0
+        if (not spec.is_flying_gantry and gravity_preload_n >= 5.0)
+        or (spec.is_flying_gantry and f_tap < 0.85 * gravity_preload_n)
+        else reversal_backlash_um
+    )
+    total_center_um = bed_center_um + gantry_z_belt_um + active_tap_backlash_um
+    total_corner_um = bed_corner_um + gantry_z_belt_um + active_tap_backlash_um
+    return {
+        "tap_force_n": float(f_tap),
+        "bed_center_elastic_um": float(bed_center_um),
+        "bed_corner_elastic_um": float(bed_corner_um),
+        "gantry_z_drive_elastic_um": float(gantry_z_belt_um),
+        "active_tap_backlash_um": float(active_tap_backlash_um),
+        "reversal_backlash_um": float(reversal_backlash_um),
+        "total_center_tap_deflection_um": float(total_center_um),
+        "total_corner_tap_deflection_um": float(total_corner_um),
+        "gravity_preload_n": float(gravity_preload_n),
+    }

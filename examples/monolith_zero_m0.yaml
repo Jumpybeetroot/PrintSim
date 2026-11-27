@@ -7,7 +7,7 @@ frame:
   height_mm: 300
   profile: extrusion_1515
   material: aluminum_6063_t5
-  bracing: corner_gussets
+  bracing: cnc_corner_gussets
   corner_joint_type: corner_cube
   enclosed_panels: true
   panel_mounting: bolted_structural

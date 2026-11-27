@@ -7,7 +7,7 @@ frame:
   height_mm: 500
   profile: extrusion_3030
   material: aluminum_6063_t5
-  bracing: side_cross
+  bracing: side_flat_bar_x
   brace_profile: brace_rod_10mm
   brace_material: steel_4140
   enclosed_panels: false

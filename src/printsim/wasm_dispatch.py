@@ -15,7 +15,12 @@ from typing import Any
 
 import yaml
 
-from printsim.engine import evaluate_printer, optimize_design, optimize_pareto_front
+from printsim.engine import (
+    evaluate_printer,
+    optimize_design,
+    optimize_pareto_front,
+    run_signoff_verification,
+)
 from printsim.engine.evaluator import verify_printer_deep
 from printsim.fea.adxl_calibration import calibrate_printer_against_adxl, fit_printer_to_adxl
 from printsim.fea.solid_fem import (
@@ -49,6 +54,7 @@ from printsim.schema import (
     CORNER_JOINT_IWAN_DAMPING,
     CPAP_BLOWER_CATALOG,
     EXTRUSION_FILLINGS,
+    FRAME_BRACING_CATALOG,
     FRAME_FEET_CATALOG,
     SUSPENSION_LINE_CATALOG,
     FRONT_BRACE_CATALOG,
@@ -174,6 +180,7 @@ def build_catalog_payload() -> dict[str, Any]:
         ],
         "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
         "z_rail_profiles": list(Z_RAIL_PROFILES.values()),
+        "frame_bracing": list(FRAME_BRACING_CATALOG.values()),
         "top_braces": list(TOP_BRACE_CATALOG.values()),
         "front_braces": list(FRONT_BRACE_CATALOG.values()),
         "bearing_clearances": [
@@ -355,6 +362,25 @@ def dispatch_api_request(
                 filament_id=str(payload.get("filament_id", "pla")),
                 deep_mesh_n=int(payload.get("deep_mesh_n", 8)),
                 deep_bed_mesh_n=int(payload.get("deep_bed_mesh_n", 16)),
+            )
+            deep_sim = res.get("deep_simulation")
+            if isinstance(deep_sim, dict):
+                deep_sim.setdefault("spec", spec.model_dump(mode="json"))
+                deep_sim.setdefault("yaml_text", spec.to_yaml())
+            return _ok_json(res)
+
+        if verb == "POST" and clean_path == "/api/verify/signoff":
+            spec = _resolve_spec_payload(payload)
+            max_groups = payload.get("max_uncertainty_groups")
+            res = run_signoff_verification(
+                spec,
+                gcode_text=payload.get("gcode_text"),
+                filament_id=str(payload.get("filament_id", "pla")),
+                deep_mesh_n=int(payload.get("deep_mesh_n", 8)),
+                deep_bed_mesh_n=int(payload.get("deep_bed_mesh_n", 16)),
+                workspace_grid_n=int(payload.get("workspace_grid_n", 3)),
+                include_z_extremes=bool(payload.get("include_z_extremes", True)),
+                max_uncertainty_groups=int(max_groups) if max_groups is not None else None,
             )
             deep_sim = res.get("deep_simulation")
             if isinstance(deep_sim, dict):

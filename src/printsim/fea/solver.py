@@ -508,7 +508,10 @@ def solve_static_fea(
         key=lambda item: item[1],
     )[0]
     stage_stiff = assembly.toolhead_stage_stiffnesses_n_per_mm
-    has_superelements = bool(getattr(assembly, "superelements", None))
+    has_superelements = any(
+        se.category in ("toolheads", "hotends", "assemblies")
+        for se in getattr(assembly, "superelements", ())
+    )
     hotend_k_fallback = (
         (2.0 / max(c3_xy, 1e-12)) * 1e-3
         if (has_superelements and c3_xy > 1e-12)
