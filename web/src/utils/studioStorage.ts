@@ -27,6 +27,8 @@ export interface StudioPersistedSettings {
   modalColorMode: ModalColorMode;
   modalScaleMode: ModalScaleMode;
   showBedWarp: boolean;
+  toolheadPunchIn?: boolean;
+  layerLimit?: number;
   optObjective: OptObjective;
   gcodeText?: string;
 }
@@ -49,6 +51,8 @@ const SAVED_BUILDS_KEY = "printsim_studio_saved_builds_v1";
 const SHOW_HINTS_KEY = "printsim_studio_show_hints_v1";
 const ADVANCED_MODE_KEY = "printsim_studio_advanced_mode_v1";
 const BASE_MACHINE_CHOSEN_KEY = "printsim_studio_base_machine_chosen_v1";
+const VIEWPORT_CAMERA_KEY = "printsim_studio_viewport_camera_v1";
+const VIEWPORT_UI_STATE_KEY = "printsim_studio_viewport_ui_v1";
 const MAX_SAVED_BUILDS = 30;
 const MAX_GCODE_CHARS = 100_000;
 
@@ -139,6 +143,11 @@ export function sanitizePersistedSettings(raw: unknown): StudioPersistedSettings
       ? clamp(raw.feaScale, 10, 5000)
       : 600;
 
+  const layerLimit =
+    typeof raw.layerLimit === "number" && Number.isFinite(raw.layerLimit)
+      ? Math.max(0, Math.round(raw.layerLimit))
+      : 999;
+
   const gcodeText =
     typeof raw.gcodeText === "string" && raw.gcodeText.length <= MAX_GCODE_CHARS
       ? raw.gcodeText
@@ -169,6 +178,8 @@ export function sanitizePersistedSettings(raw: unknown): StudioPersistedSettings
     modalColorMode,
     modalScaleMode,
     showBedWarp: Boolean(raw.showBedWarp),
+    toolheadPunchIn: Boolean(raw.toolheadPunchIn),
+    layerLimit,
     optObjective,
     gcodeText,
   };
@@ -457,6 +468,146 @@ export function loadBaseMachineChosenPreference(): boolean {
 export function saveBaseMachineChosenPreference(chosen: boolean): void {
   try {
     window.localStorage.setItem(BASE_MACHINE_CHOSEN_KEY, chosen ? "1" : "0");
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export interface ViewportCameraPose {
+  position: [number, number, number];
+  target: [number, number, number];
+}
+
+function isValidVec3Tuple(v: unknown): v is [number, number, number] {
+  return (
+    Array.isArray(v) &&
+    v.length === 3 &&
+    v.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 200)
+  );
+}
+
+function isValidCameraPose(pose: unknown): pose is ViewportCameraPose {
+  if (!pose || typeof pose !== "object") return false;
+  const obj = pose as Record<string, unknown>;
+  if (!isValidVec3Tuple(obj.position) || !isValidVec3Tuple(obj.target)) return false;
+  const dx = obj.position[0] - obj.target[0];
+  const dy = obj.position[1] - obj.target[1];
+  const dz = obj.position[2] - obj.target[2];
+  const dist = Math.hypot(dx, dy, dz);
+  return Number.isFinite(dist) && dist >= 0.05 && dist <= 180;
+}
+
+export function loadViewportCameraPose(): ViewportCameraPose | null {
+  try {
+    const raw = window.localStorage.getItem(VIEWPORT_CAMERA_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isValidCameraPose(parsed)) return null;
+    return {
+      position: [parsed.position[0], parsed.position[1], parsed.position[2]],
+      target: [parsed.target[0], parsed.target[1], parsed.target[2]],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveViewportCameraPose(pose: ViewportCameraPose): void {
+  if (!isValidCameraPose(pose)) return;
+  try {
+    window.localStorage.setItem(VIEWPORT_CAMERA_KEY, JSON.stringify(pose));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export type ViewportFeaLayerId = "panels" | "frame" | "gantry" | "toolhead" | "bed";
+
+const VALID_VIEWPORT_FEA_LAYERS = new Set<ViewportFeaLayerId>([
+  "panels",
+  "frame",
+  "gantry",
+  "toolhead",
+  "bed",
+]);
+
+export interface ViewportUiState {
+  hiddenFeaLayers: ViewportFeaLayerId[];
+  hiddenFeaParts: string[];
+  isolateToolheadModal: boolean;
+  toolheadExplode: boolean;
+  modalAmpScale: number;
+  modalPaused: boolean;
+  ecoDpr: boolean;
+  showHudDetails: boolean;
+  showCarvedGhost: boolean;
+}
+
+const DEFAULT_VIEWPORT_UI_STATE: ViewportUiState = {
+  hiddenFeaLayers: [],
+  hiddenFeaParts: [],
+  isolateToolheadModal: false,
+  toolheadExplode: false,
+  modalAmpScale: 1.0,
+  modalPaused: false,
+  ecoDpr: false,
+  showHudDetails: false,
+  showCarvedGhost: true,
+};
+
+export function loadViewportUiState(): ViewportUiState {
+  try {
+    const raw = window.localStorage.getItem(VIEWPORT_UI_STATE_KEY);
+    if (!raw) return { ...DEFAULT_VIEWPORT_UI_STATE };
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return { ...DEFAULT_VIEWPORT_UI_STATE };
+
+    const hiddenFeaLayers = Array.isArray(parsed.hiddenFeaLayers)
+      ? Array.from(
+          new Set(
+            parsed.hiddenFeaLayers.filter(
+              (v): v is ViewportFeaLayerId =>
+                typeof v === "string" && VALID_VIEWPORT_FEA_LAYERS.has(v as ViewportFeaLayerId)
+            )
+          )
+        )
+      : [];
+
+    const hiddenFeaParts = Array.isArray(parsed.hiddenFeaParts)
+      ? Array.from(
+          new Set(
+            parsed.hiddenFeaParts
+              .filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 200)
+              .slice(0, 200)
+          )
+        )
+      : [];
+
+    const modalAmpScale =
+      typeof parsed.modalAmpScale === "number" && Number.isFinite(parsed.modalAmpScale)
+        ? clamp(parsed.modalAmpScale, 0.1, 5.0)
+        : 1.0;
+
+    return {
+      hiddenFeaLayers,
+      hiddenFeaParts,
+      isolateToolheadModal: Boolean(parsed.isolateToolheadModal),
+      toolheadExplode: Boolean(parsed.toolheadExplode),
+      modalAmpScale,
+      modalPaused: Boolean(parsed.modalPaused),
+      ecoDpr: Boolean(parsed.ecoDpr),
+      showHudDetails: Boolean(parsed.showHudDetails),
+      showCarvedGhost:
+        typeof parsed.showCarvedGhost === "boolean" ? parsed.showCarvedGhost : true,
+    };
+  } catch {
+    return { ...DEFAULT_VIEWPORT_UI_STATE };
+  }
+}
+
+export function saveViewportUiState(state: ViewportUiState): void {
+  try {
+    window.localStorage.setItem(VIEWPORT_UI_STATE_KEY, JSON.stringify(state));
   } catch {
     // Ignore storage errors
   }

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { BaseMachineModal } from "./components/BaseMachineModal";
 import { BaselineCompareDrawer } from "./components/BaselineCompareDrawer";
@@ -7,6 +7,11 @@ import { MetricsPanel } from "./components/MetricsPanel";
 import { ParetoModal } from "./components/ParetoModal";
 import { PrinterViewport } from "./components/PrinterViewport";
 import { SavedBuildsDrawer } from "./components/SavedBuildsDrawer";
+import {
+  FlexIsolationTarget,
+  NO_FLEX_ISOLATION,
+  isSameFlexIsolation,
+} from "./viewport/flexIsolation";
 import {
   ARCH_LABELS,
   AWD_SYNC_LABELS,
@@ -876,19 +881,69 @@ export default function App() {
   const [lastChangeSummary, setLastChangeSummary] = useState<string | null>(null);
   const [compareMode, setCompareMode] = useState<CompareMode>("last");
 
-  const [viewMode, setViewMode] = useState<ViewMode>("assembly");
-  const [selectedModeIdx, setSelectedModeIdx] = useState<number>(0);
-  const [feaScale, setFeaScale] = useState<number>(600);
-  const [feaLoadCase, setFeaLoadCase] = useState<FeaLoadCase>("xy");
-  const [sensitivityLens, setSensitivityLens] = useState<AdjointLens>("print_impact");
-  const [modalColorMode, setModalColorMode] = useState<ModalColorMode>("relative");
-  const [modalScaleMode, setModalScaleMode] = useState<ModalScaleMode>("impact");
+  const initialAutoSaved = useMemo<StudioPersistedSettings | null>(() => {
+    try {
+      if (window.location.hash.startsWith("#spec=")) return null;
+      return loadAutoSavedSession();
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const saved = initialAutoSaved?.viewMode;
+    return saved && saved !== "topology" ? saved : "assembly";
+  });
+  const [selectedModeIdx, setSelectedModeIdx] = useState<number>(
+    () => initialAutoSaved?.selectedModeIdx ?? 0
+  );
+  const [feaScale, setFeaScale] = useState<number>(() => initialAutoSaved?.feaScale ?? 600);
+  const [feaLoadCase, setFeaLoadCase] = useState<FeaLoadCase>(
+    () => initialAutoSaved?.feaLoadCase ?? "xy"
+  );
+  const [sensitivityLens, setSensitivityLens] = useState<AdjointLens>(
+    () => initialAutoSaved?.sensitivityLens ?? "print_impact"
+  );
+  const [modalColorMode, setModalColorMode] = useState<ModalColorMode>(
+    () => initialAutoSaved?.modalColorMode ?? "relative"
+  );
+  const [modalScaleMode, setModalScaleMode] = useState<ModalScaleMode>(
+    () => initialAutoSaved?.modalScaleMode ?? "impact"
+  );
   const [inspectedPartId, setInspectedPartId] = useState<string | null>(null);
-  const [layerLimit, setLayerLimit] = useState<number>(999);
-  const [toolheadRelPos, setToolheadRelPos] = useState<[number, number, number]>([0.5, 0.5, 0.5]);
-  const [panelMeshN, setPanelMeshN] = useState<number>(3);
-  const [showBedWarp, setShowBedWarp] = useState<boolean>(false);
-  const [toolheadPunchIn, setToolheadPunchIn] = useState<boolean>(false);
+  const [flexIsolation, setFlexIsolation] = useState<FlexIsolationTarget>(NO_FLEX_ISOLATION);
+  const [focusFlexRequest, setFocusFlexRequest] = useState<{
+    target: FlexIsolationTarget;
+    nonce: number;
+  } | null>(null);
+  const focusFlexNonceRef = useRef<number>(0);
+
+  const handleIsolateFlexTarget = useCallback((target: FlexIsolationTarget) => {
+    setFlexIsolation((prev) => {
+      if (isSameFlexIsolation(prev, target)) {
+        return NO_FLEX_ISOLATION;
+      }
+      focusFlexNonceRef.current += 1;
+      setFocusFlexRequest({ target, nonce: focusFlexNonceRef.current });
+      return target;
+    });
+    setViewMode((prevMode) =>
+      prevMode === "fea_stress" || prevMode === "modal" || prevMode === "sensitivity"
+        ? prevMode
+        : "sensitivity"
+    );
+  }, []);
+  const [layerLimit, setLayerLimit] = useState<number>(() => initialAutoSaved?.layerLimit ?? 999);
+  const [toolheadRelPos, setToolheadRelPos] = useState<[number, number, number]>(
+    () => initialAutoSaved?.toolheadRelPos ?? [0.5, 0.5, 0.5]
+  );
+  const [panelMeshN, setPanelMeshN] = useState<number>(() => initialAutoSaved?.panelMeshN ?? 3);
+  const [showBedWarp, setShowBedWarp] = useState<boolean>(
+    () => initialAutoSaved?.showBedWarp ?? false
+  );
+  const [toolheadPunchIn, setToolheadPunchIn] = useState<boolean>(
+    () => initialAutoSaved?.toolheadPunchIn ?? false
+  );
   const [studioSyncStatus, setStudioSyncStatus] = useState<"connected" | "syncing" | "offline">("syncing");
   const [pagesEngineStatus, setPagesEngineStatus] = useState<PagesEngineStatus>(() =>
     getPagesEngineStatus()
@@ -954,6 +1009,8 @@ export default function App() {
         modalColorMode,
         modalScaleMode,
         showBedWarp,
+        toolheadPunchIn,
+        layerLimit,
         optObjective,
         gcodeText,
       }
@@ -1385,6 +1442,10 @@ export default function App() {
       setModalColorMode(settings.modalColorMode);
       setModalScaleMode(settings.modalScaleMode);
       setShowBedWarp(settings.showBedWarp);
+      setToolheadPunchIn(Boolean(settings.toolheadPunchIn));
+      if (typeof settings.layerLimit === "number" && Number.isFinite(settings.layerLimit)) {
+        setLayerLimit(settings.layerLimit);
+      }
       setOptObjective(settings.optObjective);
       setGcodeText(settings.gcodeText ?? "");
       setSpec(settings.spec);
@@ -1557,6 +1618,8 @@ export default function App() {
     modalColorMode,
     modalScaleMode,
     showBedWarp,
+    toolheadPunchIn,
+    layerLimit,
     optObjective,
     gcodeText,
   ]);
@@ -2851,6 +2914,9 @@ export default function App() {
           modalScaleMode={modalScaleMode}
           onModalScaleModeChange={setModalScaleMode}
           onInspectedPartChange={setInspectedPartId}
+          flexIsolation={flexIsolation}
+          onFlexIsolationChange={setFlexIsolation}
+          focusFlexRequest={focusFlexRequest}
           onRegisterCapture={handleRegisterCapture}
         />
 
@@ -2891,6 +2957,8 @@ export default function App() {
           onToggleToolheadPunchIn={handleOpenToolheadPunchIn}
           onApplyFittedSpec={handleSpecChange}
           onInjectCustomBracket={handleInjectCustomBracket}
+          flexIsolation={flexIsolation}
+          onIsolateFlexTarget={handleIsolateFlexTarget}
           error={error}
         />
       </main>

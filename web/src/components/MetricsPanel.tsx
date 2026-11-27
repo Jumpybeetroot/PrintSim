@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { onTabListKeyDown } from "../utils/a11y";
 import { AdxlCalibrationPanel } from "./AdxlCalibrationPanel";
 import { AdjointSensitivityContent, CncMetrologyContent } from "./CncMetrologyPanel";
+import { FlexIsolationTarget } from "../viewport/flexIsolation";
 import { KlipperShaperPsdCard } from "./KlipperShaperCard";
 import { prettifyDiagnostic, splitBomName } from "../utils/displayText";
 import {
@@ -67,6 +68,8 @@ interface Props {
   onToggleToolheadPunchIn?: () => void;
   onApplyFittedSpec?: (fittedSpec: PrinterSpecData, changeLabel?: string) => void;
   onInjectCustomBracket?: (override: CustomBracketOverrideData) => void;
+  flexIsolation?: FlexIsolationTarget;
+  onIsolateFlexTarget?: (target: FlexIsolationTarget) => void;
   error: string | null;
 }
 
@@ -2579,6 +2582,8 @@ export const MetricsPanel: React.FC<Props> = ({
   onToggleToolheadPunchIn,
   onApplyFittedSpec,
   onInjectCustomBracket,
+  flexIsolation,
+  onIsolateFlexTarget,
   error,
 }) => {
   const [rightTab, setRightTab] = useState<"overview" | "shaper" | "deep" | "bom">("overview");
@@ -4725,6 +4730,8 @@ export const MetricsPanel: React.FC<Props> = ({
                   sensitivity={sim.sensitivity}
                   viewMode={viewMode}
                   onViewModeChange={onViewModeChange}
+                  flexIsolation={flexIsolation}
+                  onIsolateFlexTarget={onIsolateFlexTarget}
                 />
               </DeepDiveAccordion>
             )}

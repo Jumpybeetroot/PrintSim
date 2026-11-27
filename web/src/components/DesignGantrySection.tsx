@@ -912,6 +912,10 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
   const currentRailBoltPitch: number = spec.gantry.rail_bolt_pitch_mm ?? 25;
   const currentRailBacker: RailBackerMaterialType = spec.gantry.rail_backer_material ?? "none";
   const currentCfRailMounting: CFRailMountingType = spec.gantry.cf_rail_mounting ?? "auto";
+  const isHollowTubeXBeam =
+    spec.gantry.x_beam_profile.includes("_tube_") ||
+    spec.gantry.x_beam_profile.startsWith("cf_") ||
+    spec.gantry.x_beam_material.startsWith("carbon_fiber");
   const currentIdlerShaftMm: number = spec.gantry.belt.idler_shaft_diameter_mm ?? 5;
   const currentBearingClass: BearingClearanceClass = spec.gantry.belt.bearing_clearance_class ?? "CN";
   const currentDriveType: DriveType = spec.kinematics.drive_type ?? "open_loop_stepper";
@@ -1480,6 +1484,37 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                   </select>
                 </div>
               </div>
+
+              {spec.architecture !== "delta" && isHollowTubeXBeam && (
+                <div className="field-row stack">
+                  <label htmlFor="dp-cf-rail-mounting">Tube Rail Mounting</label>
+                  <select
+                    id="dp-cf-rail-mounting"
+                    value={currentCfRailMounting}
+                    onChange={(e) => {
+                      const nextVal = e.target.value as CFRailMountingType;
+                      const prevLbl =
+                        CF_RAIL_MOUNTING_OPTIONS.find((o) => o.id === currentCfRailMounting)
+                          ?.shortLabel ?? currentCfRailMounting;
+                      const nextLbl =
+                        CF_RAIL_MOUNTING_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ??
+                        nextVal;
+                      update(
+                        (d) => {
+                          d.gantry.cf_rail_mounting = nextVal;
+                        },
+                        `Tube Rail Mounting: ${prevLbl} → ${nextLbl}`
+                      );
+                    }}
+                  >
+                    {CF_RAIL_MOUNTING_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {showHints && (
                 <div className="hint-line">Wider/stiffer belts reduce stretch and sharpen corners</div>
@@ -2913,39 +2948,6 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                       ))}
                     </select>
                   </div>
-
-                  {spec.architecture !== "delta" &&
-                    (spec.gantry.x_beam_profile.startsWith("cf_") ||
-                      spec.gantry.x_beam_material.startsWith("carbon_fiber")) && (
-                      <div className="field-row">
-                        <label htmlFor="dp-cf-rail-mounting">CF Rail Mounting</label>
-                        <select
-                          id="dp-cf-rail-mounting"
-                          value={currentCfRailMounting}
-                          onChange={(e) => {
-                            const nextVal = e.target.value as CFRailMountingType;
-                            const prevLbl =
-                              CF_RAIL_MOUNTING_OPTIONS.find((o) => o.id === currentCfRailMounting)
-                                ?.shortLabel ?? currentCfRailMounting;
-                            const nextLbl =
-                              CF_RAIL_MOUNTING_OPTIONS.find((o) => o.id === nextVal)?.shortLabel ??
-                              nextVal;
-                            update(
-                              (d) => {
-                                d.gantry.cf_rail_mounting = nextVal;
-                              },
-                              `CF Rail Mounting: ${prevLbl} → ${nextLbl}`
-                            );
-                          }}
-                        >
-                          {CF_RAIL_MOUNTING_OPTIONS.map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
 
                   {spec.architecture !== "delta" &&
                     sim?.geometry?.linear_rails &&

@@ -67,15 +67,64 @@ export function cloneCachedCadGlb(
     heatEmissiveIntensity: number;
     inspectInfo: InspectedPartInfo;
     tagInspectable: (mesh: THREE.Mesh, info: InspectedPartInfo) => void;
+    resolveSubmesh?: (
+      meshName: string,
+      centerCadMm: [number, number, number]
+    ) => {
+      heatColor?: THREE.Color;
+      heatEmissive?: THREE.Color;
+      heatEmissiveIntensity?: number;
+      inspectInfo?: InspectedPartInfo;
+      vertexColorFn?: (xMm: number, yMm: number, zMm: number, outColor: THREE.Color) => void;
+    } | null;
   }
 ): THREE.Group {
   const clone = cached.clone(true);
+  const tmpCenter = new THREE.Vector3();
+  const tmpVCol = new THREE.Color();
   clone.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
     if (obj.geometry) {
       obj.geometry = obj.geometry.clone();
       if (!obj.geometry.getAttribute("normal")) {
         obj.geometry.computeVertexNormals();
+      }
+      if (!obj.geometry.boundingBox) {
+        obj.geometry.computeBoundingBox();
+      }
+    }
+    let centerCadMm: [number, number, number] = [0, 0, 0];
+    if (obj.geometry?.boundingBox) {
+      obj.geometry.boundingBox.getCenter(tmpCenter);
+      centerCadMm = [tmpCenter.x * 1000, tmpCenter.y * 1000, tmpCenter.z * 1000];
+    }
+    const subOverride = options.resolveSubmesh
+      ? options.resolveSubmesh(obj.name || "", centerCadMm)
+      : null;
+    const effHeatColor = subOverride?.heatColor ?? options.heatColor;
+    const effHeatEmissive = subOverride?.heatEmissive ?? options.heatEmissive;
+    const effHeatEmissiveInt =
+      subOverride?.heatEmissiveIntensity ?? options.heatEmissiveIntensity;
+    const effInspectInfo = subOverride?.inspectInfo ?? options.inspectInfo;
+    const vColorFn = options.isHeatMode ? subOverride?.vertexColorFn : undefined;
+    let useVertexColors = false;
+    if (vColorFn && obj.geometry) {
+      const posAttr = obj.geometry.getAttribute("position");
+      if (posAttr && posAttr.count > 0) {
+        const colors = new Float32Array(posAttr.count * 3);
+        for (let vi = 0; vi < posAttr.count; vi++) {
+          vColorFn(
+            posAttr.getX(vi) * 1000,
+            posAttr.getY(vi) * 1000,
+            posAttr.getZ(vi) * 1000,
+            tmpVCol
+          );
+          colors[vi * 3] = tmpVCol.r;
+          colors[vi * 3 + 1] = tmpVCol.g;
+          colors[vi * 3 + 2] = tmpVCol.b;
+        }
+        obj.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        useVertexColors = true;
       }
     }
     const cloneMat = (mat: THREE.Material): THREE.Material => {
@@ -84,15 +133,22 @@ export function cloneCachedCadGlb(
           mat instanceof THREE.MeshStandardMaterial
             ? mat.clone()
             : new THREE.MeshStandardMaterial();
-        std.color.copy(options.heatColor);
-        std.emissive.copy(options.heatEmissive);
-        std.emissiveIntensity = options.heatEmissiveIntensity;
+        if (useVertexColors) {
+          std.color.setHex(0xffffff);
+          std.emissive.copy(effHeatEmissive);
+          std.emissiveIntensity = effHeatEmissiveInt * 0.35;
+          std.vertexColors = true;
+        } else {
+          std.color.copy(effHeatColor);
+          std.emissive.copy(effHeatEmissive);
+          std.emissiveIntensity = effHeatEmissiveInt;
+          std.vertexColors = false;
+        }
         std.metalness = Math.min(std.metalness, 0.35);
         std.roughness = Math.max(std.roughness, 0.32);
         std.flatShading = false;
         std.side = mat.side;
         std.map = null;
-        std.vertexColors = false;
         std.needsUpdate = true;
         return std;
       }
@@ -115,14 +171,14 @@ export function cloneCachedCadGlb(
       obj.material = cloneMat(obj.material);
     } else {
       obj.material = new THREE.MeshStandardMaterial({
-        color: options.heatColor,
-        emissive: options.heatEmissive,
-        emissiveIntensity: options.heatEmissiveIntensity,
+        color: effHeatColor,
+        emissive: effHeatEmissive,
+        emissiveIntensity: effHeatEmissiveInt,
         metalness: options.isHeatMode ? 0.32 : 0.7,
         roughness: options.isHeatMode ? 0.36 : 0.28,
       });
     }
-    options.tagInspectable(obj, options.inspectInfo);
+    options.tagInspectable(obj, effInspectInfo);
   });
   return clone;
 }

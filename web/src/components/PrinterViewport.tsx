@@ -1,6 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  loadViewportCameraPose,
+  loadViewportUiState,
+  saveViewportCameraPose,
+  saveViewportUiState,
+} from "../utils/studioStorage";
 import {
   ADJOINT_LENS_OPTIONS,
   CAD_M_TO_THREE,
@@ -56,11 +62,21 @@ import {
   stressColorInto,
 } from "../viewport/colormaps";
 import {
+  applyCadSubmeshExplode,
+  classifyToolheadSubmeshStage,
+  createIntraPartVertexColorFn,
+  prepareIntraPartField,
+  resolveToolheadPartVisual,
+} from "../viewport/toolheadParts";
+import {
   ContinuousBeamChain,
+  ModalCadBeam,
   ModalContinuousBeam,
   applyRodGradientColors,
   createContinuousBeamGeometry,
   groupContinuousBeams,
+  prepareCadBeamDeformation,
+  updateCadBeamDeformation,
   updateContinuousBeamGeometry,
 } from "../viewport/continuousBeams";
 import {
@@ -71,6 +87,18 @@ import {
   getLensScore,
   impactLevelMeta,
 } from "../viewport/partClassifier";
+import {
+  FlexIsolationStyle,
+  FlexIsolationTarget,
+  NO_FLEX_ISOLATION,
+  applyFlexIsolationToGroup,
+  buildRankedFlexParts,
+  describeFlexIsolation,
+  findFlexTargetBoundsAndMesh,
+  isFlexIsolationActive,
+  isSameFlexIsolation,
+  subsystemLabel,
+} from "../viewport/flexIsolation";
 import {
   AdjointLens,
   BedMountType,
@@ -120,7 +148,49 @@ interface Props {
   modalScaleMode?: ModalScaleMode;
   onModalScaleModeChange?: (mode: ModalScaleMode) => void;
   onInspectedPartChange?: (partId: string | null) => void;
+  flexIsolation?: FlexIsolationTarget;
+  onFlexIsolationChange?: (target: FlexIsolationTarget) => void;
+  focusFlexRequest?: { target: FlexIsolationTarget; nonce: number } | null;
   onRegisterCapture?: (fn: (frames?: number, delayMs?: number) => Promise<string[]>) => void;
+}
+
+type FeaVisLayer = "panels" | "frame" | "gantry" | "toolhead" | "bed";
+
+const FEA_VIS_LAYERS: Array<{ id: FeaVisLayer; label: string; title: string }> = [
+  {
+    id: "panels",
+    label: "Panels",
+    title: "Hide enclosure panels (MITC4 shells) to select parts inside the printer",
+  },
+  {
+    id: "frame",
+    label: "Frame",
+    title: "Hide frame extrusions, braces, corner gussets, and feet",
+  },
+  {
+    id: "gantry",
+    label: "Gantry",
+    title: "Hide X-beam, Y-rails, gantry brackets, and belts",
+  },
+  {
+    id: "toolhead",
+    label: "Toolhead",
+    title: "Hide carriage, toolhead body, hotend, and nozzle",
+  },
+  {
+    id: "bed",
+    label: "Bed & Z",
+    title: "Hide heated bed, Z-axis mounts, and build volume wireframe",
+  },
+];
+
+function isObjectEffectivelyVisible(obj: THREE.Object3D): boolean {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    if (!cur.visible) return false;
+    cur = cur.parent;
+  }
+  return true;
 }
 
 const _shellCol = new THREE.Color();
@@ -152,29 +222,91 @@ export const PrinterViewport: React.FC<Props> = ({
   modalScaleMode: modalScaleModeProp,
   onModalScaleModeChange,
   onInspectedPartChange,
+  flexIsolation: flexIsolationProp,
+  onFlexIsolationChange,
+  focusFlexRequest,
   onRegisterCapture,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(true);
+  const initialUiState = useMemo(() => loadViewportUiState(), []);
+  const hadSavedCameraOnMountRef = useRef<boolean>(loadViewportCameraPose() !== null);
+  const hadSimForPunchInRef = useRef<boolean>(false);
+  const [showCarvedGhost, setShowCarvedGhost] = useState<boolean>(initialUiState.showCarvedGhost);
   const [internalAdjointLens, setInternalAdjointLens] = useState<AdjointLens>("print_impact");
   const [internalModalColorMode, setInternalModalColorMode] = useState<ModalColorMode>("relative");
   const [internalModalScaleMode, setInternalModalScaleMode] = useState<ModalScaleMode>("impact");
   const [internalShowBedWarp, setInternalShowBedWarp] = useState<boolean>(false);
   const [internalToolheadPunchIn, setInternalToolheadPunchIn] = useState<boolean>(false);
-  const [isolateToolheadModal, setIsolateToolheadModal] = useState<boolean>(false);
-  const [modalAmpScale, setModalAmpScale] = useState<number>(1.0);
-  const [ecoDpr, setEcoDpr] = useState<boolean>(false);
-  const [modalPaused, setModalPaused] = useState<boolean>(false);
-  const [showHudDetails, setShowHudDetails] = useState<boolean>(false);
+  const [isolateToolheadModal, setIsolateToolheadModal] = useState<boolean>(
+    initialUiState.isolateToolheadModal
+  );
+  const [modalAmpScale, setModalAmpScale] = useState<number>(initialUiState.modalAmpScale);
+  const [ecoDpr, setEcoDpr] = useState<boolean>(initialUiState.ecoDpr);
+  const [modalPaused, setModalPaused] = useState<boolean>(initialUiState.modalPaused);
+  const [showHudDetails, setShowHudDetails] = useState<boolean>(initialUiState.showHudDetails);
   const [toolsMenuOpen, setToolsMenuOpen] = useState<boolean>(false);
   const toolsMenuRef = useRef<HTMLDivElement | null>(null);
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
+  const [toolheadExplode, setToolheadExplode] = useState<boolean>(initialUiState.toolheadExplode);
+  const [hiddenFeaLayers, setHiddenFeaLayers] = useState<Set<FeaVisLayer>>(
+    () => new Set(initialUiState.hiddenFeaLayers)
+  );
+  const [hiddenFeaParts, setHiddenFeaParts] = useState<Set<string>>(
+    () => new Set(initialUiState.hiddenFeaParts)
+  );
+  const [internalFlexIsolation, setInternalFlexIsolation] =
+    useState<FlexIsolationTarget>(NO_FLEX_ISOLATION);
+  const flexIsolation = flexIsolationProp ?? internalFlexIsolation;
+  const setFlexIsolation = useCallback(
+    (next: FlexIsolationTarget) => {
+      if (onFlexIsolationChange) onFlexIsolationChange(next);
+      else setInternalFlexIsolation(next);
+    },
+    [onFlexIsolationChange]
+  );
+  const [flexIsolationStyle, setFlexIsolationStyle] = useState<FlexIsolationStyle>("xray");
+  const [flexFinderOpen, setFlexFinderOpen] = useState<boolean>(false);
+  const flexFinderRef = useRef<HTMLDivElement | null>(null);
+  const hiddenFeaLayersRef = useRef<Set<FeaVisLayer>>(hiddenFeaLayers);
+  const hiddenFeaPartsRef = useRef<Set<string>>(hiddenFeaParts);
+  const flexIsolationRef = useRef<FlexIsolationTarget>(flexIsolation);
+  const flexIsolationStyleRef = useRef<FlexIsolationStyle>(flexIsolationStyle);
+  const simRef = useRef<SimulationResponse | null>(sim);
+  simRef.current = sim;
+  const savedIsoCameraRef = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+
+  // Persist viewport visibility toggles, modal controls, and HUD preferences across reloads
+  useEffect(() => {
+    saveViewportUiState({
+      hiddenFeaLayers: Array.from(hiddenFeaLayers),
+      hiddenFeaParts: Array.from(hiddenFeaParts),
+      isolateToolheadModal,
+      toolheadExplode,
+      modalAmpScale,
+      modalPaused,
+      ecoDpr,
+      showHudDetails,
+      showCarvedGhost,
+    });
+  }, [
+    hiddenFeaLayers,
+    hiddenFeaParts,
+    isolateToolheadModal,
+    toolheadExplode,
+    modalAmpScale,
+    modalPaused,
+    ecoDpr,
+    showHudDetails,
+    showCarvedGhost,
+  ]);
   const [cadGlbVersion, setCadGlbVersion] = useState<number>(0);
   const [webglError, setWebglError] = useState<string | null>(null);
 
   const hotendVisualGlbUrl = sim?.geometry?.toolhead_structure?.hotend_visual_glb_url ?? null;
   const toolheadVisualGlbUrl = sim?.geometry?.toolhead_structure?.toolhead_visual_glb_url ?? null;
+  const carriageMountVisualGlbUrl =
+    sim?.geometry?.toolhead_structure?.carriage_mount_visual_glb_url ?? null;
   const xBeamVisualGlbUrl = sim?.geometry?.x_beam_visual?.visual_glb_url ?? null;
   const gantryCadAssets = sim?.geometry?.gantry_brackets?.cad_assets;
   const frameBraceVisuals = sim?.geometry?.frame_bracing?.visuals;
@@ -183,6 +315,7 @@ export const PrinterViewport: React.FC<Props> = ({
     const urls = new Set<string>();
     if (hotendVisualGlbUrl) urls.add(hotendVisualGlbUrl);
     if (toolheadVisualGlbUrl) urls.add(toolheadVisualGlbUrl);
+    if (carriageMountVisualGlbUrl) urls.add(carriageMountVisualGlbUrl);
     if (xBeamVisualGlbUrl) urls.add(xBeamVisualGlbUrl);
     if (gantryCadAssets) {
       for (const asset of Object.values(gantryCadAssets)) {
@@ -195,7 +328,7 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     }
     return Array.from(urls).sort();
-  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl, xBeamVisualGlbUrl, gantryCadAssets, frameBraceVisuals]);
+  }, [hotendVisualGlbUrl, toolheadVisualGlbUrl, carriageMountVisualGlbUrl, xBeamVisualGlbUrl, gantryCadAssets, frameBraceVisuals]);
 
   const cadGlbUrlsKey = cadGlbUrlsToLoad.join("|");
 
@@ -318,6 +451,210 @@ export const PrinterViewport: React.FC<Props> = ({
     onInspectedPartChange?.(pinnedPart ? pinnedPart.partGroupId || pinnedPart.key : null);
   }, [pinnedPart, onInspectedPartChange]);
 
+  const applyFeaVisibility = useCallback(
+    (
+      layers: Set<FeaVisLayer>,
+      partKeys: Set<string>,
+      activeMode: ViewMode,
+      isolation: FlexIsolationTarget = flexIsolationRef.current,
+      isoStyle: FlexIsolationStyle = flexIsolationStyleRef.current
+    ) => {
+      const grp = stateRef.current.dynamicGroup;
+      if (!grp) return;
+      const isStructuralView =
+        activeMode === "fea_stress" || activeMode === "modal" || activeMode === "sensitivity";
+      const enforceManualHide = isStructuralView && (layers.size > 0 || partKeys.size > 0);
+      grp.traverse((obj) => {
+        if (obj === grp) return;
+        if (obj.userData.baseVisible === undefined) {
+          obj.userData.baseVisible = obj.visible;
+        }
+        if (!enforceManualHide) {
+          obj.visible = Boolean(obj.userData.baseVisible);
+          return;
+        }
+        const visLayer = obj.userData.visLayer as FeaVisLayer | undefined;
+        const info = obj.userData.inspectInfo as InspectedPartInfo | undefined;
+        const partKey = (obj.userData.partKey as string | undefined) ?? info?.key;
+        const thPartKey = info?.toolheadPartKey;
+        const hiddenByLayer = Boolean(visLayer && layers.has(visLayer));
+        const hiddenByPart = Boolean(
+          (partKey && partKeys.has(partKey)) || (thPartKey && partKeys.has(thPartKey))
+        );
+        obj.visible = Boolean(obj.userData.baseVisible) && !hiddenByLayer && !hiddenByPart;
+      });
+
+      // Apply X-Ray / Solo flex isolation on top of manual layer/part visibility
+      applyFlexIsolationToGroup(grp, isolation, isoStyle, activeMode, simRef.current);
+
+      if (
+        stateRef.current.hoveredMesh &&
+        (!isObjectEffectivelyVisible(stateRef.current.hoveredMesh) ||
+          Boolean(stateRef.current.hoveredMesh.userData?.isFlexGhosted))
+      ) {
+        const oldHover = stateRef.current.hoveredMesh;
+        stateRef.current.hoveredMesh = null;
+        stateRef.current.hoveredKey = null;
+        if (oldHover !== stateRef.current.pinnedMesh) {
+          applyInspectHighlight(oldHover, "none");
+        }
+        setHoveredPart(null);
+      }
+      if (
+        stateRef.current.pinnedMesh &&
+        !isObjectEffectivelyVisible(stateRef.current.pinnedMesh)
+      ) {
+        applyInspectHighlight(stateRef.current.pinnedMesh, "none");
+        stateRef.current.pinnedMesh = null;
+        stateRef.current.pinnedKey = null;
+        setPinnedPart(null);
+      }
+      requestRenderRef.current?.();
+    },
+    []
+  );
+
+  useEffect(() => {
+    hiddenFeaLayersRef.current = hiddenFeaLayers;
+    hiddenFeaPartsRef.current = hiddenFeaParts;
+    flexIsolationRef.current = flexIsolation;
+    flexIsolationStyleRef.current = flexIsolationStyle;
+    applyFeaVisibility(hiddenFeaLayers, hiddenFeaParts, viewMode, flexIsolation, flexIsolationStyle);
+  }, [hiddenFeaLayers, hiddenFeaParts, viewMode, flexIsolation, flexIsolationStyle, applyFeaVisibility]);
+
+  const focusCameraOnTarget = useCallback(
+    (target: FlexIsolationTarget, pinRepresentative = true) => {
+      const grp = stateRef.current.dynamicGroup;
+      const cam = stateRef.current.camera;
+      const ctrl = stateRef.current.controls;
+      if (!grp || !cam || !ctrl || target.kind === "none") return;
+
+      const { box, bestMesh } = findFlexTargetBoundsAndMesh(
+        grp,
+        stateRef.current.inspectableMeshes,
+        target,
+        simRef.current
+      );
+
+      if (!box.isEmpty()) {
+        if (!savedIsoCameraRef.current) {
+          savedIsoCameraRef.current = {
+            pos: cam.position.clone(),
+            target: ctrl.target.clone(),
+          };
+        }
+        const sphere = box.getBoundingSphere(new THREE.Sphere());
+        const halfFovRad = THREE.MathUtils.degToRad(cam.fov * 0.5);
+        const radius = Math.max(sphere.radius, 0.25);
+        const dist = Math.min(Math.max((radius / Math.sin(halfFovRad)) * 1.45, 1.85), 11.0);
+        const viewDir = cam.position.clone().sub(ctrl.target);
+        if (viewDir.lengthSq() < 1e-4) {
+          viewDir.set(0.62, 0.42, 0.66);
+        }
+        viewDir.normalize();
+        cameraAnimRef.current.targetLook.copy(sphere.center);
+        cameraAnimRef.current.targetPos.copy(sphere.center).addScaledVector(viewDir, dist);
+        cameraAnimRef.current.active = true;
+      }
+
+      if (pinRepresentative && bestMesh && bestMesh.userData?.inspectInfo) {
+        const prevPinned = stateRef.current.pinnedMesh;
+        if (prevPinned && prevPinned !== bestMesh) {
+          applyInspectHighlight(prevPinned, "none");
+        }
+        stateRef.current.pinnedMesh = bestMesh;
+        stateRef.current.pinnedKey = (bestMesh.userData.inspectInfo as InspectedPartInfo).key;
+        applyInspectHighlight(bestMesh, "pin", 0.65);
+        setPinnedPart(bestMesh.userData.inspectInfo as InspectedPartInfo);
+      }
+      requestRenderRef.current?.();
+    },
+    []
+  );
+
+  const clearFlexIsolation = useCallback(
+    (restoreCamera = false) => {
+      setFlexIsolation(NO_FLEX_ISOLATION);
+      if (restoreCamera && savedIsoCameraRef.current) {
+        cameraAnimRef.current.targetPos.copy(savedIsoCameraRef.current.pos);
+        cameraAnimRef.current.targetLook.copy(savedIsoCameraRef.current.target);
+        cameraAnimRef.current.active = true;
+        savedIsoCameraRef.current = null;
+        requestRenderRef.current?.();
+      } else if (!restoreCamera) {
+        savedIsoCameraRef.current = null;
+      }
+    },
+    [setFlexIsolation]
+  );
+
+  const selectOrToggleFlexIsolation = useCallback(
+    (target: FlexIsolationTarget, options?: { focusCamera?: boolean; pinPart?: boolean }) => {
+      const focusCam = options?.focusCamera ?? true;
+      const pinPart = options?.pinPart ?? true;
+      if (isSameFlexIsolation(flexIsolationRef.current, target)) {
+        clearFlexIsolation(false);
+        return;
+      }
+      setFlexIsolation(target);
+      if (target.kind !== "none" && (focusCam || pinPart)) {
+        // Wait one microtask/frame so visibility updates before computing bounds
+        requestAnimationFrame(() => {
+          focusCameraOnTarget(target, pinPart);
+        });
+      }
+    },
+    [clearFlexIsolation, focusCameraOnTarget, setFlexIsolation]
+  );
+
+  // Handle external focus requests (e.g., clicking a hotspot in MetricsPanel)
+  const lastFocusNonceRef = useRef<number>(0);
+  useEffect(() => {
+    if (!focusFlexRequest || focusFlexRequest.nonce === lastFocusNonceRef.current) return;
+    lastFocusNonceRef.current = focusFlexRequest.nonce;
+    const target = focusFlexRequest.target;
+    setFlexIsolation(target);
+    if (target.kind !== "none") {
+      // Delay slightly so if viewMode also switched, dynamicGroup has rebuilt its meshes
+      const id = window.setTimeout(() => {
+        focusCameraOnTarget(target, target.kind !== "subsystem" && target.kind !== "top_flexers");
+      }, 60);
+      return () => window.clearTimeout(id);
+    }
+  }, [focusFlexRequest, focusCameraOnTarget, setFlexIsolation]);
+
+  const toggleFeaLayer = useCallback((layer: FeaVisLayer) => {
+    setHiddenFeaLayers((prev) => {
+      const next = new Set(prev);
+      if (next.has(layer)) next.delete(layer);
+      else next.add(layer);
+      return next;
+    });
+  }, []);
+
+  const toggleFeaPart = useCallback((partKey: string) => {
+    setHiddenFeaParts((prev) => {
+      const next = new Set(prev);
+      if (next.has(partKey)) next.delete(partKey);
+      else next.add(partKey);
+      return next;
+    });
+  }, []);
+
+  const hideFeaPart = useCallback((partKey: string) => {
+    setHiddenFeaParts((prev) => {
+      if (prev.has(partKey)) return prev;
+      const next = new Set(prev);
+      next.add(partKey);
+      return next;
+    });
+  }, []);
+
+  const showAllFea = useCallback(() => {
+    setHiddenFeaLayers(new Set());
+    setHiddenFeaParts(new Set());
+  }, []);
+
   const stateRef = useRef<{
     renderer?: THREE.WebGLRenderer;
     scene?: THREE.Scene;
@@ -337,6 +674,7 @@ export const PrinterViewport: React.FC<Props> = ({
       endId: string;
     }>;
     modalContinuousBeams: ModalContinuousBeam[];
+    modalCadBeams: ModalCadBeam[];
     modalShellMeshes: ModalShellMesh[];
     modalToolhead?: THREE.Group;
     modalRailShoe?: THREE.Group;
@@ -383,6 +721,7 @@ export const PrinterViewport: React.FC<Props> = ({
     modalAmpScale: number;
     modalMotionScale: number;
     isToolheadPunchIn: boolean;
+    isToolheadExplode: boolean;
     ecoDpr: boolean;
     modalPaused: boolean;
   }>({
@@ -393,6 +732,7 @@ export const PrinterViewport: React.FC<Props> = ({
     hoveredKey: null,
     modalMeshes: [],
     modalContinuousBeams: [],
+    modalCadBeams: [],
     modalShellMeshes: [],
     modalCogOffset: new THREE.Vector3(),
     modalNozzleOffset: new THREE.Vector3(),
@@ -424,6 +764,7 @@ export const PrinterViewport: React.FC<Props> = ({
     modalAmpScale: 1.0,
     modalMotionScale: 1.0,
     isToolheadPunchIn: false,
+    isToolheadExplode: false,
     ecoDpr: false,
     modalPaused: false,
   });
@@ -440,8 +781,9 @@ export const PrinterViewport: React.FC<Props> = ({
 
   useEffect(() => {
     stateRef.current.isToolheadPunchIn = toolheadPunchIn;
+    stateRef.current.isToolheadExplode = toolheadPunchIn && toolheadExplode;
     requestRenderRef.current?.();
-  }, [toolheadPunchIn]);
+  }, [toolheadPunchIn, toolheadExplode]);
 
   useEffect(() => {
     stateRef.current.modalPaused = modalPaused;
@@ -492,8 +834,17 @@ export const PrinterViewport: React.FC<Props> = ({
 
     const initW = Math.max(el.clientWidth, 1);
     const initH = Math.max(el.clientHeight, 1);
+    const savedCameraPose = loadViewportCameraPose();
     const camera = new THREE.PerspectiveCamera(42, initW / initH, 0.05, 200);
-    camera.position.set(7.5, 6.2, 8.2);
+    if (savedCameraPose) {
+      camera.position.set(
+        savedCameraPose.position[0],
+        savedCameraPose.position[1],
+        savedCameraPose.position[2]
+      );
+    } else {
+      camera.position.set(7.5, 6.2, 8.2);
+    }
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -518,7 +869,16 @@ export const PrinterViewport: React.FC<Props> = ({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.target.set(0, 2.3, 0);
+    if (savedCameraPose) {
+      controls.target.set(
+        savedCameraPose.target[0],
+        savedCameraPose.target[1],
+        savedCameraPose.target[2]
+      );
+    } else {
+      controls.target.set(0, 2.3, 0);
+    }
+    controls.update();
 
     // Studio CAD Lighting (key + hemisphere + warm front-lower fill + cool rim for crisp metallic speculars)
     scene.add(new THREE.AmbientLight(0xffffff, 0.48));
@@ -560,6 +920,28 @@ export const PrinterViewport: React.FC<Props> = ({
     const MODAL_FRAME_INTERVAL_MS = 33; // ~30 FPS modal animation cadence
     const prevCamPos = new THREE.Vector3();
     const prevCtrlTarget = new THREE.Vector3();
+
+    let camPersistTimerId: number | null = null;
+    const persistCameraPoseNow = () => {
+      if (camPersistTimerId !== null) {
+        window.clearTimeout(camPersistTimerId);
+        camPersistTimerId = null;
+      }
+      // Do not overwrite the saved printer camera while viewing an auto-framed solid part
+      const framedKey = stateRef.current.lastFramedKey;
+      if (framedKey && framedKey !== "printer") return;
+      saveViewportCameraPose({
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [controls.target.x, controls.target.y, controls.target.z],
+      });
+    };
+    const schedulePersistCameraPose = () => {
+      if (camPersistTimerId !== null) return;
+      camPersistTimerId = window.setTimeout(() => {
+        camPersistTimerId = null;
+        persistCameraPoseNow();
+      }, 180);
+    };
 
     const captureBgColor = new THREE.Color("#0e1522");
     const tmpPosA = new THREE.Vector3();
@@ -637,6 +1019,7 @@ export const PrinterViewport: React.FC<Props> = ({
     const hasActiveModalMeshes = (): boolean =>
       stateRef.current.isModal &&
       (stateRef.current.modalContinuousBeams.length > 0 ||
+        stateRef.current.modalCadBeams.length > 0 ||
         stateRef.current.modalMeshes.length > 0 ||
         stateRef.current.modalShellMeshes.length > 0);
 
@@ -683,6 +1066,7 @@ export const PrinterViewport: React.FC<Props> = ({
             controls.target.copy(cameraAnimRef.current.targetLook);
             cameraAnimRef.current.active = false;
             prevCamAnimMs = null;
+            persistCameraPoseNow();
           }
         }
 
@@ -712,6 +1096,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 needsDamping = false;
                 settledFrames = 0;
                 dampFrames = 0;
+                persistCameraPoseNow();
               }
             }
           }
@@ -721,6 +1106,7 @@ export const PrinterViewport: React.FC<Props> = ({
       if (
         stateRef.current.isModal &&
         (stateRef.current.modalContinuousBeams.length > 0 ||
+          stateRef.current.modalCadBeams.length > 0 ||
           stateRef.current.modalMeshes.length > 0 ||
           stateRef.current.modalShellMeshes.length > 0)
       ) {
@@ -730,6 +1116,7 @@ export const PrinterViewport: React.FC<Props> = ({
           modalRotations,
           modalHotendLen,
           modalContinuousBeams,
+          modalCadBeams,
           modalShellMeshes,
           modalMeshes,
           modalToolhead,
@@ -875,6 +1262,13 @@ export const PrinterViewport: React.FC<Props> = ({
           for (let i = 0; i < beam.nodeIds.length; i++) {
             getPosInto(beam.nodeIds[i], beam.controlPts[i]);
           }
+          if (beam.endExtension && beam.controlPts.length >= 2) {
+            beam.controlPts[0].addScaledVector(beam.undeformedAxis, -beam.endExtension);
+            beam.controlPts[beam.controlPts.length - 1].addScaledVector(
+              beam.undeformedAxis,
+              beam.endExtension
+            );
+          }
           updateContinuousBeamGeometry(
             beam.geometry,
             beam.controlPts,
@@ -888,6 +1282,20 @@ export const PrinterViewport: React.FC<Props> = ({
             beam.fixedEnd,
             false
           );
+        }
+
+        for (const cadBeam of modalCadBeams) {
+          for (let i = 0; i < cadBeam.nodeIds.length; i++) {
+            getPosInto(cadBeam.nodeIds[i], cadBeam.controlPts[i]);
+          }
+          if (cadBeam.endExtension && cadBeam.controlPts.length >= 2) {
+            cadBeam.controlPts[0].addScaledVector(cadBeam.undeformedAxis, -cadBeam.endExtension);
+            cadBeam.controlPts[cadBeam.controlPts.length - 1].addScaledVector(
+              cadBeam.undeformedAxis,
+              cadBeam.endExtension
+            );
+          }
+          updateCadBeamDeformation(cadBeam);
         }
 
         for (const shell of modalShellMeshes) {
@@ -1097,6 +1505,9 @@ export const PrinterViewport: React.FC<Props> = ({
                 .copy(modalCollarRelToTh)
                 .applyQuaternion(tmpRailQuat)
                 .add(tmpRailOrigin);
+              if (stateRef.current.isToolheadExplode) {
+                modalCogMarker.position.z += 0.34;
+              }
               modalCogMarker.quaternion.copy(tmpRailQuat);
             }
 
@@ -1175,6 +1586,9 @@ export const PrinterViewport: React.FC<Props> = ({
             }
             if (modalCogMarker) {
               modalCogMarker.position.copy(curCog).add(modalCogOffset);
+              if (stateRef.current.isToolheadExplode) {
+                modalCogMarker.position.z += 0.34;
+              }
               modalCogMarker.quaternion.copy(tmpStage1Quat);
             }
           }
@@ -1194,6 +1608,10 @@ export const PrinterViewport: React.FC<Props> = ({
             modalNozzleMarker.quaternion.copy(tmpCollarWorldQuat);
             tmpHotendTopVec.set(0, modalHotendLen, 0).applyQuaternion(tmpCollarWorldQuat);
             modalNozzleMarker.position.copy(tmpCollarWorldPos).sub(tmpHotendTopVec);
+            if (stateRef.current.isToolheadExplode) {
+              modalNozzleMarker.position.z += 0.34;
+              modalNozzleMarker.position.y -= 0.38;
+            }
 
             // Compute relative hotend bend in collar-local frame (scaled proportionally to maxStageAngle)
             tmpThetaBendLocal.set(0, 0, 0);
@@ -1584,6 +2002,7 @@ export const PrinterViewport: React.FC<Props> = ({
       needsDamping = true;
       settledFrames = 0;
       dampFrames = 0;
+      schedulePersistCameraPose();
       scheduleRaf();
     };
 
@@ -1592,6 +2011,7 @@ export const PrinterViewport: React.FC<Props> = ({
       needsDamping = true;
       settledFrames = 0;
       dampFrames = 0;
+      persistCameraPoseNow();
       scheduleRaf();
     };
 
@@ -1606,7 +2026,9 @@ export const PrinterViewport: React.FC<Props> = ({
     let lastMoveTs = 0;
 
     const pickInspectableMesh = (clientX: number, clientY: number): THREE.Mesh | null => {
-      const targets = stateRef.current.inspectableMeshes;
+      const targets = stateRef.current.inspectableMeshes.filter(
+        (m) => isObjectEffectivelyVisible(m) && !m.userData?.isFlexGhosted
+      );
       if (!targets.length) return null;
       const rect = renderer.domElement.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
@@ -1616,7 +2038,11 @@ export const PrinterViewport: React.FC<Props> = ({
       const hits = raycaster.intersectObjects(targets, false);
       for (const hit of hits) {
         const obj = hit.object as THREE.Mesh;
-        if (obj.userData?.inspectInfo) {
+        if (
+          obj.userData?.inspectInfo &&
+          isObjectEffectivelyVisible(obj) &&
+          !obj.userData?.isFlexGhosted
+        ) {
           return obj;
         }
       }
@@ -1768,6 +2194,8 @@ export const PrinterViewport: React.FC<Props> = ({
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", persistCameraPoseNow);
+    window.addEventListener("beforeunload", persistCameraPoseNow);
 
     // Render initial frame on demand
     requestRender();
@@ -1825,6 +2253,9 @@ export const PrinterViewport: React.FC<Props> = ({
       captureFnRef.current = null;
       clearModalTimer();
       clearScheduledRaf();
+      persistCameraPoseNow();
+      window.removeEventListener("pagehide", persistCameraPoseNow);
+      window.removeEventListener("beforeunload", persistCameraPoseNow);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("resize", onResize);
       resizeObserver?.disconnect();
@@ -1866,6 +2297,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
     stateRef.current.modalMeshes = [];
     stateRef.current.modalContinuousBeams = [];
+    stateRef.current.modalCadBeams = [];
     stateRef.current.modalShellMeshes = [];
     stateRef.current.modalToolhead = undefined;
     stateRef.current.modalRailShoe = undefined;
@@ -1935,8 +2367,14 @@ export const PrinterViewport: React.FC<Props> = ({
       const cam = stateRef.current.camera;
       const ctrl = stateRef.current.controls;
       if (cam && ctrl) {
-        cam.position.set(7.5, 6.2, 8.2);
-        ctrl.target.set(0, 2.3, 0);
+        const savedPose = loadViewportCameraPose();
+        if (savedPose) {
+          cam.position.set(savedPose.position[0], savedPose.position[1], savedPose.position[2]);
+          ctrl.target.set(savedPose.target[0], savedPose.target[1], savedPose.target[2]);
+        } else {
+          cam.position.set(7.5, 6.2, 8.2);
+          ctrl.target.set(0, 2.3, 0);
+        }
         ctrl.update();
       }
       stateRef.current.lastFramedKey = "printer";
@@ -2034,6 +2472,9 @@ export const PrinterViewport: React.FC<Props> = ({
     }
 
     const stiffenById: Record<string, NonNullable<SimulationResponse["sensitivity"]>["top_stiffen_targets"][number]> = {};
+    for (const [gid, g] of Object.entries(sim.sensitivity?.part_group_sensitivities ?? {})) {
+      stiffenById[gid] = g;
+    }
     for (const t of sim.sensitivity?.top_stiffen_targets ?? []) {
       stiffenById[t.id] = t;
     }
@@ -2045,6 +2486,17 @@ export const PrinterViewport: React.FC<Props> = ({
     const tagInspectable = (mesh: THREE.Mesh, info: InspectedPartInfo) => {
       mesh.userData.inspectInfo = info;
       stateRef.current.inspectableMeshes.push(mesh);
+    };
+
+    const addLayered = <T extends THREE.Object3D>(
+      obj: T,
+      visLayer: FeaVisLayer,
+      partKey?: string
+    ): T => {
+      obj.userData.visLayer = visLayer;
+      if (partKey) obj.userData.partKey = partKey;
+      group.add(obj);
+      return obj;
     };
 
     // Include bed spider arms & Z-rail posts (role === "bed") so real 3D bed supports render cleanly,
@@ -2306,6 +2758,7 @@ export const PrinterViewport: React.FC<Props> = ({
         actionHint: stiffTarget?.action_hint ?? lightTarget?.action_hint,
       };
 
+      const chainVisLayer: FeaVisLayer = grp.subsystem;
       if (chain.isRod) {
         const geo = new THREE.CylinderGeometry(w * 0.5, w * 0.5, 1, 10, useVertexColors ? 6 : 1);
         if (useVertexColors) {
@@ -2316,7 +2769,7 @@ export const PrinterViewport: React.FC<Props> = ({
         const p1 = viewMode === "fea_stress" ? deformedPos[lastId] : basePos[lastId];
         orientBeamMesh(mesh, p0, p1);
         tagInspectable(mesh, chainInspectInfo);
-        group.add(mesh);
+        addLayered(mesh, chainVisLayer, chainInspectInfo.key);
 
         if (viewMode === "assembly" && isOpenBraceBar && !toolheadPunchIn) {
           const barEdgesGeo = new THREE.EdgesGeometry(geo, 28);
@@ -2325,7 +2778,7 @@ export const PrinterViewport: React.FC<Props> = ({
             transparent: true,
             opacity: memberOpacity * 0.7,
           });
-          group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
+          addLayered(new THREE.LineSegments(barEdgesGeo, barEdgesMat), chainVisLayer, chainInspectInfo.key);
         }
 
         if (viewMode === "modal") {
@@ -2354,15 +2807,27 @@ export const PrinterViewport: React.FC<Props> = ({
           !m.id.includes("rail") &&
           !m.id.includes("backer");
         const xBeamVis = isPrimaryXBeamChain ? (geom.x_beam_visual ?? null) : null;
+        // Extend the visual CoreXY X-beam ends from the FEA XY-joint port1 boundary nodes
+        // to the full physical beam cut length (corexy_x_beam_span_m) so the tube/beam
+        // seats all the way through both XY-joint double-bolt clamping pockets.
+        const feaSpanThree = baseFirst.distanceTo(baseLast);
+        const physicalXSpanMm = isPrimaryXBeamChain ? geom.linear_rails?.x_beam_span_mm : null;
+        const xBeamEndExt =
+          physicalXSpanMm != null && physicalXSpanMm * SCALE > feaSpanThree + 1e-4
+            ? Math.min((physicalXSpanMm * SCALE - feaSpanThree) * 0.5, 25 * SCALE)
+            : 0;
+        if (xBeamEndExt > 0 && controlPts.length >= 2) {
+          controlPts[0].addScaledVector(undeformedAxis, -xBeamEndExt);
+          controlPts[controlPts.length - 1].addScaledVector(undeformedAxis, xBeamEndExt);
+        }
         const cachedXBeamGlb =
-          viewMode === "assembly" && xBeamVis?.visual_glb_url
+          (viewMode === "assembly" || viewMode === "fea_stress" || viewMode === "modal") &&
+          xBeamVis?.visual_glb_url
             ? (cadGlbResolvedCache.get(xBeamVis.visual_glb_url) ?? null)
             : null;
 
         if (cachedXBeamGlb && xBeamVis) {
-          const spanThree = baseFirst.distanceTo(baseLast);
           const nativeLenThree = Math.max(xBeamVis.length_mm * SCALE, 1e-4);
-          const scaleX = (spanThree / nativeLenThree) * CAD_M_TO_THREE;
           const beamClone = cloneCachedCadGlb(cachedXBeamGlb, {
             isHeatMode: false,
             heatColor: matColor,
@@ -2371,24 +2836,58 @@ export const PrinterViewport: React.FC<Props> = ({
             inspectInfo: chainInspectInfo,
             tagInspectable,
           });
-          // GLB is in PrintSim CAD coords (+X span, -Y front, +Z up); rotate -90° about X for Three.js Y-up
-          beamClone.rotation.x = -Math.PI * 0.5;
-          beamClone.scale.set(scaleX, CAD_M_TO_THREE, CAD_M_TO_THREE);
-          const wrapper = new THREE.Group();
-          wrapper.name = `cad_x_beam_${xBeamVis.asset_id}`;
-          wrapper.add(beamClone);
-          const midPt = new THREE.Vector3().addVectors(baseFirst, baseLast).multiplyScalar(0.5);
-          wrapper.position.copy(midPt);
-          const dir = new THREE.Vector3().subVectors(baseLast, baseFirst);
-          if (dir.lengthSq() > 1e-10) {
-            dir.normalize();
-            const qAlign = new THREE.Quaternion().setFromUnitVectors(
-              new THREE.Vector3(1, 0, 0),
-              dir
-            );
-            wrapper.quaternion.copy(qAlign);
+          if (viewMode === "assembly") {
+            const spanThree = feaSpanThree + 2 * xBeamEndExt;
+            const scaleX = (spanThree / nativeLenThree) * CAD_M_TO_THREE;
+            // GLB is in PrintSim CAD coords (+X span, -Y front, +Z up); rotate -90° about X for Three.js Y-up
+            beamClone.rotation.x = -Math.PI * 0.5;
+            beamClone.scale.set(scaleX, CAD_M_TO_THREE, CAD_M_TO_THREE);
+            const wrapper = new THREE.Group();
+            wrapper.name = `cad_x_beam_${xBeamVis.asset_id}`;
+            wrapper.add(beamClone);
+            const midPt = new THREE.Vector3().addVectors(baseFirst, baseLast).multiplyScalar(0.5);
+            wrapper.position.copy(midPt);
+            const dir = new THREE.Vector3().subVectors(baseLast, baseFirst);
+            if (dir.lengthSq() > 1e-10) {
+              dir.normalize();
+              const qAlign = new THREE.Quaternion().setFromUnitVectors(
+                new THREE.Vector3(1, 0, 0),
+                dir
+              );
+              wrapper.quaternion.copy(qAlign);
+            }
+            addLayered(wrapper, chainVisLayer, chainInspectInfo.key);
+          } else {
+            const basePts = chain.nodeIds.map((nid) => basePos[nid].clone());
+            if (xBeamEndExt > 0 && basePts.length >= 2) {
+              basePts[0].addScaledVector(undeformedAxis, -xBeamEndExt);
+              basePts[basePts.length - 1].addScaledVector(undeformedAxis, xBeamEndExt);
+            }
+            const { wrapper, cadBeam } = prepareCadBeamDeformation({
+              beamClone,
+              cadMToThree: CAD_M_TO_THREE,
+              nativeLengthThree: nativeLenThree,
+              nodeIds: chain.nodeIds,
+              basePts,
+              controlPts,
+              controlValues,
+              useVertexColors,
+              undeformedAxis,
+              fixedStart,
+              fixedEnd,
+              memberOpacity,
+              isModal: viewMode === "modal",
+            });
+            if (xBeamEndExt > 0) {
+              cadBeam.endExtension = xBeamEndExt;
+            }
+            wrapper.name = `cad_x_beam_${xBeamVis.asset_id}`;
+            addLayered(wrapper, chainVisLayer, chainInspectInfo.key);
+            if (viewMode === "modal") {
+              stateRef.current.modalCadBeams.push(cadBeam);
+            }
           }
-          group.add(wrapper);
+          mat.dispose();
         } else {
           const geo = createContinuousBeamGeometry(
             controlPts,
@@ -2415,10 +2914,11 @@ export const PrinterViewport: React.FC<Props> = ({
               undeformedAxis,
               fixedStart,
               fixedEnd,
+              endExtension: xBeamEndExt > 0 ? xBeamEndExt : undefined,
             });
           }
           tagInspectable(mesh, chainInspectInfo);
-          group.add(mesh);
+          addLayered(mesh, chainVisLayer, chainInspectInfo.key);
 
           if (viewMode === "assembly" && isOpenBraceBar && !toolheadPunchIn) {
             const barEdgesGeo = new THREE.EdgesGeometry(geo, 28);
@@ -2427,7 +2927,7 @@ export const PrinterViewport: React.FC<Props> = ({
               transparent: true,
               opacity: memberOpacity * 0.7,
             });
-            group.add(new THREE.LineSegments(barEdgesGeo, barEdgesMat));
+            addLayered(new THREE.LineSegments(barEdgesGeo, barEdgesMat), chainVisLayer, chainInspectInfo.key);
           } else if (viewMode === "assembly" && isCarbonBeam && m.role === "gantry") {
             const cfEdgesGeo = new THREE.EdgesGeometry(geo, 28);
             const cfEdgesMat = new THREE.LineBasicMaterial({
@@ -2435,7 +2935,7 @@ export const PrinterViewport: React.FC<Props> = ({
               transparent: true,
               opacity: memberOpacity * 0.55,
             });
-            group.add(new THREE.LineSegments(cfEdgesGeo, cfEdgesMat));
+            addLayered(new THREE.LineSegments(cfEdgesGeo, cfEdgesMat), chainVisLayer, chainInspectInfo.key);
           }
         }
 
@@ -2449,12 +2949,12 @@ export const PrinterViewport: React.FC<Props> = ({
           const inlayGeoA = new THREE.BoxGeometry(w * 0.32, 0.96, h * 1.03);
           const inlayA = new THREE.Mesh(inlayGeoA, fillingMat);
           orientBeamBoxMesh(inlayA, baseFirst, baseLast);
-          group.add(inlayA);
+          addLayered(inlayA, chainVisLayer, chainInspectInfo.key);
 
           const inlayGeoB = new THREE.BoxGeometry(w * 1.03, 0.96, h * 0.32);
           const inlayB = new THREE.Mesh(inlayGeoB, fillingMat);
           orientBeamBoxMesh(inlayB, baseFirst, baseLast);
-          group.add(inlayB);
+          addLayered(inlayB, chainVisLayer, chainInspectInfo.key);
         }
       }
 
@@ -2465,7 +2965,7 @@ export const PrinterViewport: React.FC<Props> = ({
           basePos[firstId],
           basePos[lastId],
         ]);
-        group.add(new THREE.Line(lineGeo, ghostLineMat));
+        addLayered(new THREE.Line(lineGeo, ghostLineMat), chainVisLayer, chainInspectInfo.key);
       }
     }
 
@@ -2549,7 +3049,7 @@ export const PrinterViewport: React.FC<Props> = ({
           ring.position.y = -0.02;
           footGrp.add(ring);
           footGrp.position.copy(p);
-          group.add(footGrp);
+          addLayered(footGrp, "frame", feetInspectInfo.key);
         }
       } else if (feetType === "anti_vib_pads") {
         const plateGeo = new THREE.CylinderGeometry(0.19, 0.19, 0.035, 16);
@@ -2580,7 +3080,7 @@ export const PrinterViewport: React.FC<Props> = ({
           botPlate.position.y = -0.12;
           hulaGrp.add(botPlate);
           hulaGrp.position.copy(p);
-          group.add(hulaGrp);
+          addLayered(hulaGrp, "frame", feetInspectInfo.key);
         }
       } else if (feetType === "suspended_lines") {
         // Overhead anchors and the lines the frame hangs from (anchor node -> top frame corner)
@@ -2603,7 +3103,7 @@ export const PrinterViewport: React.FC<Props> = ({
           const anchor = new THREE.Mesh(anchorGeo, anchorMat);
           anchor.position.copy(anchorPos);
           tagInspectable(anchor, feetInspectInfo);
-          group.add(anchor);
+          addLayered(anchor, "frame", feetInspectInfo.key);
           const span = new THREE.Vector3().subVectors(anchorPos, attachPos);
           const length = span.length();
           if (length < 1e-6) continue;
@@ -2614,7 +3114,7 @@ export const PrinterViewport: React.FC<Props> = ({
           lineMesh.position.copy(attachPos).addScaledVector(span, 0.5);
           lineMesh.quaternion.setFromUnitVectors(lineAxis, span.clone().normalize());
           tagInspectable(lineMesh, feetInspectInfo);
-          group.add(lineMesh);
+          addLayered(lineMesh, "frame", feetInspectInfo.key);
         }
       } else {
         const boltPadGeo = new THREE.CylinderGeometry(0.14, 0.17, 0.08, 12);
@@ -2623,7 +3123,7 @@ export const PrinterViewport: React.FC<Props> = ({
           const pad = new THREE.Mesh(boltPadGeo, boltPadMat);
           pad.position.copy(basePos[n.id]);
           tagInspectable(pad, feetInspectInfo);
-          group.add(pad);
+          addLayered(pad, "frame", feetInspectInfo.key);
         }
       }
     }
@@ -2811,14 +3311,17 @@ export const PrinterViewport: React.FC<Props> = ({
               : isFrontBraceBay
                 ? `Front Open-Door Brace (${Math.round(frontBraceThickMm)}mm Al)`
                 : `${bayName.charAt(0).toUpperCase()}${bayName.slice(1)} Enclosure Panel (MITC4)`;
+          const panelKey = isBackboneBay
+            ? "frame:trident_backbone"
+            : isTopBraceBay
+              ? "frame:top_brace"
+              : isFrontBraceBay
+                ? "frame:front_brace"
+                : `panel:${bayName}`;
+          const panelVisLayer: FeaVisLayer =
+            isBackboneBay || isTopBraceBay || isFrontBraceBay ? "frame" : "panels";
           tagInspectable(shellMesh, {
-            key: isBackboneBay
-              ? "frame:trident_backbone"
-              : isTopBraceBay
-                ? "frame:top_brace"
-                : isFrontBraceBay
-                  ? "frame:front_brace"
-                  : `panel:${bayName}`,
+            key: panelKey,
             name: bayLabel,
             subsystem: "frame",
             partGroupId: bayGrp.id,
@@ -2849,7 +3352,7 @@ export const PrinterViewport: React.FC<Props> = ({
             whyItHurts: bayStiff?.why_it_hurts,
             actionHint: bayStiff?.action_hint,
           });
-          group.add(shellMesh);
+          addLayered(shellMesh, panelVisLayer, panelKey);
 
           // Subtle dark MITC4 quad wireframe grid overlay (2×2 or 6×6)
           const wirePositions = new Float32Array(positions);
@@ -2865,7 +3368,7 @@ export const PrinterViewport: React.FC<Props> = ({
           });
           const wireLines = new THREE.LineSegments(wireGeo, wireMat);
           wireLines.renderOrder = 2;
-          group.add(wireLines);
+          addLayered(wireLines, panelVisLayer, panelKey);
 
           if (viewMode === "modal") {
             shellMesh.frustumCulled = false;
@@ -2911,16 +3414,21 @@ export const PrinterViewport: React.FC<Props> = ({
         cy,
         toolheadPunchIn,
         adjointLens,
+        feaLoadCase,
         stiffenById,
+        memberSensMap,
         tagInspectable,
       });
     } else if (viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity") {
+      const cadGantryGroup = new THREE.Group();
+      cadGantryGroup.name = "cad_gantry_stations";
       const cadGantryRes = buildCadGantryStationMeshes({
-        group,
+        group: cadGantryGroup,
         sim,
         basePos,
         deformedPos,
         viewMode,
+        feaLoadCase,
         toolheadPunchIn,
         adjointLens,
         stiffenById,
@@ -2929,26 +3437,131 @@ export const PrinterViewport: React.FC<Props> = ({
         globalNodalStress,
         memberSensMap,
       });
+      if (cadGantryGroup.children.length > 0) {
+        addLayered(cadGantryGroup, "gantry");
+      }
       if (viewMode === "modal") {
         stateRef.current.modalCadGantryItems = cadGantryRes.modalItems;
       }
     }
 
     // Modeled 3D CAD corner brackets & CNC gusset plates (baked Craig-Bampton superelements)
-    const fbVisuals = geom.frame_bracing?.visuals ?? [];
+    const fbMeta = geom.frame_bracing;
+    const fbVisuals = fbMeta?.visuals ?? [];
     if (fbVisuals.length > 0 && !toolheadPunchIn) {
       const fbGroup = new THREE.Group();
       fbGroup.name = "cad_frame_braces";
-      const isHeatMode = viewMode === "fea_stress" || viewMode === "sensitivity";
-      const heatColor = new THREE.Color(viewMode === "sensitivity" ? "#3b82f6" : "#4a7ab5");
-      const heatEmissive = new THREE.Color("#000000");
+      const isHeatMode = viewMode !== "assembly";
+      const frameColStiff =
+        stiffenById["frame_bracing"] ?? stiffenById["frame_columns"] ?? stiffenById["frame_top"];
+      const frameColLight =
+        lightenById["frame_bracing"] ?? lightenById["frame_columns"] ?? lightenById["frame_top"];
+
+      // Index frame members incident to each corner node for per-corner stress & sensitivity
+      const incidentFrameMembers = new Map<string, typeof geom.members>();
+      for (const m of geom.members) {
+        if (m.role !== "frame" && m.role !== "brace" && m.role !== "tower") continue;
+        for (const nid of [m.start_id, m.end_id]) {
+          let list = incidentFrameMembers.get(nid);
+          if (!list) {
+            list = [];
+            incidentFrameMembers.set(nid, list);
+          }
+          list.push(m);
+        }
+      }
+
+      const unitMassG =
+        fbMeta?.unit_mass_g != null
+          ? fbMeta.unit_mass_g
+          : fbMeta && fbMeta.cad_count > 0 && fbMeta.cad_mass_kg > 0
+            ? (fbMeta.cad_mass_kg * 1000.0) / fbMeta.cad_count
+            : undefined;
+      const numEls = fbMeta?.num_elements ?? 0;
+      const elemType = fbMeta?.element_type ?? "Tet4";
+
       for (const item of fbVisuals) {
         const cached = cadGlbResolvedCache.get(item.visual_glb_url);
         if (!cached) continue;
-        const label =
+        const anchorNodeId = item.node_a;
+        const baseAnchor = basePos[anchorNodeId];
+
+        // Aggregate per-corner structural telemetry from adjacent frame columns/beams
+        const adjMembers = incidentFrameMembers.get(anchorNodeId) ?? [];
+        let cornerMaxVm = 0;
+        let cornerYield: number | undefined = undefined;
+        let cornerCompShare = 0;
+        let cornerHeatScore = 0;
+        let cornerHzPer100g = 0;
+        let hasCornerSens = false;
+        for (const am of adjMembers) {
+          const ms = memberStressById[am.id];
+          if (ms && ms.von_mises_mpa >= cornerMaxVm) {
+            cornerMaxVm = ms.von_mises_mpa;
+            cornerYield = ms.yield_mpa;
+          }
+          const se = memberSensMap[am.id];
+          if (se) {
+            hasCornerSens = true;
+            cornerCompShare += se.compliance_share_pct ?? 0;
+            const sc = getLensScore(se, adjointLens);
+            if (Math.abs(sc) > Math.abs(cornerHeatScore)) cornerHeatScore = sc;
+            cornerHzPer100g += se.hz_per_100g ?? 0;
+          }
+        }
+        const rawDispMm = activeNodalDisplacements[anchorNodeId];
+        const nodeDispUm = rawDispMm
+          ? Math.hypot(rawDispMm[0], rawDispMm[1], rawDispMm[2]) * 1000.0
+          : undefined;
+
+        const heatColor = new THREE.Color(0x475569);
+        const heatEmissive = new THREE.Color(0x000000);
+        let heatEmissiveIntensity = 0.0;
+        if (viewMode === "modal") {
+          const s = getModalNodeScalar(anchorNodeId);
+          stressColorInto(s, heatColor);
+          if (s > 0.35) {
+            heatEmissive.copy(heatColor);
+            heatEmissiveIntensity = (s - 0.25) * 0.28;
+          }
+        } else if (viewMode === "fea_stress") {
+          const s = globalNodalStress[anchorNodeId] ?? 0;
+          stressColorInto(s, heatColor);
+          if (s > 0.55) {
+            heatEmissive.copy(heatColor);
+            heatEmissiveIntensity = (s - 0.5) * 0.24;
+          }
+        } else if (viewMode === "sensitivity") {
+          const sc = hasCornerSens
+            ? cornerHeatScore
+            : frameColStiff && frameColStiff.compliance_share_pct > 1.0
+              ? Math.min(1, frameColStiff.compliance_share_pct / 25.0)
+              : 0;
+          sensitivityColorInto(sc, heatColor);
+          const absSc = Math.min(1, Math.abs(sc));
+          if (absSc > 0.15) {
+            heatEmissive.copy(heatColor);
+            heatEmissiveIntensity = absSc * 0.32;
+          }
+        }
+
+        const defaultLabel =
           item.kind === "cast_corner_bracket"
             ? "Cast Al Corner Bracket (CAD)"
             : "CNC Al 5-Hole Corner Gusset (CAD)";
+        const label = fbMeta?.cad_asset_name ?? defaultLabel;
+        const cornerKrIn = fbMeta?.corner_kr_inplane_nm_rad;
+        const profileDesc =
+          numEls > 0
+            ? `${item.asset_id} · ${elemType} (${numEls.toLocaleString()} els)`
+            : item.asset_id;
+        const actionHint =
+          cornerKrIn != null && cornerKrIn > 0
+            ? `3D ${elemType} Craig-Bampton superelement in series with Huth T-slot bolt compliance (+${Math.round(
+                cornerKrIn
+              ).toLocaleString()} N·m/rad per corner joint).`
+            : "Modeled as a 3D Tet4 Craig-Bampton superelement in series with Huth T-slot bolt compliance.";
+
         const inspectInfo: InspectedPartInfo = {
           key: item.id,
           name: label,
@@ -2956,15 +3569,31 @@ export const PrinterViewport: React.FC<Props> = ({
           partGroupId: "frame_bracing",
           role: "brace",
           material: "Aluminum 6061-T6 (3D CAD Superelement)",
-          profile: item.asset_id,
-          actionHint:
-            "Modeled as a 3D Tet4 Craig-Bampton superelement in series with Huth T-slot bolt compliance.",
+          profile: profileDesc,
+          complianceSharePct: hasCornerSens
+            ? cornerCompShare
+            : frameColStiff?.compliance_share_pct,
+          rotStiffnessNmRad: fbMeta?.kr_inplane_nm_rad,
+          torsionStiffnessNmRad: fbMeta?.kr_torsion_nm_rad,
+          unitMassG,
+          totalCount: fbMeta?.cad_count,
+          nodeDispUm,
+          stressMpa: cornerMaxVm > 0 ? cornerMaxVm : undefined,
+          yieldMpa: cornerYield,
+          heatScore: hasCornerSens ? cornerHeatScore : undefined,
+          estHzGain: frameColStiff?.est_hz_gain,
+          hzPer100g:
+            hasCornerSens && Math.abs(cornerHzPer100g) >= 0.01
+              ? cornerHzPer100g
+              : frameColLight?.hz_per_100g,
+          whyItHurts: frameColStiff?.why_it_hurts,
+          actionHint,
         };
         const clone = cloneCachedCadGlb(cached, {
           isHeatMode,
           heatColor,
           heatEmissive,
-          heatEmissiveIntensity: 0.0,
+          heatEmissiveIntensity,
           inspectInfo,
           tagInspectable,
         });
@@ -2974,17 +3603,36 @@ export const PrinterViewport: React.FC<Props> = ({
         const ezT = new THREE.Vector3(item.basis_z[0], item.basis_z[2], -item.basis_z[1]).normalize();
         const basisMat = new THREE.Matrix4().makeBasis(exT, eyT, ezT);
         clone.quaternion.setFromRotationMatrix(basisMat);
-        clone.position.copy(
-          toThree(
-            [item.origin_m[0] * 1000, item.origin_m[1] * 1000, item.origin_m[2] * 1000],
-            cx,
-            cy
-          )
+
+        const baseOriginThree = toThree(
+          [item.origin_m[0] * 1000, item.origin_m[1] * 1000, item.origin_m[2] * 1000],
+          cx,
+          cy
         );
-        fbGroup.add(clone);
+        if (baseAnchor) {
+          clone.position.copy(baseOriginThree).sub(baseAnchor);
+          const wrapper = new THREE.Group();
+          const placedPos =
+            viewMode === "fea_stress" && deformedPos[anchorNodeId]
+              ? deformedPos[anchorNodeId]
+              : baseAnchor;
+          wrapper.position.copy(placedPos);
+          wrapper.add(clone);
+          fbGroup.add(wrapper);
+          if (viewMode === "modal") {
+            stateRef.current.modalCadGantryItems.push({
+              wrapper,
+              anchorNodeId,
+              baseRotY: 0,
+            });
+          }
+        } else {
+          clone.position.copy(baseOriginThree);
+          fbGroup.add(clone);
+        }
       }
       if (fbGroup.children.length > 0) {
-        group.add(fbGroup);
+        addLayered(fbGroup, "frame");
       }
     }
 
@@ -3116,7 +3764,7 @@ export const PrinterViewport: React.FC<Props> = ({
       stateRef.current.modalBedOffset.copy(bedVisualOffset);
     }
     tagInspectable(bedMesh, bedInspectInfo);
-    group.add(bedMesh);
+    addLayered(bedMesh, "bed");
 
     // Real 2D MITC4 Heated Bed Plate Surface Mesh & 3D Thermal Taco Warp Overlay
     if (bedPlateFea && isBedWarpRenderMode) {
@@ -3406,7 +4054,7 @@ export const PrinterViewport: React.FC<Props> = ({
           onTagMesh: (mesh) => tagInspectable(mesh, bedInspectInfo),
           hideProceduralTridentGe5c,
         });
-        group.add(bedMountsResult.root);
+        addLayered(bedMountsResult.root, "bed");
 
         if (viewMode === "modal" && bedNodeBase) {
           stateRef.current.modalBedSubframe = bedMountsResult.subframeGroup;
@@ -3435,7 +4083,7 @@ export const PrinterViewport: React.FC<Props> = ({
       });
       const bedGhost = new THREE.LineSegments(bedGhostEdges, bedGhostMat);
       bedGhost.position.copy(bedBaseCenter);
-      group.add(bedGhost);
+      addLayered(bedGhost, "bed");
     }
 
     // Build volume wireframe
@@ -3453,7 +4101,7 @@ export const PrinterViewport: React.FC<Props> = ({
     );
     const orig = geom.build_origin_mm;
     bvLine.position.copy(toThree([orig[0] + bx * 0.5, orig[1] + by * 0.5, orig[2] + bz * 0.5], cx, cy));
-    group.add(bvLine);
+    addLayered(bvLine, "bed");
 
     // Toolhead carriage, CoG marker sphere, and Nozzle-tip lever-arm assembly
     const thNodeId = geom.toolhead_node_id || "toolhead";
@@ -3779,6 +4427,7 @@ export const PrinterViewport: React.FC<Props> = ({
 
       const carriageInspectInfo: InspectedPartInfo = {
         key: "toolhead_carriage",
+        toolheadPartKey: "th_part_rail_carriage",
         name: isSelfContainedCadInspect
           ? "X-Carriage MGN Block (Direct CAD Mount)"
           : "X-Carriage MGN Block & Backplate",
@@ -3804,6 +4453,7 @@ export const PrinterViewport: React.FC<Props> = ({
       const mountStrutInspectInfo: InspectedPartInfo = {
         ...carriageInspectInfo,
         key: "toolhead_mount",
+        toolheadPartKey: "th_part_carriage_backplate",
         name: `X-Carriage Backplate (${backplateApp.shortLabel} · ${carPlateMm.toFixed(1)}mm)`,
       };
       const hotendStyleShort =
@@ -3818,6 +4468,7 @@ export const PrinterViewport: React.FC<Props> = ({
                 : "4× M3 Rigid Flange";
       const nozStemInspectInfo: InspectedPartInfo = {
         key: "nozzle_stem",
+        toolheadPartKey: "th_part_hotend_neck",
         name: `${sim.spec.toolhead.hotend.name || "Hotend Assembly"} (${
           thStruct?.cad_hotend_braced ? "Braced CAD" : hotendStyleShort
         })`,
@@ -3844,6 +4495,7 @@ export const PrinterViewport: React.FC<Props> = ({
       };
       const cogInspectInfo: InspectedPartInfo = {
         key: "toolhead_cog",
+        toolheadPartKey: "th_part_toolhead_chassis",
         name:
           thMassLight?.label ??
           (isSelfContainedCadInspect
@@ -3875,6 +4527,7 @@ export const PrinterViewport: React.FC<Props> = ({
       const nozzleInspectInfo: InspectedPartInfo = {
         ...nozStemInspectInfo,
         key: "nozzle_tip",
+        toolheadPartKey: "th_part_heater_nozzle",
         name: `Hotend Nozzle (${sim.spec.toolhead.hotend.nozzle_diameter_mm}mm · ${Math.round(liveHotendK).toLocaleString()} N/mm)`,
       };
 
@@ -3926,6 +4579,9 @@ export const PrinterViewport: React.FC<Props> = ({
         : undefined;
       const cachedToolheadGlb = toolheadVisualGlbUrl
         ? (cadGlbResolvedCache.get(toolheadVisualGlbUrl) ?? null)
+        : null;
+      const cachedCarriageMountGlb = carriageMountVisualGlbUrl
+        ? (cadGlbResolvedCache.get(carriageMountVisualGlbUrl) ?? null)
         : null;
       const toolheadGlbBounds = toolheadVisualGlbUrl
         ? cadGlbBoundsCache.get(toolheadVisualGlbUrl)
@@ -4292,7 +4948,66 @@ export const PrinterViewport: React.FC<Props> = ({
           effCollarRelY + (cadPort1Three ? 0.06 : clampBotY + clampH + 0.02)
         );
 
-        if (isCadSelfContainedToolhead || isCadTopMountToolhead) {
+        if (cachedCarriageMountGlb && xRailMountTool === "front" && !isDeltaArch) {
+          // Real 3D CAD Siboor / Voron Lightweight CNC 6061-T6 X-Carriage mounted flush to MGN12H face
+          const bpStaticParts = sim.static_fea.toolhead_parts ?? [];
+          const bpModalParts =
+            viewMode === "modal"
+              ? sim.modal_fea.modes[
+                  Math.min(selectedModeIdx, Math.max(0, sim.modal_fea.modes.length - 1))
+                ]?.toolhead_part_flex
+              : undefined;
+          const isBpPerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
+          const bpResolved = resolveToolheadPartVisual({
+            stage: "backplate",
+            meshName: "siboor_cnc_carriage_body",
+            staticParts: bpStaticParts,
+            modalParts: bpModalParts,
+            isModalMode: viewMode === "modal",
+            isHeatMode: isBpPerPartHeat,
+            fallbackInspect: mountStrutInspectInfo,
+          });
+          const cadCarriage = cloneCachedCadGlb(cachedCarriageMountGlb, {
+            isHeatMode,
+            heatColor: isBpPerPartHeat ? bpResolved.heatColor : backplateColorObj,
+            heatEmissive: isBpPerPartHeat ? bpResolved.heatEmissive : backplateEmissive,
+            heatEmissiveIntensity: isBpPerPartHeat
+              ? bpResolved.heatEmissiveIntensity
+              : backplateEmissiveInt,
+            inspectInfo: bpResolved.inspectInfo,
+            tagInspectable,
+            resolveSubmesh: (meshName, centerCadMm) => {
+              const stage = classifyToolheadSubmeshStage(meshName, "chassis");
+              const effStage = stage === "chassis" ? "backplate" : stage;
+              const rv = resolveToolheadPartVisual({
+                stage: effStage,
+                meshName,
+                centerCadMm,
+                defaultStage: "chassis",
+                staticParts: bpStaticParts,
+                modalParts: bpModalParts,
+                isModalMode: viewMode === "modal",
+                isHeatMode: isBpPerPartHeat,
+                fallbackInspect: mountStrutInspectInfo,
+              });
+              return isBpPerPartHeat
+                ? {
+                    heatColor: rv.heatColor,
+                    heatEmissive: rv.heatEmissive,
+                    heatEmissiveIntensity: rv.heatEmissiveIntensity,
+                    inspectInfo: rv.inspectInfo,
+                  }
+                : { inspectInfo: rv.inspectInfo };
+            },
+          });
+          cadCarriage.scale.setScalar(CAD_M_TO_THREE);
+          cadCarriage.rotation.x = -Math.PI * 0.5;
+          cadCarriage.position.set(0, 0, beamHalfZ + carTotalH);
+          if (toolheadPunchIn && toolheadExplode) {
+            applyCadSubmeshExplode(cadCarriage, "chassis");
+          }
+          backplateGroup.add(cadCarriage);
+        } else if (isCadSelfContainedToolhead || isCadTopMountToolhead) {
           // Self-contained CAD toolhead GLB mounts directly to the MGN carriage; omit generic procedural backplate
         } else if (xRailMountTool === "front") {
           const zRear = beamHalfZ + carTotalH;
@@ -4398,10 +5113,10 @@ export const PrinterViewport: React.FC<Props> = ({
       }
 
       thGroup.position.copy(thAnchor);
-      group.add(thGroup);
+      addLayered(thGroup, "toolhead");
       if (railShoeGroup.children.length > 0) {
         railShoeGroup.position.copy(thAnchor);
-        group.add(railShoeGroup);
+        addLayered(railShoeGroup, "toolhead");
       }
 
       // Compute Stage 1 FEA rotation quaternion (rest -> deformed th -> cog vector)
@@ -4422,7 +5137,7 @@ export const PrinterViewport: React.FC<Props> = ({
       if (viewMode === "fea_stress") {
         backplateGroup.quaternion.identity().slerp(stage1FeaQuat, 0.4);
       }
-      group.add(backplateGroup);
+      addLayered(backplateGroup, "toolhead");
 
       // =====================================================================
       // STAGE 2: Realistic Direct-Drive Extruder + Open-Cage Shroud + Dual Cooling Ducts + Hotend Clamp
@@ -4436,16 +5151,98 @@ export const PrinterViewport: React.FC<Props> = ({
         (sim.spec.toolhead.hotend.part_cooling_cfm ?? 0) >= 16;
       const extWidth = 0.32 + (bodyWallMm - 4.0) * 0.012; // Scales visibly with body_wall_thickness_mm
 
+      const activeStaticThParts = sim.static_fea.toolhead_parts ?? [];
+      const activeModeObj =
+        viewMode === "modal"
+          ? sim.modal_fea.modes[Math.min(selectedModeIdx, Math.max(0, sim.modal_fea.modes.length - 1))]
+          : undefined;
+      const activeModalThParts = activeModeObj?.toolhead_part_flex;
+      const isToolheadPerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
+      const preparedToolheadField = isToolheadPerPartHeat
+        ? prepareIntraPartField(
+            viewMode === "modal"
+              ? activeModeObj?.toolhead_mode_fields?.toolhead_mount
+              : sim.static_fea.toolhead_part_fields?.toolhead_mount,
+            viewMode === "modal"
+          )
+        : null;
+      const preparedHotendField = isToolheadPerPartHeat
+        ? prepareIntraPartField(
+            viewMode === "modal"
+              ? activeModeObj?.toolhead_mode_fields?.nozzle_stem
+              : sim.static_fea.toolhead_part_fields?.nozzle_stem,
+            viewMode === "modal"
+          )
+        : null;
+
+      const resolvedChassisVis = resolveToolheadPartVisual({
+        stage: "chassis",
+        staticParts: activeStaticThParts,
+        modalParts: activeModalThParts,
+        isModalMode: viewMode === "modal",
+        isHeatMode: isToolheadPerPartHeat,
+        fallbackInspect: cogInspectInfo,
+      });
+      const resolvedHotendNeckVis = resolveToolheadPartVisual({
+        stage: "hotend_neck",
+        staticParts: activeStaticThParts,
+        modalParts: activeModalThParts,
+        isModalMode: viewMode === "modal",
+        isHeatMode: isToolheadPerPartHeat,
+        fallbackInspect: nozStemInspectInfo,
+      });
+      const resolvedHeaterNozVis = resolveToolheadPartVisual({
+        stage: "heater_nozzle",
+        staticParts: activeStaticThParts,
+        modalParts: activeModalThParts,
+        isModalMode: viewMode === "modal",
+        isHeatMode: isToolheadPerPartHeat,
+        fallbackInspect: nozzleInspectInfo,
+      });
+
       if (cachedToolheadGlb) {
         // Real 3D CAD Toolhead GLB (PrintSim SI meters Z-up -> Three.js Y-up via Rx(-90 deg) * 10.0)
         // Port 0 = MGN carriage bolt face at local (0, 0, 0); Port 1 = hotend top crown at cadPort1Three.
         const cadToolhead = cloneCachedCadGlb(cachedToolheadGlb, {
           isHeatMode,
-          heatColor: bodyColorObj,
-          heatEmissive: bodyEmissive,
-          heatEmissiveIntensity: bodyEmissiveInt,
-          inspectInfo: cogInspectInfo,
+          heatColor: isToolheadPerPartHeat ? resolvedChassisVis.heatColor : bodyColorObj,
+          heatEmissive: isToolheadPerPartHeat ? resolvedChassisVis.heatEmissive : bodyEmissive,
+          heatEmissiveIntensity: isToolheadPerPartHeat
+            ? resolvedChassisVis.heatEmissiveIntensity
+            : bodyEmissiveInt,
+          inspectInfo: resolvedChassisVis.inspectInfo,
           tagInspectable,
+          resolveSubmesh: (meshName, centerCadMm) => {
+            const stage = classifyToolheadSubmeshStage(meshName, "chassis");
+            const rv = resolveToolheadPartVisual({
+              stage,
+              meshName,
+              centerCadMm,
+              defaultStage: "chassis",
+              staticParts: activeStaticThParts,
+              modalParts: activeModalThParts,
+              isModalMode: viewMode === "modal",
+              isHeatMode: isToolheadPerPartHeat,
+              fallbackInspect: cogInspectInfo,
+            });
+            return isToolheadPerPartHeat
+              ? {
+                  heatColor: rv.heatColor,
+                  heatEmissive: rv.heatEmissive,
+                  heatEmissiveIntensity: rv.heatEmissiveIntensity,
+                  inspectInfo: rv.inspectInfo,
+                  vertexColorFn: createIntraPartVertexColorFn({
+                    isStructural: rv.inspectInfo.isStructural ?? true,
+                    baseHeat01: rv.heatScore01,
+                    isModalMode: viewMode === "modal",
+                    defaultStage: "chassis",
+                    preparedField: preparedToolheadField,
+                    port0Mm: [0, 0, 0],
+                    port1Mm: cadToolheadPort1Mm ?? [0, -22, 0],
+                  }),
+                }
+              : { inspectInfo: rv.inspectInfo };
+          },
         });
         cadToolhead.scale.setScalar(CAD_M_TO_THREE);
         cadToolhead.rotation.x = -Math.PI * 0.5;
@@ -4457,7 +5254,7 @@ export const PrinterViewport: React.FC<Props> = ({
         const hideMbtShield =
           !thStruct?.nozzle_shield_options?.includes("microwaved") ||
           activeShieldMode !== "microwaved";
-        if (hideBottomBrace || hideMbtShield) {
+        if (hideBottomBrace || hideMbtShield || (isStealthBurnerToolhead && cachedCarriageMountGlb)) {
           cadToolhead.traverse((obj) => {
             const nm = (obj.name || "").toLowerCase();
             if (
@@ -4471,6 +5268,23 @@ export const PrinterViewport: React.FC<Props> = ({
             }
             if (hideMbtShield && (nm === "mbt_shield" || nm === "fastener_19")) {
               obj.visible = false;
+            }
+            if (isStealthBurnerToolhead && cachedCarriageMountGlb) {
+              // Hide printed ABS rear X-carriage halves AND their leftover M3 heatsets/screws
+              // (CAD Y > -15.5 mm, Z < +28 mm) when the real CNC 6061-T6 X-carriage CAD is mounted
+              if (nm === "sb_body_58" || nm === "sb_body_59" || nm === "sb_body_61") {
+                obj.visible = false;
+              } else if (nm.startsWith("sb_hw") && obj instanceof THREE.Mesh && obj.geometry) {
+                if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+                const bb = obj.geometry.boundingBox;
+                if (bb) {
+                  const cy = 0.5 * (bb.min.y + bb.max.y);
+                  const cz = 0.5 * (bb.min.z + bb.max.z);
+                  if (cy > -0.0155 && cz < 0.028) {
+                    obj.visible = false;
+                  }
+                }
+              }
             }
           });
         }
@@ -4492,6 +5306,9 @@ export const PrinterViewport: React.FC<Props> = ({
               : rearBridgeZ + Math.max(0, -toolheadGlbBounds.min.z);
           }
           cadToolhead.position.set(0, thPosY, thPosZ);
+        }
+        if (toolheadPunchIn && toolheadExplode) {
+          applyCadSubmeshExplode(cadToolhead, "chassis");
         }
         cogGroup.add(cadToolhead);
       } else {
@@ -4922,7 +5739,10 @@ export const PrinterViewport: React.FC<Props> = ({
           cogGroup.position.copy(port0World).add(port1FromPort0);
         }
       }
-      group.add(cogGroup);
+      if (toolheadPunchIn && toolheadExplode) {
+        cogGroup.position.z += 0.34;
+      }
+      addLayered(cogGroup, "toolhead");
 
       // =====================================================================
       // STAGE 3: High-Detail Articulated Hotend Assembly
@@ -4937,11 +5757,46 @@ export const PrinterViewport: React.FC<Props> = ({
         // Rx(-90 deg) maps PrintSim (+X, +Y, +Z) -> Three.js (+X, +Z, -Y); scale 10.0 maps m -> Three.js units.
         const cadHotend = cloneCachedCadGlb(cachedHotendGlb, {
           isHeatMode,
-          heatColor: hotendShellColorObj,
-          heatEmissive: hotendShellEmissive,
-          heatEmissiveIntensity: hotendShellEmissiveInt,
-          inspectInfo: nozStemInspectInfo,
+          heatColor: isToolheadPerPartHeat ? resolvedHotendNeckVis.heatColor : hotendShellColorObj,
+          heatEmissive: isToolheadPerPartHeat
+            ? resolvedHotendNeckVis.heatEmissive
+            : hotendShellEmissive,
+          heatEmissiveIntensity: isToolheadPerPartHeat
+            ? resolvedHotendNeckVis.heatEmissiveIntensity
+            : hotendShellEmissiveInt,
+          inspectInfo: resolvedHotendNeckVis.inspectInfo,
           tagInspectable,
+          resolveSubmesh: (meshName, centerCadMm) => {
+            const stage = classifyToolheadSubmeshStage(meshName, "hotend_neck");
+            const rv = resolveToolheadPartVisual({
+              stage,
+              meshName,
+              centerCadMm,
+              defaultStage: "hotend_neck",
+              staticParts: activeStaticThParts,
+              modalParts: activeModalThParts,
+              isModalMode: viewMode === "modal",
+              isHeatMode: isToolheadPerPartHeat,
+              fallbackInspect: nozStemInspectInfo,
+            });
+            return isToolheadPerPartHeat
+              ? {
+                  heatColor: rv.heatColor,
+                  heatEmissive: rv.heatEmissive,
+                  heatEmissiveIntensity: rv.heatEmissiveIntensity,
+                  inspectInfo: rv.inspectInfo,
+                  vertexColorFn: createIntraPartVertexColorFn({
+                    isStructural: rv.inspectInfo.isStructural ?? true,
+                    baseHeat01: rv.heatScore01,
+                    isModalMode: viewMode === "modal",
+                    defaultStage: "hotend_neck",
+                    preparedField: preparedHotendField,
+                    port0Mm: [0, 0, 0],
+                    port1Mm: [0, 0, -(sim.spec.toolhead.hotend.overall_length_mm ?? 60)],
+                  }),
+                }
+              : { inspectInfo: rv.inspectInfo };
+          },
         });
         cadHotend.scale.setScalar(CAD_M_TO_THREE);
         const hideStockTricornBucket =
@@ -4968,6 +5823,9 @@ export const PrinterViewport: React.FC<Props> = ({
             ? -hotendGlbBounds.min.y
             : topY;
         cadHotend.position.set(0, hotendYOffset, 0);
+        if (toolheadPunchIn && toolheadExplode) {
+          applyCadSubmeshExplode(cadHotend, "hotend_neck");
+        }
         nozzleGroup.add(cadHotend);
       } else {
       const nozzleMat = new THREE.MeshStandardMaterial({
@@ -5435,7 +6293,11 @@ export const PrinterViewport: React.FC<Props> = ({
         const topVec = new THREE.Vector3(0, hotendLen, 0).applyQuaternion(nozzleGroup.quaternion);
         nozzleGroup.position.copy(cogGroup.position).sub(topVec);
       }
-      group.add(nozzleGroup);
+      if (toolheadPunchIn && toolheadExplode) {
+        nozzleGroup.position.z += 0.34;
+        nozzleGroup.position.y -= 0.38;
+      }
+      addLayered(nozzleGroup, "toolhead");
 
       // =====================================================================
       // CLEAN PUNCH-IN & FEA/MODAL ENGINEERING OVERLAYS
@@ -5458,7 +6320,7 @@ export const PrinterViewport: React.FC<Props> = ({
           transparent: true,
           opacity: toolheadPunchIn ? 0.45 : 0.35,
         });
-        group.add(new THREE.Line(ghostGeo, ghostMat));
+        addLayered(new THREE.Line(ghostGeo, ghostMat), "toolhead");
 
         if (toolheadPunchIn) {
           // Faint translucent cyan undeformed ghost silhouette of extruder + hotend + nozzle
@@ -5478,7 +6340,7 @@ export const PrinterViewport: React.FC<Props> = ({
             stage2RestPos.y + clampBotY + clampH + 0.11,
             stage2RestPos.z
           );
-          group.add(ghostBody);
+          addLayered(ghostBody, "toolhead");
 
           const ghostHotendGrp = new THREE.Group();
           const ghostNoz = new THREE.Mesh(new THREE.ConeGeometry(0.044, 0.092, 10), ghostSilMat);
@@ -5494,7 +6356,7 @@ export const PrinterViewport: React.FC<Props> = ({
           ghostShell.position.y = 0.14 + ghostShellLen * 0.5;
           ghostHotendGrp.add(ghostShell);
           ghostHotendGrp.position.copy(stage3RestPos);
-          group.add(ghostHotendGrp);
+          addLayered(ghostHotendGrp, "toolhead");
 
           // Live nozzle-tip displacement vector line (rest tip -> deflected/animated tip)
           const dispLineGeo = new THREE.BufferGeometry().setFromPoints([
@@ -5508,7 +6370,7 @@ export const PrinterViewport: React.FC<Props> = ({
           });
           const dispLine = new THREE.Line(dispLineGeo, dispLineMat);
           dispLine.frustumCulled = false;
-          group.add(dispLine);
+          addLayered(dispLine, "toolhead");
           if (viewMode === "modal") {
             stateRef.current.modalNozzleDispLine = dispLine;
           }
@@ -5524,7 +6386,7 @@ export const PrinterViewport: React.FC<Props> = ({
             });
             const pip = new THREE.Mesh(pipGeo, pipMat);
             pip.position.copy(pos);
-            group.add(pip);
+            addLayered(pip, "toolhead");
 
             const tick = 0.038;
             const crossGeo = new THREE.BufferGeometry().setFromPoints([
@@ -5540,7 +6402,7 @@ export const PrinterViewport: React.FC<Props> = ({
               transparent: true,
               opacity: 0.48,
             });
-            group.add(new THREE.LineSegments(crossGeo, crossMat));
+            addLayered(new THREE.LineSegments(crossGeo, crossMat), "toolhead");
           };
           addNodePip(baseTh, 0x38bdf8); // Carriage node on X-beam
           addNodePip(stage2RestPos, 0xfbbf24); // Hotend mount / Stage 2 pivot
@@ -5897,7 +6759,7 @@ export const PrinterViewport: React.FC<Props> = ({
       thGroup.add(nozzle);
 
       thGroup.position.copy(thAnchor);
-      group.add(thGroup);
+      addLayered(thGroup, "toolhead");
     }
 
     // Glowing #1 Problem Area hotspot beacon in Adjoint ROI (sensitivity) mode
@@ -6028,6 +6890,13 @@ export const PrinterViewport: React.FC<Props> = ({
         setPinnedPart(null);
       }
     }
+    applyFeaVisibility(
+      hiddenFeaLayersRef.current,
+      hiddenFeaPartsRef.current,
+      viewMode,
+      flexIsolationRef.current,
+      flexIsolationStyleRef.current
+    );
     } finally {
       requestRenderRef.current?.();
     }
@@ -6048,6 +6917,7 @@ export const PrinterViewport: React.FC<Props> = ({
     modalScaleMode,
     showBedWarp,
     toolheadPunchIn,
+    toolheadExplode,
     cadGlbVersion,
   ]);
 
@@ -6058,6 +6928,10 @@ export const PrinterViewport: React.FC<Props> = ({
     if (!cam || !ctrl) return;
 
     const wasPunchIn = prevPunchInRef.current;
+    const hadSimBefore = hadSimForPunchInRef.current;
+    if (sim) {
+      hadSimForPunchInRef.current = true;
+    }
     prevPunchInRef.current = toolheadPunchIn;
 
     if (toolheadPunchIn && sim) {
@@ -6087,19 +6961,24 @@ export const PrinterViewport: React.FC<Props> = ({
 
       if (mid) {
         if (!wasPunchIn) {
-          // Save current full-printer camera pose to restore smoothly on exit
-          savedCameraRef.current = {
-            pos: cam.position.clone(),
-            target: ctrl.target.clone(),
-          };
-          // Front-right 3/4 slightly-below-gantry macro view (~220 mm distance) so the X-beam, linear rail,
-          // MGN carriage, backplate, extruder, and full exposed hotend down to nozzle tip are framed front-and-center!
-          const macroOffset = new THREE.Vector3(1.26, -0.22, 1.78);
-          cameraAnimRef.current.targetLook.copy(mid);
-          cameraAnimRef.current.targetPos.copy(mid).add(macroOffset);
-          cameraAnimRef.current.active = true;
-          lastPunchTargetRef.current = mid.clone();
-          requestRenderRef.current?.();
+          if (!hadSimBefore && hadSavedCameraOnMountRef.current) {
+            // Restored from a reload while already in Toolhead Punch-In: keep the saved camera pose
+            lastPunchTargetRef.current = mid.clone();
+          } else {
+            // Save current full-printer camera pose to restore smoothly on exit
+            savedCameraRef.current = {
+              pos: cam.position.clone(),
+              target: ctrl.target.clone(),
+            };
+            // Front-right 3/4 slightly-below-gantry macro view (~220 mm distance) so the X-beam, linear rail,
+            // MGN carriage, backplate, extruder, and full exposed hotend down to nozzle tip are framed front-and-center!
+            const macroOffset = new THREE.Vector3(1.26, -0.22, 1.78);
+            cameraAnimRef.current.targetLook.copy(mid);
+            cameraAnimRef.current.targetPos.copy(mid).add(macroOffset);
+            cameraAnimRef.current.active = true;
+            lastPunchTargetRef.current = mid.clone();
+            requestRenderRef.current?.();
+          }
         } else if (
           !lastPunchTargetRef.current ||
           lastPunchTargetRef.current.distanceTo(mid) > 0.08
@@ -6201,6 +7080,30 @@ export const PrinterViewport: React.FC<Props> = ({
     (toolheadPunchIn ? 1 : 0) + (bedWarpActive ? 1 : 0) + (showHudDetails ? 1 : 0);
   const hasContextTools =
     canPunchIn || (canShowBedWarpHud && Boolean(bedPlateFeaHud));
+  const isStructuralFlexView =
+    viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity";
+  const rankedFlexParts = useMemo(
+    () => buildRankedFlexParts(sim, viewMode, activeMode),
+    [sim, viewMode, activeMode]
+  );
+  const topFlexItem = rankedFlexParts[0] ?? null;
+  const flexIsoActive = isStructuralFlexView && isFlexIsolationActive(flexIsolation);
+  const flexIsoLabel = flexIsoActive ? describeFlexIsolation(flexIsolation) : "";
+
+  const isPinnedPartIsolated = useMemo(() => {
+    if (!pinnedPart || !flexIsoActive) return false;
+    if (flexIsolation.kind === "part_key") {
+      return (
+        flexIsolation.partKey === pinnedPart.key ||
+        (Boolean(pinnedPart.toolheadPartKey) &&
+          flexIsolation.toolheadPartKey === pinnedPart.toolheadPartKey)
+      );
+    }
+    if (flexIsolation.kind === "part_group") {
+      return flexIsolation.partGroupId === pinnedPart.partGroupId;
+    }
+    return false;
+  }, [pinnedPart, flexIsoActive, flexIsolation]);
 
   return (
     <div className="viewport-wrap">
@@ -6367,6 +7270,270 @@ export const PrinterViewport: React.FC<Props> = ({
               </div>
             )}
           </div>
+
+          {isStructuralFlexView && sim && rankedFlexParts.length > 0 && (
+            <div className="hud-flex-finder-wrap" ref={flexFinderRef}>
+              <button
+                type="button"
+                className={`hud-tools-trigger hud-flex-trigger ${flexFinderOpen ? "open" : ""} ${
+                  flexIsoActive ? "has-active" : ""
+                }`}
+                onClick={() => setFlexFinderOpen((o) => !o)}
+                aria-expanded={flexFinderOpen}
+                aria-controls="vp-flex-finder-drawer"
+                title="Find and isolate the parts causing the most nozzle flex in 3D"
+              >
+                {flexIsoActive && <span className="hud-tools-dot" aria-hidden="true" />}
+                <span>Flex Finder</span>
+                {topFlexItem && (
+                  <span className="hud-flex-top-badge">
+                    {Math.round(topFlexItem.complianceSharePct)}%
+                  </span>
+                )}
+                <span className="hud-tools-caret" aria-hidden="true">
+                  ▾
+                </span>
+              </button>
+
+              {flexFinderOpen && (
+                <div
+                  id="vp-flex-finder-drawer"
+                  className="flex-finder-drawer"
+                  role="region"
+                  aria-label="Flex Finder — Top Flexing Parts"
+                >
+                  <div className="flex-finder-head">
+                    <span className="flex-finder-title">
+                      {viewMode === "modal" && activeMode
+                        ? `Mode ${activeMode.mode_number} Flex Contributors`
+                        : "Top Flex Contributors"}
+                    </span>
+                    <div className="flex-finder-head-actions">
+                      <div
+                        className="flex-finder-style-toggle"
+                        role="group"
+                        aria-label="Isolation display style"
+                      >
+                        <button
+                          type="button"
+                          className={`flex-finder-mini-btn ${
+                            flexIsolationStyle === "xray" ? "active" : ""
+                          }`}
+                          aria-pressed={flexIsolationStyle === "xray"}
+                          onClick={() => setFlexIsolationStyle("xray")}
+                          title="X-Ray: ghost non-selected parts to 9% opacity for spatial context (click-through enabled)"
+                        >
+                          X-Ray
+                        </button>
+                        <button
+                          type="button"
+                          className={`flex-finder-mini-btn ${
+                            flexIsolationStyle === "solo" ? "active" : ""
+                          }`}
+                          aria-pressed={flexIsolationStyle === "solo"}
+                          onClick={() => setFlexIsolationStyle("solo")}
+                          title="Solo: completely hide all non-selected parts"
+                        >
+                          Solo
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className="part-inspector-close"
+                        onClick={() => setFlexFinderOpen(false)}
+                        aria-label="Close Flex Finder"
+                        title="Close Flex Finder"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick X-Ray Flex Threshold Filter */}
+                  <div className="flex-finder-threshold-row">
+                    <span className="flex-finder-row-label">Show:</span>
+                    <div className="flex-finder-pill-row" role="group" aria-label="Flex share threshold">
+                      <button
+                        type="button"
+                        className={`flex-finder-mini-btn ${!flexIsoActive ? "active" : ""}`}
+                        aria-pressed={!flexIsoActive}
+                        onClick={() => clearFlexIsolation(true)}
+                        title="Show all parts normally"
+                      >
+                        All
+                      </button>
+                      {([5, 10, 20] as const).map((pct) => {
+                        const target: FlexIsolationTarget = {
+                          kind: "top_flexers",
+                          minSharePct: pct,
+                        };
+                        const isActive = isSameFlexIsolation(flexIsolation, target);
+                        return (
+                          <button
+                            key={pct}
+                            type="button"
+                            className={`flex-finder-mini-btn ${isActive ? "active" : ""}`}
+                            aria-pressed={isActive}
+                            onClick={() =>
+                              selectOrToggleFlexIsolation(target, {
+                                focusCamera: false,
+                                pinPart: false,
+                              })
+                            }
+                            title={`Isolate only parts causing ≥ ${pct}% of nozzle flex`}
+                          >
+                            ≥ {pct}%
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 4-Subsystem Quick Isolate */}
+                  {sim.sensitivity?.subsystem_breakdown && (
+                    <div className="flex-finder-sub-row" role="group" aria-label="Isolate subsystem">
+                      {SUBSYSTEM_ORDER.map((sub) => {
+                        const pct =
+                          sim.sensitivity?.subsystem_breakdown?.[sub]?.compliance_share_pct ?? 0;
+                        const target: FlexIsolationTarget = {
+                          kind: "subsystem",
+                          subsystem: sub,
+                          label: subsystemLabel(sub),
+                        };
+                        const isActive = isSameFlexIsolation(flexIsolation, target);
+                        return (
+                          <button
+                            key={sub}
+                            type="button"
+                            className={`flex-finder-sub-pill ${isActive ? "active" : ""}`}
+                            aria-pressed={isActive}
+                            onClick={() =>
+                              selectOrToggleFlexIsolation(target, {
+                                focusCamera: true,
+                                pinPart: false,
+                              })
+                            }
+                            title={`Isolate ${subsystemLabel(sub)} (${Math.round(pct)}% of flex)`}
+                          >
+                            <span
+                              className="swatch-dot"
+                              style={{ background: SUBSYSTEM_META[sub].color }}
+                            />
+                            <span>{SUBSYSTEM_META[sub].label}</span>
+                            <strong>{Math.round(pct)}%</strong>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Ranked Part List */}
+                  <div className="flex-finder-list" role="list">
+                    {rankedFlexParts.slice(0, 10).map((item, idx) => {
+                      const isActive = isSameFlexIsolation(flexIsolation, item.target);
+                      const pct = Math.max(0, Math.min(100, item.complianceSharePct));
+                      const sevCls =
+                        pct >= 25 ? "sev-bad" : pct >= 10 ? "sev-warn" : "sev-neutral";
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          role="listitem"
+                          className={`flex-finder-item ${isActive ? "active" : ""} ${
+                            item.isToolheadSubpart ? "is-subpart" : ""
+                          }`}
+                          aria-pressed={isActive}
+                          onClick={() =>
+                            selectOrToggleFlexIsolation(item.target, {
+                              focusCamera: true,
+                              pinPart: true,
+                            })
+                          }
+                          title={
+                            item.actionHint
+                              ? `${item.label} — ${item.actionHint}`
+                              : `Click to isolate and focus ${item.label} in 3D`
+                          }
+                        >
+                          <div className="flex-finder-item-top">
+                            <span className="flex-finder-rank">#{idx + 1}</span>
+                            <span
+                              className="swatch-dot"
+                              style={{ background: SUBSYSTEM_META[item.subsystem].color }}
+                            />
+                            <span className="flex-finder-name">{item.label}</span>
+                            <span className={`flex-finder-pct ${sevCls}`}>
+                              {pct >= 1 ? `${pct.toFixed(0)}%` : `${pct.toFixed(1)}%`}
+                            </span>
+                          </div>
+                          <div className="flex-finder-item-bar-row">
+                            <div className="flex-finder-bar-track">
+                              <div
+                                className={`flex-finder-bar-fill ${sevCls}`}
+                                style={{ width: `${Math.max(pct, 2)}%` }}
+                              />
+                            </div>
+                            {item.estHzGain != null && item.estHzGain > 0 && (
+                              <span className="flex-finder-gain">
+                                +{formatHzGain(item.estHzGain)} Hz
+                              </span>
+                            )}
+                            {item.localFlexUm != null && item.localFlexUm > 0 && (
+                              <span className="flex-finder-um">
+                                {item.localFlexUm < 0.1
+                                  ? item.localFlexUm.toFixed(2)
+                                  : item.localFlexUm.toFixed(1)}{" "}
+                                µm
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {flexIsoActive && (
+                    <div className="flex-finder-footer">
+                      <button
+                        type="button"
+                        className="flex-finder-reset-btn"
+                        onClick={() => clearFlexIsolation(true)}
+                      >
+                        Reset Isolation &amp; View
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {flexIsoActive && (
+            <div className="hud-iso-active-group" role="group" aria-label="Active flex isolation">
+              <button
+                type="button"
+                className="hud-active-chip flex-isolated"
+                onClick={() => clearFlexIsolation(true)}
+                title={`Clear flex isolation (${flexIsoLabel}) and restore full printer view`}
+              >
+                × Isolated: {flexIsoLabel}
+              </button>
+              <button
+                type="button"
+                className="hud-active-chip flex-iso-style"
+                onClick={() =>
+                  setFlexIsolationStyle((s) => (s === "xray" ? "solo" : "xray"))
+                }
+                title={
+                  flexIsolationStyle === "xray"
+                    ? "Switch to Solo mode (hide surrounding parts completely)"
+                    : "Switch to X-Ray mode (ghost surrounding parts for context)"
+                }
+              >
+                {flexIsolationStyle === "xray" ? "X-Ray" : "Solo"}
+              </button>
+            </div>
+          )}
 
           {toolheadPunchIn && (
             <button
@@ -6597,15 +7764,91 @@ export const PrinterViewport: React.FC<Props> = ({
               </span>
               <strong className="part-inspector-title">{pinnedPart.name}</strong>
             </div>
-            <button
-              type="button"
-              className="part-inspector-close"
-              onClick={handleCloseInspector}
-              title="Close Part Inspector"
-              aria-label="Close Part Inspector"
-            >
-              ×
-            </button>
+            <div className="part-inspector-actions">
+              {isStructuralFlexView && (
+                <>
+                  <button
+                    type="button"
+                    className={`part-inspector-action-btn ${
+                      isPinnedPartIsolated ? "active" : ""
+                    }`}
+                    aria-pressed={isPinnedPartIsolated}
+                    onClick={() => {
+                      const target: FlexIsolationTarget = pinnedPart.toolheadPartKey
+                        ? {
+                            kind: "part_key",
+                            partKey: pinnedPart.key,
+                            partGroupId: pinnedPart.partGroupId,
+                            toolheadPartKey: pinnedPart.toolheadPartKey,
+                            label: pinnedPart.name,
+                            subsystem: pinnedPart.subsystem,
+                          }
+                        : {
+                            kind: "part_group",
+                            partGroupId: pinnedPart.partGroupId,
+                            label: pinnedPart.name,
+                            subsystem: pinnedPart.subsystem,
+                          };
+                      selectOrToggleFlexIsolation(target, {
+                        focusCamera: false,
+                        pinPart: false,
+                      });
+                    }}
+                    title={
+                      isPinnedPartIsolated
+                        ? `Exit isolation of ${pinnedPart.name}`
+                        : `Isolate ${pinnedPart.name} in X-Ray mode (ghost everything else)`
+                    }
+                    aria-label={
+                      isPinnedPartIsolated
+                        ? `Un-isolate ${pinnedPart.name}`
+                        : `Isolate ${pinnedPart.name}`
+                    }
+                  >
+                    {isPinnedPartIsolated ? "Un-isolate" : "Isolate"}
+                  </button>
+                  <button
+                    type="button"
+                    className="part-inspector-action-btn"
+                    onClick={() => {
+                      focusCameraOnTarget(
+                        {
+                          kind: "part_key",
+                          partKey: pinnedPart.key,
+                          partGroupId: pinnedPart.partGroupId,
+                          toolheadPartKey: pinnedPart.toolheadPartKey,
+                          label: pinnedPart.name,
+                          subsystem: pinnedPart.subsystem,
+                        },
+                        false
+                      );
+                    }}
+                    title={`Focus 3D camera on ${pinnedPart.name}`}
+                    aria-label={`Focus camera on ${pinnedPart.name}`}
+                  >
+                    Focus
+                  </button>
+                  <button
+                    type="button"
+                    className="part-inspector-hide-btn"
+                    onClick={() => hideFeaPart(pinnedPart.key)}
+                    title="Hide this part so you can select parts behind it"
+                    aria-label={`Hide ${pinnedPart.name}`}
+                  >
+                    Hide
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="part-inspector-close"
+                onClick={handleCloseInspector}
+                title="Close Part Inspector"
+                aria-label="Close Part Inspector"
+              >
+                ×
+              </button>
+            </div>
           </div>
 
           {(pinnedPart.material || pinnedPart.profile) && (
@@ -6622,6 +7865,110 @@ export const PrinterViewport: React.FC<Props> = ({
                 <span className="part-inspector-label">Nozzle Flex</span>
                 <span className="part-inspector-val">
                   {pinnedPart.complianceSharePct.toFixed(1)}%
+                  {pinnedPart.stationComplianceSharePct != null &&
+                  Math.abs(pinnedPart.complianceSharePct - pinnedPart.stationComplianceSharePct) >= 0.2
+                    ? ` (${pinnedPart.stationComplianceSharePct.toFixed(1)}% ea)`
+                    : ""}
+                </span>
+              </div>
+            )}
+            {pinnedPart.localFlexUm != null && pinnedPart.localFlexUm > 0 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Local Flex</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.localFlexUm < 0.1
+                    ? pinnedPart.localFlexUm.toFixed(2)
+                    : pinnedPart.localFlexUm.toFixed(1)}{" "}
+                  µm
+                </span>
+              </div>
+            )}
+            {pinnedPart.partStiffnessNPerMm != null && pinnedPart.partStiffnessNPerMm > 0 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Part Stiffness</span>
+                <span className="part-inspector-val">
+                  {Math.round(pinnedPart.partStiffnessNPerMm).toLocaleString()} N/mm
+                </span>
+              </div>
+            )}
+            {pinnedPart.modalFlexPct != null && viewMode === "modal" && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Mode Flex Share</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.modalFlexPct.toFixed(1)}%
+                </span>
+              </div>
+            )}
+            {pinnedPart.kineticSharePct != null && viewMode === "modal" && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Mode Kinetic</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.kineticSharePct.toFixed(1)}%
+                </span>
+              </div>
+            )}
+            {pinnedPart.bracketFlexUm != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Bracket Flex</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.bracketFlexUm < 0.1
+                    ? pinnedPart.bracketFlexUm.toFixed(2)
+                    : pinnedPart.bracketFlexUm.toFixed(1)}{" "}
+                  µm
+                </span>
+              </div>
+            )}
+            {pinnedPart.bracketTwistMrad != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Bracket Twist</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.bracketTwistMrad.toFixed(3)} mrad
+                </span>
+              </div>
+            )}
+            {pinnedPart.transmittedForceN != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Transmitted Load</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.transmittedForceN.toFixed(1)} N
+                </span>
+              </div>
+            )}
+            {pinnedPart.rotStiffnessNmRad != null && pinnedPart.rotStiffnessNmRad > 0 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Joint Stiffness</span>
+                <span className="part-inspector-val">
+                  {Math.round(pinnedPart.rotStiffnessNmRad).toLocaleString()} N·m/rad
+                </span>
+              </div>
+            )}
+            {pinnedPart.torsionStiffnessNmRad != null && pinnedPart.torsionStiffnessNmRad > 0 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Torsion Stiff.</span>
+                <span className="part-inspector-val">
+                  {Math.round(pinnedPart.torsionStiffnessNmRad).toLocaleString()} N·m/rad
+                </span>
+              </div>
+            )}
+            {pinnedPart.nodeDispUm != null && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Corner Disp.</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.nodeDispUm < 0.1
+                    ? pinnedPart.nodeDispUm.toFixed(2)
+                    : pinnedPart.nodeDispUm.toFixed(1)}{" "}
+                  µm
+                </span>
+              </div>
+            )}
+            {pinnedPart.unitMassG != null && pinnedPart.unitMassG > 0 && (
+              <div className="part-inspector-cell">
+                <span className="part-inspector-label">Hardware Mass</span>
+                <span className="part-inspector-val">
+                  {pinnedPart.unitMassG.toFixed(1)} g
+                  {pinnedPart.totalCount && pinnedPart.totalCount > 1
+                    ? ` × ${pinnedPart.totalCount}`
+                    : ""}
                 </span>
               </div>
             )}
@@ -6792,25 +8139,15 @@ export const PrinterViewport: React.FC<Props> = ({
               ];
 
           return (
-            <div
-              className="hud-card"
-              style={{
-                width: 318,
-                flexDirection: "column",
-                alignItems: "stretch",
-                gap: 6,
-                padding: "9px 11px",
-                background: "rgba(13, 19, 29, 0.92)",
-                borderColor: "rgba(56, 189, 248, 0.55)",
-                boxShadow: "0 10px 28px rgba(0, 0, 0, 0.45)",
-              }}
-            >
+            <div className="hud-card th-flex-hud-card">
               <div
                 style={{
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 8,
+                  minWidth: 0,
+                  width: "100%",
                 }}
               >
                 <span
@@ -6820,6 +8157,10 @@ export const PrinterViewport: React.FC<Props> = ({
                     textTransform: "uppercase",
                     letterSpacing: "0.05em",
                     color: "var(--accent)",
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   Toolhead Flex Breakdown
@@ -6830,6 +8171,8 @@ export const PrinterViewport: React.FC<Props> = ({
                     fontWeight: 600,
                     color: "var(--text)",
                     fontVariantNumeric: "tabular-nums",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
                   }}
                 >
                   {bd
@@ -6839,7 +8182,7 @@ export const PrinterViewport: React.FC<Props> = ({
               </div>
 
               {bd ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0, width: "100%" }}>
                   {hudBars.map(([label, pct, color, isDom]) => (
                     <div key={label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       <div
@@ -6889,6 +8232,176 @@ export const PrinterViewport: React.FC<Props> = ({
                   Stage breakdown populates from static FEA toolhead compliance model.
                 </div>
               )}
+
+              {(() => {
+                const thStaticParts = sim.static_fea.toolhead_parts ?? [];
+                const activeModeObj =
+                  viewMode === "modal"
+                    ? sim.modal_fea.modes[clampedModeIdx]
+                    : undefined;
+                const thModalParts = activeModeObj?.toolhead_part_flex ?? [];
+                if (thStaticParts.length === 0) return null;
+
+                const isModalView = viewMode === "modal";
+                const rows = thStaticParts
+                  .map((sp) => {
+                    const mp = thModalParts.find((m) => m.id === sp.id);
+                    const pct = isModalView
+                      ? mp?.modal_flex_pct ?? 0
+                      : sp.compliance_share_pct;
+                    const sortScore = isModalView
+                      ? (mp?.modal_flex_pct ?? 0) + (mp?.kinetic_share_pct ?? 0) * 0.05
+                      : sp.compliance_share_pct + (sp.is_structural ? 0.01 : 0);
+                    return { sp, mp, pct, sortScore };
+                  })
+                  .sort((a, b) => b.sortScore - a.sortScore);
+
+                const handleSelectPartRow = (sp: (typeof thStaticParts)[number], mp?: (typeof thModalParts)[number]) => {
+                  const targetKey = `th_part_${sp.id}`;
+                  const matchedMesh = stateRef.current.inspectableMeshes.find((mesh) => {
+                    const info = mesh.userData?.inspectInfo as InspectedPartInfo | undefined;
+                    return info?.key === targetKey || info?.toolheadPartKey === targetKey;
+                  });
+                  if (stateRef.current.pinnedMesh) {
+                    applyInspectHighlight(stateRef.current.pinnedMesh, "none");
+                  }
+                  if (matchedMesh && matchedMesh.userData?.inspectInfo) {
+                    stateRef.current.pinnedMesh = matchedMesh;
+                    stateRef.current.pinnedKey = targetKey;
+                    applyInspectHighlight(matchedMesh, "pin", 0.65);
+                    setPinnedPart(matchedMesh.userData.inspectInfo as InspectedPartInfo);
+                  } else {
+                    stateRef.current.pinnedMesh = null;
+                    stateRef.current.pinnedKey = targetKey;
+                    setPinnedPart({
+                      key: targetKey,
+                      name: sp.name,
+                      subsystem: "toolhead",
+                      partGroupId: "toolhead_mount",
+                      role: "toolhead",
+                      material: sp.material,
+                      profile:
+                        sp.source === "cad_3d_recovery"
+                          ? "3D CAD Tet4 Recovery"
+                          : sp.is_structural
+                            ? "Structural Stage"
+                            : "Non-Structural Rider",
+                      complianceSharePct: sp.is_structural ? sp.compliance_share_pct : undefined,
+                      localFlexUm: sp.local_flex_um,
+                      nodeDispUm: sp.total_disp_um,
+                      bracketTwistMrad: sp.twist_mrad > 0 ? sp.twist_mrad : undefined,
+                      partStiffnessNPerMm: sp.stiffness_n_per_mm ?? undefined,
+                      unitMassG: sp.mass_g > 0 ? sp.mass_g : undefined,
+                      stressMpa: sp.stress_mpa ?? undefined,
+                      yieldMpa: sp.yield_mpa ?? undefined,
+                      modalFlexPct: mp?.modal_flex_pct,
+                      kineticSharePct: mp?.kinetic_share_pct,
+                      partSource: sp.source,
+                      isStructural: sp.is_structural,
+                      whyItHurts: sp.why_it_hurts,
+                      actionHint: sp.action_hint,
+                    });
+                  }
+                  requestRenderRef.current?.();
+                };
+
+                return (
+                  <div className="th-parts-section">
+                    <div className="th-parts-header">
+                      <span>
+                        Individual Parts ({isModalView ? `M${activeModeObj?.mode_number ?? 1} Flex` : "FEA Flex"})
+                      </span>
+                      <button
+                        type="button"
+                        className={`hud-pill ${toolheadExplode ? "active" : ""}`}
+                        aria-pressed={toolheadExplode}
+                        onClick={() => setToolheadExplode((v) => !v)}
+                        title="Separate toolhead stages to inspect internal parts"
+                      >
+                        {toolheadExplode ? "Exploded" : "Explode"}
+                      </button>
+                    </div>
+                    <div className="th-parts-list">
+                      {rows.map(({ sp, mp, pct }) => {
+                        const partKey = `th_part_${sp.id}`;
+                        const isPinned = pinnedPart?.key === partKey;
+                        const isPartHidden =
+                          (viewMode === "fea_stress" || viewMode === "modal") &&
+                          hiddenFeaParts.has(partKey);
+                        const tierCls =
+                          !sp.is_structural
+                            ? "cool"
+                            : pct >= 25
+                              ? "hot"
+                              : pct >= 10
+                                ? "warm"
+                                : "";
+                        return (
+                          <div key={sp.id} className="th-part-item">
+                            <button
+                              type="button"
+                              className={`th-part-row ${isPinned ? "active" : ""} ${isPartHidden ? "is-part-hidden" : ""}`}
+                              onClick={() => handleSelectPartRow(sp, mp)}
+                              title={`${sp.name} — Click to inspect stats & highlight`}
+                            >
+                              <div className="th-part-row-top">
+                                <span
+                                  className={`th-part-name ${sp.is_structural ? "" : "non-structural"}`}
+                                >
+                                  {sp.name}
+                                </span>
+                                {sp.source === "cad_3d_recovery" && (
+                                  <span className="th-part-cad-tag">3D CAD</span>
+                                )}
+                                <span className={`th-part-pct-val ${tierCls}`}>
+                                  {sp.is_structural ? `${pct.toFixed(0)}%` : "Rider"}
+                                </span>
+                              </div>
+                              <div className="th-part-row-sub">
+                                <span className="th-part-flex-val">
+                                  {isModalView
+                                    ? `KE ${(mp?.kinetic_share_pct ?? 0).toFixed(0)}%`
+                                    : sp.local_flex_um > 0
+                                      ? `${sp.local_flex_um < 0.1 ? sp.local_flex_um.toFixed(2) : sp.local_flex_um.toFixed(1)} µm${
+                                          sp.stiffness_n_per_mm
+                                            ? ` · ${Math.round(sp.stiffness_n_per_mm).toLocaleString()} N/mm`
+                                            : ""
+                                        }`
+                                      : `${sp.mass_g.toFixed(0)} g`}
+                                </span>
+                                <div className="th-part-bar-track">
+                                  <div
+                                    className={`th-part-bar-fill ${tierCls}`}
+                                    style={{
+                                      width: `${Math.min(100, Math.max(sp.is_structural ? pct : (mp?.kinetic_share_pct ?? 0), 2))}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            </button>
+                            {(viewMode === "fea_stress" || viewMode === "modal") && (
+                              <button
+                                type="button"
+                                className={`th-part-hide-btn ${isPartHidden ? "is-hidden" : ""}`}
+                                aria-pressed={isPartHidden}
+                                aria-label={isPartHidden ? `Show ${sp.name}` : `Hide ${sp.name}`}
+                                title={
+                                  isPartHidden
+                                    ? `Show ${sp.name} in 3D view`
+                                    : `Hide ${sp.name} to select parts behind it`
+                                }
+                                onClick={() => toggleFeaPart(partKey)}
+                              >
+                                {isPartHidden ? "Show" : "Hide"}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {showHudDetails && (
                 <div className="th-flex-meta-strip">
@@ -7038,7 +8551,72 @@ export const PrinterViewport: React.FC<Props> = ({
                   {FEA_LOAD_META[id].label}
                 </button>
               ))}
+              <button
+                type="button"
+                className={`hud-pill ${toolheadPunchIn ? "active" : ""}`}
+                aria-pressed={toolheadPunchIn}
+                title="Zoom into the toolhead and inspect individual toolhead parts, flex, and stats"
+                onClick={() => setToolheadPunchIn(!toolheadPunchIn)}
+              >
+                Toolhead Focus
+              </button>
             </div>
+            {(() => {
+              const hasEnclosurePanels = Boolean(
+                sim.geometry.shell_panels?.some(
+                  (p) =>
+                    p.bay !== "backbone" && p.bay !== "top_brace" && p.bay !== "front_brace"
+                )
+              );
+              const layers = hasEnclosurePanels
+                ? FEA_VIS_LAYERS
+                : FEA_VIS_LAYERS.filter((l) => l.id !== "panels");
+              const anyHidden = hiddenFeaLayers.size > 0 || hiddenFeaParts.size > 0;
+              return (
+                <div className="hud-card hud-vis-bar">
+                  <span id="vp-fea-hide-label" className="hud-inline-label">
+                    Hide:
+                  </span>
+                  <div
+                    className="hud-pill-inline-group"
+                    role="group"
+                    aria-labelledby="vp-fea-hide-label"
+                  >
+                    {layers.map((layer) => {
+                      const isHidden = hiddenFeaLayers.has(layer.id);
+                      return (
+                        <button
+                          key={layer.id}
+                          type="button"
+                          className={`hud-pill hud-pill-compact hud-hide-pill ${isHidden ? "is-hidden" : ""}`}
+                          aria-pressed={isHidden}
+                          onClick={() => toggleFeaLayer(layer.id)}
+                          title={
+                            isHidden
+                              ? `Show ${layer.label}`
+                              : layer.title
+                          }
+                        >
+                          {layer.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {anyHidden && (
+                    <button
+                      type="button"
+                      className="hud-pill hud-pill-compact hud-show-all-btn"
+                      onClick={showAllFea}
+                      title="Restore all hidden layers and parts in FEA view"
+                    >
+                      {hiddenFeaParts.size > 0
+                        ? `Show All (${hiddenFeaParts.size} part${hiddenFeaParts.size === 1 ? "" : "s"})`
+                        : "Show All"}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
             <div className="hud-card">
               {sim.geometry.shell_panels && sim.geometry.shell_panels.length > 0 && (
                 <span className="badge-pill">
@@ -7185,6 +8763,15 @@ export const PrinterViewport: React.FC<Props> = ({
                     ★ Focus Limiting M{primaryLimitingModeNum}
                   </button>
                 )}
+              <button
+                type="button"
+                className={`hud-pill ${toolheadPunchIn ? "active" : ""}`}
+                aria-pressed={toolheadPunchIn}
+                title="Zoom into the toolhead and inspect individual toolhead parts, modal flex, and stats"
+                onClick={() => setToolheadPunchIn(!toolheadPunchIn)}
+              >
+                Toolhead Focus
+              </button>
               <span className="hud-divider" aria-hidden="true">|</span>
               <span id="vp-modal-scale-label" className="hud-inline-label">
                 Visual:
@@ -7471,6 +9058,48 @@ export const PrinterViewport: React.FC<Props> = ({
                       <div className="hud-mode-causes-chips">
                         {topCauses.map((cause) => {
                           const isMass = cause.kind === "mass";
+                          const canIsolateCause = cause.subsystem !== "drive";
+                          const causeTarget: FlexIsolationTarget = {
+                            kind: "part_group",
+                            partGroupId: cause.id,
+                            label: cause.label,
+                            subsystem:
+                              cause.subsystem !== "drive" ? cause.subsystem : undefined,
+                          };
+                          const isCauseIsolated =
+                            canIsolateCause && isSameFlexIsolation(flexIsolation, causeTarget);
+                          if (canIsolateCause) {
+                            return (
+                              <button
+                                key={cause.id}
+                                type="button"
+                                className={`hud-mode-cause-chip is-clickable ${
+                                  isMass ? "mass" : "flex"
+                                } ${isCauseIsolated ? "is-isolated" : ""}`}
+                                aria-pressed={isCauseIsolated}
+                                onClick={() =>
+                                  selectOrToggleFlexIsolation(causeTarget, {
+                                    focusCamera: true,
+                                    pinPart: true,
+                                  })
+                                }
+                                title={`${cause.detail} — Click to isolate & focus in 3D`}
+                              >
+                                <span className={`cause-kind-tag ${isMass ? "mass" : "flex"}`}>
+                                  {isMass ? "MASS" : "FLEX"}
+                                </span>
+                                <span className="hud-cause-name">{cause.label}</span>
+                                <strong className="hud-cause-pct">
+                                  {Math.round(cause.share_pct)}%
+                                </strong>
+                                {cause.est_hz_gain > 0 && (
+                                  <span className="hud-cause-hz">
+                                    +{formatHzGain(cause.est_hz_gain)} Hz
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          }
                           return (
                             <span
                               key={cause.id}

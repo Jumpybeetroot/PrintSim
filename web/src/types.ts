@@ -1151,6 +1151,8 @@ export interface PrinterSpecData {
     cpap_pwm_pct?: number;
     shared_heatsink_cpap_duct?: boolean;
     belt_plane_z_offset_mm?: number;
+    umbilical_type?: "standard" | "can_umbilical" | "cable_chain" | "cpap_15mm" | "cpap_18mm" | "custom";
+    umbilical_mass_g?: number | null;
     envelope_mm: [number, number, number];
     hotend: {
       preset_id?: string | null;
@@ -1381,6 +1383,38 @@ export interface ModeCauseItem {
   detail: string;
 }
 
+export interface ToolheadPartModalData {
+  id: string;
+  name: string;
+  stage: string;
+  is_structural: boolean;
+  source: "cad_3d_recovery" | "stage_fea";
+  modal_flex_pct: number;
+  kinetic_share_pct: number;
+  rel_flex_norm: number;
+  disp_norm: number;
+}
+
+export interface ToolheadPartStaticData {
+  id: string;
+  name: string;
+  stage: string;
+  is_structural: boolean;
+  source: "cad_3d_recovery" | "stage_fea";
+  material: string;
+  mass_g: number;
+  stiffness_n_per_mm: number | null;
+  compliance_share_pct: number;
+  toolhead_share_pct: number;
+  local_flex_um: number;
+  total_disp_um: number;
+  twist_mrad: number;
+  stress_mpa: number | null;
+  yield_mpa: number | null;
+  why_it_hurts: string;
+  action_hint: string;
+}
+
 export interface ModeShapeData {
   mode_number: number;
   frequency_hz: number;
@@ -1411,6 +1445,20 @@ export interface ModeShapeData {
   toolhead_participation_xyz: [number, number, number];
   nodal_vectors: Record<string, [number, number, number]>;
   nodal_rotations?: Record<string, [number, number, number]>;
+  toolhead_part_flex?: ToolheadPartModalData[];
+  toolhead_mode_fields?: Record<string, CadIntraPartFieldData>;
+}
+
+export interface CadIntraPartFieldData {
+  source: string;
+  points_mm: [number, number, number][];
+  flex_um?: number[];
+  stress_mpa?: number[];
+  max_flex_um?: number;
+  max_stress_mpa?: number;
+  flex_norm?: number[];
+  strain_norm?: number[];
+  subpart_idx?: number[];
 }
 
 export interface AccelBottleneckShares {
@@ -1626,6 +1674,7 @@ export interface GeometryLinearRailsData {
   x_rail_height_mm: number;
   y_rail_width_mm: number;
   y_rail_height_mm: number;
+  x_beam_span_mm?: number | null;
   x_beam_ei_y_boost_pct: number;
   x_beam_ei_z_boost_pct: number;
   x_beam_gj_boost_pct?: number;
@@ -1714,11 +1763,13 @@ export interface ToolheadStructureGeometryData {
   use_hotend_bottom_brace?: boolean;
   cad_hotend_brace_available?: boolean;
   cad_toolhead_self_contained?: boolean;
+  cad_split_carriage_compatible?: boolean;
   cad_hotend_self_contained?: boolean;
   cad_hotend_braced?: boolean;
   cad_superelements_active?: CadSuperelementSummary[];
   hotend_visual_glb_url?: string | null;
   toolhead_visual_glb_url?: string | null;
+  carriage_mount_visual_glb_url?: string | null;
   toolhead_visual_ports_mm?: {
     port0_mm: [number, number, number];
     port1_mm: [number, number, number];
@@ -1871,6 +1922,15 @@ export interface GeometryData {
     active: boolean;
     cad_count: number;
     cad_asset_id: string | null;
+    cad_asset_name?: string;
+    unit_mass_g?: number;
+    unit_cost_usd?: number;
+    element_type?: string;
+    num_elements?: number;
+    kr_inplane_nm_rad?: number;
+    kr_torsion_nm_rad?: number;
+    corner_kr_inplane_nm_rad?: number;
+    corner_kr_torsion_nm_rad?: number;
     cad_mass_kg: number;
     flat_bar_mass_kg: number;
     total_mass_kg: number;
@@ -1907,6 +1967,28 @@ export interface GeometryData {
   mass_summary: GeometryMassSummaryData;
 }
 
+export interface SuperelementStaticMetrics {
+  id: string;
+  part_group_id: string;
+  mass_g: number;
+  flex_xy_um: number;
+  flex_x_um: number;
+  flex_y_um: number;
+  flex_gravity_um: number;
+  twist_xy_mrad: number;
+  twist_x_mrad: number;
+  twist_y_mrad: number;
+  twist_gravity_mrad: number;
+  force_xy_n: number;
+  force_x_n: number;
+  force_y_n: number;
+  force_gravity_n: number;
+  moment_xy_nm: number;
+  moment_x_nm: number;
+  moment_y_nm: number;
+  moment_gravity_nm: number;
+}
+
 export interface StaticFeaData {
   gravity_sag_toolhead_um: number;
   accel_deflection_x_um: number;
@@ -1921,6 +2003,8 @@ export interface StaticFeaData {
   toolhead_stiffness_y_n_per_mm: number;
   toolhead_stiffness_z_n_per_mm: number;
   toolhead_flex_breakdown?: ToolheadFlexBreakdownData;
+  toolhead_parts?: ToolheadPartStaticData[];
+  toolhead_part_fields?: Record<string, CadIntraPartFieldData>;
   max_von_mises_mpa: number;
   panel_max_von_mises_mpa?: number;
   peak_stress_part_label?: string;
@@ -1933,6 +2017,7 @@ export interface StaticFeaData {
   nodal_displacements_y_mm?: Record<string, [number, number, number]>;
   nodal_displacements_xy_mm?: Record<string, [number, number, number]>;
   shell_panel_stresses?: ShellPanelStressData[];
+  superelement_metrics?: Record<string, SuperelementStaticMetrics>;
   member_stresses: Array<{
     member_id: string;
     role: string;
@@ -2247,6 +2332,7 @@ export interface SensitivityData {
   primary_problem_subsystem?: SubsystemKey;
   top_stiffen_targets: SensitivityStiffenTarget[];
   top_lighten_targets: SensitivityLightenTarget[];
+  part_group_sensitivities?: Record<string, SensitivityStiffenTarget>;
 }
 
 export interface BedPlateFeaData {

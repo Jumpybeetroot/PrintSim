@@ -9,6 +9,12 @@ import {
   WorkspaceFRFData,
 } from "../types";
 import { formatHzGain } from "../viewport/partClassifier";
+import {
+  FlexIsolationTarget,
+  inferSubsystemForPartGroup,
+  isSameFlexIsolation,
+  subsystemLabel,
+} from "../viewport/flexIsolation";
 import { SurfaceTexturePreview } from "./SurfaceTexturePreview";
 
 const SUBSYSTEM_ORDER: SubsystemKey[] = ["toolhead", "gantry", "frame", "bed"];
@@ -1089,9 +1095,11 @@ export const AdjointSensitivityContent: React.FC<{
   sensitivity: SensitivityData;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
-}> = ({ sensitivity, viewMode, onViewModeChange }) => {
-  const topStiffen = sensitivity.top_stiffen_targets?.slice(0, 3) ?? [];
-  const topLighten = sensitivity.top_lighten_targets?.slice(0, 2) ?? [];
+  flexIsolation?: FlexIsolationTarget;
+  onIsolateFlexTarget?: (target: FlexIsolationTarget) => void;
+}> = ({ sensitivity, viewMode, onViewModeChange, flexIsolation, onIsolateFlexTarget }) => {
+  const topStiffen = sensitivity.top_stiffen_targets?.slice(0, 5) ?? [];
+  const topLighten = sensitivity.top_lighten_targets?.slice(0, 3) ?? [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1167,16 +1175,27 @@ export const AdjointSensitivityContent: React.FC<{
                 const entry = bd[k];
                 const sev = entry?.severity ?? "low";
                 const isPrimary = primary === k;
+                const subTarget: FlexIsolationTarget = {
+                  kind: "subsystem",
+                  subsystem: k,
+                  label: subsystemLabel(k),
+                };
+                const isIso = isSameFlexIsolation(flexIsolation, subTarget);
                 return (
-                  <div
+                  <button
                     key={k}
-                    className={`sens-sub-chip sev-${sev} ${isPrimary ? "primary" : ""}`}
+                    type="button"
+                    className={`sens-sub-chip sev-${sev} ${isPrimary ? "primary" : ""} ${
+                      isIso ? "is-isolated" : ""
+                    }`}
+                    aria-pressed={isIso}
+                    onClick={() => onIsolateFlexTarget?.(subTarget)}
                     title={
                       entry
                         ? `${entry.label}: ${entry.compliance_share_pct.toFixed(1)}% flex • Stiff sens ${entry.modal_stiff_hz.toFixed(
                             2
-                          )} Hz • Mass sens ${entry.modal_mass_hz.toFixed(2)} Hz`
-                        : SUBSYSTEM_DISPLAY[k].full
+                          )} Hz • Mass sens ${entry.modal_mass_hz.toFixed(2)} Hz — Click to isolate in 3D`
+                        : `${SUBSYSTEM_DISPLAY[k].full} — Click to isolate in 3D`
                     }
                   >
                     <span className="sens-sub-chip-top">
@@ -1191,7 +1210,7 @@ export const AdjointSensitivityContent: React.FC<{
                         {Math.round(entry?.compliance_share_pct ?? 0)}%
                       </strong>
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -1204,37 +1223,62 @@ export const AdjointSensitivityContent: React.FC<{
       {topStiffen.length > 0 && (
         <div className="sens-group">
           <div className="sens-group-label stiffen">Primary Compliance Hotspots (Stiffness Limits)</div>
-          {topStiffen.map((t) => (
-            <div
-              key={`stiff-${t.id}`}
-              className="sens-row stiffen"
-              title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
-            >
-              <div className="sens-row-top">
-                <span className="sens-id">
-                  <strong>{t.label ?? t.id}</strong>
-                  {!t.label && <span className="sens-role">{t.role}</span>}
-                </span>
-              </div>
-              <div className="sens-badge-row">
-                {(t.est_hz_gain ?? 0) > 0 && (
-                  <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
-                )}
-                {t.compliance_share_pct >= 1 && (
-                  <span className="sens-badge flex">
-                    {t.compliance_share_pct.toFixed(0)}% of flex
+          {topStiffen.map((t) => {
+            const label = t.label ?? t.id;
+            const target: FlexIsolationTarget = {
+              kind: "part_group",
+              partGroupId: t.id,
+              label,
+              subsystem: inferSubsystemForPartGroup(t.id, t.role),
+            };
+            const isIso = isSameFlexIsolation(flexIsolation, target);
+            return (
+              <div
+                key={`stiff-${t.id}`}
+                className={`sens-row stiffen ${isIso ? "is-isolated" : ""}`}
+                title={t.action_hint || `${label} (${t.id})`}
+              >
+                <div className="sens-row-top">
+                  <span className="sens-id">
+                    <strong>{label}</strong>
+                    {!t.label && <span className="sens-role">{t.role}</span>}
                   </span>
-                )}
-                <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
-              </div>
-              {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
-              {t.action_hint && (
-                <div className="sens-fix">
-                  <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
+                  {onIsolateFlexTarget && (
+                    <button
+                      type="button"
+                      className={`sens-isolate-btn ${isIso ? "active" : ""}`}
+                      aria-pressed={isIso}
+                      onClick={() => onIsolateFlexTarget(target)}
+                      title={
+                        isIso
+                          ? `Exit 3D isolation of ${label}`
+                          : `Isolate and focus ${label} in 3D viewport`
+                      }
+                    >
+                      {isIso ? "Isolated" : "Isolate 3D"}
+                    </button>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+                <div className="sens-badge-row">
+                  {(t.est_hz_gain ?? 0) > 0 && (
+                    <span className="sens-badge gain">+{formatHzGain(t.est_hz_gain!)} Hz</span>
+                  )}
+                  {t.compliance_share_pct >= 1 && (
+                    <span className="sens-badge flex">
+                      {t.compliance_share_pct.toFixed(0)}% of flex
+                    </span>
+                  )}
+                  <span className="sens-badge roi">+{t.hz_per_usd.toFixed(2)} Hz/$</span>
+                </div>
+                {t.why_it_hurts && <div className="sens-why">{t.why_it_hurts}</div>}
+                {t.action_hint && (
+                  <div className="sens-fix">
+                    <span className="sens-fix-prefix">Main limit:</span> {t.action_hint}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1243,17 +1287,40 @@ export const AdjointSensitivityContent: React.FC<{
           <div className="sens-group-label lighten">Primary Inertia Hotspots (Moving-Mass Limits)</div>
           {topLighten.map((t) => {
             const gainPer100g = t.hz_gain_per_100g_saved ?? Math.abs(t.hz_per_100g);
+            const label = t.label ?? t.id;
+            const target: FlexIsolationTarget = {
+              kind: "part_group",
+              partGroupId: t.id,
+              label,
+              subsystem: inferSubsystemForPartGroup(t.id, t.role),
+            };
+            const isIso = isSameFlexIsolation(flexIsolation, target);
             return (
               <div
                 key={`light-${t.id}`}
-                className="sens-row lighten"
-                title={t.action_hint || `${t.label ?? t.id} (${t.id})`}
+                className={`sens-row lighten ${isIso ? "is-isolated" : ""}`}
+                title={t.action_hint || `${label} (${t.id})`}
               >
                 <div className="sens-row-top">
                   <span className="sens-id">
-                    <strong>{t.label ?? t.id}</strong>
+                    <strong>{label}</strong>
                     {!t.label && <span className="sens-role">{t.role}</span>}
                   </span>
+                  {onIsolateFlexTarget && (
+                    <button
+                      type="button"
+                      className={`sens-isolate-btn ${isIso ? "active" : ""}`}
+                      aria-pressed={isIso}
+                      onClick={() => onIsolateFlexTarget(target)}
+                      title={
+                        isIso
+                          ? `Exit 3D isolation of ${label}`
+                          : `Isolate and focus ${label} in 3D viewport`
+                      }
+                    >
+                      {isIso ? "Isolated" : "Isolate 3D"}
+                    </button>
+                  )}
                 </div>
                 <div className="sens-badge-row">
                   <span className="sens-badge lighten-gain">

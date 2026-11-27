@@ -1315,17 +1315,102 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                     </div>
                   </div>
 
+                  {Boolean(sim?.geometry?.toolhead_structure?.cad_split_carriage_compatible) && (
+                    <div className="field-row">
+                      <label htmlFor="dp-cad-carriage-material">X-Carriage Mount</label>
+                      {(() => {
+                        const isMetalCarriage = !currentCarriageMountMat.endsWith("_printed");
+                        const printedFallbackMat = currentBodyMat.endsWith("_printed")
+                          ? currentBodyMat
+                          : "abs_printed";
+                        return (
+                          <div className="pill-toggle-row" role="group" aria-label="X-Carriage type">
+                            <button
+                              type="button"
+                              className={`pill-toggle-btn ${!isMetalCarriage ? "active" : ""}`}
+                              aria-pressed={!isMetalCarriage}
+                              onClick={() => {
+                                if (!isMetalCarriage) return;
+                                update(
+                                  (d) => {
+                                    d.toolhead.carriage_mount_material = printedFallbackMat;
+                                  },
+                                  `X-Carriage Mount: CNC → Printed (${toolheadPartMatShort(printedFallbackMat)})`
+                                );
+                              }}
+                            >
+                              Printed
+                            </button>
+                            <button
+                              type="button"
+                              className={`pill-toggle-btn ${isMetalCarriage ? "active" : ""}`}
+                              aria-pressed={isMetalCarriage}
+                              onClick={() => {
+                                if (isMetalCarriage) return;
+                                update(
+                                  (d) => {
+                                    d.toolhead.carriage_mount_material = "aluminum_6061_t6";
+                                  },
+                                  "X-Carriage Mount: Printed → CNC 6061-T6"
+                                );
+                              }}
+                            >
+                              CNC Metal
+                            </button>
+                          </div>
+                        );
+                      })()}
+                      <select
+                        id="dp-cad-carriage-material"
+                        value={currentCarriageMountMat}
+                        onChange={(e) => {
+                          const nextMat = e.target.value;
+                          update(
+                            (d) => {
+                              d.toolhead.carriage_mount_material = nextMat;
+                            },
+                            `X-Carriage Mount: ${toolheadPartMatShort(currentCarriageMountMat)} → ${toolheadPartMatShort(nextMat)}`
+                          );
+                        }}
+                      >
+                        {!TOOLHEAD_PART_MATERIAL_OPTIONS.some(
+                          (opt) => opt.id === currentCarriageMountMat
+                        ) && (
+                          <option value={currentCarriageMountMat}>
+                            {materialLabel(currentCarriageMountMat)}
+                          </option>
+                        )}
+                        {TOOLHEAD_PART_MATERIAL_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div className="field-row">
-                    <label htmlFor="dp-cad-toolhead-material">Chassis Material</label>
+                    <label htmlFor="dp-cad-toolhead-material">
+                      {sim?.geometry?.toolhead_structure?.cad_split_carriage_compatible
+                        ? "Body / Chassis Material"
+                        : "Chassis Material"}
+                    </label>
                     <select
                       id="dp-cad-toolhead-material"
                       value={currentBodyMat}
                       onChange={(e) => {
                         const nextMat = e.target.value;
+                        const isSplitCarriage = Boolean(
+                          sim?.geometry?.toolhead_structure?.cad_split_carriage_compatible
+                        );
+                        const keepSeparateCarriage =
+                          isSplitCarriage && currentCarriageMountMat !== currentBodyMat;
                         update(
                           (d) => {
                             d.toolhead.body_material = nextMat;
-                            d.toolhead.carriage_mount_material = nextMat;
+                            if (!keepSeparateCarriage) {
+                              d.toolhead.carriage_mount_material = nextMat;
+                            }
                             d.toolhead.hotend_mount_material = nextMat;
                             if (MOUNT_MATERIAL_OPTIONS.some((o) => o.id === nextMat)) {
                               d.toolhead.mount_material = nextMat as ToolheadMountMaterial;
@@ -1735,6 +1820,109 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                       <div className="hint-line">
                         Aligning the belt plane with toolhead CoG (≈ 0 mm) minimizes X-axis roll torque
                         and resonance splitting.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="field-row">
+                    <label htmlFor="dp-umbilical-type">
+                      <span>Umbilical &amp; Support System</span>
+                      <span className="sub-block-tag">
+                        {Math.round(
+                          spec.toolhead.umbilical_mass_g ??
+                            ({
+                              standard: 40,
+                              can_umbilical: 20,
+                              cable_chain: 60,
+                              cpap_15mm: 38,
+                              cpap_18mm: 55,
+                              custom: 40,
+                            }[spec.toolhead.umbilical_type ?? "standard"] ?? 40)
+                        )}{" "}
+                        g
+                      </span>
+                    </label>
+                    <select
+                      id="dp-umbilical-type"
+                      aria-label="Umbilical and support system"
+                      value={spec.toolhead.umbilical_type ?? "standard"}
+                      onChange={(e) => {
+                        const nextType = e.target.value as
+                          | "standard"
+                          | "can_umbilical"
+                          | "cable_chain"
+                          | "cpap_15mm"
+                          | "cpap_18mm"
+                          | "custom";
+                        const presetMass: Record<string, number> = {
+                          standard: 40,
+                          can_umbilical: 20,
+                          cable_chain: 60,
+                          cpap_15mm: 38,
+                          cpap_18mm: 55,
+                        };
+                        update(
+                          (d) => {
+                            d.toolhead.umbilical_type = nextType;
+                            if (nextType !== "custom") {
+                              d.toolhead.umbilical_mass_g = presetMass[nextType];
+                            } else if (d.toolhead.umbilical_mass_g == null) {
+                              d.toolhead.umbilical_mass_g = 40;
+                            }
+                          },
+                          `Umbilical Support: ${nextType}`
+                        );
+                      }}
+                    >
+                      <option value="standard">Standard Harness / Default (40 g)</option>
+                      <option value="can_umbilical">CAN / USB Umbilical + PTFE (20 g)</option>
+                      <option value="cable_chain">Dual Cable Chains + Loom (60 g)</option>
+                      <option value="cpap_15mm">CPAP 15 mm HT Hose + Umbilical (38 g)</option>
+                      <option value="cpap_18mm">CPAP 18 mm Hose + Umbilical (55 g)</option>
+                      <option value="custom">Custom Moving Mass</option>
+                    </select>
+                  </div>
+
+                  <div className="field-row">
+                    <label htmlFor="dp-umbilical-mass-g">
+                      <span>Umbilical Drag Mass (g)</span>
+                      <span className="sub-block-tag">X &amp; Y moving</span>
+                    </label>
+                    <input
+                      id="dp-umbilical-mass-g"
+                      type="number"
+                      min={0}
+                      max={250}
+                      step={1}
+                      value={
+                        spec.toolhead.umbilical_mass_g ??
+                        ({
+                          standard: 40,
+                          can_umbilical: 20,
+                          cable_chain: 60,
+                          cpap_15mm: 38,
+                          cpap_18mm: 55,
+                          custom: 40,
+                        }[spec.toolhead.umbilical_type ?? "standard"] ?? 40)
+                      }
+                      title="Effective moving mass of umbilical wiring, drag chains, CPAP hose, and PTFE tube carried by the toolhead in both X and Y (g)"
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        const clamped = Math.max(0, Math.min(250, v));
+                        update(
+                          (d) => {
+                            d.toolhead.umbilical_mass_g = clamped;
+                            d.toolhead.umbilical_type = "custom";
+                          },
+                          `Umbilical Drag Mass: ${clamped} g`
+                        );
+                      }}
+                    />
+                    {showHints && (
+                      <div className="hint-line">
+                        Moving harness, cable chain, CPAP hose, and PTFE mass carried in X and Y
+                        (0–250 g). Lowering drag-chain mass directly lifts X &amp; Y shaper Hz.
                       </div>
                     )}
                   </div>

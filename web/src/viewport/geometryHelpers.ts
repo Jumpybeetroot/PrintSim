@@ -12,6 +12,15 @@ export interface InspectedPartInfo {
   material?: string;
   profile?: string;
   complianceSharePct?: number;
+  stationComplianceSharePct?: number;
+  bracketFlexUm?: number;
+  bracketTwistMrad?: number;
+  transmittedForceN?: number;
+  rotStiffnessNmRad?: number;
+  torsionStiffnessNmRad?: number;
+  unitMassG?: number;
+  totalCount?: number;
+  nodeDispUm?: number;
   heatScore?: number;
   stressMpa?: number;
   yieldMpa?: number;
@@ -23,6 +32,14 @@ export interface InspectedPartInfo {
   bedTacoUm?: number;
   bedModeHz?: number;
   bedRisk?: "low" | "moderate" | "high" | "critical";
+  localFlexUm?: number;
+  partStiffnessNPerMm?: number;
+  modalFlexPct?: number;
+  kineticSharePct?: number;
+  partSource?: "cad_3d_recovery" | "stage_fea";
+  isStructural?: boolean;
+  /** Canonical backend toolhead part key (`th_part_<id>`) for stage-level hide/highlight */
+  toolheadPartKey?: string;
 }
 
 export interface ModalVisualSeverity {

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import {
   AdjointLens,
   CadGantryStationAsset,
+  FeaLoadCase,
   SimulationResponse,
   XRailMountType,
   YRailMountType,
@@ -41,6 +42,7 @@ export interface BuildCadGantryStationsParams {
   basePos: Record<string, THREE.Vector3>;
   deformedPos?: Record<string, THREE.Vector3>;
   viewMode: "assembly" | "fea_stress" | "modal" | "sensitivity";
+  feaLoadCase?: FeaLoadCase;
   toolheadPunchIn: boolean;
   adjointLens: AdjointLens;
   stiffenById: Record<
@@ -80,6 +82,7 @@ export function buildCadGantryStationMeshes({
   basePos,
   deformedPos,
   viewMode,
+  feaLoadCase = "xy",
   toolheadPunchIn,
   adjointLens,
   stiffenById,
@@ -198,18 +201,72 @@ export function buildCadGantryStationMeshes({
         : undefined;
     const profileDesc = [gantryKitLabel, massText, stiffText].filter(Boolean).join(" · ");
     const isXyStation = stationKey === "xy_left" || stationKey === "xy_right";
-    const partGroupId = isXyStation ? "xy_joints" : "gantry_brackets";
-    const bktStiff = stiffenById[partGroupId] ?? stiffenById["gantry_brackets"];
+    const classified = classifyPartGroup(
+      sensMemberId || (isXyStation ? "xy_joint" : stationKey),
+      "gantry"
+    );
+    const partGroupId = isXyStation
+      ? "xy_joints"
+      : sensMemberId
+        ? classified.id
+        : stationKey.startsWith("trident_bed_arm")
+          ? "bed_support"
+          : stationKey.startsWith("z_joint")
+            ? "z_gantry_joints"
+            : "gantry_brackets";
+    const subsystem =
+      partGroupId === "bed_support" ? "bed" : classified.subsystem;
+    const bktStiff = stiffenById[partGroupId];
+    const sensEntry = sensMemberId ? memberSensMap?.[sensMemberId] : undefined;
+    const seMetricsMap = sim.static_fea.superelement_metrics;
+    const seMetric = sensMemberId
+      ? (seMetricsMap?.[sensMemberId] ?? seMetricsMap?.[`cad_${sensMemberId}`])
+      : undefined;
+    const activeCase: FeaLoadCase = feaLoadCase ?? "xy";
+    const bracketFlexUm = seMetric
+      ? activeCase === "x"
+        ? seMetric.flex_x_um
+        : activeCase === "y"
+          ? seMetric.flex_y_um
+          : activeCase === "gravity"
+            ? seMetric.flex_gravity_um
+            : seMetric.flex_xy_um
+      : undefined;
+    const bracketTwistMrad = seMetric
+      ? activeCase === "x"
+        ? seMetric.twist_x_mrad
+        : activeCase === "y"
+          ? seMetric.twist_y_mrad
+          : activeCase === "gravity"
+            ? seMetric.twist_gravity_mrad
+            : seMetric.twist_xy_mrad
+      : undefined;
+    const transmittedForceN = seMetric
+      ? activeCase === "x"
+        ? seMetric.force_x_n
+        : activeCase === "y"
+          ? seMetric.force_y_n
+          : activeCase === "gravity"
+            ? seMetric.force_gravity_n
+            : seMetric.force_xy_n
+      : undefined;
     const inspectInfo: InspectedPartInfo = {
       key: inspectKey,
       name: displayName,
-      subsystem: "gantry",
+      subsystem,
       partGroupId,
-      role: "gantry",
+      role: subsystem === "bed" ? "bed" : "gantry",
       material: bracketInfo?.name ?? gantryKitLabel,
       profile: profileDesc || gantryKitLabel,
-      complianceSharePct: bktStiff?.compliance_share_pct,
+      complianceSharePct:
+        bktStiff?.compliance_share_pct ?? sensEntry?.compliance_share_pct,
+      stationComplianceSharePct: sensEntry?.compliance_share_pct,
+      bracketFlexUm,
+      bracketTwistMrad,
+      transmittedForceN,
+      heatScore: sensEntry ? getLensScore(sensEntry, adjointLens) : undefined,
       estHzGain: bktStiff?.est_hz_gain,
+      hzPer100g: sensEntry?.hz_per_100g,
       whyItHurts: bktStiff?.why_it_hurts,
       actionHint: bktStiff?.action_hint,
     };
@@ -709,9 +766,14 @@ export interface BuildAssemblyHardwareParams {
   cy: number;
   toolheadPunchIn: boolean;
   adjointLens: AdjointLens;
+  feaLoadCase?: FeaLoadCase;
   stiffenById: Record<
     string,
     NonNullable<SimulationResponse["sensitivity"]>["top_stiffen_targets"][number]
+  >;
+  memberSensMap?: Record<
+    string,
+    NonNullable<SimulationResponse["sensitivity"]>["member_sensitivities"][string]
   >;
   tagInspectable: (mesh: THREE.Mesh, info: InspectedPartInfo) => void;
 }
@@ -729,7 +791,9 @@ export function buildAssemblyHardwareMeshes({
   cy,
   toolheadPunchIn,
   adjointLens,
+  feaLoadCase = "xy",
   stiffenById,
+  memberSensMap,
   tagInspectable,
 }: BuildAssemblyHardwareParams): void {
   const geom = sim.geometry;
@@ -748,9 +812,11 @@ export function buildAssemblyHardwareMeshes({
         sim,
         basePos,
         viewMode: "assembly",
+        feaLoadCase,
         toolheadPunchIn,
         adjointLens,
         stiffenById,
+        memberSensMap,
         tagInspectable,
       });
       const cadReplacedMountNodeIds = cadResult.replacedMountNodeIds;
@@ -837,9 +903,59 @@ export function buildAssemblyHardwareMeshes({
       if (xyJointNodes.length > 0) {
         bracketMatUsed = true;
         const xyJointGeo = new THREE.BoxGeometry(0.32, 0.24, 0.34);
+        const xyStiff = stiffenById["xy_joints"];
+        const seMetricsMap = sim.static_fea.superelement_metrics;
         for (const n of xyJointNodes) {
+          const isLeft = n.id === "y_car_l";
+          const sensId = isLeft ? "xy_joint_l" : "xy_joint_r";
+          const sensEntry = memberSensMap?.[sensId];
+          const seMetric = seMetricsMap?.[sensId];
           const jointMesh = new THREE.Mesh(xyJointGeo, bracketMat);
           jointMesh.position.copy(basePos[n.id]);
+          tagInspectable(jointMesh, {
+            key: `xy_joint_proc:${sensId}`,
+            name: isLeft ? "Left XY-Joint Bracket" : "Right XY-Joint Bracket",
+            subsystem: "gantry",
+            partGroupId: "xy_joints",
+            role: "gantry",
+            material: bracketInfo?.name ?? "Gantry Bracket",
+            profile: "Procedural XY-Joint",
+            complianceSharePct:
+              xyStiff?.compliance_share_pct ?? sensEntry?.compliance_share_pct,
+            stationComplianceSharePct: sensEntry?.compliance_share_pct,
+            bracketFlexUm: seMetric
+              ? feaLoadCase === "x"
+                ? seMetric.flex_x_um
+                : feaLoadCase === "y"
+                  ? seMetric.flex_y_um
+                  : feaLoadCase === "gravity"
+                    ? seMetric.flex_gravity_um
+                    : seMetric.flex_xy_um
+              : undefined,
+            bracketTwistMrad: seMetric
+              ? feaLoadCase === "x"
+                ? seMetric.twist_x_mrad
+                : feaLoadCase === "y"
+                  ? seMetric.twist_y_mrad
+                  : feaLoadCase === "gravity"
+                    ? seMetric.twist_gravity_mrad
+                    : seMetric.twist_xy_mrad
+              : undefined,
+            transmittedForceN: seMetric
+              ? feaLoadCase === "x"
+                ? seMetric.force_x_n
+                : feaLoadCase === "y"
+                  ? seMetric.force_y_n
+                  : feaLoadCase === "gravity"
+                    ? seMetric.force_gravity_n
+                    : seMetric.force_xy_n
+              : undefined,
+            heatScore: sensEntry ? getLensScore(sensEntry, adjointLens) : undefined,
+            estHzGain: xyStiff?.est_hz_gain,
+            hzPer100g: sensEntry?.hz_per_100g,
+            whyItHurts: xyStiff?.why_it_hurts,
+            actionHint: xyStiff?.action_hint,
+          });
           group.add(jointMesh);
         }
       }

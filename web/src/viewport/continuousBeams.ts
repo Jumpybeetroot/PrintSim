@@ -20,6 +20,29 @@ export interface ModalContinuousBeam {
   undeformedAxis: THREE.Vector3;
   fixedStart: boolean;
   fixedEnd: boolean;
+  endExtension?: number;
+}
+
+export interface CadBeamDeformSubmesh {
+  geometry: THREE.BufferGeometry;
+  stationIdx: Uint8Array;
+  stationFrac: Float32Array;
+  uOff: Float32Array;
+  vOff: Float32Array;
+  restNT: Float32Array;
+  restNU: Float32Array;
+  restNV: Float32Array;
+}
+
+export interface ModalCadBeam {
+  meshes: CadBeamDeformSubmesh[];
+  nodeIds: string[];
+  controlPts: THREE.Vector3[];
+  spanFracs: number[];
+  undeformedAxis: THREE.Vector3;
+  fixedStart: boolean;
+  fixedEnd: boolean;
+  endExtension?: number;
 }
 
 /**
@@ -628,4 +651,456 @@ export function applyRodGradientColors(geo: THREE.BufferGeometry, val0: number, 
     colors[i * 3 + 2] = _beamCol.b;
   }
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+
+const CAD_BEAM_LUT_STEPS = 64;
+const _cadLutP = new Float32Array((CAD_BEAM_LUT_STEPS + 1) * 3);
+const _cadLutT = new Float32Array((CAD_BEAM_LUT_STEPS + 1) * 3);
+const _cadLutU = new Float32Array((CAD_BEAM_LUT_STEPS + 1) * 3);
+const _cadLutV = new Float32Array((CAD_BEAM_LUT_STEPS + 1) * 3);
+const _cadTmpPos = new THREE.Vector3();
+const _cadTmpNorm = new THREE.Vector3();
+const _cadNormalMat = new THREE.Matrix3();
+
+function evalSpanParam(t: number, spanFracs: number[], out: { spanIdx: number; u: number }): void {
+  const numSpans = spanFracs.length - 1;
+  if (numSpans <= 1) {
+    out.spanIdx = 0;
+    out.u = Math.max(0, Math.min(1, t));
+    return;
+  }
+  let idx = numSpans - 1;
+  for (let i = 0; i < numSpans; i++) {
+    if (t <= spanFracs[i + 1] || i === numSpans - 1) {
+      idx = i;
+      break;
+    }
+  }
+  const f0 = spanFracs[idx];
+  const f1 = spanFracs[idx + 1];
+  const span = f1 - f0;
+  out.spanIdx = idx;
+  out.u = span > 1e-8 ? Math.max(0, Math.min(1, (t - f0) / span)) : 0;
+}
+
+const _cadSpanOut = { spanIdx: 0, u: 0 };
+
+/**
+ * Deform a baked CAD X-beam GLB in-place along a continuous cubic-Hermite beam centerline
+ * with Bishop parallel-transport cross-section frames (zero per-frame heap allocations).
+ */
+export function updateCadBeamDeformation(cadBeam: ModalCadBeam): void {
+  const { controlPts, spanFracs, undeformedAxis, fixedStart, fixedEnd, meshes } = cadBeam;
+  const numPts = controlPts.length;
+  if (numPts < 2 || meshes.length === 0) return;
+  const numSpans = numPts - 1;
+
+  ensureSplineScratch(numPts);
+
+  if (undeformedAxis.lengthSq() > 1e-10) {
+    _beamRefAxis.copy(undeformedAxis).normalize();
+  } else {
+    _beamRefAxis.subVectors(controlPts[numPts - 1], controlPts[0]);
+    const refLen = _beamRefAxis.length();
+    if (refLen > 1e-8) {
+      _beamRefAxis.divideScalar(refLen);
+    } else {
+      _beamRefAxis.set(1, 0, 0);
+    }
+  }
+
+  for (let i = 0; i < numSpans; i++) {
+    const sVec = _beamSecantPool[i];
+    sVec.subVectors(controlPts[i + 1], controlPts[i]);
+    const d = Math.max(sVec.length(), 1e-5);
+    _beamSpanLens[i] = d;
+    sVec.divideScalar(d);
+  }
+
+  if (numPts === 2) {
+    _beamTangentPool[0].copy(_beamSecantPool[0]);
+    _beamTangentPool[1].copy(_beamSecantPool[0]);
+  } else {
+    for (let i = 1; i < numPts - 1; i++) {
+      const dPrev = _beamSpanLens[i - 1];
+      const dNext = _beamSpanLens[i];
+      const denom = dPrev + dNext;
+      const wPrev = dNext / denom;
+      const wNext = dPrev / denom;
+      const sPrev = _beamSecantPool[i - 1];
+      const sNext = _beamSecantPool[i];
+      _beamTangentPool[i].set(
+        wPrev * sPrev.x + wNext * sNext.x,
+        wPrev * sPrev.y + wNext * sNext.y,
+        wPrev * sPrev.z + wNext * sNext.z
+      );
+    }
+
+    if (fixedStart) {
+      _beamTangentPool[0].copy(_beamRefAxis);
+    } else {
+      const s0 = _beamSecantPool[0];
+      const m1 = _beamTangentPool[1];
+      _beamTangentPool[0].set(
+        1.5 * s0.x - 0.5 * m1.x,
+        1.5 * s0.y - 0.5 * m1.y,
+        1.5 * s0.z - 0.5 * m1.z
+      );
+    }
+
+    const last = numPts - 1;
+    if (fixedEnd) {
+      _beamTangentPool[last].copy(_beamRefAxis);
+    } else {
+      const sLast = _beamSecantPool[numSpans - 1];
+      const mPrev = _beamTangentPool[last - 1];
+      _beamTangentPool[last].set(
+        1.5 * sLast.x - 0.5 * mPrev.x,
+        1.5 * sLast.y - 0.5 * mPrev.y,
+        1.5 * sLast.z - 0.5 * mPrev.z
+      );
+    }
+  }
+
+  const refUpVec = Math.abs(_beamRefAxis.y) > 0.99 ? _beamCadY : _beamUp;
+  _beamU.crossVectors(_beamRefAxis, refUpVec).normalize();
+  _beamV.crossVectors(_beamU, _beamRefAxis).normalize();
+
+  for (let s = 0; s <= CAD_BEAM_LUT_STEPS; s++) {
+    const t = s / CAD_BEAM_LUT_STEPS;
+    evalSpanParam(t, spanFracs, _cadSpanOut);
+    const spanIdx = _cadSpanOut.spanIdx;
+    const u = _cadSpanOut.u;
+
+    const p0 = controlPts[spanIdx];
+    const p1 = controlPts[spanIdx + 1];
+    const d = _beamSpanLens[spanIdx];
+    const m0 = _beamTangentPool[spanIdx];
+    const m1 = _beamTangentPool[spanIdx + 1];
+
+    if (numPts === 2) {
+      _beamP.set(
+        p0.x + (p1.x - p0.x) * u,
+        p0.y + (p1.y - p0.y) * u,
+        p0.z + (p1.z - p0.z) * u
+      );
+      _beamT.copy(_beamSecantPool[0]);
+    } else {
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const h00 = 2 * u3 - 3 * u2 + 1;
+      const h10 = (u3 - 2 * u2 + u) * d;
+      const h01 = -2 * u3 + 3 * u2;
+      const h11 = (u3 - u2) * d;
+
+      _beamP.set(
+        h00 * p0.x + h10 * m0.x + h01 * p1.x + h11 * m1.x,
+        h00 * p0.y + h10 * m0.y + h01 * p1.y + h11 * m1.y,
+        h00 * p0.z + h10 * m0.z + h01 * p1.z + h11 * m1.z
+      );
+
+      const dh00 = 6 * u2 - 6 * u;
+      const dh10 = (3 * u2 - 4 * u + 1) * d;
+      const dh01 = -6 * u2 + 6 * u;
+      const dh11 = (3 * u2 - 2 * u) * d;
+
+      _beamT.set(
+        dh00 * p0.x + dh10 * m0.x + dh01 * p1.x + dh11 * m1.x,
+        dh00 * p0.y + dh10 * m0.y + dh01 * p1.y + dh11 * m1.y,
+        dh00 * p0.z + dh10 * m0.z + dh01 * p1.z + dh11 * m1.z
+      );
+      const tLen = _beamT.length();
+      if (tLen > 1e-8) {
+        _beamT.divideScalar(tLen);
+      } else {
+        _beamT.copy(_beamSecantPool[spanIdx]);
+      }
+    }
+
+    if (s === 0) {
+      const dot0 = _beamRefAxis.dot(_beamT);
+      if (dot0 < 0.999999 && dot0 > -0.9999) {
+        _beamStepQ.setFromUnitVectors(_beamRefAxis, _beamT);
+        _beamU.applyQuaternion(_beamStepQ);
+      }
+    } else {
+      const dotS = _beamPrevT.dot(_beamT);
+      if (dotS < 0.999999 && dotS > -0.9999) {
+        _beamStepQ.setFromUnitVectors(_beamPrevT, _beamT);
+        _beamU.applyQuaternion(_beamStepQ);
+      }
+    }
+    _beamU.addScaledVector(_beamT, -_beamU.dot(_beamT));
+    if (_beamU.lengthSq() > 1e-10) {
+      _beamU.normalize();
+    } else {
+      _beamU.set(1, 0, 0).cross(_beamT);
+      if (_beamU.lengthSq() < 1e-6) _beamU.set(0, 0, 1).cross(_beamT);
+      _beamU.normalize();
+    }
+    _beamV.crossVectors(_beamU, _beamT).normalize();
+    _beamPrevT.copy(_beamT);
+
+    const o = s * 3;
+    _cadLutP[o] = _beamP.x;
+    _cadLutP[o + 1] = _beamP.y;
+    _cadLutP[o + 2] = _beamP.z;
+    _cadLutT[o] = _beamT.x;
+    _cadLutT[o + 1] = _beamT.y;
+    _cadLutT[o + 2] = _beamT.z;
+    _cadLutU[o] = _beamU.x;
+    _cadLutU[o + 1] = _beamU.y;
+    _cadLutU[o + 2] = _beamU.z;
+    _cadLutV[o] = _beamV.x;
+    _cadLutV[o + 1] = _beamV.y;
+    _cadLutV[o + 2] = _beamV.z;
+  }
+
+  for (let mi = 0; mi < meshes.length; mi++) {
+    const sub = meshes[mi];
+    const posAttr = sub.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const normAttr = sub.geometry.getAttribute("normal") as THREE.BufferAttribute | undefined;
+    const posArr = posAttr.array as Float32Array;
+    const normArr = normAttr ? (normAttr.array as Float32Array) : null;
+    const { stationIdx, stationFrac, uOff, vOff, restNT, restNU, restNV } = sub;
+    const count = stationIdx.length;
+
+    for (let i = 0; i < count; i++) {
+      const s = stationIdx[i];
+      const f = stationFrac[i];
+      const o0 = s * 3;
+      const o1 = o0 + 3;
+
+      const px = _cadLutP[o0] + (_cadLutP[o1] - _cadLutP[o0]) * f;
+      const py = _cadLutP[o0 + 1] + (_cadLutP[o1 + 1] - _cadLutP[o0 + 1]) * f;
+      const pz = _cadLutP[o0 + 2] + (_cadLutP[o1 + 2] - _cadLutP[o0 + 2]) * f;
+
+      const ux = _cadLutU[o0] + (_cadLutU[o1] - _cadLutU[o0]) * f;
+      const uy = _cadLutU[o0 + 1] + (_cadLutU[o1 + 1] - _cadLutU[o0 + 1]) * f;
+      const uz = _cadLutU[o0 + 2] + (_cadLutU[o1 + 2] - _cadLutU[o0 + 2]) * f;
+
+      const vx = _cadLutV[o0] + (_cadLutV[o1] - _cadLutV[o0]) * f;
+      const vy = _cadLutV[o0 + 1] + (_cadLutV[o1 + 1] - _cadLutV[o0 + 1]) * f;
+      const vz = _cadLutV[o0 + 2] + (_cadLutV[o1 + 2] - _cadLutV[o0 + 2]) * f;
+
+      const uo = uOff[i];
+      const vo = vOff[i];
+      const vo3 = i * 3;
+      posArr[vo3] = px + uo * ux + vo * vx;
+      posArr[vo3 + 1] = py + uo * uy + vo * vy;
+      posArr[vo3 + 2] = pz + uo * uz + vo * vz;
+
+      if (normArr) {
+        const tx = _cadLutT[o0] + (_cadLutT[o1] - _cadLutT[o0]) * f;
+        const ty = _cadLutT[o0 + 1] + (_cadLutT[o1 + 1] - _cadLutT[o0 + 1]) * f;
+        const tz = _cadLutT[o0 + 2] + (_cadLutT[o1 + 2] - _cadLutT[o0 + 2]) * f;
+        const nt = restNT[i];
+        const nu = restNU[i];
+        const nv = restNV[i];
+        normArr[vo3] = nt * tx + nu * ux + nv * vx;
+        normArr[vo3 + 1] = nt * ty + nu * uy + nv * vy;
+        normArr[vo3 + 2] = nt * tz + nu * uz + nv * vz;
+      }
+    }
+
+    posAttr.needsUpdate = true;
+    if (normAttr) {
+      normAttr.needsUpdate = true;
+    }
+  }
+}
+
+export interface PrepareCadBeamParams {
+  beamClone: THREE.Group;
+  cadMToThree: number;
+  nativeLengthThree: number;
+  nodeIds: string[];
+  basePts: THREE.Vector3[];
+  controlPts: THREE.Vector3[];
+  controlValues: number[];
+  useVertexColors: boolean;
+  undeformedAxis: THREE.Vector3;
+  fixedStart: boolean;
+  fixedEnd: boolean;
+  memberOpacity: number;
+  isModal: boolean;
+}
+
+/**
+ * Prepare a cloned CAD X-beam GLB for spline-following FEA Stress and Modal animation,
+ * baking per-vertex axial station indices, cross-section offsets, and scientific heatmap colors.
+ */
+export function prepareCadBeamDeformation(params: PrepareCadBeamParams): {
+  wrapper: THREE.Group;
+  cadBeam: ModalCadBeam;
+} {
+  const {
+    beamClone,
+    cadMToThree,
+    nativeLengthThree,
+    nodeIds,
+    basePts,
+    controlPts,
+    controlValues,
+    useVertexColors,
+    undeformedAxis,
+    fixedStart,
+    fixedEnd,
+    memberOpacity,
+    isModal,
+  } = params;
+
+  // Ensure the beam is parameterized left-to-right (+X) so asymmetric front/rear flanges stay oriented
+  const flipChain = undeformedAxis.x < 0;
+  const orderedNodeIds = flipChain ? [...nodeIds].reverse() : [...nodeIds];
+  const orderedBasePts = flipChain ? [...basePts].reverse() : basePts;
+  const orderedControlPts = flipChain
+    ? controlPts.map((p) => p.clone()).reverse()
+    : controlPts.map((p) => p.clone());
+  const orderedValues = flipChain ? [...controlValues].reverse() : controlValues;
+  const orderedAxis = flipChain ? undeformedAxis.clone().negate() : undeformedAxis.clone();
+  const orderedFixedStart = flipChain ? fixedEnd : fixedStart;
+  const orderedFixedEnd = flipChain ? fixedStart : fixedEnd;
+
+  // Cumulative undeformed arc-length fractions along the chain so off-center toolhead nodes
+  // preserve uniform CAD pocket spacing along the X-beam span.
+  const spanFracs: number[] = [0];
+  let totalBaseLen = 0;
+  for (let i = 0; i < orderedBasePts.length - 1; i++) {
+    totalBaseLen += Math.max(orderedBasePts[i].distanceTo(orderedBasePts[i + 1]), 1e-6);
+    spanFracs.push(totalBaseLen);
+  }
+  const invTotal = totalBaseLen > 1e-8 ? 1 / totalBaseLen : 1;
+  for (let i = 1; i < spanFracs.length; i++) {
+    spanFracs[i] = i === spanFracs.length - 1 ? 1 : spanFracs[i] * invTotal;
+  }
+
+  // Transform GLB vertices from CAD coords (+X span, -Y front, +Z up) to Three.js Y-up beam frame
+  beamClone.position.set(0, 0, 0);
+  beamClone.rotation.set(-Math.PI * 0.5, 0, 0);
+  beamClone.scale.set(cadMToThree, cadMToThree, cadMToThree);
+  beamClone.updateMatrixWorld(true);
+
+  const collected: Array<{ mesh: THREE.Mesh; worldMat: THREE.Matrix4 }> = [];
+  beamClone.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && obj.geometry) {
+      collected.push({ mesh: obj, worldMat: obj.matrixWorld.clone() });
+    }
+  });
+
+  const wrapper = new THREE.Group();
+  const submeshes: CadBeamDeformSubmesh[] = [];
+  const invNativeLen = 1 / Math.max(nativeLengthThree, 1e-4);
+
+  for (const { mesh, worldMat } of collected) {
+    const geo = mesh.geometry;
+    const posAttr = geo.getAttribute("position") as THREE.BufferAttribute | undefined;
+    if (!posAttr) continue;
+    if (!geo.getAttribute("normal")) {
+      geo.computeVertexNormals();
+    }
+    const normAttr = geo.getAttribute("normal") as THREE.BufferAttribute;
+    const count = posAttr.count;
+
+    const stationIdx = new Uint8Array(count);
+    const stationFrac = new Float32Array(count);
+    const uOff = new Float32Array(count);
+    const vOff = new Float32Array(count);
+    const restNT = new Float32Array(count);
+    const restNU = new Float32Array(count);
+    const restNV = new Float32Array(count);
+    const colors = useVertexColors ? new Float32Array(count * 3) : null;
+
+    _cadNormalMat.getNormalMatrix(worldMat);
+
+    for (let i = 0; i < count; i++) {
+      _cadTmpPos.fromBufferAttribute(posAttr, i).applyMatrix4(worldMat);
+      const t = Math.max(0, Math.min(1, _cadTmpPos.x * invNativeLen + 0.5));
+      const sFloat = t * CAD_BEAM_LUT_STEPS;
+      const sIdx = Math.min(CAD_BEAM_LUT_STEPS - 1, Math.floor(sFloat));
+      stationIdx[i] = sIdx;
+      stationFrac[i] = sFloat - sIdx;
+      // Three.js +Z corresponds to Bishop U (+Z when refAxis=+X); Three.js +Y corresponds to Bishop V (+Y)
+      uOff[i] = _cadTmpPos.z;
+      vOff[i] = _cadTmpPos.y;
+
+      _cadTmpNorm.fromBufferAttribute(normAttr, i).applyMatrix3(_cadNormalMat).normalize();
+      restNT[i] = _cadTmpNorm.x;
+      restNU[i] = _cadTmpNorm.z;
+      restNV[i] = _cadTmpNorm.y;
+
+      if (colors) {
+        evalSpanParam(t, spanFracs, _cadSpanOut);
+        const v0 = orderedValues[_cadSpanOut.spanIdx] ?? 0;
+        const v1 = orderedValues[_cadSpanOut.spanIdx + 1] ?? v0;
+        stressColorInto(v0 + (v1 - v0) * _cadSpanOut.u, _beamCol);
+        const o3 = i * 3;
+        colors[o3] = _beamCol.r;
+        colors[o3 + 1] = _beamCol.g;
+        colors[o3 + 2] = _beamCol.b;
+      }
+    }
+
+    if (colors) {
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    }
+
+    if (useVertexColors) {
+      const makeHeatMat = (orig: THREE.Material): THREE.MeshStandardMaterial => {
+        const std = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          vertexColors: true,
+          metalness: 0.25,
+          roughness: 0.4,
+          side: orig.side,
+          transparent: memberOpacity < 1,
+          opacity: memberOpacity,
+          depthWrite: memberOpacity >= 0.5,
+        });
+        orig.dispose();
+        return std;
+      };
+      if (Array.isArray(mesh.material)) {
+        mesh.material = mesh.material.map(makeHeatMat);
+      } else if (mesh.material) {
+        mesh.material = makeHeatMat(mesh.material);
+      }
+    }
+
+    mesh.position.set(0, 0, 0);
+    mesh.quaternion.identity();
+    mesh.scale.set(1, 1, 1);
+    if (isModal) {
+      mesh.frustumCulled = false;
+    }
+    wrapper.add(mesh);
+
+    submeshes.push({
+      geometry: geo,
+      stationIdx,
+      stationFrac,
+      uOff,
+      vOff,
+      restNT,
+      restNU,
+      restNV,
+    });
+  }
+
+  const cadBeam: ModalCadBeam = {
+    meshes: submeshes,
+    nodeIds: orderedNodeIds,
+    controlPts: orderedControlPts,
+    spanFracs,
+    undeformedAxis: orderedAxis,
+    fixedStart: orderedFixedStart,
+    fixedEnd: orderedFixedEnd,
+  };
+
+  updateCadBeamDeformation(cadBeam);
+  for (const sub of submeshes) {
+    sub.geometry.computeBoundingSphere();
+  }
+
+  return { wrapper, cadBeam };
 }
