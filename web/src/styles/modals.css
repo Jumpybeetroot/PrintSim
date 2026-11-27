@@ -1107,7 +1107,7 @@
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 960px) {
   .topbar {
     flex-wrap: wrap;
     padding: 8px 12px;
@@ -1123,7 +1123,9 @@
   .topbar-actions > .btn.primary {
     margin-left: auto;
   }
+}
 
+@media (max-width: 720px) {
   /* Anchor menus to the bar, not the trigger, so they cannot run off-screen. */
   .topbar-menu-wrap {
     position: static;

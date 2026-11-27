@@ -1,4 +1,38 @@
 /* ==========================================================================
+   WebGL Unavailable Fallback Card
+   ========================================================================== */
+
+.viewport-webgl-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  pointer-events: none;
+}
+
+.viewport-webgl-fallback-card {
+  max-width: 420px;
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgb(var(--panel-rgb) / 0.94);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.viewport-webgl-fallback-card p {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+/* ==========================================================================
    Plain-English Viewport Bottom HUD Guides (FEA, Modal, Adjoint ROI)
    ========================================================================== */
 

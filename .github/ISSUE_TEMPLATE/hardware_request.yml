@@ -1,0 +1,44 @@
+name: Hardware / CAD Asset Request
+description: Request a new printer kit, gantry upgrade, toolhead, hotend, motor, belt, or STEP CAD superelement.
+title: "[Hardware] "
+labels: ["enhancement", "hardware"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Hardware Category
+      options:
+        - Gantry / Printer Kit
+        - Toolhead / Extruder
+        - Hotend
+        - Stepper Motor / Belt / Linear Rail
+        - STEP / STL CAD Asset (Craig–Bampton Superelement)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: hardware_name
+    attributes:
+      label: Hardware Name
+      placeholder: "e.g., XOL Toolhead + Sherpa Mini, Monolith Gantry Rev X, RatRig V-Core 4"
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Official CAD, Repo, or Datasheet Links
+      description: Link to the GitHub repo, public Onshape document, STEP/STL release, or manufacturer datasheet.
+      placeholder: "https://github.com/..."
+    validations:
+      required: true
+  - type: textarea
+    id: specs
+    attributes:
+      label: Known Specs (Optional)
+      description: Scale-weighed mass (g), nozzle offset (mm), material, bolt pattern, or torque/flow curves if you have them.
+      placeholder: |
+        - Dressed mass: ... g
+        - Material: ...
+        - Notes: ...
+    validations:
+      required: false

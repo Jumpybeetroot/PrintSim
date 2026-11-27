@@ -1,0 +1,70 @@
+name: ADXL Calibration Data
+description: Contribute real Klipper resonances_*.csv ADXL345 logs to help calibrate PrintSim against physical printers.
+title: "[ADXL] <Printer / Gantry> — <Measured X / Y Hz>"
+labels: ["calibration", "adxl"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing real resonance data! Real Klipper ADXL345 logs help calibrate belt compliance, linear-rail roll stiffness, bolted joint damping, and gantry superelements across real-world builds.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Printer Platform
+      description: Select the closest base platform for your machine.
+      options:
+        - Monolith AWD
+        - Monolith 2WD
+        - Voron 2.4r2
+        - Voron Trident
+        - Siboor (Trident AWD / 2.4 CNC)
+        - LDO Kit (Trident / 2.4 Rev D)
+        - VzBoT (330 / 235)
+        - Custom
+    validations:
+      required: true
+  - type: input
+    id: frame_size
+    attributes:
+      label: Build Volume & Frame
+      description: Print volume, extrusion profile, enclosure panels, and feet/mount setup.
+      placeholder: "e.g., 300x300, 2020 Misumi, 3mm ACM rear + 3mm PC sides, hard rubber feet on concrete paver"
+    validations:
+      required: true
+  - type: textarea
+    id: gantry_specs
+    attributes:
+      label: Gantry, Belts, Motors & Toolhead Specs
+      description: List your gantry kit/brackets (CNC 6061, SLM, ABS/CF printed), X-beam & rail, belts, steppers (+ voltage/current), and toolhead (with dressed mass in g if weighed).
+      placeholder: |
+        - Gantry kit / brackets: e.g., LDO Monolith CNC AWD / printed ABS+
+        - X beam & rail: e.g., 2020 Al + MGN12H front-mounted (or 20x20x1 CF tube + top MGN9H)
+        - Belts: e.g., 9mm Gates GT2 (2GT)
+        - Steppers: e.g., 4x LDO 2804AC @ 48V, 1.8A
+        - Toolhead / hotend: e.g., StealthBurner + CW2 (~460g) or XOL / Archetype / Vz-Printhead (~320g)
+    validations:
+      required: true
+  - type: input
+    id: belt_tension
+    attributes:
+      label: Belt Tension (Hz @ Span) & Chamber Temp
+      description: Measured pluck frequency and free-span length (plus chamber temperature during the test, if heated).
+      placeholder: "e.g., 110 Hz @ 150 mm span, 25 °C ambient (or 55 °C chamber)"
+    validations:
+      required: true
+  - type: textarea
+    id: adxl_logs
+    attributes:
+      label: Klipper ADXL CSV Logs (Drag & Drop)
+      description: Drag and drop your `resonances_x.csv` / `resonances_y.csv` (or a `.zip` of both, plus optional Shake&Tune PNGs) directly into this box.
+      placeholder: "Drop resonances_x.csv and resonances_y.csv here..."
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: PrintSim #spec= Link & Notes (Optional)
+      description: If you tried matching your machine in the Web Studio, paste the `#spec=` share link and note any simulated vs. measured frequency or damping deltas.
+      placeholder: "https://jumpybeetroot.github.io/PrintSim/#spec=..."
+    validations:
+      required: false

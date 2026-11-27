@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Launch PrintSim 3D Web Studio (Zero Install)
+    url: https://jumpybeetroot.github.io/PrintSim/
+    about: Run live 3D FEA, modal vibration, ADXL CSV overlay, and build comparisons directly in your browser.
+  - name: Model Confidence & Engineering References
+    url: https://github.com/Jumpybeetroot/PrintSim/blob/main/docs/MODEL_CONFIDENCE_AND_REFERENCES.md
+    about: Check the 0–100% engineering confidence rating, assumptions, and calibration history for every physics model.

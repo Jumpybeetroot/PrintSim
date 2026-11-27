@@ -1,0 +1,34 @@
+name: Feature / Physics Model Request
+description: Suggest a new simulator capability, physics model, Studio UI workflow, or export format.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Structural FEA / Modal / Input Shaper
+        - Kinematics / Belts / Steppers
+        - Thermal / Hotend / Cooling / Chamber
+        - 3D Web Studio UI / Visualization
+        - Exports (Klipper / DXF / BOM / CAD)
+        - CLI / MCP / AI Agent Workflow
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What would you like added?
+      description: Describe the feature, calculation, or workflow you'd like to see in PrintSim.
+      placeholder: "e.g., Support comparing two uploaded ADXL CSVs side by side, or add a Z-belt tension calculator..."
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Why is it useful / References (Optional)
+      description: Share your printer use case, datasheet/paper links, or examples from other tools.
+    validations:
+      required: false

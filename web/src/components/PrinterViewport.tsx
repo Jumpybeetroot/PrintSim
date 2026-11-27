@@ -171,6 +171,7 @@ export const PrinterViewport: React.FC<Props> = ({
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
   const [cadGlbVersion, setCadGlbVersion] = useState<number>(0);
+  const [webglError, setWebglError] = useState<string | null>(null);
 
   const hotendVisualGlbUrl = sim?.geometry?.toolhead_structure?.hotend_visual_glb_url ?? null;
   const toolheadVisualGlbUrl = sim?.geometry?.toolhead_structure?.toolhead_visual_glb_url ?? null;
@@ -486,11 +487,19 @@ export const PrinterViewport: React.FC<Props> = ({
     const camera = new THREE.PerspectiveCamera(42, initW / initH, 0.05, 200);
     camera.position.set(7.5, 6.2, 8.2);
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-      powerPreference: "low-power",
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+        powerPreference: "low-power",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not initialize WebGL context.";
+      setWebglError(msg);
+      return;
+    }
+    setWebglError(null);
     renderer.setClearColor(viewportBgColor, 1);
     renderer.setPixelRatio(
       stateRef.current.ecoDpr ? 1 : Math.min(window.devicePixelRatio || 1, 1.5)
@@ -6086,6 +6095,19 @@ export const PrinterViewport: React.FC<Props> = ({
         role="img"
         aria-label="Interactive 3D view of the printer. Drag to orbit, scroll to zoom."
       />
+
+      {webglError && (
+        <div className="viewport-webgl-fallback" role="status">
+          <div className="viewport-webgl-fallback-card">
+            <strong>3D WebGL Viewport Unavailable</strong>
+            <p>
+              This browser could not create a WebGL context ({webglError}). Enable hardware
+              acceleration or open PrintSim in Chrome, Firefox, or Safari for the interactive 3D
+              model — all Design, FEA, Resonance, ADXL, and BOM panels remain fully functional.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="viewport-hud-top">
         <div className="viewport-hud-top-left">
