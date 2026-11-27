@@ -90,6 +90,27 @@ def test_corexy_modeled_bracing_monotonicity_and_cad_attachment() -> None:
     assert r_full.assembly.frame_brace_cad_count == 16
     assert r_full.assembly.frame_brace_flat_bar_mass_kg > 0.5
 
+    # Geometry payload exposes per-bracket CAD superelement metadata for Studio Part Inspector
+    for res, expected_count in ((r_cast, 24), (r_cnc, 16)):
+        fb_dict = res.assembly.to_geometry_dict()["frame_bracing"]
+        assert fb_dict["cad_count"] == expected_count
+        assert fb_dict["unit_mass_g"] > 10.0
+        assert fb_dict["num_elements"] >= 1000
+        assert fb_dict["kr_inplane_nm_rad"] > 50.0
+        assert fb_dict["kr_torsion_nm_rad"] > 50.0
+        assert fb_dict["corner_kr_inplane_nm_rad"] >= fb_dict["kr_inplane_nm_rad"]
+        assert fb_dict["cad_asset_name"]
+        nmap = res.assembly.node_map
+        for v in fb_dict["visuals"]:
+            assert v["node_a"] in nmap
+            dist_m = float(
+                ((nmap[v["node_a"]].position_m - __import__("numpy").asarray(v["origin_m"])) ** 2).sum() ** 0.5
+            )
+            assert dist_m < 0.04, f"{v['id']} anchored to distant node {v['node_a']} ({dist_m*1000:.1f} mm away)"
+    assert r_cnc.assembly.to_geometry_dict()["frame_bracing"]["kr_inplane_nm_rad"] > (
+        r_cast.assembly.to_geometry_dict()["frame_bracing"]["kr_inplane_nm_rad"]
+    )
+
     # Physical stiffness monotonicity on open CoreXY frame
     assert r_cast.static_fea.toolhead_stiffness_x_n_per_mm > r_none.static_fea.toolhead_stiffness_x_n_per_mm
     assert r_cnc.static_fea.toolhead_stiffness_x_n_per_mm > r_cast.static_fea.toolhead_stiffness_x_n_per_mm

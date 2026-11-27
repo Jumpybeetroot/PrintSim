@@ -498,6 +498,7 @@ def test_zero_mass_cost_double_counting_with_cf_beam_and_epoxy_granite() -> None
     # 2. Exact y_moving_mass_kg (NO double-counting of x_rail_mass!)
     expected_y_mov_f = (
         (s_cf_epoxy_front.toolhead.total_mass_g + s_cf_epoxy_front.toolhead.hotend.mass_g) * 1e-3
+        + s_cf_epoxy_front.toolhead.effective_umbilical_mass_g * 1e-3
         + bare_cf_kg
         + one_x_rail_kg
         + s_cf_epoxy_front.gantry.carriage_mass_g * 1e-3
@@ -555,6 +556,7 @@ def test_geometry_dict_and_api_expose_linear_rails_telemetry() -> None:
         "x_rail_height_mm": 8.0,
         "y_rail_width_mm": 9.0,
         "y_rail_height_mm": 6.5,
+        "x_beam_span_mm": 380.0,
         "x_beam_ei_y_boost_pct": round(asm.x_rail_ei_y_boost_pct, 1),
         "x_beam_ei_z_boost_pct": round(asm.x_rail_ei_z_boost_pct, 1),
         "x_beam_gj_boost_pct": round(asm.x_rail_gj_boost_pct, 1),
@@ -680,6 +682,7 @@ def test_official_hiwin_carriage_block_masses_and_moving_mass_deltas() -> None:
         ) == pytest.approx(asm.toolhead_moving_mass_kg, rel=1e-12)
         assert (
             asm.toolhead_moving_mass_kg
+            + s.toolhead.effective_umbilical_mass_g * 1e-3
             + asm.x_beam_mass_kg
             + asm.x_rail_mass_kg
             + asm.x_backer_mass_kg

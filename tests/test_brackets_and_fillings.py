@@ -225,7 +225,10 @@ def test_bracket_creep_risk_flags_diagnostics_and_penalty() -> None:
     spec_mixed.toolhead.mount_material = "abs_printed"
     rep_mixed = evaluate_printer(spec_mixed)
     assert rep_mixed.kinematics.bracket_creep_risk is False
-    assert any("toolhead mount" in d.lower() and "creep" in d.lower() for d in rep_mixed.diagnostics)
+    assert any(
+        ("toolhead carriage" in d.lower() or "toolhead mount" in d.lower()) and "creep" in d.lower()
+        for d in rep_mixed.diagnostics
+    )
     assert rep_mixed.scores.dynamics > rep_abs.scores.dynamics + 4.5
 
     # Verify -5 dynamics penalty directly when comparing borderline creep vs non-creep (same stiffness bracket)

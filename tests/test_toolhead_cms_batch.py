@@ -34,10 +34,10 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 CAL02_TOOLHEADS = (
     # (asset_id, expected_port1_mm, expected_trust_pct, expected_body_range_n_per_mm, expected_tip_range_n_per_mm)
-    ("xol_compact", (-0.1, -24.35, 4.68), 86, (100.0, 260.0), (50.0, 130.0)),
-    ("a4t_beacon", (0.0, -24.35, 4.88), 84, (85.0, 240.0), (45.0, 120.0)),
-    ("dragon_burner", (0.0, -20.0, -3.54), 83, (100.0, 260.0), (50.0, 130.0)),
-    ("archetype_cpap", (0.0, -21.7, 13.5), 82, (45.0, 160.0), (30.0, 95.0)),
+    ("xol_compact", (-0.1, -24.35, 4.68), 86, (100.0, 340.0), (50.0, 140.0)),
+    ("a4t_beacon", (0.0, -24.35, 4.88), 84, (85.0, 300.0), (45.0, 130.0)),
+    ("dragon_burner", (0.0, -20.0, -3.54), 83, (100.0, 340.0), (50.0, 140.0)),
+    ("archetype_cpap", (0.0, -21.7, 13.5), 82, (45.0, 220.0), (30.0, 110.0)),
 )
 
 

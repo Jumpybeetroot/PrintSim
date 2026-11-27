@@ -953,3 +953,163 @@ def test_cli_kb_end_to_end_smoke(tmp_path: Path) -> None:
         assert mock_ao.call_count == 1  # Not called when disabled
         sync_without_data = json.loads(r_sync_without.output)
         assert not any(r.get("source") == "answeroverflow.com" for r in sync_without_data["reports"])
+
+
+# ---------------------------------------------------------------------------
+# 13. Re-seeding an edited doc replaces its earlier snapshot
+# ---------------------------------------------------------------------------
+
+_WEIGHTS_DOC = """# Community Touchstones
+
+## Verified Component Weights
+
+| Category | Component | Mass (g) | Source / Notes |
+| :--- | :--- | :--- | :--- |
+| hotend | Example Hotend | {mass} | Vendor drawing |
+| toolhead | Example Toolhead | 250 | Scale-weighed assembly |
+"""
+
+
+def test_reseed_after_doc_edit_replaces_old_snapshot(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    doc = docs / "community_touchstones.md"
+    doc.write_text(_WEIGHTS_DOC.format(mass=78), encoding="utf-8")
+
+    with TouchstoneKB(tmp_path / "kb.db") as kb:
+        first = seed_from_benchmark_docs(kb, docs_dir=docs)
+        assert first["weights_added"] == 2
+        assert first["stale_snapshots_removed"] == 0
+
+        # The doc is corrected: 78 g -> 90 g.
+        doc.write_text(_WEIGHTS_DOC.format(mass=90), encoding="utf-8")
+        second = seed_from_benchmark_docs(kb, docs_dir=docs)
+        assert second["raw_items_added"] == 1
+        assert second["stale_snapshots_removed"] == 1
+
+        rows = kb.conn.execute(
+            "SELECT component_name, mass_g FROM component_weights ORDER BY component_name"
+        ).fetchall()
+        # One row per component, carrying the corrected value: no 78 g left beside the 90 g.
+        assert [(r["component_name"], r["mass_g"]) for r in rows] == [
+            ("Example Hotend", 90.0),
+            ("Example Toolhead", 250.0),
+        ]
+        assert kb.conn.execute(
+            "SELECT COUNT(*) FROM raw_items WHERE source_type = 'benchmark_doc'"
+        ).fetchone()[0] == 1
+
+        # Search no longer returns the superseded record or the old document text.
+        hits = kb.search("Example Hotend")
+        weight_hits = [h for h in hits if h["item_type"] == "component_weight"]
+        assert len(weight_hits) == 1 and weight_hits[0]["record"]["mass_g"] == 90.0
+        assert len([h for h in hits if h["item_type"] == "raw_item"]) == 1
+        fts_orphans = kb.conn.execute(
+            """
+            SELECT COUNT(*) FROM kb_fts
+            WHERE item_type = 'component_weight'
+              AND CAST(ref_id AS INTEGER) NOT IN (SELECT id FROM component_weights)
+            """
+        ).fetchone()[0]
+        assert fts_orphans == 0
+
+        # Seeding again with no edit changes nothing.
+        third = seed_from_benchmark_docs(kb, docs_dir=docs)
+        assert third["raw_items_added"] == 0
+        assert third["stale_snapshots_removed"] == 0
+        assert third["weights_added"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 14. Curated JSON records can state their structured data outright
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_json_records_with_explicit_structured_records(tmp_path: Path) -> None:
+    capture = tmp_path / "capture.json"
+    capture.write_text(
+        json.dumps(
+            [
+                # Header-style record without text: skipped.
+                {"kind": "capture", "topic": "example hotend weight"},
+                {
+                    "kind": "note",
+                    "author": "agent note",
+                    "source_name": "agent note",
+                    "url": "https://example.invalid/thread/1",
+                    # Wording the regex extractor would not recognise as a weight.
+                    "content": "Read from the scale photo: the bare unit comes in a hair under eighty.",
+                    "records": {
+                        "component_weights": [
+                            {"category": "hotend", "component_name": "Example Hotend", "mass_g": "79.0"},
+                            {"category": "hotend", "component_name": "No Mass Given"},
+                            {"category": "hotend", "component_name": "Bad Mass", "mass_g": "heavy"},
+                        ],
+                        "builds": [
+                            {"build_name": "Example Build", "x_shaper_type": "mzv", "x_shaper_hz": 61.5},
+                        ],
+                        "not_a_table": [{"anything": 1}],
+                    },
+                },
+                # Plain chatter without stated records still obeys the signal threshold.
+                {"author": "someone", "content": "nice, thanks!"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with TouchstoneKB(tmp_path / "kb.db") as kb:
+        # Default min_score: the curated record is kept on the strength of its stated data.
+        res = ingest_local_path(kb, capture, auto_approve=True)
+        assert res["items_kept"] == 1
+        assert res["items_skipped_low_signal"] == 1
+        assert res["weights_added"] == 1
+        assert res["builds_added"] == 1
+
+        weight = kb.conn.execute(
+            """
+            SELECT w.component_name, w.mass_g, w.category, r.url, r.author
+            FROM component_weights w JOIN raw_items r ON r.id = w.raw_item_id
+            """
+        ).fetchone()
+        assert (weight["component_name"], weight["mass_g"], weight["category"]) == ("Example Hotend", 79.0, "hotend")
+        # The structured row stays linked to the record (and its source link) that stated it.
+        assert weight["url"] == "https://example.invalid/thread/1"
+        assert weight["author"] == "agent note"
+
+        build = kb.list_builds()[0]
+        assert build["build_name"] == "Example Build" and build["x_shaper_hz"] == 61.5
+
+        # Re-ingesting the same file adds nothing.
+        again = ingest_local_path(kb, capture, auto_approve=True)
+        assert again["items_kept"] == 0 and again["weights_added"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 15. A wrong entry can be retracted together with what was derived from it
+# ---------------------------------------------------------------------------
+
+
+def test_cli_kb_forget_removes_item_and_derived_records(tmp_path: Path) -> None:
+    db_path = tmp_path / "kb.db"
+    with TouchstoneKB(db_path) as kb:
+        keep_id, _ = kb.upsert_raw_item(source_type="local_export", raw_text="kept note", title="keep")
+        kb.add_component_weight(raw_item_id=keep_id, category="hotend", component_name="Kept Hotend", mass_g=50.0)
+        wrong_id, _ = kb.upsert_raw_item(source_type="local_export", raw_text="mistaken note", title="wrong")
+        kb.add_component_weight(raw_item_id=wrong_id, category="hotend", component_name="Wrong Hotend", mass_g=999.0)
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["kb", "forget", str(wrong_id), "--db", str(db_path), "--json"])
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.output)["removed"]["component_weights"] == 1
+
+    with TouchstoneKB(db_path) as kb:
+        names = [r["component_name"] for r in kb.conn.execute("SELECT component_name FROM component_weights")]
+        assert names == ["Kept Hotend"]
+        assert kb.get_raw_item(wrong_id) is None
+        assert kb.search("Wrong Hotend") == []
+        assert kb.search("mistaken") == []
+        assert len(kb.search("Kept Hotend")) == 1
+
+    missing = runner.invoke(app, ["kb", "forget", "424242", "--db", str(db_path)])
+    assert missing.exit_code == 1

@@ -225,6 +225,18 @@ def test_stealthburner_cw2_stiffness_realism_clamshell_and_tap_parity() -> None:
         rep_tap_probe.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"], rel=0.05
     )
 
+    # Upgrading ONLY the X-carriage to CNC Al 6061 while keeping the ABS StealthBurner body
+    # combines 35% X-carriage + 65% forward body compliance in series: measurably stiffer than
+    # all-ABS (~1.5x) yet still bounded by the printed body, and clears polymer belt creep warnings.
+    spec_cnc_car = base.model_copy(deep=True)
+    spec_cnc_car.toolhead.carriage_mount_material = "aluminum_6061_t6"
+    spec_cnc_car.gantry.belt.pretension_n = 65.0
+    rep_cnc_car = evaluate_printer(spec_cnc_car, include_advanced_analysis=False)
+    k_body_cnc_car = rep_cnc_car.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"]
+    assert rep_cnc_car.assembly.to_geometry_dict()["toolhead_structure"]["cad_split_carriage_compatible"] is True
+    assert k_body_abs * 1.35 < k_body_cnc_car < k_body_abs * 1.75
+    assert not any("printed mount creep warning" in d.lower() for d in rep_cnc_car.diagnostics)
+
     # Upgrading StealthBurner chassis material to CNC Al 6061 retains multi-piece bolted seam compliance
     # (0.58x) rather than jumping to a welded solid billet (> 10,000 N/mm).
     spec_al = base.model_copy(deep=True)
@@ -233,6 +245,7 @@ def test_stealthburner_cw2_stiffness_realism_clamshell_and_tap_parity() -> None:
     spec_al.toolhead.hotend_mount_material = "aluminum_6061_t6"
     rep_al = evaluate_printer(spec_al, include_advanced_analysis=False)
     k_body_al = rep_al.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"]
+    assert k_body_cnc_car * 5.0 < k_body_al < 7000.0
     assert k_body_abs * 10.0 < k_body_al < 7000.0
 
 

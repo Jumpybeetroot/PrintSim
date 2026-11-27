@@ -1150,13 +1150,14 @@ def test_exact_x_beam_mass_and_y_gantry_breakdown_zero_double_counting() -> None
         # Full Y moving mass sum identity (exact in kg, rounded consistently in mass_summary)
         sum_kg = (
             asm.toolhead_moving_mass_kg
+            + s.toolhead.effective_umbilical_mass_g * 1e-3
             + asm.x_beam_mass_kg
             + asm.x_rail_mass_kg
             + asm.x_backer_mass_kg
             + asm.y_carriage_joints_mass_kg
         )
         assert sum_kg == pytest.approx(asm.y_moving_mass_kg, rel=1e-12, abs=1e-12)
-        assert ms["toolhead_moving_mass_g"] + ms["x_beam_mass_g"] + ms["x_rail_mass_g"] + ms[
+        assert ms["toolhead_moving_mass_g"] + s.toolhead.effective_umbilical_mass_g + ms["x_beam_mass_g"] + ms["x_rail_mass_g"] + ms[
             "x_backer_mass_g"
         ] + ms["y_carriage_joints_mass_g"] == pytest.approx(ms["y_moving_mass_g"], abs=0.3)
 

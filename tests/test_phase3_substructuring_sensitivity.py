@@ -495,3 +495,45 @@ def test_bracket_variants_rbe3_vs_rbe2_and_multi_architecture_sensitivities() ->
         assert comp_sum == pytest.approx(100.0, abs=0.5)
         assert len(rep.top_stiffen_targets) > 0
         assert len(rep.top_lighten_targets) > 0
+
+
+def test_xy_joint_superelement_metrics_and_full_part_group_sensitivities() -> None:
+    """Verify 2-port superelement static flex/twist/load recovery and full part_group_sensitivities."""
+    spec_abs = PrinterSpec.from_yaml("examples/corexy_voron_style.yaml")
+    spec_cnc = spec_abs.model_copy(
+        update={"gantry": spec_abs.gantry.model_copy(update={"bracket_material": "aluminum_6061_t6"})}
+    )
+
+    asm_abs = build_assembly(spec_abs)
+    static_abs = solve_static_fea(asm_abs)
+    sens_abs = compute_structural_sensitivities(asm_abs, static_res=static_abs)
+
+    asm_cnc = build_assembly(spec_cnc)
+    static_cnc = solve_static_fea(asm_cnc)
+    sens_cnc = compute_structural_sensitivities(asm_cnc, static_res=static_cnc)
+
+    for se_id in ("xy_joint_l", "xy_joint_r"):
+        m_abs = static_abs.superelement_metrics[se_id]
+        m_cnc = static_cnc.superelement_metrics[se_id]
+        assert m_abs["part_group_id"] == "xy_joints"
+        assert m_abs["flex_xy_um"] > 0.0
+        assert m_abs["flex_gravity_um"] > 0.0
+        assert m_abs["twist_xy_mrad"] > 0.0
+        assert m_abs["force_xy_n"] > 0.0
+        assert m_abs["force_gravity_n"] > m_abs["force_xy_n"]
+        # CNC aluminum XY-joints must flex strictly less than printed ABS under identical loads
+        assert m_cnc["flex_xy_um"] < m_abs["flex_xy_um"]
+        assert m_cnc["twist_xy_mrad"] < m_abs["twist_xy_mrad"]
+
+    # part_group_sensitivities must include xy_joints & gantry_brackets even when outside top-5
+    for sens in (sens_abs, sens_cnc):
+        assert "xy_joints" in sens.part_group_sensitivities
+        assert "gantry_brackets" in sens.part_group_sensitivities
+        xy_g = sens.part_group_sensitivities["xy_joints"]
+        assert xy_g["compliance_share_pct"] >= 0.0
+        assert xy_g["why_it_hurts"]
+        assert xy_g["action_hint"]
+    assert (
+        sens_cnc.part_group_sensitivities["xy_joints"]["compliance_share_pct"]
+        < sens_abs.part_group_sensitivities["xy_joints"]["compliance_share_pct"]
+    )

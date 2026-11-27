@@ -859,3 +859,39 @@ def test_thick_walled_x_beam_profiles_and_monotonic_stiffness() -> None:
         r_thick = evaluate_printer(s_thick)
         assert r_thick.static_fea.combined_max_deflection_um < r_thin.static_fea.combined_max_deflection_um
 
+
+def test_tube_rail_mounting_applies_to_all_hollow_tubes() -> None:
+    """Metal hollow tubes (Al, Ti, Steel) support cf_rail_mounting; extrusions and CNC beams stay 'none'."""
+    for non_tube in ("extrusion_2020", "cnc_al_monocoque_20x20", "unsupported_rail"):
+        s_nt = _corexy_cf_base(x_beam_profile=non_tube, x_beam_material="aluminum_6061_t6")
+        s_nt.gantry.cf_rail_mounting = "two_wall_clamped_inserts"
+        assert s_nt.gantry.is_hollow_tube_x_beam is False
+        assert s_nt.gantry.effective_cf_rail_mounting == "none"
+
+    for tube_id, mat_id in (
+        ("al_tube_20x20x2", "aluminum_6061_t6"),
+        ("ti_tube_20x20x1_2", "titanium_grade5"),
+        ("steel_tube_25x25x2", "steel_4140"),
+    ):
+        s_auto = _corexy_cf_base(x_beam_profile=tube_id, x_beam_material=mat_id)
+        assert s_auto.gantry.is_hollow_tube_x_beam is True
+        assert s_auto.gantry.effective_cf_rail_mounting == "single_wall_bare"
+
+        s_ins = s_auto.model_copy(deep=True)
+        s_ins.gantry.cf_rail_mounting = "two_wall_clamped_inserts"
+        assert s_ins.gantry.effective_cf_rail_mounting == "two_wall_clamped_inserts"
+
+        asm_bare = build_assembly(s_auto)
+        asm_ins = build_assembly(s_ins)
+        ts_bare = compute_thermal_structural_report(asm_bare)
+        ts_ins = compute_thermal_structural_report(asm_ins)
+        assert asm_ins.x_rail_newmark_gamma > asm_bare.x_rail_newmark_gamma
+        assert ts_ins.rail_newmark_gamma == pytest.approx(asm_ins.x_rail_newmark_gamma, rel=1e-9)
+        assert asm_ins.x_carriage_k_rx_nm_rad > asm_bare.x_carriage_k_rx_nm_rad
+        assert asm_ins.x_beam_insert_mass_kg > 0.0
+        assert asm_bare.x_beam_insert_mass_kg == 0.0
+        assert solve_static_fea(asm_ins).toolhead_stiffness_y_n_per_mm > solve_static_fea(
+            asm_bare
+        ).toolhead_stiffness_y_n_per_mm
+
+

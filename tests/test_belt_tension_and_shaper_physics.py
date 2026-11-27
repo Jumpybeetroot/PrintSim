@@ -52,7 +52,9 @@ def test_belt_flexural_rigidity_cantilever_droop_and_scaling() -> None:
     assert ei9 == pytest.approx(ei6 * 1.5, rel=1e-6)
     assert belt_flexural_rigidity_nm2(b6_steel) > ei6 * 2.0
     assert belt_flexural_rigidity_nm2(b3gt) > ei9 * 5.0
-    assert belt_flexural_rigidity_nm2(bat3) > belt_flexural_rigidity_nm2(b3gt)
+    # 3D Tet10 pitch-cell FEA (belt_pitch_cell_fea.json): 2.41 mm thick 3GT > 1.90 mm AT3 > 1.38 mm 2GT
+    assert belt_flexural_rigidity_nm2(bat3) > ei9 * 2.5
+    assert belt_flexural_rigidity_nm2(b3gt) > belt_flexural_rigidity_nm2(bat3)
 
 
 def test_width_normalized_crimp_and_pulley_wrap_seating_compliance() -> None:

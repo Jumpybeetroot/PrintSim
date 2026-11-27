@@ -780,7 +780,7 @@ def test_item_confidence_registry_completeness_all_14_catalogs() -> None:
             assert isinstance(meta["basis"], str) and len(meta["basis"].strip()) > 10
             assert isinstance(meta["caveat"], str) and len(meta["caveat"].strip()) > 10
             total_options += 1
-    assert total_options == 119
+    assert total_options == 120
 
 
 def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
@@ -811,7 +811,7 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "belt": 15,
         "belt_routing": 2,
         "gantry_bracket": 14,
-        "toolhead_preset": 15,
+        "toolhead_preset": 16,
         "toolhead_construction": 6,
         "z_probe": 4,
         "hotend_clamp": 14,
@@ -927,12 +927,12 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         s.gantry.belt = s.gantry.belt.model_copy(update={"type": bid})
         belt_scores[bid] = _by_id(s)["belt"]["trust_pct"]
     assert belt_scores == {
-        "gt2_6mm": 84,
-        "gt2_9mm": 82,
-        "gt2_12mm": 76,
-        "gt2_15mm": 58,
-        "3gt_9mm": 44,
-        "at5_16mm": 34,
+        "gt2_6mm": 87,
+        "gt2_9mm": 85,
+        "gt2_12mm": 80,
+        "gt2_15mm": 62,
+        "3gt_9mm": 52,
+        "at5_16mm": 40,
     }
 
     # 4. rail_qualities differentiation
@@ -1069,14 +1069,14 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     assert _by_id(s_cf_gen)["x_gantry_beam"]["trust_pct"] == 88
     assert _by_id(s_cf_gen)["x_gantry_beam"]["tier"] == "calibrated"
 
-    # Belt per-item confidence: gt2_6mm -> 84%, gt2_15mm -> 58%, at3_16mm -> 38%
-    assert _by_id(spec)["belt"]["trust_pct"] == 84
+    # Belt per-item confidence: gt2_6mm -> 87%, gt2_15mm -> 62%, at3_16mm -> 46%
+    assert _by_id(spec)["belt"]["trust_pct"] == 87
     s_exp = spec.model_copy(deep=True)
     s_exp.gantry.belt = spec.gantry.belt.model_copy(update={"type": "gt2_15mm"})
-    assert _by_id(s_exp)["belt"]["trust_pct"] == 58
+    assert _by_id(s_exp)["belt"]["trust_pct"] == 62
     s_theo = spec.model_copy(deep=True)
     s_theo.gantry.belt = spec.gantry.belt.model_copy(update={"type": "at3_16mm"})
-    assert _by_id(s_theo)["belt"]["trust_pct"] == 38
+    assert _by_id(s_theo)["belt"]["trust_pct"] == 46
     assert _by_id(s_theo)["belt"]["tier"] == "heuristic"
 
     # Belt routing: stock_corexy -> 87%, monolith_short -> 86%
