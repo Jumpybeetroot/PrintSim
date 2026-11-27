@@ -5,7 +5,7 @@
   "name": "VzBot 330 Y-Gantry XY-Joint Left",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-26T22:36:12Z",
+  "baked_at": "2026-11-27T04:59:22Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 36378,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.016147,
+  "rigid_body_max_freq_hz": 0.008504,
   "mass_kg": 0.04091,
   "com_mm": [
     38.4657,
@@ -35,26 +35,26 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 738719.863,
-    "ky": 129705.033,
-    "kz": 98713.064
+    "kx": 374188.349,
+    "ky": 73646.471,
+    "kz": 70626.971
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 49221.816,
-    "kry": 98237.006,
-    "krz": 68922.775
+    "krx": 37927.766,
+    "kry": 49468.188,
+    "krz": 30398.34
   },
   "fixed_interface_freqs_hz": [
-    6506.22,
-    7534.08,
-    9721.14,
-    12890.24,
-    15485.95,
-    17578.7
+    6457.91,
+    7478.54,
+    9616.79,
+    12962.58,
+    15376.18,
+    17568.81
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21978,
   "visual_bytes": 905516,
-  "cad_trust_pct": 72,
-  "source_hash": "57840da3f9d62e9b75b63732a4139984e47ebe0e618818ace026c278d3ae898b"
+  "cad_trust_pct": 84,
+  "source_hash": "963013701233ae57cb186e92a9dce98062a071dc9d9959b604f96a3979115cf2"
 }

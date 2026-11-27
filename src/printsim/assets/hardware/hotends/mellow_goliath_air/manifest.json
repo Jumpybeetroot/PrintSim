@@ -2,18 +2,27 @@
   "schema_version": 1,
   "category": "hotends",
   "asset_id": "mellow_goliath_air",
-  "name": "Mellow Goliath Air (VzBoT CAD mock-up)",
-  "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
+  "name": "Mellow Goliath Air (100W Long-Melt, Multi-Material CAD CMS)",
+  "source_cad": "Vz-330_WEB v2.step (Goliath_Air_cooled datums + watertight multi-material B-Rep)",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-26T23:58:33Z",
-  "has_superelement": false,
-  "visual_glb": "visual.glb",
-  "visual_triangles": 9844,
-  "visual_bytes": 318396,
-  "ref_size_mm": [
-    33.95,
-    25.16,
-    69.25
+  "baked_at": "2026-11-27T04:57:25Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 11929,
+  "num_elements": 51816,
+  "num_dofs": 35787,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005085,
+  "mass_kg": 0.084729,
+  "com_mm": [
+    -1.2524,
+    0.0001,
+    -35.4464
   ],
   "port0_mm": [
     0.0,
@@ -25,6 +34,29 @@
     0.0,
     -69.24
   ],
-  "datum": "Port 0 = top mounting face center; Port 1 = nozzle tip",
-  "cad_trust_pct": 65
+  "port_stiffness_n_per_mm": {
+    "kx": 894.963,
+    "ky": 955.439,
+    "kz": 99316.895
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1111.042,
+    "kry": 1058.217,
+    "krz": 1071.717
+  },
+  "fixed_interface_freqs_hz": [
+    4746.57,
+    4956.26,
+    6577.19,
+    12939.09,
+    14288.32,
+    14508.46,
+    15835.06,
+    16163.73
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 10806,
+  "visual_bytes": 390492,
+  "cad_trust_pct": 85,
+  "source_hash": "a964c2347c3afb24e2aae3e5bf0f82f19f74b2e763d88c3d8379e2734eba074f"
 }

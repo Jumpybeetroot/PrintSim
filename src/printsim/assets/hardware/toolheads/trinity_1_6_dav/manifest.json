@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "trinity_1_6_dav",
+  "name": "WV-Design Trinity 1.6 Unibody (Dragon Ace Volcano + Dual-3628)",
+  "source_cad": "Trinity_DAV_1.6_10mm.step",
+  "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
+  "baked_at": "2026-11-27T03:31:52Z",
+  "reference_material_id": "ppa_cf_printed",
+  "reference_youngs_modulus_pa": 10800000000.0,
+  "reference_density_kg_m3": 1250.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 18365,
+  "num_elements": 62785,
+  "num_dofs": 55095,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.003251,
+  "mass_kg": 0.082119,
+  "com_mm": [
+    -0.0988,
+    -11.3493,
+    -1.1816
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -9.74,
+    -21.6
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 17037.846,
+    "ky": 17544.885,
+    "kz": 43600.888
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 2893.056,
+    "kry": 4453.761,
+    "krz": 4881.884
+  },
+  "fixed_interface_freqs_hz": [
+    1686.51,
+    1783.16,
+    1868.87,
+    1977.68,
+    3156.4,
+    3351.72
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 31984,
+  "visual_bytes": 1244432,
+  "cad_trust_pct": 88,
+  "source_hash": "2e89727aae505df71e219d083ecc77c39d27f4d8c1e295f6b09b129d512a3c31",
+  "is_unibody": true
+}

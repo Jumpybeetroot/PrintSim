@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "trinity_1_6_chube",
+  "name": "WV-Design Trinity 1.6 Unibody (Chube Compact + Dual-3628)",
+  "source_cad": "Trinity_Chube_1.6_10mm.step",
+  "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
+  "baked_at": "2026-11-27T03:32:49Z",
+  "reference_material_id": "ppa_cf_printed",
+  "reference_youngs_modulus_pa": 10800000000.0,
+  "reference_density_kg_m3": 1250.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 21290,
+  "num_elements": 75155,
+  "num_dofs": 63870,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.003211,
+  "mass_kg": 0.098299,
+  "com_mm": [
+    0.0441,
+    -11.3247,
+    -7.0434
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -9.74,
+    -33.98
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 7367.251,
+    "ky": 5264.632,
+    "kz": 35208.804
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 2568.318,
+    "kry": 4210.438,
+    "krz": 3925.346
+  },
+  "fixed_interface_freqs_hz": [
+    1480.34,
+    1485.21,
+    1706.13,
+    1712.63,
+    3296.05,
+    3314.53
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 31992,
+  "visual_bytes": 1246940,
+  "cad_trust_pct": 88,
+  "source_hash": "cc2b1a3aeb0dd6e1d8a0eb73278cc7c3f6453f3b033ea0d844e874862a6a1320",
+  "is_unibody": true
+}

@@ -1,0 +1,32 @@
+{
+  "asset_id": "cnc_al_truss_voron24_lw",
+  "category": "x_beams",
+  "name": "Voron 2.4 Lightweight Milled 20x20 X-Beam (Emil Wallberg)",
+  "source": "GrabCAD Emil Wallberg Voron 2.4 Lightweight X-Axis 300mm (Voron_XAxis_LW_300.STEP, 19.6x19.6x380mm)",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 380.0,
+  "width_mm": 19.6,
+  "height_mm": 19.6,
+  "visual_triangles": 16000,
+  "visual_bytes": 568576,
+  "fea_section_properties": {
+    "name": "cnc_al_truss_voron24_lw",
+    "length_mm": 380.0,
+    "width_mm": 19.6,
+    "height_mm": 19.6,
+    "volume_cm3": 23.982,
+    "mass_al6061_g": 64.75,
+    "linear_mass_al6061_g_m": 170.4,
+    "area_m2": 6.310936589500636e-05,
+    "iy_m4": 1.790624226752363e-09,
+    "iz_m4": 1.8730333618896455e-09,
+    "j_m4": 1.4982681311597066e-09,
+    "n_nodes": 32506,
+    "n_tets": 95649,
+    "L_eff_mm": 375.75,
+    "delta_y_um_per_N": 137.032,
+    "delta_z_um_per_N": 143.339,
+    "theta_x_mrad_per_Nm": 9.682
+  }
+}

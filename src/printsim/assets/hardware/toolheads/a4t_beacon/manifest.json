@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "a4t_beacon",
+  "name": "A4T + Dragon HE Duct + Xol Carriage (PPA-CF / ASA)",
+  "source_cad": "a4t_cowling_dragon_xol.step + a4t_he_duct_dragon.step + Xol_Carriage_MGN12H",
+  "source_url": "https://github.com/DW-Tas/A4T",
+  "baked_at": "2026-11-27T04:14:07Z",
+  "reference_material_id": "ppa_cf_printed",
+  "reference_youngs_modulus_pa": 10800000000.0,
+  "reference_density_kg_m3": 1250.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 18270,
+  "num_elements": 52840,
+  "num_dofs": 54810,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.003435,
+  "mass_kg": 0.085004,
+  "com_mm": [
+    0.132,
+    -24.9305,
+    -6.1234
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -24.35,
+    4.88
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 5105.104,
+    "ky": 32826.483,
+    "kz": 3268.06
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1062.385,
+    "kry": 2107.04,
+    "krz": 2146.381
+  },
+  "fixed_interface_freqs_hz": [
+    1015.1,
+    1221.51,
+    1589.96,
+    1627.1,
+    2332.08,
+    2461.19
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 29993,
+  "visual_bytes": 1050040,
+  "cad_trust_pct": 84,
+  "source_hash": "e67e61f3e697fe71a48dcb19a948c9dbc70c2511bde5a330b7929d71b8b2532b"
+}

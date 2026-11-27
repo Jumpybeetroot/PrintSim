@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "trianglelab_dragon_ace_volcano",
+  "source_cad": "Trinity_DAV_1.6_10mm.step (dragon_ace_volcano sub-assembly)",
+  "source_url": "https://trianglelab.net/products/dragon-ace%E2%84%A2-hotend?VariantsId=12007",
+  "regions": [
+    {
+      "label": "v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "ti_standoffs_and_heatbreak",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "dav_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "volcano_copper_block_mze",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    }
+  ],
+  "overall_length_mm": 59.4,
+  "meltzone_length_mm": 34.0,
+  "mount_pcd_mm": 16.97,
+  "standoffs": "4x \u00d82.3x7.5 mm Ti-6Al-4V @ 12x12 mm square",
+  "heatbreak": "Thick-walled Ti-6Al-4V (1.9 mm ID, ~0.45 mm wall)",
+  "block": "18x22x20 mm Cu Volcano block + 15.4 mm Cu MZE + V6 nozzle"
+}

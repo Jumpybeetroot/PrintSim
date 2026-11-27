@@ -5,7 +5,7 @@
   "name": "VzBot 330 AWD Front-Right Idler/Motor Mount",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-26T23:02:32Z",
+  "baked_at": "2026-11-27T04:55:39Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 54657,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.030891,
+  "rigid_body_max_freq_hz": 0.010177,
   "mass_kg": 0.147266,
   "com_mm": [
     -39.3433,
@@ -35,26 +35,26 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 25162.369,
-    "ky": 22389.371,
-    "kz": 10608.511
+    "kx": 24456.221,
+    "ky": 21996.852,
+    "kz": 10015.288
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 3889.184,
-    "kry": 5676.337,
-    "krz": 30478.316
+    "krx": 4048.759,
+    "kry": 5596.483,
+    "krz": 30272.221
   },
   "fixed_interface_freqs_hz": [
-    2018.48,
-    4094.73,
-    5578.37,
-    6080.53,
-    6676.32,
-    7058.07
+    1997.08,
+    4138.23,
+    5536.72,
+    6031.73,
+    6698.14,
+    7053.85
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21989,
   "visual_bytes": 962648,
-  "cad_trust_pct": 72,
+  "cad_trust_pct": 84,
   "source_hash": "137bafcb3fdf221afa60899e56b68227bb4139059078d6d9cf6df4b0c8a53a8f"
 }

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "category": "frame_braces",
+  "asset_id": "cnc_corner_gusset_4040",
+  "name": "CNC Al 4040 5-Hole Corner Gusset Plate (120\u00d7120\u00d76 mm)",
+  "source_cad": "Parametric build123d CAD (120\u00d7120\u00d76mm 5-hole Al 6061-T6 plate)",
+  "source_url": "https://github.com/Jumpybeetroot/PrintSim",
+  "baked_at": "2026-11-27T04:19:50Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 3305,
+  "num_elements": 10922,
+  "num_dofs": 9915,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 4,
+  "rigid_body_max_freq_hz": 0.012869,
+  "mass_kg": 0.176983,
+  "com_mm": [
+    50.6393,
+    50.6393,
+    3.0
+  ],
+  "port0_mm": [
+    80.0,
+    20.0,
+    0.0
+  ],
+  "port1_mm": [
+    20.0,
+    80.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 82290.117,
+    "ky": 95773.937,
+    "kz": 1678.469
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 4408.108,
+    "kry": 4405.089,
+    "krz": 176173.738
+  },
+  "fixed_interface_freqs_hz": [
+    3009.02,
+    5138.78,
+    8775.51,
+    9963.54
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 2200,
+  "visual_bytes": 85628,
+  "cad_trust_pct": 90,
+  "source_hash": "001c62f865529544b7f0a394161a904e5fcf4f896b095557ba7683f9ac6b9d4f"
+}

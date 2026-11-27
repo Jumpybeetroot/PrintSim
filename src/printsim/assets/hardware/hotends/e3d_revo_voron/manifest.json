@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "e3d_revo_voron",
+  "name": "E3D Revo Voron (40W RapidChange, Thin-Wall SS304)",
+  "source_cad": "Stealthburner_CW2.5_Assembly.step (E3D P6_Assembly__RevC_)",
+  "source_url": "https://e3d-online.com/products/revo-voron",
+  "baked_at": "2026-11-27T04:57:10Z",
+  "reference_material_id": "stainless_304",
+  "reference_youngs_modulus_pa": 193000000000.0,
+  "reference_density_kg_m3": 8000.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 7411,
+  "num_elements": 27999,
+  "num_dofs": 22233,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.007521,
+  "mass_kg": 0.025175,
+  "com_mm": [
+    0.0006,
+    0.0,
+    -27.0268
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -49.08
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 137.249,
+    "ky": 135.673,
+    "kz": 49132.347
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 63.194,
+    "kry": 63.797,
+    "krz": 58.952
+  },
+  "fixed_interface_freqs_hz": [
+    7146.76,
+    7215.04,
+    14609.54,
+    16129.05,
+    17184.48,
+    17333.41,
+    27902.26,
+    28373.73
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23998,
+  "visual_bytes": 762148,
+  "cad_trust_pct": 86,
+  "source_hash": "8857f8cdbf73e224981ccc00eb8cc7213fadf053fef9dcc49ea5afc803046c92"
+}

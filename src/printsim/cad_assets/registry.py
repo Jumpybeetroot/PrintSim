@@ -19,6 +19,8 @@ _DEFAULT_CATEGORIES: tuple[str, ...] = (
     "toolheads",
     "assemblies",
     "gantry_brackets",
+    "frame_braces",
+    "x_beams",
 )
 
 
@@ -59,11 +61,186 @@ class _RawCachedAsset:
 _ASSET_CACHE: dict[tuple[str, str], _RawCachedAsset] = {}
 _VISUAL_MANIFEST_CACHE: dict[tuple[str, str], tuple[dict[str, Any], Path]] = {}
 
+# PrintDB-calibrated printed-polymer gantry-bracket creep, HDT & moisture knockdown defaults.
+# Hydrated lazily from PrintDB records (``materials/generic-abs``, ``materials/bambu-pet-cf``,
+# ``materials/generic-pa12-cf15``, ``materials/treed-pc-pbt-gf``, ``materials/bambu-ppa-cf``,
+# ``materials/bambu-pps-cf``) with WASM-safe built-in fallbacks.
+_POLYMER_PRINTDB_IDS: dict[str, str] = {
+    "abs_printed": "materials/generic-abs",
+    "pet_cf_printed": "materials/bambu-pet-cf",
+    "pa12_cf_printed": "materials/generic-pa12-cf15",
+    "pc_pbt_gf_printed": "materials/treed-pc-pbt-gf",
+    "ppa_cf_printed": "materials/bambu-ppa-cf",
+    "pps_cf_printed": "materials/bambu-pps-cf",
+}
+
+_POLYMER_CREEP_FALLBACKS: dict[str, dict[str, float]] = {
+    "abs_printed": {
+        "hdt_c": 95.0,
+        "tg_c": 105.0,
+        "creep_limit_n": 45.0,
+        "water_absorption_pct": 0.25,
+        "infill_shell_factor": 0.78,
+    },
+    "pet_cf_printed": {
+        "hdt_c": 182.0,
+        "tg_c": 75.0,
+        "creep_limit_n": 85.0,
+        "water_absorption_pct": 0.37,
+        "infill_shell_factor": 0.78,
+    },
+    "pa12_cf_printed": {
+        "hdt_c": 135.0,
+        "tg_c": 56.0,
+        "creep_limit_n": 65.0,
+        "water_absorption_pct": 1.60,
+        "infill_shell_factor": 0.78,
+    },
+    "pc_pbt_gf_printed": {
+        "hdt_c": 120.0,
+        "tg_c": 138.0,
+        "creep_limit_n": 72.0,
+        "water_absorption_pct": 0.30,
+        "infill_shell_factor": 0.78,
+    },
+    "ppa_cf_printed": {
+        "hdt_c": 196.0,
+        "tg_c": 85.0,
+        "creep_limit_n": 120.0,
+        "water_absorption_pct": 0.65,  # annealed conditioned effective uptake (1.30% raw TDS)
+        "infill_shell_factor": 0.78,
+    },
+    "pps_cf_printed": {
+        "hdt_c": 235.0,
+        "tg_c": 100.0,
+        "creep_limit_n": 140.0,
+        "water_absorption_pct": 0.05,
+        "infill_shell_factor": 0.78,
+    },
+}
+
+_POLYMER_CREEP_CACHE: dict[str, dict[str, float]] = {}
+
+
+def _get_polymer_creep_params(material_id: str) -> dict[str, float]:
+    """Return PrintDB-hydrated polymer HDT/creep/moisture calibration parameters (WASM-safe)."""
+    cached = _POLYMER_CREEP_CACHE.get(material_id)
+    if cached is not None:
+        return cached
+
+    base = dict(
+        _POLYMER_CREEP_FALLBACKS.get(
+            material_id,
+            {
+                "hdt_c": 110.0,
+                "tg_c": 90.0,
+                "creep_limit_n": 60.0,
+                "water_absorption_pct": 0.50,
+                "infill_shell_factor": 0.78,
+            },
+        )
+    )
+    rid = _POLYMER_PRINTDB_IDS.get(material_id)
+    if rid is not None:
+        try:
+            from printsim.schema.printdb_bridge import get_record_specs
+
+            raw = get_record_specs(rid, si=False)
+            if raw:
+                if raw.get("hd_temp_c") is not None:
+                    base["hdt_c"] = float(raw["hd_temp_c"])
+                if raw.get("glass_transition_c") is not None:
+                    base["tg_c"] = float(raw["glass_transition_c"])
+                if raw.get("creep_limit_n") is not None:
+                    base["creep_limit_n"] = float(raw["creep_limit_n"])
+                if raw.get("water_absorption_pct") is not None:
+                    # Annealed PPA-CF halves equilibrium moisture plasticization vs raw unannealed TDS
+                    wa = float(raw["water_absorption_pct"])
+                    base["water_absorption_pct"] = 0.5 * wa if material_id == "ppa_cf_printed" else wa
+        except Exception:
+            pass
+
+    _POLYMER_CREEP_CACHE[material_id] = base
+    return base
+
+
+def _orthotropic_effective_ratio(material_id: str) -> float:
+    """Mean 3D structural modulus factor from FDM orthotropic ratios (1, e2_ratio, e3_ratio)."""
+    mat = get_material(material_id)
+    return float((1.0 + 0.65 * float(mat.e2_ratio) + 0.35 * float(mat.e3_ratio)) / 2.0)
+
+
+def gantry_bracket_polymer_knockdown(
+    material_id: str,
+    chamber_temp_c: float = 25.0,
+    *,
+    reference_is_fdm: bool = False,
+    reference_material_id: str | None = None,
+    belt_tension_n: float | None = None,
+) -> dict[str, float]:
+    """Compute PrintDB-calibrated FDM anisotropy, moisture & HDT/creep stiffness knockdown for printed brackets.
+
+    Calibrated against PrintDB polymer TDS & community creep records (Bambu PPA-CF/PPS-CF/PET-CF,
+    Polymaker PA12-CF15, TreeD PC-PBT-GF, generic ABS). Returns exact factor decomposition and
+    temperature-derated creep tension limit (N). For non-printed metals, returns neutral ``1.0`` factors.
+    """
+    mat = get_material(material_id)
+    if not bool(mat.is_printed_polymer):
+        return {
+            "fdm_anisotropy_infill_factor": 1.0,
+            "moisture_conditioning_factor": 1.0,
+            "hdt_creep_factor": 1.0,
+            "tension_creep_factor": 1.0,
+            "total_stiffness_factor": 1.0,
+            "hdt_c": float(mat.hdt_c or 300.0),
+            "base_creep_limit_n": 250.0,
+            "effective_creep_limit_n": 250.0,
+        }
+
+    params = _get_polymer_creep_params(material_id)
+    aniso_cur = _orthotropic_effective_ratio(material_id)
+    if reference_is_fdm and reference_material_id:
+        aniso_ref = max(_orthotropic_effective_ratio(reference_material_id), 0.25)
+        fdm_factor = float(np.clip(aniso_cur / aniso_ref, 0.55, 1.35))
+    else:
+        fdm_factor = float(params["infill_shell_factor"]) * aniso_cur
+
+    # Conditioned ambient moisture plasticization (strongest for hygroscopic PA12-CF, ~0 for PPS-CF)
+    water_pct = max(0.0, float(params["water_absorption_pct"]))
+    moisture_factor = 1.0 / (1.0 + 0.11 * water_pct)
+
+    # Sustained-load thermal creep secant-modulus knockdown vs PrintDB HDT @ 1.8 MPa
+    hdt_c = max(float(params["hdt_c"]), 55.0)
+    tau = max(0.0, (float(chamber_temp_c) - 25.0) / max(hdt_c - 25.0, 20.0))
+    hdt_creep_factor = 1.0 / (1.0 + 0.18 * (tau**2.2))
+
+    # Optional sustained belt-tension creep knockdown above 50% of PrintDB creep tension ceiling
+    base_creep_n = max(float(params["creep_limit_n"]), 20.0)
+    eff_creep_n = base_creep_n * hdt_creep_factor * moisture_factor
+    if belt_tension_n is not None and float(belt_tension_n) > 0.0:
+        load_ratio = float(belt_tension_n) / max(eff_creep_n, 1.0)
+        tension_creep_factor = 1.0 / (1.0 + 0.22 * (max(load_ratio - 0.5, 0.0) ** 2.0))
+    else:
+        tension_creep_factor = 1.0
+
+    total = float(np.clip(fdm_factor * moisture_factor * hdt_creep_factor * tension_creep_factor, 0.25, 1.10))
+    return {
+        "fdm_anisotropy_infill_factor": round(fdm_factor, 4),
+        "moisture_conditioning_factor": round(moisture_factor, 4),
+        "hdt_creep_factor": round(hdt_creep_factor, 4),
+        "tension_creep_factor": round(tension_creep_factor, 4),
+        "total_stiffness_factor": round(total, 4),
+        "hdt_c": round(hdt_c, 1),
+        "base_creep_limit_n": round(base_creep_n, 1),
+        "effective_creep_limit_n": round(eff_creep_n, 1),
+    }
+
 
 def clear_asset_cache() -> None:
     """Clear the in-memory hardware superelement & visual manifest caches (useful after re-baking)."""
     _ASSET_CACHE.clear()
     _VISUAL_MANIFEST_CACHE.clear()
+    _POLYMER_CREEP_CACHE.clear()
 
 
 def _asset_dir(category: str, asset_id: str | None) -> Path | None:
@@ -263,7 +440,7 @@ def load_superelement(
     if raw is None:
         return None
 
-    manifest = _manifest_with_visual_url(raw.manifest, category, asset_id)
+    manifest = _manifest_with_visual_url(raw.manifest, category, asset_id, has_superelement=True)
     scale_k = float(stiffness_mult)
     scale_m = 1.0
 
@@ -275,6 +452,15 @@ def load_superelement(
         e_eff = float(mat.effective_modulus_pa(float(chamber_temp_c)))
         scale_k *= e_eff / max(e_ref, 1e-12)
         scale_m *= float(mat.density_kg_m3) / max(rho_ref, 1e-12)
+        if category == "gantry_brackets" and bool(mat.is_printed_polymer):
+            kd = gantry_bracket_polymer_knockdown(
+                material_id,
+                chamber_temp_c=float(chamber_temp_c),
+                reference_is_fdm=bool(manifest.get("is_fdm_anisotropic", False)),
+                reference_material_id=str(manifest.get("reference_material_id") or "") or None,
+            )
+            scale_k *= float(kd["total_stiffness_factor"])
+            manifest["polymer_knockdown_applied"] = kd
 
     K_cb = raw.K_cb * scale_k
     K_bb = raw.K_bb * scale_k

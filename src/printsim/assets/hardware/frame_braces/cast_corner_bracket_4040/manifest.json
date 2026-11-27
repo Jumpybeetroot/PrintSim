@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "category": "frame_braces",
+  "asset_id": "cast_corner_bracket_4040",
+  "name": "Cast Al 4040 Corner Bracket (HBLFSN8 48\u00d748\u00d738 mm)",
+  "source_cad": "Parametric build123d CAD (Misumi HBLFSN 4040 datasheet)",
+  "source_url": "https://us.misumi-ec.com/vona2/detail/110300465900/",
+  "baked_at": "2026-11-27T04:19:29Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1445,
+  "num_elements": 4499,
+  "num_dofs": 4335,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 4,
+  "rigid_body_max_freq_hz": 0.004487,
+  "mass_kg": 0.079056,
+  "com_mm": [
+    16.2509,
+    16.2509,
+    0.0
+  ],
+  "port0_mm": [
+    24.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    24.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 92095.309,
+    "ky": 65268.025,
+    "kz": 53083.257
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 22548.382,
+    "kry": 21746.299,
+    "krz": 25571.516
+  },
+  "fixed_interface_freqs_hz": [
+    16052.55,
+    17293.61,
+    21844.2,
+    24951.72
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 412,
+  "visual_bytes": 19136,
+  "cad_trust_pct": 88,
+  "source_hash": "c75379ea48f8d598b74aa66ab55ddb45fdd251b956de3068060039c85c3e2d15"
+}

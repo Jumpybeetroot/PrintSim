@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "trinity_1_6_chube",
+  "source_cad": "Trinity_Chube_1.6_10mm.step",
+  "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
+  "regions": [
+    {
+      "label": "trinity_1_6_chube_body",
+      "material_id": "ppa_cf_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "origin": "MGN12H front carriage face (0,0,0)",
+  "hotend_port_mm": [
+    0.0,
+    -9.74,
+    -33.98
+  ],
+  "is_unibody": true,
+  "default_hotend": "chube_compact",
+  "shell_brace_z_mm": [
+    -59.68,
+    -33.98
+  ],
+  "target_nozzle_tip_mm": [
+    0.0,
+    -9.74,
+    -81.18
+  ]
+}

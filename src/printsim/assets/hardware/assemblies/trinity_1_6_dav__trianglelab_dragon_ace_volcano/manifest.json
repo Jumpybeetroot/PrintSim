@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "assemblies",
+  "asset_id": "trinity_1_6_dav__trianglelab_dragon_ace_volcano",
+  "name": "Dragon Ace Volcano + Trinity Unibody Heatsink Brace",
+  "source_cad": "Trinity_DAV_1.6_10mm.step",
+  "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
+  "baked_at": "2026-11-27T03:29:23Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 10890,
+  "num_elements": 43476,
+  "num_dofs": 32670,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.011844,
+  "mass_kg": 0.078261,
+  "com_mm": [
+    -0.0,
+    1.3508,
+    -31.9456
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -59.4
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 3125.911,
+    "ky": 3147.481,
+    "kz": 125955.857
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1276.656,
+    "kry": 1282.363,
+    "krz": 1665.255
+  },
+  "fixed_interface_freqs_hz": [
+    6760.29,
+    9183.72,
+    9441.17,
+    14458.13,
+    17767.46,
+    18093.57,
+    33051.62,
+    34173.88
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23996,
+  "visual_bytes": 883512,
+  "cad_trust_pct": 88,
+  "source_hash": "6ecd9d7b21d729eb53af6dcead45ca8a77609b5ffe8a6cd243bb0e08910b5083"
+}

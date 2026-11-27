@@ -1,0 +1,32 @@
+schema_version: 1
+category: toolheads
+asset_id: dragon_burner
+name: Dragon Burner V8 + Orbiter 2 Mount (PA12-CF / ABS)
+step_path: cad_sources/toolhead_audit/dragon_burner_v8.step
+source_url: https://github.com/chirpy2605/voron/tree/main/V0/Dragon_Burner
+reference_material_id: pa12_cf_printed
+cad_trust_pct: 83
+is_fdm_anisotropic: true
+mesh_size_mm: 3.2
+n_internal_modes: 6
+visual_max_triangles: 28000
+transform:
+  scale: 1.0
+  rotate_deg: [0.0, 0.0, 0.0]
+  translate_mm: [-147.7, 110.78, -97.8]
+port0:
+  kind: plane_box
+  vp_coord_mm: [0.0, 0.0, 0.0]
+  params:
+    axis: 1
+    coord_mm: 0.0
+    tol_mm: 2.5
+    bounds_mm: [[-15.0, 15.0], [-2.5, 2.5], [-14.0, 14.0]]
+port1:
+  kind: plane_box
+  vp_coord_mm: [0.0, -20.0, -3.54]
+  params:
+    axis: 2
+    coord_mm: -3.54
+    tol_mm: 2.4
+    bounds_mm: [[-10.5, 10.5], [-28.5, -11.5], [-5.8, -1.0]]

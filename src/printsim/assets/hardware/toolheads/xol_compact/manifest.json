@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "xol_compact",
+  "name": "XOL 2 Compact Dual-4010 (PA12-CF / ASA)",
+  "source_cad": "Xol Toolhead Assembly Guide 20240615.step",
+  "source_url": "https://github.com/Armchair-Heavy-Industries/Xol-Toolhead",
+  "baked_at": "2026-11-27T04:13:46Z",
+  "reference_material_id": "pa12_cf_printed",
+  "reference_youngs_modulus_pa": 6200000000.0,
+  "reference_density_kg_m3": 1180.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 9944,
+  "num_elements": 27850,
+  "num_dofs": 29832,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.003166,
+  "mass_kg": 0.067161,
+  "com_mm": [
+    -0.2244,
+    -17.5135,
+    -2.5348
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    -0.1,
+    -24.35,
+    4.68
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 7888.935,
+    "ky": 61079.783,
+    "kz": 6546.855
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1549.601,
+    "kry": 1977.721,
+    "krz": 4084.819
+  },
+  "fixed_interface_freqs_hz": [
+    993.01,
+    1241.5,
+    1416.62,
+    1601.13,
+    1807.48,
+    2190.45
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 30232,
+  "visual_bytes": 1455216,
+  "cad_trust_pct": 86,
+  "source_hash": "4ea0cbe961423cf00fe70dbe2795f41305a19c289331e936440790d3402915d1"
+}

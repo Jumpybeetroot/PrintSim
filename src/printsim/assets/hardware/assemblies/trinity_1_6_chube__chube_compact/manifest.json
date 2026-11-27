@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "assemblies",
+  "asset_id": "trinity_1_6_chube__chube_compact",
+  "name": "Chube Compact + Trinity Unibody Shell Brace",
+  "source_cad": "Trinity_Chube_1.6_10mm.step + Chube_Compact_integration_assembly.step",
+  "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
+  "baked_at": "2026-11-27T03:29:33Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 12034,
+  "num_elements": 44622,
+  "num_dofs": 36102,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.027805,
+  "mass_kg": 0.066972,
+  "com_mm": [
+    0.2497,
+    0.0,
+    -26.6279
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -47.2
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 25107.792,
+    "ky": 24253.814,
+    "kz": 207296.578
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1742.285,
+    "kry": 1819.408,
+    "krz": 3041.45
+  },
+  "fixed_interface_freqs_hz": [
+    7754.8,
+    7950.09,
+    10972.1,
+    10992.51,
+    12550.32,
+    12599.07,
+    13211.37,
+    17355.04
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 24000,
+  "visual_bytes": 865032,
+  "cad_trust_pct": 88,
+  "source_hash": "be0daf5081a736ff57cb26c987827d3c9aea39eabae1a79c03cdfdbd0545329a"
+}

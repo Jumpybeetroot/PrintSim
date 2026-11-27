@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "category": "frame_braces",
+  "asset_id": "cast_corner_bracket_3030",
+  "name": "Cast Al 3030 Corner Bracket (HBLFSN6 38\u00d738\u00d728 mm)",
+  "source_cad": "Parametric build123d CAD (Misumi HBLFSN 3030 datasheet)",
+  "source_url": "https://us.misumi-ec.com/vona2/detail/110300465900/",
+  "baked_at": "2026-11-27T04:19:28Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 1274,
+  "num_elements": 3925,
+  "num_dofs": 3822,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 4,
+  "rigid_body_max_freq_hz": 0.005867,
+  "mass_kg": 0.039176,
+  "com_mm": [
+    13.1034,
+    13.1034,
+    0.0
+  ],
+  "port0_mm": [
+    19.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    19.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 101120.263,
+    "ky": 72282.48,
+    "kz": 48526.604
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 13247.227,
+    "kry": 13264.671,
+    "krz": 17584.459
+  },
+  "fixed_interface_freqs_hz": [
+    20668.21,
+    22824.33,
+    31002.56,
+    35254.06
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 412,
+  "visual_bytes": 17084,
+  "cad_trust_pct": 88,
+  "source_hash": "65aea21f656301d89f94e3fc6c04f2f959905383d1f4f149c80d9c553d087476"
+}

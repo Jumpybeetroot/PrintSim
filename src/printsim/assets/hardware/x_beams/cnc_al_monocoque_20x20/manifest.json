@@ -1,0 +1,32 @@
+{
+  "asset_id": "cnc_al_monocoque_20x20",
+  "category": "x_beams",
+  "name": "PrintSim CNC Monocoque Truss 20x20 X-Beam",
+  "source": "Parametric build123d 20x20x380mm semi-monocoque Warren-truss beam (solid MGN12H front flange + 3-face CNC pockets)",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 380.0,
+  "width_mm": 20.0,
+  "height_mm": 20.0,
+  "visual_triangles": 16000,
+  "visual_bytes": 569244,
+  "fea_section_properties": {
+    "name": "cnc_al_monocoque_20x20",
+    "length_mm": 380.0,
+    "width_mm": 20.0,
+    "height_mm": 20.0,
+    "volume_cm3": 33.502,
+    "mass_al6061_g": 90.46,
+    "linear_mass_al6061_g_m": 238.0,
+    "area_m2": 8.816424647676791e-05,
+    "iy_m4": 3.442952734293586e-09,
+    "iz_m4": 4.09329020123703e-09,
+    "j_m4": 1.8783832415498236e-09,
+    "n_nodes": 43934,
+    "n_tets": 141182,
+    "L_eff_mm": 374.85,
+    "delta_y_um_per_N": 62.253,
+    "delta_z_um_per_N": 74.012,
+    "theta_x_mrad_per_Nm": 7.704
+  }
+}

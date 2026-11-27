@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "dragon_burner",
+  "source_cad": "dragon_burner_v8.step",
+  "source_url": "https://github.com/chirpy2605/voron/tree/main/V0/Dragon_Burner",
+  "regions": [
+    {
+      "label": "dragon_burner_body",
+      "material_id": "pa12_cf_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "origin": "MGN12H front carriage face (0,0,0)",
+  "hotend_port_mm": [
+    0.0,
+    -20.0,
+    -3.54
+  ],
+  "multi_piece_bolted": true,
+  "duct_bottom_z_mm": -47.5,
+  "target_nozzle_tip_z_mm": -50.0
+}

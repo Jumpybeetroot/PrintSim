@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_dragon_hf",
+  "name": "Phaetus Dragon HF (4-Bolt Rigid, 4x Ti Standoffs)",
+  "source_cad": "phaetus_dragon_hf.step (Onshape multi-body assembly)",
+  "source_url": "https://www.phaetus.com/products/dragon-hotend",
+  "baked_at": "2026-11-27T04:56:59Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 11829,
+  "num_elements": 46879,
+  "num_dofs": 35487,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005924,
+  "mass_kg": 0.055101,
+  "com_mm": [
+    -1.4914,
+    -0.0001,
+    -25.7867
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -45.51
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 1558.384,
+    "ky": 1563.148,
+    "kz": 59063.937
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 714.404,
+    "kry": 720.53,
+    "krz": 738.46
+  },
+  "fixed_interface_freqs_hz": [
+    6828.29,
+    6975.0,
+    8540.41,
+    13716.12,
+    14367.77,
+    17813.36,
+    19565.52,
+    24953.64
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23990,
+  "visual_bytes": 873516,
+  "cad_trust_pct": 86,
+  "source_hash": "2c371c3899baf3c54c10acd0997e218e416084284d074c892ce2297a371f5a69"
+}

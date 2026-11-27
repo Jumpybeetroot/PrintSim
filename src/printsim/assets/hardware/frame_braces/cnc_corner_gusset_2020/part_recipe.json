@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "category": "frame_braces",
+  "asset_id": "cnc_corner_gusset_2020",
+  "source_cad": "Parametric build123d CAD (60\u00d760\u00d75mm 5-hole Al 6061-T6 plate)",
+  "source_url": "https://github.com/Jumpybeetroot/PrintSim",
+  "regions": [
+    {
+      "label": "cnc_gusset_plate",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": null
+    }
+  ],
+  "kind": "cnc_corner_gusset",
+  "profile_series": "2020",
+  "ext_w_mm": 20.0,
+  "leg_len_mm": 60.0,
+  "thickness_mm": 5.0,
+  "port_offset_mm": 40.0,
+  "unit_cost_usd": 3.8
+}

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "dragon_burner",
+  "name": "Dragon Burner V8 + Orbiter 2 Mount (PA12-CF / ABS)",
+  "source_cad": "dragon_burner_v8.step",
+  "source_url": "https://github.com/chirpy2605/voron/tree/main/V0/Dragon_Burner",
+  "baked_at": "2026-11-27T04:17:21Z",
+  "reference_material_id": "pa12_cf_printed",
+  "reference_youngs_modulus_pa": 6200000000.0,
+  "reference_density_kg_m3": 1180.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 8931,
+  "num_elements": 30365,
+  "num_dofs": 26793,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002414,
+  "mass_kg": 0.055964,
+  "com_mm": [
+    -0.2112,
+    -16.7536,
+    4.6957
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -20.0,
+    -3.54
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 11803.83,
+    "ky": 14340.022,
+    "kz": 6663.767
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 974.322,
+    "kry": 2013.087,
+    "krz": 3844.552
+  },
+  "fixed_interface_freqs_hz": [
+    225.97,
+    855.25,
+    991.58,
+    1382.9,
+    1692.61,
+    2361.26
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 27997,
+  "visual_bytes": 977344,
+  "cad_trust_pct": 83,
+  "source_hash": "f54e8a0dd6940e6efb246a77525b5c0f22df42abe9ded46408d7b687a0d77636"
+}

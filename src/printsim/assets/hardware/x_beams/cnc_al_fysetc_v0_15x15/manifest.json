@@ -1,0 +1,32 @@
+{
+  "asset_id": "cnc_al_fysetc_v0_15x15",
+  "category": "x_beams",
+  "name": "FYSETC Hollow CNC 15x15 X-Beam (Voron 0)",
+  "source": "GrabCAD Nicotina52 FYSETC X-Beam Voron0 200mm (Fysetc X-Beam [Voron0 200mm].step, 15x15x200mm)",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 200.0,
+  "width_mm": 15.0,
+  "height_mm": 15.13,
+  "visual_triangles": 16000,
+  "visual_bytes": 585020,
+  "fea_section_properties": {
+    "name": "cnc_al_fysetc_v0_15x15",
+    "length_mm": 200.0,
+    "width_mm": 15.0,
+    "height_mm": 15.13,
+    "volume_cm3": 6.455,
+    "mass_al6061_g": 17.43,
+    "linear_mass_al6061_g_m": 87.1,
+    "area_m2": 3.2275576727526296e-05,
+    "iy_m4": 7.200157830091881e-10,
+    "iz_m4": 7.268297756384219e-10,
+    "j_m4": 3.6752949103974693e-10,
+    "n_nodes": 29718,
+    "n_tets": 93440,
+    "L_eff_mm": 197.28,
+    "delta_y_um_per_N": 51.108,
+    "delta_z_um_per_N": 51.592,
+    "theta_x_mrad_per_Nm": 20.723
+  }
+}

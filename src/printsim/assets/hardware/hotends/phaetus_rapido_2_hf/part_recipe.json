@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_rapido_2_hf",
+  "source_cad": "phaetus_rapido_2_hf.step (Phaetus official Rapido 2 HF CAD)",
+  "source_url": "https://www.phaetus.com/products/rapido2",
+  "regions": [
+    {
+      "label": "rapido2_v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "rapido2_3x_ti_screws_throat",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "rapido2_cylindrical_cu_core",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "rapido2_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "rigid_mount_length_mm": 54.5,
+  "groove_adapter_oal_mm": 71.0,
+  "meltzone_length_mm": 22.0,
+  "standoffs": "3x \u00d82.6x11.0 mm Ti-6Al-4V screws @ 120 deg (r = 7.5 mm)",
+  "heatbreak": "0.25 mm thin-wall Ti-6Al-4V throat",
+  "block": "85W cylindrical ceramic ring + Cu C110 melt core + V6 nozzle"
+}

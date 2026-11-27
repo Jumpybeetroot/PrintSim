@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_rapido_2_hf",
+  "name": "Phaetus Rapido 2 HF (85W Ceramic, 3x Ti Screws)",
+  "source_cad": "phaetus_rapido_2_hf.step (Phaetus official Rapido 2 HF CAD)",
+  "source_url": "https://www.phaetus.com/products/rapido2",
+  "baked_at": "2026-11-27T04:57:21Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 10831,
+  "num_elements": 43948,
+  "num_dofs": 32493,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005764,
+  "mass_kg": 0.045189,
+  "com_mm": [
+    0.0005,
+    -0.0002,
+    -27.6759
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -54.5
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 1276.584,
+    "ky": 1270.656,
+    "kz": 70895.034
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 759.123,
+    "kry": 773.211,
+    "krz": 807.578
+  },
+  "fixed_interface_freqs_hz": [
+    7434.28,
+    7473.29,
+    10380.29,
+    20152.18,
+    20188.04,
+    21230.78,
+    22140.23,
+    22255.73
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23995,
+  "visual_bytes": 914548,
+  "cad_trust_pct": 86,
+  "source_hash": "a281e9a4592f501a2b98fc911f09bac05de40dac3b891e1cdc899e48c16430da"
+}

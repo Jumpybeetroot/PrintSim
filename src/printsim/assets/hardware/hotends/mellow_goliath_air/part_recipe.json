@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "mellow_goliath_air",
+  "source_cad": "Vz-330_WEB v2.step (Goliath_Air_cooled datums + watertight multi-material B-Rep)",
+  "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
+  "regions": [
+    {
+      "label": "goliath_m6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "goliath_ti_posts_and_heatbreak",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "goliath_50mm_copper_core",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "goliath_air_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "overall_length_mm": 69.24,
+  "meltzone_length_mm": 50.0,
+  "datum": "Port 0 = top mounting face center (Z=60 CAD); Port 1 = nozzle tip (Z=-9.24 CAD)",
+  "heatsink": "\u00d821.8-23.4 x 24.5 mm finned Al 6061 heatsink (4x M2.5 Dragon PCD)",
+  "standoffs": "3x \u00d83.0x14.0 mm Ti-6Al-4V posts @ r=7.5 mm + thick 0.50 mm Ti heatbreak",
+  "block": "50 mm plated Cu C110 melt core + 100W cartridge boss + Goliath M6 nozzle"
+}

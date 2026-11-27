@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "archetype_cpap",
+  "name": "Archetype Breakneck v24 CPAP (PPA-CF / ASA)",
+  "source_cad": "Archetype Public CAD STEP.step",
+  "source_url": "https://github.com/Armchair-Heavy-Industries/Archetype",
+  "baked_at": "2026-11-27T04:15:26Z",
+  "reference_material_id": "ppa_cf_printed",
+  "reference_youngs_modulus_pa": 10800000000.0,
+  "reference_density_kg_m3": 1250.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 19990,
+  "num_elements": 55300,
+  "num_dofs": 59970,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.002653,
+  "mass_kg": 0.088962,
+  "com_mm": [
+    -0.0834,
+    -18.7542,
+    19.549
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    -21.7,
+    13.5
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 1730.053,
+    "ky": 14825.554,
+    "kz": 2964.62
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 1098.07,
+    "kry": 1784.813,
+    "krz": 992.095
+  },
+  "fixed_interface_freqs_hz": [
+    751.24,
+    777.9,
+    1193.53,
+    1230.68,
+    1374.39,
+    1484.28
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 29947,
+  "visual_bytes": 1319012,
+  "cad_trust_pct": 82,
+  "source_hash": "25758e81c3387702260e776062e0e97790ae94870e1aa14225109b8785af5f89"
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_dragon_hf",
+  "source_cad": "phaetus_dragon_hf.step (Onshape multi-body assembly)",
+  "source_url": "https://www.phaetus.com/products/dragon-hotend",
+  "regions": [
+    {
+      "label": "v6_brass_nozzle",
+      "material_id": "brass_c360",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "ti_standoffs_and_heatbreak",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "copper_block_and_sleeve",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "dragon_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "rigid_mount_length_mm": 45.51,
+  "groove_adapter_oal_mm": 62.2,
+  "meltzone_length_mm": 17.5,
+  "standoffs": "4x \u00d82.30x7.5 mm Ti-6Al-4V @ 12x12 mm square + 2x block tie pins",
+  "heatbreak": "Bi-metal Cu cold sleeve + 0.20 mm thin-wall Ti-6Al-4V throat",
+  "block": "23x16x11.5 mm plated Cu C110 block + V6 brass nozzle"
+}

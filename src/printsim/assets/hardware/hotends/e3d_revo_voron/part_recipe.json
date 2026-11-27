@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "e3d_revo_voron",
+  "source_cad": "Stealthburner_CW2.5_Assembly.step (E3D P6_Assembly__RevC_)",
+  "source_url": "https://e3d-online.com/products/revo-voron",
+  "regions": [
+    {
+      "label": "revo_thinwall_ss304_throat",
+      "material_id": "stainless_304",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "revo_brass_nozzle_and_core",
+      "material_id": "brass_c360",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "revo_voron_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "rigid_mount_length_mm": 49.08,
+  "oal_with_collet_mm": 52.0,
+  "meltzone_length_mm": 15.5,
+  "heatsink": "18.75x14.0x27.0 mm anodized Al 6061 4-bolt M3 rigid heatsink",
+  "heatbreak": "0.15 mm thin-wall SS304 integrated RapidChange throat (I-matched \u00d82.50/1.96 mm)",
+  "heater": "40W PTC ceramic HeaterCore ring + brass Revo nozzle"
+}

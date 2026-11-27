@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "trianglelab_dragon_ace_volcano",
+  "name": "Trianglelab Dragon Ace Volcano (70W Cu/Ti)",
+  "source_cad": "Trinity_DAV_1.6_10mm.step (dragon_ace_volcano sub-assembly)",
+  "source_url": "https://trianglelab.net/products/dragon-ace%E2%84%A2-hotend?VariantsId=12007",
+  "baked_at": "2026-11-27T03:29:06Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 10890,
+  "num_elements": 43476,
+  "num_dofs": 32670,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.006395,
+  "mass_kg": 0.078261,
+  "com_mm": [
+    -0.0,
+    1.3508,
+    -31.9456
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -59.4
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 839.133,
+    "ky": 845.168,
+    "kz": 87223.448
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 836.987,
+    "kry": 837.847,
+    "krz": 1040.082
+  },
+  "fixed_interface_freqs_hz": [
+    4760.2,
+    5352.51,
+    5885.13,
+    13097.85,
+    15232.18,
+    15728.79,
+    23495.22,
+    25730.81
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23996,
+  "visual_bytes": 883512,
+  "cad_trust_pct": 87,
+  "source_hash": "aecffd24262674d8a3213050465108ce4608685287cd184c1f9178cc57fe2023"
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "a4t_beacon",
+  "source_cad": "a4t_cowling_dragon_xol.step + a4t_he_duct_dragon.step + Xol_Carriage_MGN12H",
+  "source_url": "https://github.com/DW-Tas/A4T",
+  "regions": [
+    {
+      "label": "a4t_beacon_body",
+      "material_id": "ppa_cf_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "origin": "MGN12H front carriage face (0,0,0)",
+  "hotend_port_mm": [
+    0.0,
+    -24.35,
+    4.88
+  ],
+  "multi_piece_bolted": true,
+  "duct_bottom_z_mm": -47.14,
+  "target_nozzle_tip_z_mm": -50.0
+}

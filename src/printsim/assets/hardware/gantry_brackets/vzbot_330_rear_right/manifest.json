@@ -5,7 +5,7 @@
   "name": "VzBot 330 Rear-Right Motor Mount + Tensioner",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-26T22:42:43Z",
+  "baked_at": "2026-11-27T04:54:52Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 37722,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.024502,
+  "rigid_body_max_freq_hz": 0.009585,
   "mass_kg": 0.096858,
   "com_mm": [
     -27.5631,
@@ -35,26 +35,26 @@
     -2.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 25005.483,
-    "ky": 31145.71,
-    "kz": 17841.83
+    "kx": 23139.617,
+    "ky": 29812.111,
+    "kz": 16919.634
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 7124.517,
-    "kry": 6139.024,
-    "krz": 19427.256
+    "krx": 6303.881,
+    "kry": 5972.517,
+    "krz": 16958.593
   },
   "fixed_interface_freqs_hz": [
-    3154.97,
-    4746.67,
-    6573.51,
-    6946.27,
-    8179.69,
-    9274.7
+    3387.76,
+    4919.19,
+    6630.21,
+    7677.4,
+    8303.03,
+    9690.47
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21975,
   "visual_bytes": 953804,
-  "cad_trust_pct": 72,
+  "cad_trust_pct": 84,
   "source_hash": "a8f69fde0dbcea084546f6961e0c7571699423e575b38fb4615b23ae14f6ab41"
 }

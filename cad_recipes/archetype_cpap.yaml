@@ -1,0 +1,32 @@
+schema_version: 1
+category: toolheads
+asset_id: archetype_cpap
+name: Archetype Breakneck v24 CPAP (PPA-CF / ASA)
+step_path: cad_sources/toolhead_audit/archetype/Archetype Public CAD STEP.step
+source_url: https://github.com/Armchair-Heavy-Industries/Archetype
+reference_material_id: ppa_cf_printed
+cad_trust_pct: 82
+is_fdm_anisotropic: true
+mesh_size_mm: 3.0
+n_internal_modes: 6
+visual_max_triangles: 30000
+transform:
+  scale: 1.0
+  rotate_deg: [0.0, 0.0, 0.0]
+  translate_mm: [0.0, -6.2, 0.0]
+port0:
+  kind: plane_box
+  vp_coord_mm: [0.0, 0.0, 0.0]
+  params:
+    axis: 1
+    coord_mm: 0.0
+    tol_mm: 2.5
+    bounds_mm: [[-16.0, 16.0], [-2.5, 2.5], [-14.0, 14.0]]
+port1:
+  kind: plane_box
+  vp_coord_mm: [0.0, -21.7, 13.5]
+  params:
+    axis: 2
+    coord_mm: 13.5
+    tol_mm: 2.8
+    bounds_mm: [[-12.0, 12.0], [-32.0, -11.5], [11.0, 16.5]]

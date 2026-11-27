@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "category": "frame_braces",
+  "asset_id": "cast_corner_bracket_2020",
+  "source_cad": "Parametric build123d CAD (Misumi HBLFSN 2020 datasheet)",
+  "source_url": "https://us.misumi-ec.com/vona2/detail/110300465900/",
+  "regions": [
+    {
+      "label": "cast_bracket_body",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": null
+    }
+  ],
+  "kind": "cast_corner_bracket",
+  "profile_series": "2020",
+  "ext_w_mm": 20.0,
+  "arm_mm": 28.0,
+  "width_mm": 20.0,
+  "bolt_offset_mm": 14.0,
+  "unit_cost_usd": 1.4
+}

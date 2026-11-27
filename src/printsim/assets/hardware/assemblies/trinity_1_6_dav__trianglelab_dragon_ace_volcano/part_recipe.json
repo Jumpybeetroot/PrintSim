@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "category": "assemblies",
+  "asset_id": "trinity_1_6_dav__trianglelab_dragon_ace_volcano",
+  "source_cad": "Trinity_DAV_1.6_10mm.step",
+  "source_url": "https://github.com/WV-design/Trinity-toolhead/tree/1.6-stable",
+  "regions": [
+    {
+      "label": "v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "ti_standoffs_and_heatbreak",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "dav_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "volcano_copper_block_mze",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    }
+  ],
+  "toolhead_id": "trinity_1_6_dav",
+  "hotend_id": "trianglelab_dragon_ace_volcano",
+  "brace_part": "Trinity 1.6 Unibody Heatsink Wrap Collar (Z=-17.5..-23.0 mm)",
+  "overall_length_mm": 59.4,
+  "meltzone_length_mm": 34.0
+}
