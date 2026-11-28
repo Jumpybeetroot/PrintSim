@@ -924,6 +924,211 @@ export interface PrepareCadBeamParams {
   fixedEnd: boolean;
   memberOpacity: number;
   isModal: boolean;
+  /** Optional extra roll (rad) about beam +X axis (e.g. -Math.PI/2 to move canonical -Y front rail face to +Z top). */
+  rollAboutXRad?: number;
+}
+
+const CAD_BEAM_AXIAL_SLICES = 28;
+
+/**
+ * Slice any triangle that spans across uniform axial planes along the beam X-axis
+ * so decimated CAD beams/rails (whose flat rails often have full-span 380mm triangles)
+ * bend smoothly along the spline instead of cutting straight across the chord.
+ */
+function subdivideBeamGeometryAlongX(
+  geo: THREE.BufferGeometry,
+  worldMat: THREE.Matrix4,
+  normalMat: THREE.Matrix3,
+  nativeLengthThree: number
+): {
+  geometry: THREE.BufferGeometry;
+  worldPositions: Float32Array;
+  worldNormals: Float32Array;
+  replaced: boolean;
+} {
+  const posAttr = geo.getAttribute("position") as THREE.BufferAttribute;
+  const normAttr = geo.getAttribute("normal") as THREE.BufferAttribute;
+  const origCount = posAttr.count;
+
+  const origPos = new Float32Array(origCount * 3);
+  const origNorm = new Float32Array(origCount * 3);
+  for (let i = 0; i < origCount; i++) {
+    _cadTmpPos.fromBufferAttribute(posAttr, i).applyMatrix4(worldMat);
+    const o3 = i * 3;
+    origPos[o3] = _cadTmpPos.x;
+    origPos[o3 + 1] = _cadTmpPos.y;
+    origPos[o3 + 2] = _cadTmpPos.z;
+
+    _cadTmpNorm.fromBufferAttribute(normAttr, i).applyMatrix3(normalMat).normalize();
+    origNorm[o3] = _cadTmpNorm.x;
+    origNorm[o3 + 1] = _cadTmpNorm.y;
+    origNorm[o3 + 2] = _cadTmpNorm.z;
+  }
+
+  const indexAttr = geo.getIndex();
+  const triCount = indexAttr ? Math.floor(indexAttr.count / 3) : Math.floor(origCount / 3);
+  if (triCount <= 0 || nativeLengthThree <= 1e-4) {
+    return { geometry: geo, worldPositions: origPos, worldNormals: origNorm, replaced: false };
+  }
+
+  const N = CAD_BEAM_AXIAL_SLICES;
+  const invLen = 1 / nativeLengthThree;
+  const eps = nativeLengthThree * 1e-5;
+  const getIdx = (k: number): number => (indexAttr ? indexAttr.getX(k) : k);
+
+  // Quick check: does any triangle cross an axial slice plane?
+  let needsSubdiv = false;
+  for (let t = 0; t < triCount; t++) {
+    const a = getIdx(t * 3);
+    const b = getIdx(t * 3 + 1);
+    const c = getIdx(t * 3 + 2);
+    const xa = origPos[a * 3];
+    const xb = origPos[b * 3];
+    const xc = origPos[c * 3];
+    const xMin = Math.min(xa, xb, xc);
+    const xMax = Math.max(xa, xb, xc);
+    const kStart = Math.max(1, Math.floor((xMin * invLen + 0.5) * N) + 1);
+    const kEnd = Math.min(N - 1, Math.ceil((xMax * invLen + 0.5) * N) - 1);
+    if (kStart <= kEnd) {
+      const pFirst = (-0.5 + kStart / N) * nativeLengthThree;
+      if (pFirst > xMin + eps && pFirst < xMax - eps) {
+        needsSubdiv = true;
+        break;
+      }
+    }
+  }
+
+  if (!needsSubdiv) {
+    return { geometry: geo, worldPositions: origPos, worldNormals: origNorm, replaced: false };
+  }
+
+  // Keep all original vertices at their original indices, append only newly sliced vertices
+  const posList: number[] = Array.from(origPos);
+  const normList: number[] = Array.from(origNorm);
+  const newIndices: number[] = [];
+
+  const appendVert = (
+    x: number,
+    y: number,
+    z: number,
+    nx: number,
+    ny: number,
+    nz: number
+  ): number => {
+    const idx = posList.length / 3;
+    posList.push(x, y, z);
+    const nLen = Math.hypot(nx, ny, nz);
+    if (nLen > 1e-8) {
+      normList.push(nx / nLen, ny / nLen, nz / nLen);
+    } else {
+      normList.push(0, 1, 0);
+    }
+    return idx;
+  };
+
+  const interpEdge = (i0: number, i1: number, xPlane: number): number => {
+    const o0 = i0 * 3;
+    const o1 = i1 * 3;
+    const x0 = posList[o0];
+    const x1 = posList[o1];
+    const denom = x1 - x0;
+    const alpha = Math.abs(denom) > 1e-10 ? Math.max(0, Math.min(1, (xPlane - x0) / denom)) : 0.5;
+    return appendVert(
+      xPlane,
+      posList[o0 + 1] + (posList[o1 + 1] - posList[o0 + 1]) * alpha,
+      posList[o0 + 2] + (posList[o1 + 2] - posList[o0 + 2]) * alpha,
+      normList[o0] + (normList[o1] - normList[o0]) * alpha,
+      normList[o0 + 1] + (normList[o1 + 1] - normList[o0 + 1]) * alpha,
+      normList[o0 + 2] + (normList[o1 + 2] - normList[o0 + 2]) * alpha
+    );
+  };
+
+  const emitPoly = (poly: number[]) => {
+    for (let i = 1; i + 1 < poly.length; i++) {
+      newIndices.push(poly[0], poly[i], poly[i + 1]);
+    }
+  };
+
+  const sliceTriRange = (triStart: number, triEnd: number) => {
+    for (let t = triStart; t < triEnd; t++) {
+      const a = getIdx(t * 3);
+      const b = getIdx(t * 3 + 1);
+      const c = getIdx(t * 3 + 2);
+      const xa = origPos[a * 3];
+      const xb = origPos[b * 3];
+      const xc = origPos[c * 3];
+      const xMin = Math.min(xa, xb, xc);
+      const xMax = Math.max(xa, xb, xc);
+      const kStart = Math.max(1, Math.floor((xMin * invLen + 0.5) * N) + 1);
+      const kEnd = Math.min(N - 1, Math.ceil((xMax * invLen + 0.5) * N) - 1);
+      if (kStart > kEnd) {
+        newIndices.push(a, b, c);
+        continue;
+      }
+
+      let rem: number[] = [a, b, c];
+      for (let k = kStart; k <= kEnd && rem.length >= 3; k++) {
+        const xPlane = (-0.5 + k / N) * nativeLengthThree;
+        const left: number[] = [];
+        const right: number[] = [];
+        const n = rem.length;
+        for (let i = 0; i < n; i++) {
+          const cur = rem[i];
+          const nxt = rem[(i + 1) % n];
+          const xCur = posList[cur * 3];
+          const xNxt = posList[nxt * 3];
+          const curLeft = xCur <= xPlane + eps;
+          const curRight = xCur >= xPlane - eps;
+          const nxtLeft = xNxt <= xPlane + eps;
+          const nxtRight = xNxt >= xPlane - eps;
+
+          if (curLeft) left.push(cur);
+          if (curRight) right.push(cur);
+
+          if (
+            (xCur < xPlane - eps && xNxt > xPlane + eps) ||
+            (xCur > xPlane + eps && xNxt < xPlane - eps)
+          ) {
+            const mid = interpEdge(cur, nxt, xPlane);
+            left.push(mid);
+            right.push(mid);
+          }
+        }
+        if (left.length >= 3) emitPoly(left);
+        rem = right;
+      }
+      if (rem.length >= 3) emitPoly(rem);
+    }
+  };
+
+  const newGeo = new THREE.BufferGeometry();
+  const origGroups = geo.groups;
+  if (origGroups && origGroups.length > 0) {
+    for (const grp of origGroups) {
+      const outStart = newIndices.length;
+      const tStart = Math.floor(grp.start / 3);
+      const tEnd = Math.min(triCount, Math.floor((grp.start + grp.count) / 3));
+      sliceTriRange(tStart, tEnd);
+      const outCount = newIndices.length - outStart;
+      if (outCount > 0) {
+        newGeo.addGroup(outStart, outCount, grp.materialIndex);
+      }
+    }
+  } else {
+    sliceTriRange(0, triCount);
+  }
+
+  const worldPositions = new Float32Array(posList);
+  const worldNormals = new Float32Array(normList);
+  const vCount = worldPositions.length / 3;
+  newGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(worldPositions), 3));
+  newGeo.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(worldNormals), 3));
+  newGeo.setIndex(
+    vCount <= 65535
+      ? new THREE.BufferAttribute(new Uint16Array(newIndices), 1)
+      : new THREE.BufferAttribute(new Uint32Array(newIndices), 1)
+  );
+  return { geometry: newGeo, worldPositions, worldNormals, replaced: true };
 }
 
 /**
@@ -948,6 +1153,7 @@ export function prepareCadBeamDeformation(params: PrepareCadBeamParams): {
     fixedEnd,
     memberOpacity,
     isModal,
+    rollAboutXRad = 0,
   } = params;
 
   // Ensure the beam is parameterized left-to-right (+X) so asymmetric front/rear flanges stay oriented
@@ -977,7 +1183,7 @@ export function prepareCadBeamDeformation(params: PrepareCadBeamParams): {
 
   // Transform GLB vertices from CAD coords (+X span, -Y front, +Z up) to Three.js Y-up beam frame
   beamClone.position.set(0, 0, 0);
-  beamClone.rotation.set(-Math.PI * 0.5, 0, 0);
+  beamClone.rotation.set(-Math.PI * 0.5 + rollAboutXRad, 0, 0);
   beamClone.scale.set(cadMToThree, cadMToThree, cadMToThree);
   beamClone.updateMatrixWorld(true);
 
@@ -993,15 +1199,26 @@ export function prepareCadBeamDeformation(params: PrepareCadBeamParams): {
   const invNativeLen = 1 / Math.max(nativeLengthThree, 1e-4);
 
   for (const { mesh, worldMat } of collected) {
-    const geo = mesh.geometry;
-    const posAttr = geo.getAttribute("position") as THREE.BufferAttribute | undefined;
-    if (!posAttr) continue;
-    if (!geo.getAttribute("normal")) {
-      geo.computeVertexNormals();
+    const origGeo = mesh.geometry;
+    const origPosAttr = origGeo.getAttribute("position") as THREE.BufferAttribute | undefined;
+    if (!origPosAttr) continue;
+    if (!origGeo.getAttribute("normal")) {
+      origGeo.computeVertexNormals();
     }
-    const normAttr = geo.getAttribute("normal") as THREE.BufferAttribute;
-    const count = posAttr.count;
 
+    _cadNormalMat.getNormalMatrix(worldMat);
+    const {
+      geometry: geo,
+      worldPositions,
+      worldNormals,
+      replaced,
+    } = subdivideBeamGeometryAlongX(origGeo, worldMat, _cadNormalMat, nativeLengthThree);
+    if (replaced) {
+      mesh.geometry = geo;
+      origGeo.dispose();
+    }
+
+    const count = worldPositions.length / 3;
     const stationIdx = new Uint8Array(count);
     const stationFrac = new Float32Array(count);
     const uOff = new Float32Array(count);
@@ -1011,30 +1228,29 @@ export function prepareCadBeamDeformation(params: PrepareCadBeamParams): {
     const restNV = new Float32Array(count);
     const colors = useVertexColors ? new Float32Array(count * 3) : null;
 
-    _cadNormalMat.getNormalMatrix(worldMat);
-
     for (let i = 0; i < count; i++) {
-      _cadTmpPos.fromBufferAttribute(posAttr, i).applyMatrix4(worldMat);
-      const t = Math.max(0, Math.min(1, _cadTmpPos.x * invNativeLen + 0.5));
+      const o3 = i * 3;
+      const wx = worldPositions[o3];
+      const wy = worldPositions[o3 + 1];
+      const wz = worldPositions[o3 + 2];
+      const t = Math.max(0, Math.min(1, wx * invNativeLen + 0.5));
       const sFloat = t * CAD_BEAM_LUT_STEPS;
       const sIdx = Math.min(CAD_BEAM_LUT_STEPS - 1, Math.floor(sFloat));
       stationIdx[i] = sIdx;
       stationFrac[i] = sFloat - sIdx;
       // Three.js +Z corresponds to Bishop U (+Z when refAxis=+X); Three.js +Y corresponds to Bishop V (+Y)
-      uOff[i] = _cadTmpPos.z;
-      vOff[i] = _cadTmpPos.y;
+      uOff[i] = wz;
+      vOff[i] = wy;
 
-      _cadTmpNorm.fromBufferAttribute(normAttr, i).applyMatrix3(_cadNormalMat).normalize();
-      restNT[i] = _cadTmpNorm.x;
-      restNU[i] = _cadTmpNorm.z;
-      restNV[i] = _cadTmpNorm.y;
+      restNT[i] = worldNormals[o3];
+      restNU[i] = worldNormals[o3 + 2];
+      restNV[i] = worldNormals[o3 + 1];
 
       if (colors) {
         evalSpanParam(t, spanFracs, _cadSpanOut);
         const v0 = orderedValues[_cadSpanOut.spanIdx] ?? 0;
         const v1 = orderedValues[_cadSpanOut.spanIdx + 1] ?? v0;
         stressColorInto(v0 + (v1 - v0) * _cadSpanOut.u, _beamCol);
-        const o3 = i * 3;
         colors[o3] = _beamCol.r;
         colors[o3 + 1] = _beamCol.g;
         colors[o3 + 2] = _beamCol.b;

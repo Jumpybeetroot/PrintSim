@@ -543,7 +543,7 @@ def create_app() -> FastAPI:
         return FileResponse(
             path=str(glb_path),
             media_type="model/gltf-binary",
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "no-cache"},
         )
 
     @api.post("/api/simulate")

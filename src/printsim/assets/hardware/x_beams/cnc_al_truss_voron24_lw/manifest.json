@@ -5,24 +5,24 @@
   "name": "Voron 2.4 Lightweight Milled 20x20 X-Beam (Emil Wallberg)",
   "source_cad": "GrabCAD Emil Wallberg Voron 2.4 Lightweight X-Axis 300mm (Voron_XAxis_LW_300.STEP, 19.6x19.6x380mm)",
   "source_url": "https://grabcad.com/library/voron-2-4-lightweight-x-axis-1",
-  "baked_at": "2026-11-28T15:39:59Z",
+  "baked_at": "2026-11-28T16:42:46Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
   "is_multi_material": false,
   "is_fdm_anisotropic": false,
   "element_type": "Tet4",
-  "num_vertices": 22617,
-  "num_elements": 66503,
-  "num_dofs": 67851,
+  "num_vertices": 22629,
+  "num_elements": 66558,
+  "num_dofs": 67887,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.004524,
+  "rigid_body_max_freq_hz": 0.006473,
   "mass_kg": 0.064925,
   "com_mm": [
     1.133,
-    -0.1336,
-    -0.0865
+    -0.0865,
+    0.1336
   ],
   "port0_mm": [
     -190.0,
@@ -35,22 +35,22 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 4630.068,
-    "ky": 7.295,
-    "kz": 6.955
+    "kx": 4631.548,
+    "ky": 6.96,
+    "kz": 7.298
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 109.911,
-    "kry": 325.698,
-    "krz": 339.318
+    "krx": 109.89,
+    "kry": 339.444,
+    "krz": 325.848
   },
   "fixed_interface_freqs_hz": [
-    727.09,
-    764.05,
-    1714.2,
-    1818.5,
-    2069.08,
-    2855.71
+    727.18,
+    764.16,
+    1713.86,
+    1818.61,
+    2068.51,
+    2854.28
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 16000,
@@ -64,10 +64,10 @@
       "mass_g": 19.42,
       "com_mm": [
         -144.06,
-        -0.18,
-        -0.12
+        -0.12,
+        0.18
       ],
-      "num_elements": 17254
+      "num_elements": 17251
     },
     {
       "id": "main_chassis",
@@ -75,11 +75,11 @@
       "material_id": "aluminum_6061_t6",
       "mass_g": 25.52,
       "com_mm": [
-        -0.28,
-        0.0,
-        -0.09
+        -0.29,
+        -0.09,
+        -0.0
       ],
-      "num_elements": 32155
+      "num_elements": 32177
     },
     {
       "id": "hotend_mount_zone",
@@ -88,13 +88,13 @@
       "mass_g": 19.99,
       "com_mm": [
         143.98,
-        -0.27,
-        -0.04
+        -0.04,
+        0.27
       ],
-      "num_elements": 17094
+      "num_elements": 17130
     }
   ],
-  "source_hash": "87d92ceee9e1c7309446e55a670e34081647a5b67294383f0d262e9bc4e7d85a",
+  "source_hash": "1726b7e78a9b8d22a9d7775421e15951fd2c461a02a08c7007c4dba867d2df70",
   "has_superelement": true,
   "length_mm": 380.0,
   "width_mm": 19.6,

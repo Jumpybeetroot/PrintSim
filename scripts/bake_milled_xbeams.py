@@ -21,6 +21,7 @@ in ``manifest.json`` are preserved byte-for-byte.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from printsim.cad_assets.baker import (
     BakedAssetSpec,
     MaterialRegion,
     PortDefinition,
+    VisualPart,
     bake_solid_superelement,
 )
 from printsim.cad_assets.registry import ASSETS_ROOT
@@ -77,8 +79,14 @@ def _load_and_align_solid(
     return solid
 
 
-def bake_all_milled_xbeams() -> None:
-    """Bake 3D Tet4 CB superelements + 3D intra-part fields for all 3 CNC milled X-beams."""
+def bake_all_milled_xbeams(only_ids: set[str] | None = None) -> None:
+    """Bake 3D Tet4 CB superelements + 3D intra-part fields + aligned PBR GLBs for CNC milled X-beams.
+
+    Canonical PrintSim X-beam CAD frame:
+      +X: span (left to right, [-L/2, +L/2])
+      -Y: front rail-mounting face (MGN rail bolts / solid flange)
+      +Z: top (up)
+    """
     configs: list[dict[str, Any]] = [
         {
             "asset_id": "cnc_al_fysetc_v0_15x15",
@@ -87,8 +95,10 @@ def bake_all_milled_xbeams() -> None:
             "source_cad": "GrabCAD Nicotina52 FYSETC X-Beam Voron0 200mm (Fysetc X-Beam [Voron0 200mm].step, 15x15x200mm)",
             "source_url": "https://grabcad.com/library/fysetc-x-beam-voron0-200mm-1",
             "material_id": "aluminum_6061_t6",
+            "color_hex": "#1f2937",
             "rot_y_deg": 0.0,
-            "rot_x_deg": 0.0,
+            # Raw STEP has M2 MGN7 rail mount holes on +Z; +90° about X moves +Z -> -Y (front)
+            "rot_x_deg": 90.0,
             "mesh_size_mm": 3.0,
             "port_band_mm": 5.0,
             "cad_trust_pct": 93,
@@ -100,7 +110,9 @@ def bake_all_milled_xbeams() -> None:
             "source_cad": "Parametric build123d 20x20x380mm semi-monocoque Warren-truss beam (solid MGN12H front flange + 3-face CNC pockets)",
             "source_url": "https://github.com/Jumpybeetroot/PrintSim",
             "material_id": "aluminum_6061_t6",
+            "color_hex": "#cbd5e1",
             "rot_y_deg": 0.0,
+            # Parametric STEP already has solid MGN12H front flange on -Y (front)
             "rot_x_deg": 0.0,
             "mesh_size_mm": 3.8,
             "port_band_mm": 6.0,
@@ -113,8 +125,10 @@ def bake_all_milled_xbeams() -> None:
             "source_cad": "GrabCAD Emil Wallberg Voron 2.4 Lightweight X-Axis 300mm (Voron_XAxis_LW_300.STEP, 19.6x19.6x380mm)",
             "source_url": "https://grabcad.com/library/voron-2-4-lightweight-x-axis-1",
             "material_id": "aluminum_6061_t6",
+            "color_hex": "#d1d5db",
             "rot_y_deg": 90.0,
-            "rot_x_deg": 0.0,
+            # After rot_y=+90°, M3 MGN12 rail mount holes sit on -Z (bottom); -90° about X moves -Z -> -Y (front)
+            "rot_x_deg": -90.0,
             "mesh_size_mm": 3.8,
             "port_band_mm": 6.0,
             "cad_trust_pct": 93,
@@ -123,12 +137,11 @@ def bake_all_milled_xbeams() -> None:
 
     for cfg in configs:
         asset_id = cfg["asset_id"]
+        if only_ids and asset_id not in only_ids:
+            continue
         asset_dir = ASSETS_ROOT / "x_beams" / asset_id
-        glb_path = asset_dir / "visual.glb"
         manifest_path = asset_dir / "manifest.json"
 
-        # Preserve existing high-detail PBR visual.glb and FEA section properties
-        existing_glb_bytes = glb_path.read_bytes() if glb_path.is_file() else None
         existing_manifest = (
             json.loads(manifest_path.read_text(encoding="utf-8"))
             if manifest_path.is_file()
@@ -172,12 +185,16 @@ def bake_all_milled_xbeams() -> None:
                 "length_mm": round(length_mm, 3),
                 "width_mm": round(float(bb.size.Y), 3),
                 "height_mm": round(float(bb.size.Z), 3),
+                "rot_y_deg": float(cfg["rot_y_deg"]),
+                "rot_x_deg": float(cfg["rot_x_deg"]),
+                "rail_mount_face": "-Y",
             },
         )
 
         print(
             f"=== Baking {asset_id} (L={length_mm:.1f}mm, "
-            f"W={bb.size.Y:.2f}mm, H={bb.size.Z:.2f}mm, h={cfg['mesh_size_mm']}mm) ===",
+            f"W={bb.size.Y:.2f}mm, H={bb.size.Z:.2f}mm, h={cfg['mesh_size_mm']}mm, "
+            f"rot_x={cfg['rot_x_deg']}deg) ===",
             flush=True,
         )
         res = bake_solid_superelement(
@@ -189,27 +206,27 @@ def bake_all_milled_xbeams() -> None:
                     label="cnc_xbeam_body",
                 )
             ],
+            visual_parts=[
+                VisualPart(
+                    shape_or_mesh=solid,
+                    label=asset_id,
+                    color_hex=cfg["color_hex"],
+                    metallic=0.82,
+                    roughness=0.30,
+                )
+            ],
             assets_root=ASSETS_ROOT,
         )
 
-        # Restore preserved PBR visual.glb and merge preserved manifest metadata
-        if existing_glb_bytes is not None:
-            glb_path.write_bytes(existing_glb_bytes)
-
         merged_manifest = dict(res.manifest)
         merged_manifest["has_superelement"] = True
-        merged_manifest["length_mm"] = float(existing_manifest.get("length_mm", round(length_mm, 2)))
-        merged_manifest["width_mm"] = float(existing_manifest.get("width_mm", round(float(bb.size.Y), 2)))
-        merged_manifest["height_mm"] = float(existing_manifest.get("height_mm", round(float(bb.size.Z), 2)))
+        merged_manifest["length_mm"] = round(length_mm, 2)
+        merged_manifest["width_mm"] = round(float(bb.size.Y), 2)
+        merged_manifest["height_mm"] = round(float(bb.size.Z), 2)
         if "source" in existing_manifest:
             merged_manifest["source"] = existing_manifest["source"]
         if "fea_section_properties" in existing_manifest:
             merged_manifest["fea_section_properties"] = existing_manifest["fea_section_properties"]
-        if existing_glb_bytes is not None:
-            merged_manifest["visual_triangles"] = int(
-                existing_manifest.get("visual_triangles", merged_manifest.get("visual_triangles", 16000))
-            )
-            merged_manifest["visual_bytes"] = len(existing_glb_bytes)
 
         manifest_path.write_text(json.dumps(merged_manifest, indent=2), encoding="utf-8")
 
@@ -227,4 +244,5 @@ def bake_all_milled_xbeams() -> None:
 
 
 if __name__ == "__main__":
-    bake_all_milled_xbeams()
+    only = {arg for arg in sys.argv[1:] if not arg.startswith("-")} or None
+    bake_all_milled_xbeams(only_ids=only)

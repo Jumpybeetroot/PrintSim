@@ -15,5 +15,8 @@
   "step_source": "cad_sources/milled_x_beams/voron24_lw/Voron 2.4 LW X-Axis/step/Voron_XAxis_LW_300.STEP",
   "length_mm": 380.0,
   "width_mm": 19.6,
-  "height_mm": 19.6
+  "height_mm": 19.6,
+  "rot_y_deg": 90.0,
+  "rot_x_deg": -90.0,
+  "rail_mount_face": "-Y"
 }

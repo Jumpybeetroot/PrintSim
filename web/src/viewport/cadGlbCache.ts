@@ -30,30 +30,36 @@ export function computeCadGlbBounds(root: THREE.Group): THREE.Box3 {
 export function loadCadGlbCached(url: string): Promise<THREE.Group | null> {
   const existing = cadGlbPromiseCache.get(url);
   if (existing) return existing;
-  const promise = new Promise<THREE.Group | null>((resolve) => {
-    cadGltfLoader.load(
-      url,
-      (gltf) => {
-        const root = gltf.scene ?? null;
-        if (root) {
-          const bounds = computeCadGlbBounds(root);
-          if (!bounds.isEmpty()) {
-            cadGlbBoundsCache.set(url, bounds);
-            cadGlbResolvedCache.set(url, root);
-            resolve(root);
-            return;
-          }
-        }
+  const promise = (async (): Promise<THREE.Group | null> => {
+    try {
+      const resp = await fetch(url, { cache: "no-cache" });
+      if (!resp.ok) {
         cadGlbResolvedCache.set(url, null);
-        resolve(null);
-      },
-      undefined,
-      () => {
-        cadGlbResolvedCache.set(url, null);
-        resolve(null);
+        return null;
       }
-    );
-  });
+      const buffer = await resp.arrayBuffer();
+      const root = await new Promise<THREE.Group | null>((resolve) => {
+        cadGltfLoader.parse(
+          buffer,
+          "",
+          (gltf) => resolve(gltf.scene ?? null),
+          () => resolve(null)
+        );
+      });
+      if (root) {
+        const bounds = computeCadGlbBounds(root);
+        if (!bounds.isEmpty()) {
+          cadGlbBoundsCache.set(url, bounds);
+          cadGlbResolvedCache.set(url, root);
+          return root;
+        }
+      }
+    } catch {
+      // Fall through to null cache entry
+    }
+    cadGlbResolvedCache.set(url, null);
+    return null;
+  })();
   cadGlbPromiseCache.set(url, promise);
   return promise;
 }

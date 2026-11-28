@@ -2861,6 +2861,10 @@ export const PrinterViewport: React.FC<Props> = ({
 
         if (cachedXBeamGlb && xBeamVis) {
           const nativeLenThree = Math.max(xBeamVis.length_mm * SCALE, 1e-4);
+          const xRailMount = geom.linear_rails?.x_rail_mount ?? sim.spec.gantry.x_rail_mount ?? "front";
+          // Canonical milled X-beam GLBs have their rail-mounting face on CAD -Y (front).
+          // When x_rail_mount is "top" (or "dual_top_bottom"), roll -90° about +X so the rail face moves to Three.js +Y (top).
+          const xBeamRollX = xRailMount === "top" || xRailMount === "dual_top_bottom" ? -Math.PI * 0.5 : 0;
           const beamClone = cloneCachedCadGlb(cachedXBeamGlb, {
             isHeatMode: false,
             heatColor: matColor,
@@ -2873,7 +2877,7 @@ export const PrinterViewport: React.FC<Props> = ({
             const spanThree = feaSpanThree + 2 * xBeamEndExt;
             const scaleX = (spanThree / nativeLenThree) * CAD_M_TO_THREE;
             // GLB is in PrintSim CAD coords (+X span, -Y front, +Z up); rotate -90° about X for Three.js Y-up
-            beamClone.rotation.x = -Math.PI * 0.5;
+            beamClone.rotation.x = -Math.PI * 0.5 + xBeamRollX;
             beamClone.scale.set(scaleX, CAD_M_TO_THREE, CAD_M_TO_THREE);
             const wrapper = new THREE.Group();
             wrapper.name = `cad_x_beam_${xBeamVis.asset_id}`;
@@ -2910,6 +2914,7 @@ export const PrinterViewport: React.FC<Props> = ({
               fixedEnd,
               memberOpacity,
               isModal: viewMode === "modal",
+              rollAboutXRad: xBeamRollX,
             });
             if (xBeamEndExt > 0) {
               cadBeam.endExtension = xBeamEndExt;
