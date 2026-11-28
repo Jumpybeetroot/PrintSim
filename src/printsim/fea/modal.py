@@ -1090,6 +1090,11 @@ def _precompute_modal_element_blocks(
                 normal_vec=np.asarray(sp.normal_vec, dtype=float),
                 offset_vec=np.asarray(sp.offset_m, dtype=float),
                 k_diag_6dof=sp.k_diag_6dof,
+                offset_vec_frame=(
+                    None
+                    if getattr(sp, "offset_frame_m", None) is None
+                    else np.asarray(sp.offset_frame_m, dtype=float)
+                ),
             )
             dofs = [6 * i_s + d for d in range(6)] + [6 * i_f + d for d in range(6)]
         bay_raw = sp.bay

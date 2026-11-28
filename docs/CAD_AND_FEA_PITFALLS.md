@@ -109,6 +109,11 @@ This playbook captures the hard-won engineering pitfalls, mathematical invariant
 
 ---
 
+### Pitfall 4C-2: One Shared Lever Arm on a 6-DOF Spring Whose Nodes Are Apart
+- **Symptom**: Inner-mounted Y rails place `y_car_*` on the raceway, about 15 mm from `y_rail_car_*`. Building `y_car_bearing_*` with a single `offset_m` applied to both nodes (`K = T^T K6 T` in all four blocks) is only valid for co-located nodes. With the nodes apart, rotating both together as a rigid body stored energy: `k_z a^2` about Y (49.8 kN·m/rad) and `k_y a^2` about Z (219 kN·m/rad, through the 1e9 N/m axial lock), and a twist of the rail node moved the carriage the wrong way.
+- **Fix**: `FastenerSpring.offset_frame_m` + `fastener_spring_matrices(..., offset_vec_frame=...)`. The relative motion at the contact point is `(u0 + th0 x a0) - (u1 + th1 x a1)`, so `K12 = [T0, -T1]^T K6 [T0, -T1]` with one rigid arm per node, both ending at the same contact point (`p_shell + offset_m == p_frame + offset_frame_m`). For inner rails the contact is the raceway: `offset_m = p_car - p_rail`, `offset_frame_m = (0, 0, 0)`. Co-located springs (top/bottom rails, rigid ties) leave `offset_frame_m = None` and keep the old matrix bit-for-bit.
+- **Check**: `tests/test_spring_rigid_body_invariance.py` asserts every 6-DOF spring in every CoreXY example has `K12 @ rigid_modes == 0`. Any new spring between separated nodes must pass it.
+
 ### Pitfall 4D: Top-Mounted Rails, Visual-Only CAD Toolheads & Raceway-Offset Carriage Nodes
 - **Symptom**: CAD toolheads were only seated on front-carriage rails (`isCadSelfContainedToolhead` requires `x_rail_mount === "front"`), so a VzBot Vz-Printhead on a top MGN9H fell back to the procedural box; and once inner-rail `y_car_*` nodes moved onto the raceway, XY-joint GLBs anchored at `y_car` would shift 14.8 mm inboard of their CAD datum.
 - **Invariant**:

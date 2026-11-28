@@ -407,6 +407,7 @@ def fastener_spring_matrices(
     normal_vec: np.ndarray,
     offset_vec: np.ndarray | None = None,
     k_diag_6dof: tuple[float, float, float, float, float, float] | None = None,
+    offset_vec_frame: np.ndarray | None = None,
 ) -> np.ndarray:
     """Build exact symmetric 12x12 two-node 3D CBUSH spring stiffness matrix.
 
@@ -416,7 +417,26 @@ def fastener_spring_matrices(
     If ``offset_vec`` (``p_shell - p_frame`` in global meters) is nonzero, applies an
     exact rigid-body eccentric lever-arm transformation on Node 1 so rigid rotations
     have zero strain energy and parallel-axis composite flange bending is captured.
+
+    With ``k_diag_6dof``, the 6-DOF stiffness acts at one contact point reached from each
+    node by a rigid arm. When the two nodes are co-located, ``offset_vec`` alone is that arm
+    for both. When they are apart, pass ``offset_vec`` (shell node -> contact point) and
+    ``offset_vec_frame`` (frame node -> contact point) separately; the two arms must end at
+    the same point (``p_shell + offset_vec == p_frame + offset_vec_frame``) for all six
+    rigid-body modes to stay strain-free.
     """
+    if k_diag_6dof is not None and offset_vec_frame is not None:
+        # Separated nodes: relative motion at the contact point is
+        # (u0 + th0 x a0) - (u1 + th1 x a1), i.e. d = [T0, -T1] q with T_i = [[I, -skew(a_i)], [0, I]].
+        k6 = np.diag(np.asarray(k_diag_6dof, dtype=float))
+        t_0 = np.eye(6, dtype=float)
+        if offset_vec is not None:
+            t_0[0:3, 3:6] = -_skew(np.asarray(offset_vec, dtype=float))
+        t_1 = np.eye(6, dtype=float)
+        t_1[0:3, 3:6] = -_skew(np.asarray(offset_vec_frame, dtype=float))
+        b_rel = np.hstack([t_0, -t_1])
+        k12 = b_rel.T @ k6 @ b_rel
+        return 0.5 * (k12 + k12.T)
     if k_diag_6dof is not None:
         k_diag = np.diag(np.asarray(k_diag_6dof, dtype=float))
         if offset_vec is not None:

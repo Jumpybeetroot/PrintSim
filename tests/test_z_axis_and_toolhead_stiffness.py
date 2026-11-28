@@ -717,7 +717,8 @@ def test_modal_nodal_rotations_populated_and_v6_vs_chube_hotend_bending() -> Non
     v6_drot, v6_dv = _max_rel_hotend_bending(asm_v6, mo_v6)
     chube_drot, chube_dv = _max_rel_hotend_bending(asm_chube, mo_chube)
     assert v6_drot > chube_drot * 5.0
-    assert v6_dv > chube_dv * 3.8
+    # 3.33x on this inner-rail preset with the rigid-body-invariant Y-carriage bearing (3.99x before)
+    assert v6_dv > chube_dv * 3.0
 
 
 # ---------------------------------------------------------------------------

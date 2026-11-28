@@ -109,6 +109,9 @@ class FastenerSpring:
     normal_vec: tuple[float, float, float] = (0.0, 0.0, 1.0)
     offset_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     k_diag_6dof: tuple[float, float, float, float, float, float] | None = None
+    # 6-DOF springs between nodes that are NOT co-located: rigid arm from the frame node to the
+    # contact point, with offset_m then being the arm from the shell node to that same point.
+    offset_frame_m: tuple[float, float, float] | None = None
 
 
 @dataclass

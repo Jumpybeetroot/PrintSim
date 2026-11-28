@@ -303,8 +303,10 @@ def test_inner_rail_carriage_rides_raceway_with_rigid_arm(vz_spec: PrinterSpec) 
         assert (car - rail)[0] == pytest.approx(sign * 0.0148, abs=1e-9)
         assert car[1:] == pytest.approx(rail[1:])
         sp = next(s for s in asm.fastener_springs if s.id == f"y_car_bearing_{side}")
-        # Rigid arm from the raceway (frame node = carriage) back to the extrusion axis (shell = rail)
-        assert np.asarray(sp.offset_m) == pytest.approx(rail - car)
+        # Hertzian contact at the raceway: rigid arm from the rail node (shell) out to the carriage
+        # node (frame), and no arm on the carriage node itself
+        assert np.asarray(sp.offset_m) == pytest.approx(car - rail)
+        assert sp.offset_frame_m == (0.0, 0.0, 0.0)
         # XY-joint superelement now spans raceway -> CF-tube clamp (43.5 - 14.8 = 28.7 mm)
         xb = nm[f"x_beam_{side}"].position_m
         assert abs(xb[0] - car[0]) == pytest.approx(0.0435 - 0.0148, abs=2e-4)

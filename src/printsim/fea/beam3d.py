@@ -557,6 +557,11 @@ def assemble_global_system(assembly: AssemblyModel, freeze: bool = True) -> Glob
             normal_vec=np.asarray(spring.normal_vec, dtype=float),
             offset_vec=np.asarray(spring.offset_m, dtype=float),
             k_diag_6dof=spring.k_diag_6dof,
+            offset_vec_frame=(
+                None
+                if getattr(spring, "offset_frame_m", None) is None
+                else np.asarray(spring.offset_frame_m, dtype=float)
+            ),
         )
         dofs = list(range(6 * i_s, 6 * i_s + 6)) + list(range(6 * i_f, 6 * i_f + 6))
         K[np.ix_(dofs, dofs)] += k_sp

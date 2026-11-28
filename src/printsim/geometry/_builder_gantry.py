@@ -1186,11 +1186,15 @@ def _build_y_carriage_bearing_superelement(
     y_mount = spec.gantry.y_rail_mount
     side = "l" if se_id.endswith("_l") else "r"
     lever_arm = y_carriage_lever_arm_m(spec.gantry.y_rail_profile, y_mount, side)
+    frame_arm: tuple[float, float, float] | None = None
     if y_mount == "inner" and rail_and_car_pos_m is not None:
-        # Carriage node already sits on the raceway: rigid arm back to the Y-extrusion axis
-        # (p_shell - p_frame = y_rail_car - y_car), Hertzian contact acting at the raceway.
+        # Carriage node already sits on the raceway, apart from the rail node on the Y-extrusion
+        # axis. The Hertzian contact acts at the raceway: rigid arm from the rail node (shell) out
+        # to the carriage node, zero arm on the carriage node (frame). One shared arm for both
+        # nodes is only valid when they coincide and would break rigid-body invariance here.
         p_rail, p_car = rail_and_car_pos_m
-        lever_arm = tuple(float(v) for v in (np.asarray(p_rail) - np.asarray(p_car)))
+        lever_arm = tuple(float(v) for v in (np.asarray(p_car) - np.asarray(p_rail)))
+        frame_arm = (0.0, 0.0, 0.0)
     k_yy_lock = 1.0e9
     k_ry_roll = max(float(y_car["k_rx_nm_rad"]), 1.0)
     if y_mount == "inner":
@@ -1215,6 +1219,7 @@ def _build_y_carriage_bearing_superelement(
         normal_vec=(0.0, 1.0, 0.0),
         offset_m=lever_arm,
         k_diag_6dof=(k_xx, k_yy_lock, k_zz, k_rx, k_ry_roll, k_rz),
+        offset_frame_m=frame_arm,
     )
 
 
