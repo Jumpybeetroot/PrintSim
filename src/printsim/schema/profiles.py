@@ -177,7 +177,7 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
         area_m2=1.83e-4,  # 183 mm^2 = 0.494 kg/m (D-04: Misumi HFS5-2020 datasheet)
         iy_m4=0.742e-8,  # 0.742 cm^4 (Misumi HFS5-2020 datasheet)
         iz_m4=0.742e-8,
-        j_m4=0.11e-8,  # 0.11 cm^4 open T-slot St. Venant torsion constant I_t (Bosch/Item datasheet)
+        j_m4=0.0783e-8,  # 0.0783 cm^4 open T-slot St. Venant torsion constant (sectionproperties warping FEM on Misumi HFSB5-2020 STEP)
     ),
     "extrusion_2040": ProfileSpec(
         id="extrusion_2040",

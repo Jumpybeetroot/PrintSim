@@ -174,15 +174,6 @@ def test_2020_vendor_cad_torsion_constant_value():
     assert fem["j"] / (fem["ixx"] + fem["iyy"]) < 0.06
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known catalog discrepancy: extrusion_2020 j_m4 = 0.11 cm^4 (scaled from Bosch/item tables) is "
-        "about 40 % above the 0.078 cm^4 the vendor-CAD outline gives. Changing it shifts every 2020 "
-        "frame and X-beam torsion result and the shaper baselines, so it is left for a deliberate "
-        "recalibration. Remove this marker when the catalog value is updated."
-    ),
-)
 def test_2020_catalog_torsion_constant_matches_vendor_cad():
     _, fem = _load_fixture("extrusion_2020")
     cat = _catalog_mm(PROFILE_CATALOG["extrusion_2020"])

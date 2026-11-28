@@ -93,6 +93,7 @@
 - **`scripts/calibrate_corner_joints_fea.py`** (810 lines): `iso_constitutive_3d()` L63–77, `mindlin_contact_pad_3d()` L80–95, `_make_2020_tslot_face()` L108–124, `_extrude_z()` L127–133, `_extrude_x_at_z()` L136–142, `_fragment_and_tag()` L145–175, `_build_rigid_control()` L183–188, `_build_gusset_welded_control()` L191–210, `_build_cube_welded_control()` L213–221, `_build_blind_joint()` L224–242
 - **`scripts/calibrate_pocketed_rails_fea.py`** (1764 lines): `class RailGeomSpec` L71–132 [pocket_len_mm, min_raceway_wall_mm, top_web_mm, foot_width_mm], `bolt_positions_mm()` L307–334, `pocket_centers_mm()` L337–340, `_make_rounded_rect_face_yz()` L343–350, `build_rail_part_mm()` L353–506, `iso_constitutive_3d()` L514–524, `ortho_constitutive_3d()` L527–548, `mindlin_pad_constitutive_3d()` L551–556, `_fragment_and_tag()` L559–589, `_mesh_and_assemble()` L592–660
 - **`scripts/calibrate_xbeam_3d_fea.py`** (1420 lines): `ortho_constitutive_3d()` L49–74, `iso_constitutive_3d()` L77–91, `normal_bearing_constitutive_3d()` L94–105, `mindlin_pad_constitutive_3d()` L108–113, `cf_constitutive_at_temp()` L116–134, `_make_rounded_rect_face()` L142–157, `_make_2020_tslot_face()` L160–176, `_extrude_x()` L179–185, `_make_rail_solid_front()` L188–204, `_make_cf_insert_block()` L207–215
+- **`scripts/derive_profile_sections.py`** (152 lines): `extract_section()` L50–90, `section_properties()` L93–112, `main()` L115–148
 - **`scripts/gen_codebase_map.py`** (126 lines): `generate_map()` L75–116, `main()` L119–122
 
 ## Web 3D Studio (`web/src/`)
