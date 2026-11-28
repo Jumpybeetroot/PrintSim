@@ -5,24 +5,24 @@
   "name": "Siboor / Voron Lightweight CNC 6061-T6 X-Carriage",
   "source_cad": "siboor_cnc_x_carriage.step",
   "source_url": "https://cad.onshape.com/documents/8815cfcf2c39d4bef7b1d1fe/w/333249d118e927d6219d2e17/e/3d4c8b8bb873147aa0f62918",
-  "baked_at": "2026-11-27T13:51:05Z",
+  "baked_at": "2026-11-28T15:37:57Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
   "is_multi_material": false,
   "is_fdm_anisotropic": false,
   "element_type": "Tet4",
-  "num_vertices": 3262,
-  "num_elements": 8930,
-  "num_dofs": 9786,
+  "num_vertices": 8200,
+  "num_elements": 25395,
+  "num_dofs": 24600,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.011273,
-  "mass_kg": 0.020199,
+  "rigid_body_max_freq_hz": 0.026267,
+  "mass_kg": 0.019061,
   "com_mm": [
-    -0.019,
-    -4.8992,
-    -5.6848
+    -0.0115,
+    -4.7111,
+    4.3457
   ],
   "port0_mm": [
     0.0,
@@ -35,76 +35,64 @@
     -10.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 636.436,
-    "ky": 903.028,
-    "kz": 4488.433
+    "kx": 1940.335,
+    "ky": 2601.598,
+    "kz": 2405.814
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 571.009,
-    "kry": 695.941,
-    "krz": 141.472
+    "krx": 221.151,
+    "kry": 378.815,
+    "krz": 36.629
   },
   "fixed_interface_freqs_hz": [
-    911.97,
-    2608.69,
-    2621.24,
-    3451.84,
-    5969.21,
-    6660.82
+    1227.17,
+    1944.29,
+    2540.24,
+    3794.03,
+    5192.6,
+    6158.57
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 12000,
-  "visual_bytes": 458324,
+  "visual_bytes": 433348,
   "cad_trust_pct": 90,
   "subparts": [
     {
       "id": "carriage_mount_zone",
       "name": "Carriage Mount Zone",
       "material_id": "aluminum_6061_t6",
-      "mass_g": 10.4,
+      "mass_g": 11.18,
       "com_mm": [
-        0.0,
-        -4.71,
-        13.94
+        -0.01,
+        -4.31,
+        20.49
       ],
-      "num_elements": 4598
+      "num_elements": 14881
     },
     {
       "id": "main_chassis",
       "name": "Main Chassis",
       "material_id": "aluminum_6061_t6",
-      "mass_g": 1.22,
+      "mass_g": 1.9,
       "com_mm": [
-        -0.13,
-        -1.37,
-        -10.3
+        -0.01,
+        -1.7,
+        -8.44
       ],
-      "num_elements": 536
+      "num_elements": 2547
     },
     {
       "id": "hotend_mount_zone",
       "name": "Hotend Mount Zone",
       "material_id": "aluminum_6061_t6",
-      "mass_g": 8.47,
+      "mass_g": 5.98,
       "com_mm": [
-        -0.03,
-        -5.52,
-        -29.31
+        -0.02,
+        -6.43,
+        -21.75
       ],
-      "num_elements": 3750
-    },
-    {
-      "id": "upper_extruder_zone",
-      "name": "Upper Extruder Zone",
-      "material_id": "aluminum_6061_t6",
-      "mass_g": 0.11,
-      "com_mm": [
-        0.0,
-        -13.77,
-        10.53
-      ],
-      "num_elements": 46
+      "num_elements": 7967
     }
   ],
-  "source_hash": "fd9cc71317d6771ae97fb9b2b05f267c1dabb164ae32612e11652730c7baa7af"
+  "source_hash": "cff78c730713ab31b9c7cf8d9f51da36ce40b1f3bf2ffb6fe17406aa5d37efa0"
 }

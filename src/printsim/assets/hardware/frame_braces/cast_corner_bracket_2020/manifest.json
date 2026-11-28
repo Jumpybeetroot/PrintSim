@@ -5,7 +5,7 @@
   "name": "Cast Al 2020 Corner Bracket (HBLFSN5 28\u00d728\u00d720 mm)",
   "source_cad": "Parametric build123d CAD (Misumi HBLFSN 2020 datasheet)",
   "source_url": "https://us.misumi-ec.com/vona2/detail/110300465900/",
-  "baked_at": "2026-11-27T04:19:27Z",
+  "baked_at": "2026-11-28T15:34:54Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 3072,
   "n_boundary_dofs": 12,
   "n_internal_modes": 4,
-  "rigid_body_max_freq_hz": 0.006976,
+  "rigid_body_max_freq_hz": 0.006967,
   "mass_kg": 0.01639,
   "com_mm": [
     9.9,
@@ -54,5 +54,43 @@
   "visual_triangles": 412,
   "visual_bytes": 19144,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 5.56,
+      "com_mm": [
+        18.94,
+        3.53,
+        -0.01
+      ],
+      "num_elements": 1119
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 5.25,
+      "com_mm": [
+        7.08,
+        7.06,
+        0.03
+      ],
+      "num_elements": 895
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 5.58,
+      "com_mm": [
+        3.54,
+        18.92,
+        -0.01
+      ],
+      "num_elements": 1121
+    }
+  ],
   "source_hash": "aa5297b9142d6c866816185adf7e07313872ccc9c9a994a954e3e8fda152b1cb"
 }

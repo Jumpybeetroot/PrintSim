@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "category": "x_beams",
+  "asset_id": "cnc_al_truss_voron24_lw",
+  "source_cad": "GrabCAD Emil Wallberg Voron 2.4 Lightweight X-Axis 300mm (Voron_XAxis_LW_300.STEP, 19.6x19.6x380mm)",
+  "source_url": "https://grabcad.com/library/voron-2-4-lightweight-x-axis-1",
+  "regions": [
+    {
+      "label": "cnc_xbeam_body",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": null
+    }
+  ],
+  "kind": "cnc_milled_x_beam",
+  "step_source": "cad_sources/milled_x_beams/voron24_lw/Voron 2.4 LW X-Axis/step/Voron_XAxis_LW_300.STEP",
+  "length_mm": 380.0,
+  "width_mm": 19.6,
+  "height_mm": 19.6
+}

@@ -5,7 +5,7 @@
   "name": "LDO Monolith CNC 6061 Front-Left Drive (AWD 9mm)",
   "source_cad": "front_left.step",
   "source_url": "https://cad.onshape.com/documents/739b76283701789caa9999c7/w/434ca8ef5e541eb4a503de27",
-  "baked_at": "2026-11-26T19:05:40Z",
+  "baked_at": "2026-11-28T15:36:14Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 7989,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.00354,
+  "rigid_body_max_freq_hz": 0.003535,
   "mass_kg": 0.089692,
   "com_mm": [
     22.8379,
@@ -56,5 +56,55 @@
   "visual_triangles": 21978,
   "visual_bytes": 867548,
   "cad_trust_pct": 90,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 11.01,
+      "com_mm": [
+        -5.33,
+        26.51,
+        -2.11
+      ],
+      "num_elements": 879
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 21.59,
+      "com_mm": [
+        14.77,
+        13.48,
+        -8.83
+      ],
+      "num_elements": 1700
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 39.03,
+      "com_mm": [
+        39.46,
+        14.09,
+        -0.62
+      ],
+      "num_elements": 3114
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 18.06,
+      "com_mm": [
+        13.73,
+        18.43,
+        14.0
+      ],
+      "num_elements": 1467
+    }
+  ],
   "source_hash": "92204374c4351dce995f262492d417a86011dd00cf3171e050c43283da8d08ac"
 }

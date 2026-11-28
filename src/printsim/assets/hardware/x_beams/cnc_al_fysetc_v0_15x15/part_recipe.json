@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "category": "x_beams",
+  "asset_id": "cnc_al_fysetc_v0_15x15",
+  "source_cad": "GrabCAD Nicotina52 FYSETC X-Beam Voron0 200mm (Fysetc X-Beam [Voron0 200mm].step, 15x15x200mm)",
+  "source_url": "https://grabcad.com/library/fysetc-x-beam-voron0-200mm-1",
+  "regions": [
+    {
+      "label": "cnc_xbeam_body",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": null
+    }
+  ],
+  "kind": "cnc_milled_x_beam",
+  "step_source": "cad_sources/milled_x_beams/fysetc_v0/Fysetc X-Beam [Voron0 200mm].step",
+  "length_mm": 200.0,
+  "width_mm": 15.0,
+  "height_mm": 15.13
+}

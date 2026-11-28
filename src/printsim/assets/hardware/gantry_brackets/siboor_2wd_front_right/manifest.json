@@ -5,7 +5,7 @@
   "name": "Siboor CNC 6061 Front-Right Idler (2WD)",
   "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
   "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
-  "baked_at": "2026-11-26T19:07:55Z",
+  "baked_at": "2026-11-28T15:43:05Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 3861,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.005774,
+  "rigid_body_max_freq_hz": 0.005181,
   "mass_kg": 0.042842,
   "com_mm": [
     -5.0035,
@@ -35,26 +35,76 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 87713.965,
-    "ky": 66481.306,
-    "kz": 2087.176
+    "kx": 86836.11,
+    "ky": 51756.494,
+    "kz": 1679.024
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 275.703,
-    "kry": 1803.252,
-    "krz": 7007.816
+    "krx": 280.035,
+    "kry": 1795.44,
+    "krz": 7173.688
   },
   "fixed_interface_freqs_hz": [
-    791.1,
-    2275.99,
-    2424.41,
-    12172.02,
-    13711.75,
-    13819.68
+    779.99,
+    1895.73,
+    2385.16,
+    12888.46,
+    13776.61,
+    14137.29
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21992,
   "visual_bytes": 752076,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 25.1,
+      "com_mm": [
+        2.04,
+        28.5,
+        -0.87
+      ],
+      "num_elements": 2003
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 3.15,
+      "com_mm": [
+        -9.07,
+        18.37,
+        -15.96
+      ],
+      "num_elements": 250
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 9.48,
+      "com_mm": [
+        -20.19,
+        9.39,
+        -0.83
+      ],
+      "num_elements": 756
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 5.12,
+      "com_mm": [
+        -8.9,
+        19.64,
+        15.93
+      ],
+      "num_elements": 411
+    }
+  ],
   "source_hash": "75d78bc72f1f9a660c7b050e9a407f32d22b74ff148b58a43518875beabbc807"
 }

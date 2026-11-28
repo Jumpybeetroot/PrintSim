@@ -5,7 +5,7 @@
   "name": "CNC Al 4040 5-Hole Corner Gusset Plate (120\u00d7120\u00d76 mm)",
   "source_cad": "Parametric build123d CAD (120\u00d7120\u00d76mm 5-hole Al 6061-T6 plate)",
   "source_url": "https://github.com/Jumpybeetroot/PrintSim",
-  "baked_at": "2026-11-27T04:19:50Z",
+  "baked_at": "2026-11-28T15:35:18Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 9915,
   "n_boundary_dofs": 12,
   "n_internal_modes": 4,
-  "rigid_body_max_freq_hz": 0.012869,
+  "rigid_body_max_freq_hz": 0.012867,
   "mass_kg": 0.176983,
   "com_mm": [
     50.6393,
@@ -54,5 +54,43 @@
   "visual_triangles": 2200,
   "visual_bytes": 85628,
   "cad_trust_pct": 90,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 57.67,
+      "com_mm": [
+        84.53,
+        24.39,
+        3.0
+      ],
+      "num_elements": 3338
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 61.68,
+      "com_mm": [
+        43.52,
+        43.54,
+        3.0
+      ],
+      "num_elements": 4236
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 57.63,
+      "com_mm": [
+        24.34,
+        84.51,
+        3.0
+      ],
+      "num_elements": 3348
+    }
+  ],
   "source_hash": "001c62f865529544b7f0a394161a904e5fcf4f896b095557ba7683f9ac6b9d4f"
 }

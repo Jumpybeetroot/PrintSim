@@ -766,6 +766,8 @@ export function resolveToolheadPartVisual(params: {
   };
 }
 
+export type IntraPartFieldMetric = "combined" | "stress" | "flex";
+
 /**
  * Precomputed 3D Tet4 intra-part field interpolator for fast per-vertex FEA coloring.
  */
@@ -773,16 +775,173 @@ export interface PreparedIntraPartField {
   pts: Float32Array; // length 3*K in CAD mm
   vals: Float32Array; // length K normalized [0..1]
   count: number;
+  maxStressMpa: number;
+  maxFlexUm: number;
+}
+
+/**
+ * Look up an IntraPartField from printer-wide `part_fields` / `mode_part_fields`,
+ * gracefully falling back to legacy `toolhead_part_fields` / `toolhead_mode_fields`.
+ */
+export function resolveIntraPartField(params: {
+  partFields?: Record<string, CadIntraPartFieldData> | null;
+  legacyToolheadFields?: Record<string, CadIntraPartFieldData> | null;
+  candidateKeys: Array<string | undefined | null>;
+  assetId?: string | null;
+}): { key: string; field: CadIntraPartFieldData } | null {
+  const { partFields, legacyToolheadFields, candidateKeys, assetId } = params;
+  const dicts = [partFields, legacyToolheadFields].filter(
+    (d): d is Record<string, CadIntraPartFieldData> => Boolean(d)
+  );
+  if (dicts.length === 0) return null;
+
+  const cleanedKeys = candidateKeys.filter((k): k is string => Boolean(k && k.length > 0));
+  for (const dict of dicts) {
+    for (const k of cleanedKeys) {
+      const hit = dict[k];
+      if (hit && hit.points_mm && hit.points_mm.length >= 4) {
+        return { key: k, field: hit };
+      }
+      const cadHit = dict[`cad_${k}`];
+      if (cadHit && cadHit.points_mm && cadHit.points_mm.length >= 4) {
+        return { key: `cad_${k}`, field: cadHit };
+      }
+    }
+  }
+
+  if (assetId) {
+    const targetLow = assetId.toLowerCase();
+    for (const dict of dicts) {
+      for (const [k, f] of Object.entries(dict)) {
+        if (!f || !f.points_mm || f.points_mm.length < 4) continue;
+        if (f.asset_id && f.asset_id.toLowerCase() === targetLow) {
+          return { key: k, field: f };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export interface SubpartStrainSummary {
+  index: number;
+  name: string;
+  strainEnergyPct: number;
+  maxStressMpa: number;
+  maxFlexUm: number;
+  pointCount: number;
+}
+
+/**
+ * Compute per-subpart strain energy share and peak stress/flex from an IntraPartField.
+ */
+export function computeSubpartStrainBreakdown(
+  field: CadIntraPartFieldData | null | undefined
+): SubpartStrainSummary[] {
+  if (!field) return [];
+  const rawSubparts = field.subparts;
+  const subIdx = field.subpart_idx;
+  const stresses = field.stress_mpa ?? [];
+  const flexes = field.flex_um ?? [];
+  const strainNorm = field.strain_norm ?? [];
+  const flexNorm = field.flex_norm ?? [];
+
+  // Case 1: Backend already provided rich subpart objects with strain_energy_pct
+  if (rawSubparts && rawSubparts.length > 0) {
+    const hasPrecomputed = rawSubparts.some(
+      (sp) => typeof sp !== "string" && typeof sp.strain_energy_pct === "number"
+    );
+    if (hasPrecomputed) {
+      return rawSubparts
+        .map((sp, idx) => {
+          if (typeof sp === "string") {
+            return {
+              index: idx,
+              name: sp,
+              strainEnergyPct: 0,
+              maxStressMpa: 0,
+              maxFlexUm: 0,
+              pointCount: 0,
+            };
+          }
+          return {
+            index: idx,
+            name: sp.label || sp.name || `Subpart ${idx + 1}`,
+            strainEnergyPct: sp.strain_energy_pct ?? 0,
+            maxStressMpa: sp.max_stress_mpa ?? 0,
+            maxFlexUm: sp.max_flex_um ?? 0,
+            pointCount: sp.point_count ?? 0,
+          };
+        })
+        .sort((a, b) => b.strainEnergyPct - a.strainEnergyPct);
+    }
+  }
+
+  // Case 2: Aggregate from per-point subpart_idx + stress_mpa / strain_norm
+  if (!subIdx || subIdx.length === 0) return [];
+  const buckets = new Map<
+    number,
+    { energyWeight: number; maxStress: number; maxFlex: number; count: number }
+  >();
+  let totalEnergy = 0;
+
+  for (let i = 0; i < subIdx.length; i++) {
+    const idx = subIdx[i];
+    if (idx == null || idx < 0) continue;
+    const s = stresses[i] ?? strainNorm[i] ?? 0;
+    const f = flexes[i] ?? flexNorm[i] ?? 0;
+    const w = s * s + 1e-12;
+    totalEnergy += w;
+    let b = buckets.get(idx);
+    if (!b) {
+      b = { energyWeight: 0, maxStress: 0, maxFlex: 0, count: 0 };
+      buckets.set(idx, b);
+    }
+    b.energyWeight += w;
+    if (s > b.maxStress) b.maxStress = s;
+    if (f > b.maxFlex) b.maxFlex = f;
+    b.count += 1;
+  }
+
+  if (buckets.size === 0) return [];
+  const denom = Math.max(totalEnergy, 1e-12);
+  const out: SubpartStrainSummary[] = [];
+  for (const [idx, b] of buckets.entries()) {
+    const rawEntry = rawSubparts?.[idx];
+    const name =
+      typeof rawEntry === "string"
+        ? rawEntry
+        : rawEntry?.label || rawEntry?.name || `Region ${idx + 1}`;
+    out.push({
+      index: idx,
+      name,
+      strainEnergyPct: (b.energyWeight / denom) * 100,
+      maxStressMpa: b.maxStress,
+      maxFlexUm: b.maxFlex,
+      pointCount: b.count,
+    });
+  }
+  return out.sort((a, b) => b.strainEnergyPct - a.strainEnergyPct);
 }
 
 export function prepareIntraPartField(
   field: CadIntraPartFieldData | undefined,
-  isModalMode: boolean
+  isModalMode: boolean,
+  metric: IntraPartFieldMetric = "combined"
 ): PreparedIntraPartField | null {
   if (!field || !field.points_mm || field.points_mm.length < 4) return null;
   const k = field.points_mm.length;
   const pts = new Float32Array(k * 3);
   const raw = new Float32Array(k);
+
+  const stresses = field.stress_mpa ?? [];
+  const flexes = field.flex_um ?? [];
+  let maxStress = field.max_stress_mpa ?? 0;
+  let maxFlex = field.max_flex_um ?? 0;
+  for (let i = 0; i < k; i++) {
+    if ((stresses[i] ?? 0) > maxStress) maxStress = stresses[i] ?? 0;
+    if ((flexes[i] ?? 0) > maxFlex) maxFlex = flexes[i] ?? 0;
+  }
 
   if (isModalMode && field.strain_norm && field.flex_norm) {
     for (let i = 0; i < k; i++) {
@@ -792,13 +951,17 @@ export function prepareIntraPartField(
       pts[i * 3 + 2] = p[2];
       const sn = field.strain_norm[i] ?? 0;
       const fn = field.flex_norm[i] ?? 0;
-      raw[i] = Math.min(1, Math.max(0, 0.58 * Math.pow(sn, 0.65) + 0.42 * Math.pow(fn, 0.72)));
+      if (metric === "stress") {
+        raw[i] = Math.min(1, Math.max(0, Math.pow(sn, 0.65)));
+      } else if (metric === "flex") {
+        raw[i] = Math.min(1, Math.max(0, Math.pow(fn, 0.72)));
+      } else {
+        raw[i] = Math.min(1, Math.max(0, 0.58 * Math.pow(sn, 0.65) + 0.42 * Math.pow(fn, 0.72)));
+      }
     }
-    return { pts, vals: raw, count: k };
+    return { pts, vals: raw, count: k, maxStressMpa: maxStress, maxFlexUm: maxFlex };
   }
 
-  const stresses = field.stress_mpa ?? [];
-  const flexes = field.flex_um ?? [];
   const sSorted = [...stresses].sort((a, b) => a - b);
   const fSorted = [...flexes].sort((a, b) => a - b);
   const sRef = Math.max(sSorted[Math.floor(0.95 * (sSorted.length - 1))] ?? 0, 1e-4);
@@ -811,9 +974,15 @@ export function prepareIntraPartField(
     pts[i * 3 + 2] = p[2];
     const sn = Math.min(1, (stresses[i] ?? 0) / sRef);
     const fn = Math.min(1, (flexes[i] ?? 0) / fRef);
-    raw[i] = Math.min(1, Math.max(0, 0.62 * Math.pow(sn, 0.62) + 0.38 * Math.pow(fn, 0.72)));
+    if (metric === "stress") {
+      raw[i] = Math.min(1, Math.max(0, Math.pow(sn, 0.62)));
+    } else if (metric === "flex") {
+      raw[i] = Math.min(1, Math.max(0, Math.pow(fn, 0.72)));
+    } else {
+      raw[i] = Math.min(1, Math.max(0, 0.62 * Math.pow(sn, 0.62) + 0.38 * Math.pow(fn, 0.72)));
+    }
   }
-  return { pts, vals: raw, count: k };
+  return { pts, vals: raw, count: k, maxStressMpa: maxStress, maxFlexUm: maxFlex };
 }
 
 /**

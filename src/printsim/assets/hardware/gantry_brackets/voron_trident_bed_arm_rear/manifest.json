@@ -5,7 +5,7 @@
   "name": "Voron Trident Z Bed Carriage & GE5C Arm Rear (ABS/ASA)",
   "source_cad": "trident_assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Trident",
-  "baked_at": "2026-11-26T19:13:59Z",
+  "baked_at": "2026-11-28T15:47:19Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -54,7 +54,57 @@
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21986,
-  "visual_bytes": 814716,
+  "visual_bytes": 814768,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 26.89,
+      "com_mm": [
+        -18.74,
+        -10.42,
+        16.49
+      ],
+      "num_elements": 4902
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 16.7,
+      "com_mm": [
+        -1.83,
+        -44.06,
+        7.61
+      ],
+      "num_elements": 3050
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 14.12,
+      "com_mm": [
+        -3.56,
+        -84.63,
+        14.92
+      ],
+      "num_elements": 2575
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 2.49,
+      "com_mm": [
+        -6.58,
+        -16.32,
+        32.28
+      ],
+      "num_elements": 453
+    }
+  ],
   "source_hash": "cb3019f015e5c7f867dca426dbc1dca8e07ee8b3798b605007ffbea79b5f6c36"
 }

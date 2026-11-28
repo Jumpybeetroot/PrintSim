@@ -5,7 +5,7 @@
   "name": "Siboor CNC 6061 Rear-Right Drive (2WD)",
   "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
   "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
-  "baked_at": "2026-11-26T19:07:48Z",
+  "baked_at": "2026-11-28T15:40:18Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 9783,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.003468,
+  "rigid_body_max_freq_hz": 0.003467,
   "mass_kg": 0.133121,
   "com_mm": [
     -47.9414,
@@ -56,5 +56,55 @@
   "visual_triangles": 23978,
   "visual_bytes": 974380,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 20.51,
+      "com_mm": [
+        0.65,
+        -21.79,
+        -3.83
+      ],
+      "num_elements": 1272
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 14.09,
+      "com_mm": [
+        -22.68,
+        -15.17,
+        -13.45
+      ],
+      "num_elements": 878
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 68.56,
+      "com_mm": [
+        -77.05,
+        -10.41,
+        2.94
+      ],
+      "num_elements": 4264
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 29.96,
+      "com_mm": [
+        -26.48,
+        -15.26,
+        18.08
+      ],
+      "num_elements": 1861
+    }
+  ],
   "source_hash": "14c39844ed416a5e23cd1d98dcf5b1b8dbd5d8224eafe87afed19a81eb4aa64c"
 }

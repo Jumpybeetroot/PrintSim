@@ -5,7 +5,7 @@
   "name": "Cast Al 4040 Corner Bracket (HBLFSN8 48\u00d748\u00d738 mm)",
   "source_cad": "Parametric build123d CAD (Misumi HBLFSN 4040 datasheet)",
   "source_url": "https://us.misumi-ec.com/vona2/detail/110300465900/",
-  "baked_at": "2026-11-27T04:19:29Z",
+  "baked_at": "2026-11-28T15:34:56Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 4335,
   "n_boundary_dofs": 12,
   "n_internal_modes": 4,
-  "rigid_body_max_freq_hz": 0.004487,
+  "rigid_body_max_freq_hz": 0.004462,
   "mass_kg": 0.079056,
   "com_mm": [
     16.2509,
@@ -54,5 +54,55 @@
   "visual_triangles": 412,
   "visual_bytes": 19136,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 25.18,
+      "com_mm": [
+        32.67,
+        4.96,
+        -1.4
+      ],
+      "num_elements": 1563
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 15.6,
+      "com_mm": [
+        9.95,
+        9.87,
+        -8.57
+      ],
+      "num_elements": 802
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 25.33,
+      "com_mm": [
+        4.93,
+        32.54,
+        -1.32
+      ],
+      "num_elements": 1550
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 12.96,
+      "com_mm": [
+        14.07,
+        14.03,
+        15.61
+      ],
+      "num_elements": 584
+    }
+  ],
   "source_hash": "c75379ea48f8d598b74aa66ab55ddb45fdd251b956de3068060039c85c3e2d15"
 }

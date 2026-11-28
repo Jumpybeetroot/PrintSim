@@ -338,6 +338,7 @@ def _install_mock_cad_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     mod.get_hardware_asset_manifest = get_hardware_asset_manifest  # type: ignore[attr-defined]
     mod.get_visual_glb_path = get_visual_glb_path  # type: ignore[attr-defined]
     mod.load_superelement = load_superelement  # type: ignore[attr-defined]
+    mod.LoadedHardwareAsset = _MockLoadedHardwareAsset  # type: ignore[attr-defined]
 
     pkg = types.ModuleType("printsim.cad_assets")
     pkg.registry = mod  # type: ignore[attr-defined]
@@ -888,7 +889,7 @@ def test_real_cad_assets_registry_if_present() -> None:
         assert np.all(eigs_11 > 0.0), f"{cat}/{aid} K_11 not strictly SPD"
         assert manifest.get("cad_trust_pct", 0) > 0
 
-        if cat in ("gantry_brackets", "frame_braces", "carriages"):
+        if cat in ("gantry_brackets", "frame_braces", "carriages", "x_beams"):
             continue
 
         s = base.model_copy(deep=True)

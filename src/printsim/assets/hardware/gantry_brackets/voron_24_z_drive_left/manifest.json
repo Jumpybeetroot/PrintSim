@@ -5,7 +5,7 @@
   "name": "Voron 2.4r2 Belted Z-Drive Pod A (ABS/ASA)",
   "source_cad": "Voron_2.4r2_Assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-2",
-  "baked_at": "2026-11-26T19:22:19Z",
+  "baked_at": "2026-11-28T15:48:17Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 14367,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.001681,
+  "rigid_body_max_freq_hz": 0.001603,
   "mass_kg": 0.097158,
   "com_mm": [
     15.4809,
@@ -35,26 +35,64 @@
     -40.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 6989.874,
-    "ky": 2019.577,
-    "kz": 13015.571
+    "kx": 4600.288,
+    "ky": 1641.567,
+    "kz": 9887.307
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 1475.467,
-    "kry": 2911.804,
-    "krz": 966.959
+    "krx": 1409.338,
+    "kry": 2519.325,
+    "krz": 922.356
   },
   "fixed_interface_freqs_hz": [
-    138.56,
-    198.08,
-    416.44,
-    1064.76,
-    1681.37,
-    1729.01
+    138.62,
+    198.15,
+    416.56,
+    1069.97,
+    1691.32,
+    1693.88
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 25131,
   "visual_bytes": 1100748,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 10.75,
+      "com_mm": [
+        5.28,
+        2.49,
+        -18.25
+      ],
+      "num_elements": 1578
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 20.49,
+      "com_mm": [
+        16.54,
+        17.67,
+        -22.91
+      ],
+      "num_elements": 3002
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 65.91,
+      "com_mm": [
+        16.82,
+        25.15,
+        -48.39
+      ],
+      "num_elements": 9675
+    }
+  ],
   "source_hash": "37c853ee639f4175dc687b8abbd71583b674fc88fe38198defdb41d8cf40e2d8"
 }

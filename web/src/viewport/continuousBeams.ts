@@ -1099,7 +1099,18 @@ export function prepareCadBeamDeformation(params: PrepareCadBeamParams): {
 
   updateCadBeamDeformation(cadBeam);
   for (const sub of submeshes) {
+    // cloneCachedCadGlb() precomputes boundingBox in CAD-local meters around the origin.
+    // Now that vertex positions are baked in world Three.js coordinates, recompute the
+    // bounds so Three.js Mesh.raycast() does not reject clicks against the stale AABB.
     sub.geometry.computeBoundingSphere();
+    if (isModal) {
+      sub.geometry.boundingBox = null;
+      if (sub.geometry.boundingSphere) {
+        sub.geometry.boundingSphere.radius += Math.max(1.5, sub.geometry.boundingSphere.radius * 0.5);
+      }
+    } else {
+      sub.geometry.computeBoundingBox();
+    }
   }
 
   return { wrapper, cadBeam };

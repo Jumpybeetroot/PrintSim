@@ -8,7 +8,7 @@
     {
       "label": "siboor_cnc_carriage_body",
       "material_id": "aluminum_6061_t6",
-      "fdm_anisotropic": null
+      "fdm_anisotropic": false
     }
   ]
 }

@@ -5,7 +5,7 @@
   "name": "Voron Stock Printed Front-Left Idler (ABS/ASA)",
   "source_cad": "trident_assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Trident",
-  "baked_at": "2026-11-26T19:09:11Z",
+  "baked_at": "2026-11-28T15:43:59Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 9849,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.001488,
+  "rigid_body_max_freq_hz": 0.001757,
   "mass_kg": 0.04284,
   "com_mm": [
     14.1691,
@@ -35,26 +35,76 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 19029.964,
-    "ky": 13455.873,
-    "kz": 3326.604
+    "kx": 11709.361,
+    "ky": 7732.404,
+    "kz": 1683.986
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 945.57,
-    "kry": 2935.525,
-    "krz": 1328.235
+    "krx": 902.123,
+    "kry": 3173.719,
+    "krz": 1374.765
   },
   "fixed_interface_freqs_hz": [
-    1517.17,
-    2098.96,
-    2753.75,
-    3594.95,
-    3905.36,
-    4362.46
+    1554.03,
+    2097.22,
+    2756.19,
+    3575.79,
+    3895.02,
+    4466.17
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 19990,
   "visual_bytes": 739520,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 7.03,
+      "com_mm": [
+        -3.17,
+        18.4,
+        -1.88
+      ],
+      "num_elements": 1658
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 7.21,
+      "com_mm": [
+        13.67,
+        7.88,
+        -11.79
+      ],
+      "num_elements": 1702
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 20.34,
+      "com_mm": [
+        20.77,
+        25.37,
+        0.5
+      ],
+      "num_elements": 4818
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 8.25,
+      "com_mm": [
+        13.11,
+        12.48,
+        18.24
+      ],
+      "num_elements": 1967
+    }
+  ],
   "source_hash": "37737f68dd215942c5b2570b607e3f724d36294ce612975550a63523d1f3fa33"
 }

@@ -1,15 +1,105 @@
 {
-  "asset_id": "cnc_al_fysetc_v0_15x15",
+  "schema_version": 1,
   "category": "x_beams",
+  "asset_id": "cnc_al_fysetc_v0_15x15",
   "name": "FYSETC Hollow CNC 15x15 X-Beam (Voron 0)",
-  "source": "GrabCAD Nicotina52 FYSETC X-Beam Voron0 200mm (Fysetc X-Beam [Voron0 200mm].step, 15x15x200mm)",
+  "source_cad": "GrabCAD Nicotina52 FYSETC X-Beam Voron0 200mm (Fysetc X-Beam [Voron0 200mm].step, 15x15x200mm)",
+  "source_url": "https://grabcad.com/library/fysetc-x-beam-voron0-200mm-1",
+  "baked_at": "2026-11-28T15:37:50Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 13592,
+  "num_elements": 39673,
+  "num_dofs": 40776,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.015828,
+  "mass_kg": 0.017542,
+  "com_mm": [
+    0.5746,
+    0.0014,
+    0.3116
+  ],
+  "port0_mm": [
+    -100.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    100.0,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 6412.791,
+    "ky": 18.805,
+    "kz": 18.904
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 54.124,
+    "kry": 262.136,
+    "krz": 258.526
+  },
+  "fixed_interface_freqs_hz": [
+    1809.66,
+    1864.16,
+    3582.52,
+    4090.71,
+    4292.43,
+    6709.82
+  ],
   "visual_glb": "visual.glb",
-  "has_superelement": false,
+  "visual_triangles": 16000,
+  "visual_bytes": 585020,
+  "cad_trust_pct": 93,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 5.24,
+      "com_mm": [
+        -75.52,
+        -0.03,
+        0.09
+      ],
+      "num_elements": 10903
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 6.95,
+      "com_mm": [
+        0.01,
+        -0.0,
+        0.65
+      ],
+      "num_elements": 17823
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 5.35,
+      "com_mm": [
+        75.81,
+        0.03,
+        0.09
+      ],
+      "num_elements": 10947
+    }
+  ],
+  "source_hash": "366c61fc406548178acd7898e8e485f0a9854268e00421d706d2fafb52395072",
+  "has_superelement": true,
   "length_mm": 200.0,
   "width_mm": 15.0,
   "height_mm": 15.13,
-  "visual_triangles": 16000,
-  "visual_bytes": 585020,
+  "source": "GrabCAD Nicotina52 FYSETC X-Beam Voron0 200mm (Fysetc X-Beam [Voron0 200mm].step, 15x15x200mm)",
   "fea_section_properties": {
     "name": "cnc_al_fysetc_v0_15x15",
     "length_mm": 200.0,

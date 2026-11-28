@@ -5,7 +5,7 @@
   "name": "LDO Monolith CNC 6061 Front-Left Idler (2WD 9mm)",
   "source_cad": "LDO_2WD_VT_9mm.step",
   "source_url": "https://github.com/Monolith3D/LDO_Monolith_Gantry_Kits",
-  "baked_at": "2026-11-26T19:06:06Z",
+  "baked_at": "2026-11-28T15:40:19Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 4656,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.010143,
+  "rigid_body_max_freq_hz": 0.00906,
   "mass_kg": 0.047289,
   "com_mm": [
     10.9113,
@@ -35,26 +35,76 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 59053.999,
-    "ky": 107456.599,
-    "kz": 6800.55
+    "kx": 55273.141,
+    "ky": 99349.405,
+    "kz": 6151.065
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 1690.587,
-    "kry": 3431.541,
-    "krz": 11427.446
+    "krx": 1667.171,
+    "kry": 3421.653,
+    "krz": 11294.351
   },
   "fixed_interface_freqs_hz": [
-    1616.07,
-    2960.05,
-    5209.2,
-    7679.51,
-    10935.12,
-    11539.98
+    1673.43,
+    2904.83,
+    5062.2,
+    7696.98,
+    10983.71,
+    11629.12
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21984,
   "visual_bytes": 854608,
   "cad_trust_pct": 90,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 22.82,
+      "com_mm": [
+        2.37,
+        29.87,
+        -1.44
+      ],
+      "num_elements": 1817
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 9.05,
+      "com_mm": [
+        17.78,
+        21.65,
+        -10.55
+      ],
+      "num_elements": 718
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 7.06,
+      "com_mm": [
+        23.01,
+        3.25,
+        -2.87
+      ],
+      "num_elements": 563
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.36,
+      "com_mm": [
+        16.56,
+        21.79,
+        14.52
+      ],
+      "num_elements": 677
+    }
+  ],
   "source_hash": "5a01e44a6f3d5534c6b48494800cc0cb00074ed37ee93c41f217edfc71d73ac2"
 }

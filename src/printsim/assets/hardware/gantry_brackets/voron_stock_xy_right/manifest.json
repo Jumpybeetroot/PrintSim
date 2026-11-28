@@ -5,7 +5,7 @@
   "name": "Voron Stock Printed XY-Joint Right MGN12 (ABS/ASA)",
   "source_cad": "trident_assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Trident",
-  "baked_at": "2026-11-26T19:19:11Z",
+  "baked_at": "2026-11-28T15:44:45Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -56,5 +56,55 @@
   "visual_triangles": 21980,
   "visual_bytes": 870508,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 12.76,
+      "com_mm": [
+        -6.48,
+        -18.7,
+        -24.18
+      ],
+      "num_elements": 2820
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 20.76,
+      "com_mm": [
+        -28.21,
+        -13.7,
+        -19.76
+      ],
+      "num_elements": 4553
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 9.82,
+      "com_mm": [
+        -43.72,
+        -2.4,
+        1.44
+      ],
+      "num_elements": 2163
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 20.67,
+      "com_mm": [
+        -24.63,
+        -16.7,
+        3.73
+      ],
+      "num_elements": 4634
+    }
+  ],
   "source_hash": "d0bd504e5435a64c1ed6ccb7542c35903a657ee4e9aac695bcf4dece9d08a501"
 }

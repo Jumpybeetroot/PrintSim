@@ -1,15 +1,105 @@
 {
-  "asset_id": "cnc_al_monocoque_20x20",
+  "schema_version": 1,
   "category": "x_beams",
+  "asset_id": "cnc_al_monocoque_20x20",
   "name": "PrintSim CNC Monocoque Truss 20x20 X-Beam",
-  "source": "Parametric build123d 20x20x380mm semi-monocoque Warren-truss beam (solid MGN12H front flange + 3-face CNC pockets)",
+  "source_cad": "Parametric build123d 20x20x380mm semi-monocoque Warren-truss beam (solid MGN12H front flange + 3-face CNC pockets)",
+  "source_url": "https://github.com/Jumpybeetroot/PrintSim",
+  "baked_at": "2026-11-28T15:38:01Z",
+  "reference_material_id": "aluminum_6061_t6",
+  "reference_youngs_modulus_pa": 68900000000.0,
+  "reference_density_kg_m3": 2700.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 17556,
+  "num_elements": 48559,
+  "num_dofs": 52668,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.00357,
+  "mass_kg": 0.091084,
+  "com_mm": [
+    -0.0058,
+    -1.894,
+    -0.0002
+  ],
+  "port0_mm": [
+    -190.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    190.0,
+    0.0,
+    0.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 10580.209,
+    "ky": 16.093,
+    "kz": 13.536
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 147.321,
+    "kry": 639.5,
+    "krz": 773.769
+  },
+  "fixed_interface_freqs_hz": [
+    814.69,
+    835.27,
+    1924.29,
+    2099.56,
+    2148.27,
+    3264.42
+  ],
   "visual_glb": "visual.glb",
-  "has_superelement": false,
+  "visual_triangles": 16000,
+  "visual_bytes": 569244,
+  "cad_trust_pct": 94,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 27.12,
+      "com_mm": [
+        -143.24,
+        -1.65,
+        0.03
+      ],
+      "num_elements": 13405
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 36.87,
+      "com_mm": [
+        0.02,
+        -2.33,
+        -0.0
+      ],
+      "num_elements": 21630
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 27.1,
+      "com_mm": [
+        143.27,
+        -1.54,
+        -0.03
+      ],
+      "num_elements": 13524
+    }
+  ],
+  "source_hash": "c97d33ee19f680f662899da3db103a0e45652f04178ba5ef37c345802e03a278",
+  "has_superelement": true,
   "length_mm": 380.0,
   "width_mm": 20.0,
   "height_mm": 20.0,
-  "visual_triangles": 16000,
-  "visual_bytes": 569244,
+  "source": "Parametric build123d 20x20x380mm semi-monocoque Warren-truss beam (solid MGN12H front flange + 3-face CNC pockets)",
   "fea_section_properties": {
     "name": "cnc_al_monocoque_20x20",
     "length_mm": 380.0,

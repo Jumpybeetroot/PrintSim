@@ -1447,10 +1447,26 @@ export interface ModeShapeData {
   nodal_rotations?: Record<string, [number, number, number]>;
   toolhead_part_flex?: ToolheadPartModalData[];
   toolhead_mode_fields?: Record<string, CadIntraPartFieldData>;
+  mode_part_fields?: Record<string, IntraPartField>;
 }
 
-export interface CadIntraPartFieldData {
+export type ModeShape = ModeShapeData;
+
+export interface IntraPartSubpartInfo {
+  name: string;
+  label?: string;
+  strain_energy_pct?: number;
+  max_stress_mpa?: number;
+  max_flex_um?: number;
+  mean_stress_mpa?: number;
+  point_count?: number;
+}
+
+export interface IntraPartField {
   source: string;
+  asset_id?: string;
+  label?: string;
+  node_ids?: string[];
   points_mm: [number, number, number][];
   flex_um?: number[];
   stress_mpa?: number[];
@@ -1459,7 +1475,10 @@ export interface CadIntraPartFieldData {
   flex_norm?: number[];
   strain_norm?: number[];
   subpart_idx?: number[];
+  subparts?: Array<string | IntraPartSubpartInfo>;
 }
+
+export type CadIntraPartFieldData = IntraPartField;
 
 export interface AccelBottleneckShares {
   frame: number;
@@ -2025,6 +2044,7 @@ export interface StaticFeaData {
   toolhead_flex_breakdown?: ToolheadFlexBreakdownData;
   toolhead_parts?: ToolheadPartStaticData[];
   toolhead_part_fields?: Record<string, CadIntraPartFieldData>;
+  part_fields?: Record<string, IntraPartField>;
   max_von_mises_mpa: number;
   panel_max_von_mises_mpa?: number;
   peak_stress_part_label?: string;
@@ -2049,6 +2069,8 @@ export interface StaticFeaData {
     utilization: number;
   }>;
 }
+
+export type StaticFEAResult = StaticFeaData;
 
 export interface AdxlNozzleAxisDiagnostic {
   carriage_peak_hz: number;

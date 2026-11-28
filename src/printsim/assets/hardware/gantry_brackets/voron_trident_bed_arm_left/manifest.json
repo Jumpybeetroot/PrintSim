@@ -5,7 +5,7 @@
   "name": "Voron Trident Z Bed Carriage & GE5C Arm Left (ABS/ASA)",
   "source_cad": "trident_assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Trident",
-  "baked_at": "2026-11-26T19:13:08Z",
+  "baked_at": "2026-11-28T15:46:56Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 8157,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.001687,
+  "rigid_body_max_freq_hz": 0.001688,
   "mass_kg": 0.045585,
   "com_mm": [
     16.4485,
@@ -54,7 +54,45 @@
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 21994,
-  "visual_bytes": 727212,
+  "visual_bytes": 726948,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 20.1,
+      "com_mm": [
+        11.0,
+        21.95,
+        15.67
+      ],
+      "num_elements": 3668
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 14.83,
+      "com_mm": [
+        16.64,
+        39.54,
+        8.74
+      ],
+      "num_elements": 2702
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 10.65,
+      "com_mm": [
+        26.47,
+        66.91,
+        15.16
+      ],
+      "num_elements": 1945
+    }
+  ],
   "source_hash": "288f5aab166fef3f8c8f6ac3b5b9ac3233df04ce66797b3eac82f86bc22507c1"
 }

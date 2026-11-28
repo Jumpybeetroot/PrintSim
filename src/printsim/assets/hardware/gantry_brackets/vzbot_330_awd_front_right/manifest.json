@@ -5,7 +5,7 @@
   "name": "VzBot 330 AWD Front-Right Idler/Motor Mount",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-27T04:55:39Z",
+  "baked_at": "2026-11-28T15:37:15Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 54657,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.010177,
+  "rigid_body_max_freq_hz": 0.010171,
   "mass_kg": 0.147266,
   "com_mm": [
     -39.3433,
@@ -56,5 +56,55 @@
   "visual_triangles": 21989,
   "visual_bytes": 962648,
   "cad_trust_pct": 84,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 13.52,
+      "com_mm": [
+        0.31,
+        20.66,
+        0.14
+      ],
+      "num_elements": 5975
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 31.82,
+      "com_mm": [
+        -18.87,
+        14.68,
+        -7.46
+      ],
+      "num_elements": 14074
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 80.63,
+      "com_mm": [
+        -58.75,
+        11.18,
+        -1.37
+      ],
+      "num_elements": 35646
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 21.28,
+      "com_mm": [
+        -21.64,
+        12.33,
+        12.07
+      ],
+      "num_elements": 9410
+    }
+  ],
   "source_hash": "137bafcb3fdf221afa60899e56b68227bb4139059078d6d9cf6df4b0c8a53a8f"
 }

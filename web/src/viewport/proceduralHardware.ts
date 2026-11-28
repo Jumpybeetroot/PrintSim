@@ -3,6 +3,7 @@ import {
   AdjointLens,
   CadGantryStationAsset,
   FeaLoadCase,
+  IntraPartField,
   SimulationResponse,
   XRailMountType,
   YRailMountType,
@@ -17,6 +18,11 @@ import {
 import { sensitivityColorInto, stressColorInto } from "./colormaps";
 import { InspectedPartInfo, orientBeamMesh, toThree } from "./geometryHelpers";
 import { classifyPartGroup, getLensScore } from "./partClassifier";
+import {
+  createIntraPartVertexColorFn,
+  prepareIntraPartField,
+  resolveIntraPartField,
+} from "./toolheadParts";
 
 export interface ModalCadGantryElasticMesh {
   geometry: THREE.BufferGeometry;
@@ -52,6 +58,7 @@ export interface BuildCadGantryStationsParams {
   tagInspectable: (mesh: THREE.Mesh, info: InspectedPartInfo) => void;
   getModalNodeScalar?: (nodeId: string) => number;
   globalNodalStress?: Record<string, number>;
+  partFields?: Record<string, IntraPartField>;
   memberSensMap?: Record<
     string,
     NonNullable<SimulationResponse["sensitivity"]>["member_sensitivities"][string]
@@ -89,6 +96,7 @@ export function buildCadGantryStationMeshes({
   tagInspectable,
   getModalNodeScalar,
   globalNodalStress,
+  partFields,
   memberSensMap,
 }: BuildCadGantryStationsParams): BuildCadGantryStationsResult {
   const replacedMountNodeIds = new Set<string>();
@@ -250,6 +258,18 @@ export function buildCadGantryStationMeshes({
             ? seMetric.force_gravity_n
             : seMetric.force_xy_n
       : undefined;
+    const isPerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
+    const matchedPartField = isPerPartHeat
+      ? resolveIntraPartField({
+          partFields,
+          candidateKeys: [sensMemberId, stationKey, inspectKey, hit.asset.asset_id],
+          assetId: hit.asset.asset_id,
+        })
+      : null;
+    const preparedStationField = matchedPartField
+      ? prepareIntraPartField(matchedPartField.field, viewMode === "modal")
+      : null;
+
     const inspectInfo: InspectedPartInfo = {
       key: inspectKey,
       name: displayName,
@@ -264,14 +284,44 @@ export function buildCadGantryStationMeshes({
       bracketFlexUm,
       bracketTwistMrad,
       transmittedForceN,
+      stressMpa: matchedPartField?.field.max_stress_mpa,
+      localFlexUm: matchedPartField?.field.max_flex_um ?? bracketFlexUm,
       heatScore: sensEntry ? getLensScore(sensEntry, adjointLens) : undefined,
       estHzGain: bktStiff?.est_hz_gain,
       hzPer100g: sensEntry?.hz_per_100g,
       whyItHurts: bktStiff?.why_it_hurts,
       actionHint: bktStiff?.action_hint,
+      cadAssetId: hit.asset.asset_id,
+      cadGlbUrl: hit.asset.visual_glb_url,
+      partFieldKey: matchedPartField?.key ?? sensMemberId ?? stationKey,
+      cadPort0Mm: hit.asset.port0_mm,
+      cadPort1Mm: hit.asset.port1_mm,
     };
 
     const heat = resolveStationHeat(stationKey, anchorNodeId, port1NodeId, sensMemberId);
+    const stationHeatScalar =
+      viewMode === "modal" && getModalNodeScalar
+        ? Math.max(
+            getModalNodeScalar(anchorNodeId),
+            port1NodeId ? getModalNodeScalar(port1NodeId) : 0
+          )
+        : viewMode === "fea_stress"
+          ? Math.max(
+              globalNodalStress?.[anchorNodeId] ?? 0,
+              port1NodeId ? (globalNodalStress?.[port1NodeId] ?? 0) : 0
+            )
+          : 0.5;
+    const stationVertexColorFn = isPerPartHeat
+      ? createIntraPartVertexColorFn({
+          isStructural: true,
+          baseHeat01: Math.min(1, Math.max(0.25, stationHeatScalar)),
+          isModalMode: viewMode === "modal",
+          defaultStage: "chassis",
+          preparedField: preparedStationField,
+          port0Mm: hit.asset.port0_mm ?? [0, 0, 0],
+          port1Mm: hit.asset.port1_mm ?? [0, -24, 0],
+        })
+      : undefined;
     const cadObj = cloneCachedCadGlb(hit.root, {
       isHeatMode,
       heatColor: heat.color,
@@ -279,6 +329,11 @@ export function buildCadGantryStationMeshes({
       heatEmissiveIntensity: heat.emissiveIntensity,
       inspectInfo,
       tagInspectable,
+      resolveSubmesh: stationVertexColorFn
+        ? () => ({
+            vertexColorFn: stationVertexColorFn,
+          })
+        : undefined,
     });
     cadObj.scale.setScalar(CAD_M_TO_THREE);
     cadObj.rotation.x = -Math.PI * 0.5;

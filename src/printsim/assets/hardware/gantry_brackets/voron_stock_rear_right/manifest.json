@@ -5,7 +5,7 @@
   "name": "Voron Stock Printed A-Drive Mount (ABS/ASA)",
   "source_cad": "trident_assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Trident",
-  "baked_at": "2026-11-26T19:09:00Z",
+  "baked_at": "2026-11-28T15:42:23Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -56,5 +56,55 @@
   "visual_triangles": 23386,
   "visual_bytes": 1032068,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 5.1,
+      "com_mm": [
+        1.82,
+        -24.03,
+        -3.95
+      ],
+      "num_elements": 1059
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 18.54,
+      "com_mm": [
+        -25.35,
+        -10.75,
+        -4.46
+      ],
+      "num_elements": 3804
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 43.12,
+      "com_mm": [
+        -63.44,
+        -11.95,
+        0.73
+      ],
+      "num_elements": 8937
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 10.63,
+      "com_mm": [
+        -25.19,
+        -15.68,
+        14.51
+      ],
+      "num_elements": 2240
+    }
+  ],
   "source_hash": "0f7c4c0cace94e680776d08c3170ac88818e299fca44f4f496f1699d8934db6e"
 }

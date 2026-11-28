@@ -40,6 +40,12 @@ export interface InspectedPartInfo {
   isStructural?: boolean;
   /** Canonical backend toolhead part key (`th_part_<id>`) for stage-level hide/highlight */
   toolheadPartKey?: string;
+  /** CAD asset metadata for single-object in-part 3D FEA inspection */
+  cadAssetId?: string;
+  cadGlbUrl?: string;
+  partFieldKey?: string;
+  cadPort0Mm?: [number, number, number];
+  cadPort1Mm?: [number, number, number];
 }
 
 export interface ModalVisualSeverity {

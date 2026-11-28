@@ -5,7 +5,7 @@
   "name": "Voron Trident Z Leadscrew Motor Mount Rear (ABS/ASA)",
   "source_cad": "trident_assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-Trident",
-  "baked_at": "2026-11-26T19:20:57Z",
+  "baked_at": "2026-11-28T15:46:17Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 10410,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.002379,
+  "rigid_body_max_freq_hz": 0.001535,
   "mass_kg": 0.053562,
   "com_mm": [
     -0.0,
@@ -35,26 +35,64 @@
     0.0
   ],
   "port_stiffness_n_per_mm": {
-    "kx": 4873.958,
-    "ky": 15252.514,
-    "kz": 6300.916
+    "kx": 6025.191,
+    "ky": 21066.209,
+    "kz": 4766.139
   },
   "port_rot_stiffness_nm_per_rad": {
-    "krx": 972.779,
-    "kry": 1558.434,
-    "krz": 9934.062
+    "krx": 832.201,
+    "kry": 1471.811,
+    "krz": 7359.079
   },
   "fixed_interface_freqs_hz": [
-    1474.67,
-    1519.15,
-    2347.87,
-    2577.61,
-    3173.88,
-    3580.6
+    1467.41,
+    1537.57,
+    2373.41,
+    2633.65,
+    3199.65,
+    3416.7
   ],
   "visual_glb": "visual.glb",
   "visual_triangles": 19990,
   "visual_bytes": 743596,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 12.61,
+      "com_mm": [
+        -0.0,
+        -8.4,
+        4.04
+      ],
+      "num_elements": 2300
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 11.26,
+      "com_mm": [
+        -0.0,
+        -20.58,
+        1.39
+      ],
+      "num_elements": 2078
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 29.7,
+      "com_mm": [
+        -0.0,
+        -46.39,
+        1.62
+      ],
+      "num_elements": 5392
+    }
+  ],
   "source_hash": "438eb36ab01245921039ff1e1eb52065e037d212a15fb13605bfb7e4c108c711"
 }

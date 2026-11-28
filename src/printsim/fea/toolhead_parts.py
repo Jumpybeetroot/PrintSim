@@ -942,6 +942,545 @@ def compute_modal_toolhead_parts(
     return out
 
 
+def _resolve_carriage_asset_id(
+    rail_profile_id: str | None,
+    block_type: str = "H",
+) -> str | None:
+    """Map a rail profile ID + block type ('C' | 'H') to its baked ``carriages/*`` asset ID."""
+    if not rail_profile_id:
+        return None
+    rp = str(rail_profile_id).lower().strip()
+    suffix = "c" if str(block_type).upper().strip() == "C" else "h"
+    if "hgh15" in rp:
+        return "hgh15ca"
+    if "mgn15" in rp:
+        return f"mgn15{suffix}"
+    if "mgn9" in rp:
+        return f"mgn9{suffix}"
+    if "mgn12" in rp:
+        return f"mgn12{suffix}"
+    return None
+
+
+def _has_field_recovery(rec: Any) -> bool:
+    """Return True if ``rec`` is a ``SubpartRecoveryData`` with sampled 3D Tet4 field operators."""
+    if rec is None or not hasattr(rec, "recover_field"):
+        return False
+    pts = getattr(rec, "field_points_m", None)
+    return pts is not None and len(pts) > 0
+
+
+def _load_superelement_recovery(
+    se: Any,
+    spec: Any,
+) -> tuple[Any | None, np.ndarray | None]:
+    """Return ``(subpart_recovery, port_coords_cad_m)`` for an attached CAD superelement.
+
+    Uses ``se.subpart_recovery`` when already attached, otherwise lazily resolves the cached
+    bundle via ``printsim.cad_assets.registry.load_superelement`` (pure NumPy, Pyodide-safe).
+    """
+    port_coords_cad_m: np.ndarray | None = getattr(se, "port_coords_cad_m", None)
+    if port_coords_cad_m is not None:
+        port_coords_cad_m = np.asarray(port_coords_cad_m, dtype=np.float64)
+    else:
+        man = getattr(se, "manifest", None) or {}
+        p0_mm = man.get("port0_mm")
+        p1_mm = man.get("port1_mm")
+        if (
+            isinstance(p0_mm, (list, tuple))
+            and isinstance(p1_mm, (list, tuple))
+            and len(p0_mm) == 3
+            and len(p1_mm) == 3
+        ):
+            port_coords_cad_m = np.array([p0_mm, p1_mm], dtype=np.float64) * 1e-3
+
+    rec = getattr(se, "subpart_recovery", None)
+    if _has_field_recovery(rec):
+        return rec, port_coords_cad_m
+
+    cat = str(getattr(se, "category", "") or "")
+    aid = str(getattr(se, "asset_id", "") or "")
+    if not cat or not aid or aid == "procedural_xy_joint":
+        return None, None
+
+    try:
+        from printsim.cad_assets.registry import load_superelement
+    except ImportError:
+        return None, None
+
+    mat_id: str | None = None
+    chamber_c = float(getattr(getattr(spec, "frame", None), "chamber_temp_c", 25.0))
+    if cat == "gantry_brackets":
+        se_id = str(getattr(se, "id", "") or "")
+        gantry = getattr(spec, "gantry", None)
+        if se_id.startswith("cad_z_joint_") and gantry is not None:
+            zj_mat = getattr(gantry, "z_joint_material", "printed")
+            mat_id = "abs_printed" if zj_mat == "printed" else "aluminum_6061_t6"
+        elif gantry is not None:
+            mat_id = getattr(gantry, "bracket_material", None)
+    elif cat == "frame_braces":
+        mat_id = "aluminum_6061_t6"
+
+    loaded = load_superelement(
+        cat,
+        aid,
+        material_id=mat_id,
+        chamber_temp_c=chamber_c,
+    )
+    loaded_rec = getattr(loaded, "subpart_recovery", None) if loaded is not None else None
+    if not _has_field_recovery(loaded_rec):
+        return None, None
+    loaded_ports = getattr(loaded, "port_coords_m", None)
+    if port_coords_cad_m is None and loaded_ports is not None:
+        port_coords_cad_m = np.asarray(loaded_ports, dtype=np.float64)
+    return loaded_rec, port_coords_cad_m
+
+
+def _rot_z_3x3(angle_rad: float) -> np.ndarray:
+    c = math.cos(angle_rad)
+    s = math.sin(angle_rad)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+
+
+def _superelement_rotation_cad_to_asm(se: Any) -> np.ndarray:
+    """Return the 3x3 rotation matrix ``R`` mapping CAD-local vectors to assembly coordinates."""
+    rot = getattr(se, "rotation", None)
+    if rot is not None:
+        arr = np.asarray(rot, dtype=np.float64)
+        if arr.shape == (3, 3):
+            return arr
+        if arr.ndim == 0:
+            return _rot_z_3x3(float(arr))
+
+    man = getattr(se, "manifest", None) or {}
+    if "rotation_matrix" in man:
+        arr = np.asarray(man["rotation_matrix"], dtype=np.float64)
+        if arr.shape == (3, 3):
+            return arr
+    if "rotation_z_rad" in man:
+        return _rot_z_3x3(float(man["rotation_z_rad"]))
+
+    se_id = str(getattr(se, "id", "") or "")
+    if se_id in ("cad_z_joint_rl", "cad_z_joint_rr"):
+        return _rot_z_3x3(math.pi)
+    return np.eye(3, dtype=np.float64)
+
+
+def _build_local_qb(
+    p0_asm: np.ndarray,
+    p1_asm: np.ndarray,
+    u0: np.ndarray,
+    u1: np.ndarray,
+    r_cad_to_asm: np.ndarray,
+    *,
+    dp_cad_m: np.ndarray | None = None,
+    apply_port1_shift: bool = False,
+    scale: float = 1.0,
+) -> np.ndarray:
+    """Build a rigid-body-invariant 12-DOF boundary displacement vector ``q_b`` in CAD coordinates.
+
+    Subtracts Port 0's exact 6-DOF rigid-body motion in the assembly frame, rotates the elastic
+    relative deformation into the CAD local frame via ``R.T``, and optionally shifts Port 1 from
+    ``dp_asm`` back to ``dp_cad`` (matching ``superelement_element_matrices``). Guarantees exact
+    zero flex and zero stress under arbitrary 6-DOF global rigid-body translation and rotation.
+    """
+    dp_asm = np.asarray(p1_asm, dtype=np.float64) - np.asarray(p0_asm, dtype=np.float64)
+    du_el_asm = (u1[:3] - (u0[:3] + np.cross(u0[3:6], dp_asm))) * float(scale)
+    dr_el_asm = (u1[3:6] - u0[3:6]) * float(scale)
+
+    rt = r_cad_to_asm.T
+    du_el_cad = rt @ du_el_asm
+    dr_el_cad = rt @ dr_el_asm
+
+    if apply_port1_shift and dp_cad_m is not None:
+        dp_asm_cad = rt @ dp_asm
+        du_el_cad = du_el_cad - np.cross(dr_el_cad, dp_asm_cad - dp_cad_m)
+
+    q_b = np.zeros(12, dtype=np.float64)
+    q_b[6:9] = du_el_cad
+    q_b[9:12] = dr_el_cad
+    return q_b
+
+
+def _format_part_field_entry(
+    rec: Any,
+    q_b: np.ndarray,
+    *,
+    asset_id: str,
+    label: str,
+    node_ids: tuple[str, str] | list[str],
+    normalized: bool = False,
+) -> dict[str, Any] | None:
+    """Evaluate ``rec.recover_field(q_b)`` + ``rec.recover(q_b)`` into the canonical part-field dict."""
+    f_data = rec.recover_field(q_b)
+    if not f_data:
+        return None
+
+    flex_list = f_data["flex_um"]
+    stress_list = f_data["stress_mpa"]
+    sp_idx_list = f_data["subpart_idx"]
+
+    subparts_out: list[dict[str, Any]] = []
+    if hasattr(rec, "recover"):
+        raw_subparts = rec.recover(q_b)
+        fl_arr = np.asarray(flex_list, dtype=np.float64)
+        st_arr = np.asarray(stress_list, dtype=np.float64)
+        idx_arr = np.asarray(sp_idx_list, dtype=np.int64) if sp_idx_list else np.empty(0, dtype=np.int64)
+        for sp_i, sp in enumerate(raw_subparts):
+            mask = (idx_arr == sp_i) if len(idx_arr) == len(fl_arr) else None
+            pt_count = int(np.sum(mask)) if mask is not None else 0
+            if mask is not None and pt_count > 0:
+                sp_max_stress = round(float(np.max(st_arr[mask])), 3)
+                sp_mean_stress = round(float(np.mean(st_arr[mask])), 3)
+                sp_max_flex = round(float(np.max(fl_arr[mask])), 3)
+            else:
+                sp_max_stress = float(sp["stress_mpa"])
+                sp_mean_stress = float(sp["stress_mpa"])
+                sp_max_flex = float(sp["local_flex_um"])
+            subparts_out.append(
+                {
+                    "name": sp["name"],
+                    "label": _pretty_subpart_label(sp["name"]),
+                    "material_id": sp["material_id"],
+                    "mass_g": sp["mass_g"],
+                    "strain_energy_pct": sp["strain_energy_pct"],
+                    "kinetic_energy_pct": sp["kinetic_energy_pct"],
+                    "local_flex_um": sp["local_flex_um"],
+                    "stress_mpa": sp["stress_mpa"],
+                    "max_stress_mpa": sp_max_stress,
+                    "mean_stress_mpa": sp_mean_stress,
+                    "max_flex_um": sp_max_flex,
+                    "point_count": pt_count,
+                }
+            )
+
+    entry: dict[str, Any] = {
+        "source": f_data["source"],
+        "asset_id": str(asset_id),
+        "label": str(label),
+        "node_ids": [str(node_ids[0]), str(node_ids[1])],
+        "points_mm": f_data["points_mm"],
+        "flex_um": flex_list,
+        "stress_mpa": stress_list,
+        "max_flex_um": float(f_data["max_flex_um"]),
+        "max_stress_mpa": float(f_data["max_stress_mpa"]),
+        "subpart_idx": sp_idx_list,
+        "subparts": subparts_out,
+    }
+    if normalized:
+        fl = np.asarray(flex_list, dtype=np.float64)
+        st = np.asarray(stress_list, dtype=np.float64)
+        fl_max = float(np.max(fl)) if len(fl) > 0 else 0.0
+        st_max = float(np.max(st)) if len(st) > 0 else 0.0
+        entry["flex_norm"] = np.round(fl / fl_max, 3).tolist() if fl_max > 1e-12 else [0.0] * len(fl)
+        entry["strain_norm"] = np.round(st / st_max, 3).tolist() if st_max > 1e-12 else [0.0] * len(st)
+    return entry
+
+
+def _carriage_rotation_x(x_rail_mount: str) -> np.ndarray:
+    """CAD-to-assembly rotation matrix for an X-rail HIWIN carriage (CAD +X=rail, +Z=bolt face)."""
+    ex = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    if x_rail_mount == "front":
+        ez = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+    elif x_rail_mount == "bottom":
+        ez = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+    else:
+        ez = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    ey = np.cross(ez, ex)
+    return np.column_stack([ex, ey, ez])
+
+
+def _carriage_rotation_y(y_rail_mount: str, side: str) -> np.ndarray:
+    """CAD-to-assembly rotation matrix for a Y-rail HIWIN carriage (CAD +X=rail, +Z=bolt face)."""
+    ex = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    if y_rail_mount == "top":
+        ez = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    elif y_rail_mount == "bottom":
+        ez = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+    elif y_rail_mount == "inner":
+        ez = np.array([1.0 if side == "l" else -1.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        ez = np.array([-1.0 if side == "l" else 1.0, 0.0, 0.0], dtype=np.float64)
+    ey = np.cross(ez, ex)
+    return np.column_stack([ex, ey, ez])
+
+
+def compute_printer_part_fields(
+    assembly: AssemblyModel,
+    node_idx: dict[str, int],
+    u_vec: np.ndarray,
+    *,
+    u_bed_vec: np.ndarray | None = None,
+    normalized: bool = False,
+) -> dict[str, dict[str, Any]]:
+    """Recover 3D intra-part Tet4 flex (µm) and von Mises stress (MPa) across the entire printer.
+
+    Recovers fields for:
+    1. Every attached 2-port ``AttachedSuperelement`` whose loaded asset provides
+       ``subpart_recovery`` with ``field_points_m`` (toolheads, hotends, braced assemblies,
+       XY joints, A/B motor mounts, front idlers, Z-drives, Z-joints, Trident bed arms, etc.).
+    2. Attached HIWIN linear-rail carriages (``y_car_bearing_l``, ``y_car_bearing_r``, and
+       ``x_carriage``) backed by baked ``carriages/*`` Tet4 superelements.
+    3. Modeled frame corner braces / gussets in ``assembly.frame_brace_visuals`` whenever their
+       baked ``frame_braces/*`` asset provides ``field_points_m``.
+
+    All boundary vectors ``q_b`` are transformed into each component's local CAD coordinate frame
+    with exact 6-DOF rigid-body invariance.
+    """
+    spec = assembly.spec
+    fields: dict[str, dict[str, Any]] = {}
+
+    # 1. Every attached 2-port CAD superelement on the printer
+    for se in getattr(assembly, "superelements", ()):
+        port_ids = getattr(se, "port_node_ids", ())
+        if len(port_ids) != 2:
+            continue
+        p0_id, p1_id = str(port_ids[0]), str(port_ids[1])
+        if p0_id not in node_idx or p1_id not in node_idx:
+            continue
+
+        rec, port_coords_cad_m = _load_superelement_recovery(se, spec)
+        if rec is None:
+            continue
+
+        vec = u_bed_vec if (u_bed_vec is not None and getattr(se, "role", "") == "bed") else u_vec
+        u0 = _get_node_dof6(vec, node_idx, p0_id)
+        u1 = _get_node_dof6(vec, node_idx, p1_id)
+        p0_asm = _node_pos(assembly, node_idx, p0_id)
+        p1_asm = _node_pos(assembly, node_idx, p1_id)
+
+        r_mat = _superelement_rotation_cad_to_asm(se)
+        dp_cad_m = (
+            port_coords_cad_m[1] - port_coords_cad_m[0]
+            if port_coords_cad_m is not None and len(port_coords_cad_m) >= 2
+            else None
+        )
+        se_id = str(se.id)
+        apply_shift = (
+            se_id == "toolhead_mount"
+            or se_id.startswith("corner_mount_")
+            or getattr(se, "port_coords_cad_m", None) is not None
+        )
+        q_b = _build_local_qb(
+            p0_asm,
+            p1_asm,
+            u0,
+            u1,
+            r_mat,
+            dp_cad_m=dp_cad_m,
+            apply_port1_shift=apply_shift,
+        )
+        man = getattr(se, "manifest", None) or {}
+        label = str(
+            man.get("name")
+            or getattr(se, "part_group_label", "")
+            or getattr(se, "asset_id", "")
+            or se_id
+        )
+        entry = _format_part_field_entry(
+            rec,
+            q_b,
+            asset_id=str(getattr(se, "asset_id", "") or se_id),
+            label=label,
+            node_ids=(p0_id, p1_id),
+            normalized=normalized,
+        )
+        if entry is not None:
+            fields[se_id] = entry
+
+    # 2. HIWIN linear-rail carriages (Y-rail bearings & X-rail toolhead carriage)
+    try:
+        from printsim.cad_assets.registry import load_superelement
+    except ImportError:
+        load_superelement = None  # type: ignore[assignment]
+
+    if load_superelement is not None:
+        gantry = getattr(spec, "gantry", None)
+        block_type = str(getattr(gantry, "rail_block_type", "H") or "H") if gantry is not None else "H"
+
+        # 2a. Explicit 6-DOF Y-carriage bearings (y_car_bearing_l / y_car_bearing_r)
+        y_cid = (
+            _resolve_carriage_asset_id(getattr(gantry, "y_rail_profile", None), block_type)
+            if gantry is not None
+            else None
+        )
+        y_car_asset = load_superelement("carriages", y_cid) if y_cid else None
+        y_car_rec = getattr(y_car_asset, "subpart_recovery", None) if y_car_asset is not None else None
+        if _has_field_recovery(y_car_rec):
+            y_mount = str(getattr(gantry, "y_rail_mount", "top") or "top")
+            for sp in getattr(assembly, "fastener_springs", ()):
+                sp_id = str(getattr(sp, "id", "") or "")
+                if not sp_id.startswith("y_car_bearing_") or sp_id in fields:
+                    continue
+                p0_id = str(sp.shell_node_id)
+                p1_id = str(sp.frame_node_id)
+                if p0_id not in node_idx or p1_id not in node_idx:
+                    continue
+                side = "l" if sp_id.endswith("_l") else "r"
+                r_mat = _carriage_rotation_y(y_mount, side)
+                u0 = _get_node_dof6(u_vec, node_idx, p0_id)
+                u1 = _get_node_dof6(u_vec, node_idx, p1_id)
+                p0_asm = _node_pos(assembly, node_idx, p0_id)
+                p1_asm = _node_pos(assembly, node_idx, p1_id)
+                q_b = _build_local_qb(
+                    p0_asm,
+                    p1_asm,
+                    u0,
+                    u1,
+                    r_mat,
+                    apply_port1_shift=False,
+                )
+                side_lbl = "Left" if side == "l" else "Right"
+                entry = _format_part_field_entry(
+                    y_car_rec,
+                    q_b,
+                    asset_id=y_cid,
+                    label=f"Y-Rail Carriage ({side_lbl}, {y_cid.upper()})",
+                    node_ids=(p0_id, p1_id),
+                    normalized=normalized,
+                )
+                if entry is not None:
+                    fields[sp_id] = entry
+
+        # 2b. X-rail carriage under toolhead (Stage-1 Hertzian carriage compliance share)
+        x_cid = (
+            _resolve_carriage_asset_id(getattr(gantry, "x_rail_profile", None), block_type)
+            if gantry is not None and getattr(spec, "architecture", "corexy") in ("corexy", "cartesian", "cartesian_bedslinger")
+            else None
+        )
+        if x_cid and "x_carriage" not in fields:
+            th_id = assembly.toolhead_node_id
+            cog_id = assembly.toolhead_cog_node_id if assembly.toolhead_cog_node_id in node_idx else th_id
+            junc_id = "toolhead_chassis" if "toolhead_chassis" in node_idx else cog_id
+            if th_id in node_idx and junc_id in node_idx and junc_id != th_id:
+                x_car_asset = load_superelement("carriages", x_cid)
+                x_car_rec = getattr(x_car_asset, "subpart_recovery", None) if x_car_asset is not None else None
+                if _has_field_recovery(x_car_rec):
+                    st_map = getattr(assembly, "toolhead_stage_stiffnesses_n_per_mm", None) or {}
+                    k_rail = float(st_map.get("carriage_mount_n_per_mm", 0.0))
+                    k_bp = float(st_map.get("backplate_only_n_per_mm", 0.0))
+                    k_body = float(st_map.get("body_n_per_mm", 0.0))
+                    c_rail = (1.0 / k_rail) if k_rail > 1e-6 else 0.0
+                    c_bp = (1.0 / k_bp) if k_bp > 1e-6 else 0.0
+                    c_body = (1.0 / k_body) if k_body > 1e-6 else 0.0
+                    c_tot = c_rail + c_bp + c_body
+                    car_frac = float(np.clip(c_rail / c_tot, 0.02, 1.0)) if (c_tot > 1e-12 and c_rail > 0.0) else 0.15
+
+                    x_mount = str(getattr(gantry, "effective_x_rail_mount", "front") or "front")
+                    r_mat = _carriage_rotation_x(x_mount)
+                    u0 = _get_node_dof6(u_vec, node_idx, th_id)
+                    u1 = _get_node_dof6(u_vec, node_idx, junc_id)
+                    p0_asm = _node_pos(assembly, node_idx, th_id)
+                    p1_asm = _node_pos(assembly, node_idx, junc_id)
+                    q_b = _build_local_qb(
+                        p0_asm,
+                        p1_asm,
+                        u0,
+                        u1,
+                        r_mat,
+                        apply_port1_shift=False,
+                        scale=car_frac,
+                    )
+                    entry = _format_part_field_entry(
+                        x_car_rec,
+                        q_b,
+                        asset_id=x_cid,
+                        label=f"X-Rail Carriage ({x_cid.upper()})",
+                        node_ids=(th_id, junc_id),
+                        normalized=normalized,
+                    )
+                    if entry is not None:
+                        fields["x_carriage"] = entry
+
+        # 3. Frame corner braces / gussets (activates automatically once frame_braces/* include field_points_m)
+        brace_vis_list = getattr(assembly, "frame_brace_visuals", None) or ()
+        if brace_vis_list:
+            brace_cache: dict[str, Any] = {}
+            chamber_c = float(getattr(getattr(spec, "frame", None), "chamber_temp_c", 25.0))
+            adj_map: dict[str, list[str]] | None = None
+            for vis in brace_vis_list:
+                vid = str(vis.get("id") or "")
+                aid = str(vis.get("asset_id") or "")
+                if not vid or not aid or vid in fields:
+                    continue
+                if aid not in brace_cache:
+                    brace_cache[aid] = load_superelement(
+                        "frame_braces",
+                        aid,
+                        material_id="aluminum_6061_t6",
+                        chamber_temp_c=chamber_c,
+                    )
+                b_asset = brace_cache[aid]
+                b_rec = getattr(b_asset, "subpart_recovery", None) if b_asset is not None else None
+                if not _has_field_recovery(b_rec):
+                    continue
+
+                na = str(vis.get("node_a") or "")
+                if na not in node_idx:
+                    continue
+                ex = np.asarray(vis.get("basis_x", [1.0, 0.0, 0.0]), dtype=np.float64)
+                ey = np.asarray(vis.get("basis_y", [0.0, 1.0, 0.0]), dtype=np.float64)
+                ez = np.asarray(vis.get("basis_z", [0.0, 0.0, 1.0]), dtype=np.float64)
+                r_mat = np.column_stack([ex, ey, ez])
+
+                if adj_map is None:
+                    adj_map = {}
+                    for mem in assembly.members:
+                        adj_map.setdefault(mem.start_id, []).append(mem.end_id)
+                        adj_map.setdefault(mem.end_id, []).append(mem.start_id)
+
+                p_na = _node_pos(assembly, node_idx, na)
+                best_nb: str | None = None
+                best_align = 0.5
+                for nb in adj_map.get(na, ()):
+                    if nb not in node_idx:
+                        continue
+                    v_leg = _node_pos(assembly, node_idx, nb) - p_na
+                    ln = float(np.linalg.norm(v_leg))
+                    if ln < 1e-6:
+                        continue
+                    align = float(np.dot(v_leg / ln, ey))
+                    if align > best_align:
+                        best_align = align
+                        best_nb = nb
+                if best_nb is None:
+                    continue
+
+                p_nb = _node_pos(assembly, node_idx, best_nb)
+                leg_len = max(float(np.linalg.norm(p_nb - p_na)), 1e-6)
+                b_ports = getattr(b_asset, "port_coords_m", None)
+                if b_ports is not None and len(b_ports) >= 2:
+                    dp_cad_b = np.asarray(b_ports[1], dtype=np.float64) - np.asarray(b_ports[0], dtype=np.float64)
+                    arm_scale = min(1.0, float(np.linalg.norm(dp_cad_b)) / leg_len)
+                else:
+                    arm_scale = min(1.0, 0.04 / leg_len)
+                u0 = _get_node_dof6(u_vec, node_idx, na)
+                u1 = _get_node_dof6(u_vec, node_idx, best_nb)
+                q_b = _build_local_qb(
+                    p_na,
+                    p_nb,
+                    u0,
+                    u1,
+                    r_mat,
+                    apply_port1_shift=False,
+                    scale=arm_scale,
+                )
+                b_man = getattr(b_asset, "manifest", None) or {}
+                label = str(b_man.get("name") or f"Frame Corner Brace ({vid})")
+                entry = _format_part_field_entry(
+                    b_rec,
+                    q_b,
+                    asset_id=aid,
+                    label=label,
+                    node_ids=(na, best_nb),
+                    normalized=normalized,
+                )
+                if entry is not None:
+                    fields[vid] = entry
+
+    return fields
+
+
 def compute_toolhead_part_fields(
     assembly: AssemblyModel,
     node_idx: dict[str, int],
@@ -950,38 +1489,12 @@ def compute_toolhead_part_fields(
     normalized: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Recover 3D intra-part Tet4 flex & von Mises stress fields for toolhead & hotend CAD superelements."""
-    th_id = assembly.toolhead_node_id
-    cog_id = assembly.toolhead_cog_node_id if assembly.toolhead_cog_node_id in node_idx else th_id
-    noz_id = assembly.nozzle_node_id if assembly.nozzle_node_id in node_idx else cog_id
-    junc_id = "toolhead_chassis" if "toolhead_chassis" in node_idx else cog_id
-
-    u_th = _get_node_dof6(u_vec, node_idx, th_id)
-    u_junc = _get_node_dof6(u_vec, node_idx, junc_id)
-    u_noz = _get_node_dof6(u_vec, node_idx, noz_id)
-
-    fields: dict[str, dict[str, Any]] = {}
-    for se_id, q_b in (
-        ("toolhead_mount", np.concatenate([u_th, u_junc])),
-        ("nozzle_stem", np.concatenate([u_junc, u_noz])),
-    ):
-        se = _find_superelement(assembly, se_id)
-        rec = getattr(se, "subpart_recovery", None) if se is not None else None
-        if rec is None or not hasattr(rec, "recover_field"):
-            continue
-        f_data = rec.recover_field(q_b)
-        if not f_data:
-            continue
-        if normalized:
-            fl = np.asarray(f_data["flex_um"], dtype=np.float64)
-            st = np.asarray(f_data["stress_mpa"], dtype=np.float64)
-            fl_max = float(np.max(fl)) if len(fl) > 0 else 0.0
-            st_max = float(np.max(st)) if len(st) > 0 else 0.0
-            fields[se_id] = {
-                "source": f_data["source"],
-                "points_mm": f_data["points_mm"],
-                "flex_norm": np.round(fl / fl_max, 3).tolist() if fl_max > 1e-12 else [0.0] * len(fl),
-                "strain_norm": np.round(st / st_max, 3).tolist() if st_max > 1e-12 else [0.0] * len(st),
-            }
-        else:
-            fields[se_id] = f_data
-    return fields
+    all_fields = compute_printer_part_fields(
+        assembly=assembly,
+        node_idx=node_idx,
+        u_vec=u_vec,
+        normalized=normalized,
+    )
+    return {
+        k: v for k, v in all_fields.items() if k in ("toolhead_mount", "nozzle_stem")
+    }

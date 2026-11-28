@@ -5,7 +5,7 @@
   "name": "CNC Al 3030 5-Hole Corner Gusset Plate (90\u00d790\u00d76 mm)",
   "source_cad": "Parametric build123d CAD (90\u00d790\u00d76mm 5-hole Al 6061-T6 plate)",
   "source_url": "https://github.com/Jumpybeetroot/PrintSim",
-  "baked_at": "2026-11-27T04:19:42Z",
+  "baked_at": "2026-11-28T15:35:10Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 10842,
   "n_boundary_dofs": 12,
   "n_internal_modes": 4,
-  "rigid_body_max_freq_hz": 0.007107,
+  "rigid_body_max_freq_hz": 0.007117,
   "mass_kg": 0.099456,
   "com_mm": [
     37.9841,
@@ -54,5 +54,43 @@
   "visual_triangles": 2200,
   "visual_bytes": 85628,
   "cad_trust_pct": 90,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 32.29,
+      "com_mm": [
+        63.48,
+        18.29,
+        3.0
+      ],
+      "num_elements": 3865
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 34.88,
+      "com_mm": [
+        32.67,
+        32.67,
+        3.0
+      ],
+      "num_elements": 5452
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 32.29,
+      "com_mm": [
+        18.23,
+        63.42,
+        3.0
+      ],
+      "num_elements": 3904
+    }
+  ],
   "source_hash": "1801f9dd524ec4b8c7b46ddc4d15dc0b1448e9f34b6e095a71d50b541a8cf1f6"
 }

@@ -200,18 +200,34 @@ def _selector_box_or_nearest(
     center_mm: tuple[float, float, float],
     radius_mm: float,
     min_nodes: int = 16,
+    other_center_mm: tuple[float, float, float] | None = None,
 ):
-    """Select boundary vertices within ``radius_mm`` of ``center_mm``, falling back to nearest k."""
+    """Select boundary vertices within ``radius_mm`` of ``center_mm``, falling back to nearest k.
+
+    When ``other_center_mm`` is provided, excludes vertices closer to the opposite port
+    (Voronoi half-space with 0.5 mm gap) so Port 0 and Port 1 stay strictly disjoint.
+    """
     c = np.asarray(center_mm, dtype=np.float64)
+    c_other = np.asarray(other_center_mm, dtype=np.float64) if other_center_mm is not None else None
 
     def _select(coords_mm: np.ndarray) -> np.ndarray:
         d = np.linalg.norm(coords_mm - c[None, :], axis=1)
-        mask = d <= radius_mm
+        if c_other is not None:
+            d_other = np.linalg.norm(coords_mm - c_other[None, :], axis=1)
+            eligible = d + 0.5 < d_other
+        else:
+            eligible = np.ones(len(coords_mm), dtype=bool)
+        mask = (d <= radius_mm) & eligible
         if int(np.sum(mask)) >= min_nodes:
             return mask
-        order = np.argsort(d)
+        # Fall back to nearest k among eligible vertices
+        elig_idx = np.flatnonzero(eligible)
+        if len(elig_idx) == 0:
+            elig_idx = np.arange(len(coords_mm))
+        order = elig_idx[np.argsort(d[elig_idx])]
         out = np.zeros(len(coords_mm), dtype=bool)
-        out[order[: max(min_nodes, min(28, len(coords_mm) // 8))]] = True
+        k = min(len(order), max(min_nodes, min(28, len(coords_mm) // 8)))
+        out[order[:k]] = True
         return out
 
     return _select
@@ -226,8 +242,13 @@ def _already_baked(category: str, asset_id: str, require_npz: bool = True) -> bo
     d = ASSETS_ROOT / category / asset_id
     if not ((d / "manifest.json").is_file() and (d / "visual.glb").is_file()):
         return False
-    if require_npz and not (d / "superelement.npz").is_file():
-        return False
+    if require_npz:
+        npz_path = d / "superelement.npz"
+        if not npz_path.is_file():
+            return False
+        with np.load(npz_path) as data:
+            if "field_points_m" not in data.files:
+                return False
     print(f"  [skip] {category}/{asset_id} (already baked)")
     return True
 
@@ -322,11 +343,15 @@ def _bake_bracket_from_meshes(
         cad_trust_pct=cad_trust_pct,
         port0=PortDefinition(
             vp_coord_mm=port0_mm,
-            selector=_selector_box_or_nearest(port0_mm, port0_radius_mm, min_nodes=16),
+            selector=_selector_box_or_nearest(
+                port0_mm, port0_radius_mm, min_nodes=16, other_center_mm=port1_mm
+            ),
         ),
         port1=PortDefinition(
             vp_coord_mm=port1_mm,
-            selector=_selector_box_or_nearest(port1_mm, port1_radius_mm, min_nodes=16),
+            selector=_selector_box_or_nearest(
+                port1_mm, port1_radius_mm, min_nodes=16, other_center_mm=port0_mm
+            ),
         ),
         n_internal_modes=6,
         mesh_size_mm=mesh_size_mm,

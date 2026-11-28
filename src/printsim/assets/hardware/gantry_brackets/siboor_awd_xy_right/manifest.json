@@ -5,7 +5,7 @@
   "name": "Siboor CNC 6061 XY-Joint Right (AWD)",
   "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
   "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
-  "baked_at": "2026-11-26T19:18:45Z",
+  "baked_at": "2026-11-28T15:37:50Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -56,5 +56,55 @@
   "visual_triangles": 21992,
   "visual_bytes": 823332,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 11.84,
+      "com_mm": [
+        -4.93,
+        -18.64,
+        -21.38
+      ],
+      "num_elements": 945
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 10.73,
+      "com_mm": [
+        -23.47,
+        -14.53,
+        -16.25
+      ],
+      "num_elements": 855
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 23.5,
+      "com_mm": [
+        -40.0,
+        -8.09,
+        3.0
+      ],
+      "num_elements": 1876
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 7.11,
+      "com_mm": [
+        -20.47,
+        -16.87,
+        14.0
+      ],
+      "num_elements": 569
+    }
+  ],
   "source_hash": "2b1d20ddd113a2ff209690ebd77a4b5f42e990ca86fc999e47d08cfabf677f66"
 }

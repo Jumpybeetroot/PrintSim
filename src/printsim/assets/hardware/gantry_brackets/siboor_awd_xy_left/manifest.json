@@ -5,7 +5,7 @@
   "name": "Siboor CNC 6061 XY-Joint Left (AWD)",
   "source_cad": "Voron-Trident-CNC-Gantry v1.stp",
   "source_url": "https://github.com/GKD-Team/Voron-Trident-CNC-Gantry",
-  "baked_at": "2026-11-26T19:18:30Z",
+  "baked_at": "2026-11-28T15:37:38Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 5667,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.007005,
+  "rigid_body_max_freq_hz": 0.007003,
   "mass_kg": 0.05349,
   "com_mm": [
     26.2825,
@@ -56,5 +56,55 @@
   "visual_triangles": 21994,
   "visual_bytes": 827828,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 11.84,
+      "com_mm": [
+        4.93,
+        -18.64,
+        -21.38
+      ],
+      "num_elements": 945
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 10.73,
+      "com_mm": [
+        23.47,
+        -14.53,
+        -16.25
+      ],
+      "num_elements": 855
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 23.5,
+      "com_mm": [
+        40.0,
+        -8.09,
+        3.0
+      ],
+      "num_elements": 1876
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 7.42,
+      "com_mm": [
+        20.96,
+        -17.41,
+        13.36
+      ],
+      "num_elements": 594
+    }
+  ],
   "source_hash": "b7226b50ba37e531fda3a33a113f5406ed2584033852092eb1907d833affcc97"
 }

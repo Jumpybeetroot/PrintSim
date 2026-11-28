@@ -5,7 +5,7 @@
   "name": "Voron 2.4r2 Flying Gantry Z-Joint (ABS/ASA)",
   "source_cad": "Voron_2.4r2_Assembly.step",
   "source_url": "https://github.com/VoronDesign/Voron-2",
-  "baked_at": "2026-11-26T19:15:44Z",
+  "baked_at": "2026-11-28T15:48:42Z",
   "reference_material_id": "abs_printed",
   "reference_youngs_modulus_pa": 2100000000.0,
   "reference_density_kg_m3": 1040.0,
@@ -17,7 +17,7 @@
   "num_dofs": 5235,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.002519,
+  "rigid_body_max_freq_hz": 0.002512,
   "mass_kg": 0.02426,
   "com_mm": [
     -0.0178,
@@ -56,5 +56,55 @@
   "visual_triangles": 19990,
   "visual_bytes": 678344,
   "cad_trust_pct": 88,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 10.82,
+      "com_mm": [
+        -0.0,
+        30.12,
+        -56.48
+      ],
+      "num_elements": 2561
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 1.32,
+      "com_mm": [
+        -0.0,
+        36.66,
+        -44.57
+      ],
+      "num_elements": 314
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 4.51,
+      "com_mm": [
+        -0.08,
+        34.98,
+        -19.49
+      ],
+      "num_elements": 1067
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 7.61,
+      "com_mm": [
+        -0.0,
+        32.34,
+        -32.8
+      ],
+      "num_elements": 1803
+    }
+  ],
   "source_hash": "c1b147d4d88f344d0f477665e432e430f9c1c06b490910ecb3dae4de33e3f7c6"
 }

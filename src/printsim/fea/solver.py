@@ -17,7 +17,11 @@ from printsim.fea.beam3d import (
     element_internal_forces,
 )
 from printsim.fea.shell_mitc4 import mitc4_shell_von_mises_mpa
-from printsim.fea.toolhead_parts import compute_static_toolhead_parts, compute_toolhead_part_fields
+from printsim.fea.toolhead_parts import (
+    compute_printer_part_fields,
+    compute_static_toolhead_parts,
+    compute_toolhead_part_fields,
+)
 from printsim.geometry.builder import (
     AssemblyModel,
     StructuralMember,
@@ -164,6 +168,7 @@ class StaticFEAResult:
     toolhead_flex_breakdown: dict[str, Any] = field(default_factory=dict)
     toolhead_parts: list[dict[str, Any]] = field(default_factory=list)
     toolhead_part_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
+    part_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -189,6 +194,7 @@ class StaticFEAResult:
             "toolhead_flex_breakdown": self.toolhead_flex_breakdown,
             "toolhead_parts": self.toolhead_parts,
             "toolhead_part_fields": self.toolhead_part_fields,
+            "part_fields": self.part_fields,
             "nodal_displacements_mm": self.nodal_displacements_mm,
             "nodal_displacements_x_mm": self.nodal_displacements_x_mm,
             "nodal_displacements_y_mm": self.nodal_displacements_y_mm,
@@ -981,12 +987,16 @@ def solve_static_fea(
         toolhead_flex_breakdown=toolhead_flex_breakdown,
         member_stress_map=member_stress_map,
     )
-    toolhead_part_fields = compute_toolhead_part_fields(
+    part_fields = compute_printer_part_fields(
         assembly=assembly,
         node_idx=node_idx,
         u_vec=u_xy_comb,
+        u_bed_vec=u_comb,
         normalized=False,
     )
+    toolhead_part_fields = {
+        k: v for k, v in part_fields.items() if k in ("toolhead_mount", "nozzle_stem")
+    }
 
     return StaticFEAResult(
         gravity_sag_toolhead_um=grav_sag_um,
@@ -1018,4 +1028,5 @@ def solve_static_fea(
         toolhead_flex_breakdown=toolhead_flex_breakdown,
         toolhead_parts=toolhead_parts,
         toolhead_part_fields=toolhead_part_fields,
+        part_fields=part_fields,
     )

@@ -5,7 +5,7 @@
   "name": "VzBot 330 Y-Gantry XY-Joint Left",
   "source_cad": "Vz-330_v1.2.zip / Vz-330_WEB v2.step",
   "source_url": "https://github.com/VzBoT3D/VzBoT-Vz330/tree/master/CAD/Full%20Printer",
-  "baked_at": "2026-11-27T04:59:22Z",
+  "baked_at": "2026-11-28T15:41:57Z",
   "reference_material_id": "aluminum_6061_t6",
   "reference_youngs_modulus_pa": 68900000000.0,
   "reference_density_kg_m3": 2700.0,
@@ -17,7 +17,7 @@
   "num_dofs": 36378,
   "n_boundary_dofs": 12,
   "n_internal_modes": 6,
-  "rigid_body_max_freq_hz": 0.008504,
+  "rigid_body_max_freq_hz": 0.008508,
   "mass_kg": 0.04091,
   "com_mm": [
     38.4657,
@@ -56,5 +56,43 @@
   "visual_triangles": 21978,
   "visual_bytes": 905516,
   "cad_trust_pct": 84,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 6.6,
+      "com_mm": [
+        26.69,
+        0.0,
+        -0.03
+      ],
+      "num_elements": 6240
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 11.96,
+      "com_mm": [
+        33.13,
+        -0.01,
+        -0.13
+      ],
+      "num_elements": 11785
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 22.35,
+      "com_mm": [
+        44.8,
+        -1.63,
+        -0.19
+      ],
+      "num_elements": 21710
+    }
+  ],
   "source_hash": "963013701233ae57cb186e92a9dce98062a071dc9d9959b604f96a3979115cf2"
 }

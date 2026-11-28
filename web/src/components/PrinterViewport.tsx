@@ -66,8 +66,14 @@ import {
   classifyToolheadSubmeshStage,
   createIntraPartVertexColorFn,
   prepareIntraPartField,
+  resolveIntraPartField,
   resolveToolheadPartVisual,
 } from "../viewport/toolheadParts";
+import {
+  IsolatedCadPartOption,
+  PartFeaInspector,
+  PartFeaInspectorState,
+} from "./PartFeaInspector";
 import {
   ContinuousBeamChain,
   ModalCadBeam,
@@ -248,6 +254,13 @@ export const PrinterViewport: React.FC<Props> = ({
   const toolsMenuRef = useRef<HTMLDivElement | null>(null);
   const [hoveredPart, setHoveredPart] = useState<InspectedPartInfo | null>(null);
   const [pinnedPart, setPinnedPart] = useState<InspectedPartInfo | null>(null);
+  const [partFeaInspector, setPartFeaInspector] = useState<PartFeaInspectorState | null>(null);
+  const [isolatedPartBoundsMm, setIsolatedPartBoundsMm] = useState<{
+    min: [number, number, number];
+    max: [number, number, number];
+  } | null>(null);
+  const savedSinglePartCamRef = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+  const lastIsolatedPartIdRef = useRef<string | null>(null);
   const [toolheadExplode, setToolheadExplode] = useState<boolean>(initialUiState.toolheadExplode);
   const [hiddenFeaLayers, setHiddenFeaLayers] = useState<Set<FeaVisLayer>>(
     () => new Set(initialUiState.hiddenFeaLayers)
@@ -673,6 +686,7 @@ export const PrinterViewport: React.FC<Props> = ({
     camera?: THREE.PerspectiveCamera;
     controls?: OrbitControls;
     dynamicGroup?: THREE.Group;
+    isolatedPartGroup?: THREE.Group;
     animFrame?: number;
     lastFramedKey?: string;
     inspectableMeshes: THREE.Mesh[];
@@ -872,6 +886,7 @@ export const PrinterViewport: React.FC<Props> = ({
     }
     setWebglError(null);
     renderer.setClearColor(viewportBgColor, 1);
+    renderer.localClippingEnabled = true;
     renderer.setPixelRatio(
       stateRef.current.ecoDpr ? 1 : Math.min(window.devicePixelRatio || 1, 1.5)
     );
@@ -912,11 +927,17 @@ export const PrinterViewport: React.FC<Props> = ({
     const dynamicGroup = new THREE.Group();
     scene.add(dynamicGroup);
 
+    const isolatedPartGroup = new THREE.Group();
+    isolatedPartGroup.name = "isolated_part_fea";
+    isolatedPartGroup.visible = false;
+    scene.add(isolatedPartGroup);
+
     stateRef.current.renderer = renderer;
     stateRef.current.scene = scene;
     stateRef.current.camera = camera;
     stateRef.current.controls = controls;
     stateRef.current.dynamicGroup = dynamicGroup;
+    stateRef.current.isolatedPartGroup = isolatedPartGroup;
 
     let disposed = false;
     let rafId: number | null = null;
@@ -3432,6 +3453,12 @@ export const PrinterViewport: React.FC<Props> = ({
         tagInspectable,
       });
     } else if (viewMode === "fea_stress" || viewMode === "modal" || viewMode === "sensitivity") {
+      const activeModeForFields =
+        viewMode === "modal"
+          ? sim.modal_fea.modes[Math.min(selectedModeIdx, Math.max(0, sim.modal_fea.modes.length - 1))]
+          : undefined;
+      const activePrinterPartFields =
+        viewMode === "modal" ? activeModeForFields?.mode_part_fields : sim.static_fea.part_fields;
       const cadGantryGroup = new THREE.Group();
       cadGantryGroup.name = "cad_gantry_stations";
       const cadGantryRes = buildCadGantryStationMeshes({
@@ -3447,6 +3474,7 @@ export const PrinterViewport: React.FC<Props> = ({
         tagInspectable,
         getModalNodeScalar,
         globalNodalStress,
+        partFields: activePrinterPartFields,
         memberSensMap,
       });
       if (cadGantryGroup.children.length > 0) {
@@ -3574,6 +3602,41 @@ export const PrinterViewport: React.FC<Props> = ({
               ).toLocaleString()} N·m/rad per corner joint).`
             : "Modeled as a 3D Tet4 Craig-Bampton superelement in series with Huth T-slot bolt compliance.";
 
+        const isBracePerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
+        const braceModeObj =
+          viewMode === "modal"
+            ? sim.modal_fea.modes[Math.min(selectedModeIdx, Math.max(0, sim.modal_fea.modes.length - 1))]
+            : undefined;
+        const bracePartFields =
+          viewMode === "modal" ? braceModeObj?.mode_part_fields : sim.static_fea.part_fields;
+        const matchedBraceField = isBracePerPartHeat
+          ? resolveIntraPartField({
+              partFields: bracePartFields,
+              candidateKeys: [item.id, item.asset_id, `frame_brace_${item.node_a}`, "frame_bracing"],
+              assetId: item.asset_id,
+            })
+          : null;
+        const preparedBraceField = matchedBraceField
+          ? prepareIntraPartField(matchedBraceField.field, viewMode === "modal")
+          : null;
+        const braceScalar =
+          viewMode === "modal"
+            ? getModalNodeScalar(anchorNodeId)
+            : viewMode === "fea_stress"
+              ? (globalNodalStress[anchorNodeId] ?? 0)
+              : 0.4;
+        const braceVertexColorFn = isBracePerPartHeat
+          ? createIntraPartVertexColorFn({
+              isStructural: true,
+              baseHeat01: Math.min(1, Math.max(0.25, braceScalar)),
+              isModalMode: viewMode === "modal",
+              defaultStage: "chassis",
+              preparedField: preparedBraceField,
+              port0Mm: [0, 0, 0],
+              port1Mm: [20, 20, 0],
+            })
+          : undefined;
+
         const inspectInfo: InspectedPartInfo = {
           key: item.id,
           name: label,
@@ -3590,7 +3653,9 @@ export const PrinterViewport: React.FC<Props> = ({
           unitMassG,
           totalCount: fbMeta?.cad_count,
           nodeDispUm,
-          stressMpa: cornerMaxVm > 0 ? cornerMaxVm : undefined,
+          localFlexUm: matchedBraceField?.field.max_flex_um,
+          stressMpa:
+            matchedBraceField?.field.max_stress_mpa ?? (cornerMaxVm > 0 ? cornerMaxVm : undefined),
           yieldMpa: cornerYield,
           heatScore: hasCornerSens ? cornerHeatScore : undefined,
           estHzGain: frameColStiff?.est_hz_gain,
@@ -3600,6 +3665,9 @@ export const PrinterViewport: React.FC<Props> = ({
               : frameColLight?.hz_per_100g,
           whyItHurts: frameColStiff?.why_it_hurts,
           actionHint,
+          cadAssetId: item.asset_id,
+          cadGlbUrl: item.visual_glb_url,
+          partFieldKey: matchedBraceField?.key ?? item.id,
         };
         const clone = cloneCachedCadGlb(cached, {
           isHeatMode,
@@ -3608,6 +3676,11 @@ export const PrinterViewport: React.FC<Props> = ({
           heatEmissiveIntensity,
           inspectInfo,
           tagInspectable,
+          resolveSubmesh: braceVertexColorFn
+            ? () => ({
+                vertexColorFn: braceVertexColorFn,
+              })
+            : undefined,
         });
         clone.scale.setScalar(CAD_M_TO_THREE);
         const exT = new THREE.Vector3(item.basis_x[0], item.basis_x[2], -item.basis_x[1]).normalize();
@@ -4863,13 +4936,64 @@ export const PrinterViewport: React.FC<Props> = ({
           if (cachedXCarGlb && xCarVis) {
             const port1Off = xCarVis.port1_z_mm * SCALE;
             const carOriginOff = carTotalH - port1Off;
+            const isXCarPerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
+            const xCarModeObj =
+              viewMode === "modal"
+                ? sim.modal_fea.modes[
+                    Math.min(selectedModeIdx, Math.max(0, sim.modal_fea.modes.length - 1))
+                  ]
+                : undefined;
+            const xCarPartFields =
+              viewMode === "modal" ? xCarModeObj?.mode_part_fields : sim.static_fea.part_fields;
+            const matchedXCarField = isXCarPerPartHeat
+              ? resolveIntraPartField({
+                  partFields: xCarPartFields,
+                  candidateKeys: [
+                    "x_carriage",
+                    "carriage_x",
+                    "rail_carriage_x",
+                    "mgn_carriage_x",
+                    xCarVis.asset_id,
+                  ],
+                  assetId: xCarVis.asset_id,
+                })
+              : null;
+            const preparedXCarField = matchedXCarField
+              ? prepareIntraPartField(matchedXCarField.field, viewMode === "modal")
+              : null;
+            const xCarVertexColorFn = isXCarPerPartHeat
+              ? createIntraPartVertexColorFn({
+                  isStructural: true,
+                  baseHeat01: 0.45,
+                  isModalMode: viewMode === "modal",
+                  defaultStage: "chassis",
+                  preparedField: preparedXCarField,
+                  port0Mm: [0, 0, 0],
+                  port1Mm: [0, 0, xCarVis.port1_z_mm],
+                })
+              : undefined;
+            const xCarInspectInfo: InspectedPartInfo = {
+              ...carriageInspectInfo,
+              stressMpa: matchedXCarField?.field.max_stress_mpa ?? carriageInspectInfo.stressMpa,
+              localFlexUm: matchedXCarField?.field.max_flex_um ?? carriageInspectInfo.localFlexUm,
+              cadAssetId: xCarVis.asset_id,
+              cadGlbUrl: xCarVis.visual_glb_url,
+              partFieldKey: matchedXCarField?.key ?? "x_carriage",
+              cadPort0Mm: [0, 0, 0],
+              cadPort1Mm: [0, 0, xCarVis.port1_z_mm],
+            };
             const carClone = cloneCachedCadGlb(cachedXCarGlb, {
               isHeatMode,
               heatColor: mgnBlockColorObj,
               heatEmissive: mgnBlockEmissive,
               heatEmissiveIntensity: mgnBlockEmissiveInt,
-              inspectInfo: carriageInspectInfo,
+              inspectInfo: xCarInspectInfo,
               tagInspectable,
+              resolveSubmesh: xCarVertexColorFn
+                ? () => ({
+                    vertexColorFn: xCarVertexColorFn,
+                  })
+                : undefined,
             });
             if (face === "top") {
               carClone.rotation.x = -Math.PI * 0.5;
@@ -4994,13 +5118,38 @@ export const PrinterViewport: React.FC<Props> = ({
         if (cachedCarriageMountGlb && xRailMountTool === "front" && !isDeltaArch) {
           // Real 3D CAD Siboor / Voron Lightweight CNC 6061-T6 X-Carriage mounted flush to MGN12H face
           const bpStaticParts = sim.static_fea.toolhead_parts ?? [];
-          const bpModalParts =
+          const bpModeObj =
             viewMode === "modal"
               ? sim.modal_fea.modes[
                   Math.min(selectedModeIdx, Math.max(0, sim.modal_fea.modes.length - 1))
-                ]?.toolhead_part_flex
+                ]
               : undefined;
+          const bpModalParts = bpModeObj?.toolhead_part_flex;
           const isBpPerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
+          const bpCadMeta = thStruct?.cad_superelements_active?.find(
+            (s) => s.id === "carriage_mount" || s.id === "x_carriage_mount"
+          );
+          const bpCadAssetId = bpCadMeta?.asset_id ?? "carriage_mount";
+          const matchedBpField = isBpPerPartHeat
+            ? resolveIntraPartField({
+                partFields:
+                  viewMode === "modal" ? bpModeObj?.mode_part_fields : sim.static_fea.part_fields,
+                legacyToolheadFields:
+                  viewMode === "modal"
+                    ? bpModeObj?.toolhead_mode_fields
+                    : sim.static_fea.toolhead_part_fields,
+                candidateKeys: [
+                  "carriage_mount",
+                  "x_carriage_mount",
+                  "toolhead_backplate",
+                  "toolhead_mount",
+                ],
+                assetId: bpCadAssetId,
+              })
+            : null;
+          const preparedBpField = matchedBpField
+            ? prepareIntraPartField(matchedBpField.field, viewMode === "modal")
+            : null;
           const bpResolved = resolveToolheadPartVisual({
             stage: "backplate",
             meshName: "siboor_cnc_carriage_body",
@@ -5010,6 +5159,14 @@ export const PrinterViewport: React.FC<Props> = ({
             isHeatMode: isBpPerPartHeat,
             fallbackInspect: mountStrutInspectInfo,
           });
+          const bpInspectWithCad: InspectedPartInfo = {
+            ...bpResolved.inspectInfo,
+            cadAssetId: bpCadAssetId,
+            cadGlbUrl: carriageMountVisualGlbUrl ?? undefined,
+            partFieldKey: matchedBpField?.key ?? "carriage_mount",
+            cadPort0Mm: [0, 0, 0],
+            cadPort1Mm: [0, -14, 0],
+          };
           const cadCarriage = cloneCachedCadGlb(cachedCarriageMountGlb, {
             isHeatMode,
             heatColor: isBpPerPartHeat ? bpResolved.heatColor : backplateColorObj,
@@ -5017,7 +5174,7 @@ export const PrinterViewport: React.FC<Props> = ({
             heatEmissiveIntensity: isBpPerPartHeat
               ? bpResolved.heatEmissiveIntensity
               : backplateEmissiveInt,
-            inspectInfo: bpResolved.inspectInfo,
+            inspectInfo: bpInspectWithCad,
             tagInspectable,
             resolveSubmesh: (meshName, centerCadMm) => {
               const stage = classifyToolheadSubmeshStage(meshName, "chassis");
@@ -5033,14 +5190,31 @@ export const PrinterViewport: React.FC<Props> = ({
                 isHeatMode: isBpPerPartHeat,
                 fallbackInspect: mountStrutInspectInfo,
               });
+              const subInspect: InspectedPartInfo = {
+                ...rv.inspectInfo,
+                cadAssetId: bpInspectWithCad.cadAssetId,
+                cadGlbUrl: bpInspectWithCad.cadGlbUrl,
+                partFieldKey: bpInspectWithCad.partFieldKey,
+                cadPort0Mm: bpInspectWithCad.cadPort0Mm,
+                cadPort1Mm: bpInspectWithCad.cadPort1Mm,
+              };
               return isBpPerPartHeat
                 ? {
                     heatColor: rv.heatColor,
                     heatEmissive: rv.heatEmissive,
                     heatEmissiveIntensity: rv.heatEmissiveIntensity,
-                    inspectInfo: rv.inspectInfo,
+                    inspectInfo: subInspect,
+                    vertexColorFn: createIntraPartVertexColorFn({
+                      isStructural: rv.inspectInfo.isStructural ?? true,
+                      baseHeat01: rv.heatScore01,
+                      isModalMode: viewMode === "modal",
+                      defaultStage: "chassis",
+                      preparedField: preparedBpField,
+                      port0Mm: [0, 0, 0],
+                      port1Mm: [0, -14, 0],
+                    }),
                   }
-                : { inspectInfo: rv.inspectInfo };
+                : { inspectInfo: subInspect };
             },
           });
           cadCarriage.scale.setScalar(CAD_M_TO_THREE);
@@ -5201,21 +5375,39 @@ export const PrinterViewport: React.FC<Props> = ({
           : undefined;
       const activeModalThParts = activeModeObj?.toolhead_part_flex;
       const isToolheadPerPartHeat = viewMode === "fea_stress" || viewMode === "modal";
-      const preparedToolheadField = isToolheadPerPartHeat
-        ? prepareIntraPartField(
-            viewMode === "modal"
-              ? activeModeObj?.toolhead_mode_fields?.toolhead_mount
-              : sim.static_fea.toolhead_part_fields?.toolhead_mount,
-            viewMode === "modal"
-          )
+      const activeModePartFields =
+        viewMode === "modal" ? activeModeObj?.mode_part_fields : sim.static_fea.part_fields;
+      const activeLegacyThFields =
+        viewMode === "modal"
+          ? activeModeObj?.toolhead_mode_fields
+          : sim.static_fea.toolhead_part_fields;
+      const thCadSeMeta = thStruct?.cad_superelements_active?.find(
+        (s) => s.id === "toolhead_mount"
+      );
+      const hotendCadSeMeta = thStruct?.cad_superelements_active?.find(
+        (s) => s.id === "nozzle_stem"
+      );
+      const matchedToolheadField = isToolheadPerPartHeat
+        ? resolveIntraPartField({
+            partFields: activeModePartFields,
+            legacyToolheadFields: activeLegacyThFields,
+            candidateKeys: ["toolhead_mount", "toolhead", sim.spec.toolhead.preset_id],
+            assetId: thCadSeMeta?.asset_id,
+          })
         : null;
-      const preparedHotendField = isToolheadPerPartHeat
-        ? prepareIntraPartField(
-            viewMode === "modal"
-              ? activeModeObj?.toolhead_mode_fields?.nozzle_stem
-              : sim.static_fea.toolhead_part_fields?.nozzle_stem,
-            viewMode === "modal"
-          )
+      const preparedToolheadField = matchedToolheadField
+        ? prepareIntraPartField(matchedToolheadField.field, viewMode === "modal")
+        : null;
+      const matchedHotendField = isToolheadPerPartHeat
+        ? resolveIntraPartField({
+            partFields: activeModePartFields,
+            legacyToolheadFields: activeLegacyThFields,
+            candidateKeys: ["nozzle_stem", "hotend", sim.spec.toolhead.hotend.preset_id],
+            assetId: hotendCadSeMeta?.asset_id,
+          })
+        : null;
+      const preparedHotendField = matchedHotendField
+        ? prepareIntraPartField(matchedHotendField.field, viewMode === "modal")
         : null;
 
       const resolvedChassisVis = resolveToolheadPartVisual({
@@ -5246,6 +5438,16 @@ export const PrinterViewport: React.FC<Props> = ({
       if (cachedToolheadGlb) {
         // Real 3D CAD Toolhead GLB (PrintSim SI meters Z-up -> Three.js Y-up via Rx(-90 deg) * 10.0)
         // Port 0 = MGN carriage bolt face at local (0, 0, 0); Port 1 = hotend top crown at cadPort1Three.
+        const thCadAssetId =
+          thCadSeMeta?.asset_id ?? sim.spec.toolhead.preset_id ?? "toolhead_mount";
+        const thInspectWithCad: InspectedPartInfo = {
+          ...resolvedChassisVis.inspectInfo,
+          cadAssetId: thCadAssetId,
+          cadGlbUrl: toolheadVisualGlbUrl ?? undefined,
+          partFieldKey: matchedToolheadField?.key ?? "toolhead_mount",
+          cadPort0Mm: [0, 0, 0],
+          cadPort1Mm: cadToolheadPort1Mm ?? [0, -22, 0],
+        };
         const cadToolhead = cloneCachedCadGlb(cachedToolheadGlb, {
           isHeatMode,
           heatColor: isToolheadPerPartHeat ? resolvedChassisVis.heatColor : bodyColorObj,
@@ -5253,7 +5455,7 @@ export const PrinterViewport: React.FC<Props> = ({
           heatEmissiveIntensity: isToolheadPerPartHeat
             ? resolvedChassisVis.heatEmissiveIntensity
             : bodyEmissiveInt,
-          inspectInfo: resolvedChassisVis.inspectInfo,
+          inspectInfo: thInspectWithCad,
           tagInspectable,
           resolveSubmesh: (meshName, centerCadMm) => {
             const stage = classifyToolheadSubmeshStage(meshName, "chassis");
@@ -5268,12 +5470,20 @@ export const PrinterViewport: React.FC<Props> = ({
               isHeatMode: isToolheadPerPartHeat,
               fallbackInspect: cogInspectInfo,
             });
+            const subInspect: InspectedPartInfo = {
+              ...rv.inspectInfo,
+              cadAssetId: thCadAssetId,
+              cadGlbUrl: toolheadVisualGlbUrl ?? undefined,
+              partFieldKey: matchedToolheadField?.key ?? "toolhead_mount",
+              cadPort0Mm: [0, 0, 0],
+              cadPort1Mm: cadToolheadPort1Mm ?? [0, -22, 0],
+            };
             return isToolheadPerPartHeat
               ? {
                   heatColor: rv.heatColor,
                   heatEmissive: rv.heatEmissive,
                   heatEmissiveIntensity: rv.heatEmissiveIntensity,
-                  inspectInfo: rv.inspectInfo,
+                  inspectInfo: subInspect,
                   vertexColorFn: createIntraPartVertexColorFn({
                     isStructural: rv.inspectInfo.isStructural ?? true,
                     baseHeat01: rv.heatScore01,
@@ -5284,7 +5494,7 @@ export const PrinterViewport: React.FC<Props> = ({
                     port1Mm: cadToolheadPort1Mm ?? [0, -22, 0],
                   }),
                 }
-              : { inspectInfo: rv.inspectInfo };
+              : { inspectInfo: subInspect };
           },
         });
         cadToolhead.scale.setScalar(CAD_M_TO_THREE);
@@ -5798,6 +6008,21 @@ export const PrinterViewport: React.FC<Props> = ({
       if (cachedHotendGlb) {
         // Real 3D CAD Hotend GLB: Port 0 (top mounting flange) at [0, 0, 0], Port 1 (nozzle tip) at [0, 0, -L_m].
         // Rx(-90 deg) maps PrintSim (+X, +Y, +Z) -> Three.js (+X, +Z, -Y); scale 10.0 maps m -> Three.js units.
+        const hotendCadAssetId =
+          hotendCadSeMeta?.asset_id ?? sim.spec.toolhead.hotend.preset_id ?? "nozzle_stem";
+        const hotendPort1Mm: [number, number, number] = [
+          0,
+          0,
+          -(sim.spec.toolhead.hotend.overall_length_mm ?? 60),
+        ];
+        const hotendInspectWithCad: InspectedPartInfo = {
+          ...resolvedHotendNeckVis.inspectInfo,
+          cadAssetId: hotendCadAssetId,
+          cadGlbUrl: hotendVisualGlbUrl ?? undefined,
+          partFieldKey: matchedHotendField?.key ?? "nozzle_stem",
+          cadPort0Mm: [0, 0, 0],
+          cadPort1Mm: hotendPort1Mm,
+        };
         const cadHotend = cloneCachedCadGlb(cachedHotendGlb, {
           isHeatMode,
           heatColor: isToolheadPerPartHeat ? resolvedHotendNeckVis.heatColor : hotendShellColorObj,
@@ -5807,7 +6032,7 @@ export const PrinterViewport: React.FC<Props> = ({
           heatEmissiveIntensity: isToolheadPerPartHeat
             ? resolvedHotendNeckVis.heatEmissiveIntensity
             : hotendShellEmissiveInt,
-          inspectInfo: resolvedHotendNeckVis.inspectInfo,
+          inspectInfo: hotendInspectWithCad,
           tagInspectable,
           resolveSubmesh: (meshName, centerCadMm) => {
             const stage = classifyToolheadSubmeshStage(meshName, "hotend_neck");
@@ -5822,12 +6047,20 @@ export const PrinterViewport: React.FC<Props> = ({
               isHeatMode: isToolheadPerPartHeat,
               fallbackInspect: nozStemInspectInfo,
             });
+            const subInspect: InspectedPartInfo = {
+              ...rv.inspectInfo,
+              cadAssetId: hotendCadAssetId,
+              cadGlbUrl: hotendVisualGlbUrl ?? undefined,
+              partFieldKey: matchedHotendField?.key ?? "nozzle_stem",
+              cadPort0Mm: [0, 0, 0],
+              cadPort1Mm: hotendPort1Mm,
+            };
             return isToolheadPerPartHeat
               ? {
                   heatColor: rv.heatColor,
                   heatEmissive: rv.heatEmissive,
                   heatEmissiveIntensity: rv.heatEmissiveIntensity,
-                  inspectInfo: rv.inspectInfo,
+                  inspectInfo: subInspect,
                   vertexColorFn: createIntraPartVertexColorFn({
                     isStructural: rv.inspectInfo.isStructural ?? true,
                     baseHeat01: rv.heatScore01,
@@ -5835,10 +6068,10 @@ export const PrinterViewport: React.FC<Props> = ({
                     defaultStage: "hotend_neck",
                     preparedField: preparedHotendField,
                     port0Mm: [0, 0, 0],
-                    port1Mm: [0, 0, -(sim.spec.toolhead.hotend.overall_length_mm ?? 60)],
+                    port1Mm: hotendPort1Mm,
                   }),
                 }
-              : { inspectInfo: rv.inspectInfo };
+              : { inspectInfo: subInspect };
           },
         });
         cadHotend.scale.setScalar(CAD_M_TO_THREE);
@@ -7148,6 +7381,687 @@ export const PrinterViewport: React.FC<Props> = ({
     return false;
   }, [pinnedPart, flexIsoActive, flexIsolation]);
 
+  // Collect every inspectable CAD superelement / hardware part on the printer
+  const isolatedCadPartOptions = useMemo<IsolatedCadPartOption[]>(() => {
+    if (!sim) return [];
+    const opts: IsolatedCadPartOption[] = [];
+    const seen = new Set<string>();
+    const pushOpt = (opt: IsolatedCadPartOption) => {
+      if (seen.has(opt.id)) return;
+      seen.add(opt.id);
+      opts.push(opt);
+    };
+
+    const thStruct = sim.geometry.toolhead_structure;
+    const partFields =
+      viewMode === "modal" ? activeMode?.mode_part_fields : sim.static_fea.part_fields;
+    const legacyThFields =
+      viewMode === "modal"
+        ? activeMode?.toolhead_mode_fields
+        : sim.static_fea.toolhead_part_fields;
+
+    const thSeMeta = thStruct?.cad_superelements_active?.find((s) => s.id === "toolhead_mount");
+    const hotendSeMeta = thStruct?.cad_superelements_active?.find((s) => s.id === "nozzle_stem");
+    const carSeMeta = thStruct?.cad_superelements_active?.find(
+      (s) => s.id === "carriage_mount" || s.id === "x_carriage_mount"
+    );
+
+    if (toolheadVisualGlbUrl) {
+      const thAssetId =
+        thSeMeta?.asset_id ?? sim.spec.toolhead.preset_id ?? "toolhead_mount";
+      const mf = resolveIntraPartField({
+        partFields,
+        legacyToolheadFields: legacyThFields,
+        candidateKeys: ["toolhead_mount", "toolhead", thAssetId],
+        assetId: thAssetId,
+      });
+      pushOpt({
+        id: "toolhead_mount",
+        label: thSeMeta?.name || `Toolhead (${sim.spec.toolhead.preset_id || "CAD"})`,
+        subsystem: "toolhead",
+        assetId: thAssetId,
+        glbUrl: toolheadVisualGlbUrl,
+        partFieldKey: mf?.key ?? "toolhead_mount",
+        port0Mm: [0, 0, 0],
+        port1Mm: (thStruct?.toolhead_visual_ports_mm?.port1_mm as [number, number, number] | undefined) ?? [
+          0, -22, 0,
+        ],
+        stressMpa: mf?.field.max_stress_mpa,
+        localFlexUm: mf?.field.max_flex_um,
+      });
+    }
+
+    if (hotendVisualGlbUrl) {
+      const hAssetId =
+        hotendSeMeta?.asset_id ?? sim.spec.toolhead.hotend.preset_id ?? "nozzle_stem";
+      const mf = resolveIntraPartField({
+        partFields,
+        legacyToolheadFields: legacyThFields,
+        candidateKeys: ["nozzle_stem", "hotend", hAssetId],
+        assetId: hAssetId,
+      });
+      pushOpt({
+        id: "nozzle_stem",
+        label: hotendSeMeta?.name || `Hotend (${sim.spec.toolhead.hotend.preset_id || "CAD"})`,
+        subsystem: "toolhead",
+        assetId: hAssetId,
+        glbUrl: hotendVisualGlbUrl,
+        partFieldKey: mf?.key ?? "nozzle_stem",
+        port0Mm: [0, 0, 0],
+        port1Mm: [0, 0, -(sim.spec.toolhead.hotend.overall_length_mm ?? 60)],
+        stressMpa: mf?.field.max_stress_mpa,
+        localFlexUm: mf?.field.max_flex_um,
+      });
+    }
+
+    if (carriageMountVisualGlbUrl) {
+      const cAssetId = carSeMeta?.asset_id ?? "carriage_mount";
+      const mf = resolveIntraPartField({
+        partFields,
+        legacyToolheadFields: legacyThFields,
+        candidateKeys: ["carriage_mount", "x_carriage_mount", "toolhead_backplate", cAssetId],
+        assetId: cAssetId,
+      });
+      pushOpt({
+        id: "carriage_mount",
+        label: carSeMeta?.name || "X-Carriage Backplate (CAD)",
+        subsystem: "toolhead",
+        assetId: cAssetId,
+        glbUrl: carriageMountVisualGlbUrl,
+        partFieldKey: mf?.key ?? "carriage_mount",
+        port0Mm: [0, 0, 0],
+        port1Mm: [0, -14, 0],
+        stressMpa: mf?.field.max_stress_mpa,
+        localFlexUm: mf?.field.max_flex_um,
+      });
+    }
+
+    const xCarVis = sim.geometry.carriage_visuals?.x;
+    if (xCarVis?.visual_glb_url) {
+      const mf = resolveIntraPartField({
+        partFields,
+        candidateKeys: ["x_carriage", "carriage_x", "rail_carriage_x", xCarVis.asset_id],
+        assetId: xCarVis.asset_id,
+      });
+      pushOpt({
+        id: "x_carriage",
+        label: `HIWIN X-Carriage (${xCarVis.asset_id.replace(/_/g, " ")})`,
+        subsystem: "gantry",
+        assetId: xCarVis.asset_id,
+        glbUrl: xCarVis.visual_glb_url,
+        partFieldKey: mf?.key ?? "x_carriage",
+        port0Mm: [0, 0, 0],
+        port1Mm: [0, 0, xCarVis.port1_z_mm],
+        stressMpa: mf?.field.max_stress_mpa,
+        localFlexUm: mf?.field.max_flex_um,
+      });
+    }
+
+    if (gantryCadAssets && sim.geometry.gantry_brackets?.hardware_kit !== "procedural") {
+      const kitLabel = sim.geometry.gantry_brackets?.hardware_kit_label ?? "Gantry";
+      const stationToSens: Record<string, { sensId: string; label: string; sub: SubsystemKey }> = {
+        xy_left: { sensId: "xy_joint_l", label: `${kitLabel} — Left XY-Joint`, sub: "gantry" },
+        xy_right: { sensId: "xy_joint_r", label: `${kitLabel} — Right XY-Joint`, sub: "gantry" },
+        rear_left: { sensId: "corner_mount_rl", label: `${kitLabel} — Rear-Left Motor Mount`, sub: "gantry" },
+        rear_right: { sensId: "corner_mount_rr", label: `${kitLabel} — Rear-Right Motor Mount`, sub: "gantry" },
+        front_left: { sensId: "corner_mount_fl", label: `${kitLabel} — Front-Left Idler`, sub: "gantry" },
+        front_right: { sensId: "corner_mount_fr", label: `${kitLabel} — Front-Right Idler`, sub: "gantry" },
+        z_drive_left: { sensId: "z_drive_fl", label: `${kitLabel} — Z-Drive (Left)`, sub: "gantry" },
+        z_drive_right: { sensId: "z_drive_fr", label: `${kitLabel} — Z-Drive (Right)`, sub: "gantry" },
+        z_joint: { sensId: "z_joint_fl", label: `${kitLabel} — Z-Joint`, sub: "gantry" },
+        trident_bed_arm_left: { sensId: "trident_bed_arm_fl", label: `${kitLabel} — Left Bed Arm`, sub: "bed" },
+        trident_bed_arm_right: { sensId: "trident_bed_arm_fr", label: `${kitLabel} — Right Bed Arm`, sub: "bed" },
+        trident_bed_arm_rear: { sensId: "trident_bed_arm_r", label: `${kitLabel} — Rear Bed Arm`, sub: "bed" },
+        trident_z_mount_left: { sensId: "trident_z_mount_left", label: `${kitLabel} — Left Z-Mount`, sub: "gantry" },
+        trident_z_mount_right: { sensId: "trident_z_mount_right", label: `${kitLabel} — Right Z-Mount`, sub: "gantry" },
+        trident_z_mount_rear: { sensId: "trident_z_mount_rear", label: `${kitLabel} — Rear Z-Mount`, sub: "gantry" },
+      };
+      for (const [stationKey, asset] of Object.entries(gantryCadAssets)) {
+        if (!asset?.visual_glb_url) continue;
+        const meta = stationToSens[stationKey];
+        const mf = resolveIntraPartField({
+          partFields,
+          candidateKeys: [meta?.sensId, stationKey, asset.asset_id],
+          assetId: asset.asset_id,
+        });
+        pushOpt({
+          id: `gantry_cad:${stationKey}`,
+          label: meta?.label ?? `${kitLabel} — ${stationKey.replace(/_/g, " ")}`,
+          subsystem: meta?.sub ?? "gantry",
+          assetId: asset.asset_id,
+          glbUrl: asset.visual_glb_url,
+          partFieldKey: mf?.key ?? meta?.sensId ?? stationKey,
+          port0Mm: asset.port0_mm,
+          port1Mm: asset.port1_mm,
+          stressMpa: mf?.field.max_stress_mpa,
+          localFlexUm: mf?.field.max_flex_um,
+        });
+      }
+    }
+
+    if (frameBraceVisuals && frameBraceVisuals.length > 0) {
+      const fb0 = frameBraceVisuals[0];
+      const mf = resolveIntraPartField({
+        partFields,
+        candidateKeys: [fb0.id, fb0.asset_id, "frame_bracing"],
+        assetId: fb0.asset_id,
+      });
+      pushOpt({
+        id: fb0.id,
+        label: sim.geometry.frame_bracing?.cad_asset_name ?? "Frame Corner Brace / Gusset (CAD)",
+        subsystem: "frame",
+        assetId: fb0.asset_id,
+        glbUrl: fb0.visual_glb_url,
+        partFieldKey: mf?.key ?? fb0.id,
+        port0Mm: [0, 0, 0],
+        port1Mm: [20, 20, 0],
+        stressMpa: mf?.field.max_stress_mpa,
+        localFlexUm: mf?.field.max_flex_um,
+      });
+    }
+
+    // Also include any backend `part_fields` entries not already listed above
+    if (partFields) {
+      for (const [fKey, fVal] of Object.entries(partFields)) {
+        if (!fVal || !fVal.points_mm || fVal.points_mm.length < 4) continue;
+        const alreadyCovered = opts.some(
+          (o) =>
+            o.partFieldKey === fKey ||
+            o.id === fKey ||
+            (fVal.asset_id && o.assetId.toLowerCase() === fVal.asset_id.toLowerCase())
+        );
+        if (alreadyCovered) continue;
+        pushOpt({
+          id: fKey,
+          label: fVal.label || fKey.replace(/_/g, " "),
+          subsystem: "gantry",
+          assetId: fVal.asset_id || fKey,
+          partFieldKey: fKey,
+          stressMpa: fVal.max_stress_mpa,
+          localFlexUm: fVal.max_flex_um,
+        });
+      }
+    }
+
+    return opts;
+  }, [
+    sim,
+    viewMode,
+    activeMode,
+    toolheadVisualGlbUrl,
+    hotendVisualGlbUrl,
+    carriageMountVisualGlbUrl,
+    gantryCadAssets,
+    frameBraceVisuals,
+  ]);
+
+  const activeIsolatedPartOption = useMemo(() => {
+    if (!partFeaInspector) return null;
+    return (
+      isolatedCadPartOptions.find((o) => o.id === partFeaInspector.partId) ??
+      isolatedCadPartOptions[0] ??
+      null
+    );
+  }, [partFeaInspector, isolatedCadPartOptions]);
+
+  const activeIsolatedPartField = useMemo(() => {
+    if (!sim || !activeIsolatedPartOption) return null;
+    const partFields =
+      viewMode === "modal" ? activeMode?.mode_part_fields : sim.static_fea.part_fields;
+    const legacyThFields =
+      viewMode === "modal"
+        ? activeMode?.toolhead_mode_fields
+        : sim.static_fea.toolhead_part_fields;
+    return (
+      resolveIntraPartField({
+        partFields,
+        legacyToolheadFields: legacyThFields,
+        candidateKeys: [
+          activeIsolatedPartOption.partFieldKey,
+          activeIsolatedPartOption.id,
+          activeIsolatedPartOption.assetId,
+        ],
+        assetId: activeIsolatedPartOption.assetId,
+      })?.field ?? null
+    );
+  }, [sim, viewMode, activeMode, activeIsolatedPartOption]);
+
+  const pinnedPartCadOption = useMemo<IsolatedCadPartOption | null>(() => {
+    if (!pinnedPart) return null;
+    const byUrl = pinnedPart.cadGlbUrl
+      ? isolatedCadPartOptions.find((o) => o.glbUrl === pinnedPart.cadGlbUrl)
+      : undefined;
+    if (byUrl) return byUrl;
+    const byField = pinnedPart.partFieldKey
+      ? isolatedCadPartOptions.find((o) => o.partFieldKey === pinnedPart.partFieldKey)
+      : undefined;
+    if (byField) return byField;
+    const byAsset = pinnedPart.cadAssetId
+      ? isolatedCadPartOptions.find((o) => o.assetId === pinnedPart.cadAssetId)
+      : undefined;
+    if (byAsset) return byAsset;
+    if (pinnedPart.cadGlbUrl) {
+      return {
+        id: pinnedPart.key,
+        label: pinnedPart.name,
+        subsystem: pinnedPart.subsystem,
+        assetId: pinnedPart.cadAssetId || pinnedPart.key,
+        glbUrl: pinnedPart.cadGlbUrl,
+        partFieldKey: pinnedPart.partFieldKey,
+        port0Mm: pinnedPart.cadPort0Mm,
+        port1Mm: pinnedPart.cadPort1Mm,
+        stressMpa: pinnedPart.stressMpa,
+        localFlexUm: pinnedPart.localFlexUm,
+      };
+    }
+    return null;
+  }, [pinnedPart, isolatedCadPartOptions]);
+
+  const frameIsolatedPartCamera = useCallback(() => {
+    const isoGrp = stateRef.current.isolatedPartGroup;
+    const cam = stateRef.current.camera;
+    const ctrl = stateRef.current.controls;
+    if (!isoGrp || !cam || !ctrl) return;
+    isoGrp.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(isoGrp);
+    if (box.isEmpty()) return;
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const halfFovRad = THREE.MathUtils.degToRad(cam.fov * 0.5);
+    const radius = Math.max(sphere.radius, 0.45);
+    const dist = Math.min(Math.max((radius / Math.sin(halfFovRad)) * 1.45, 2.2), 9.0);
+    const dir = new THREE.Vector3(0.68, 0.42, 0.72).normalize();
+    cameraAnimRef.current.targetLook.copy(sphere.center);
+    cameraAnimRef.current.targetPos.copy(sphere.center).addScaledVector(dir, dist);
+    cameraAnimRef.current.active = true;
+    requestRenderRef.current?.();
+  }, []);
+
+  const openSinglePartInspector = useCallback(
+    (partIdOrOpt: string | IsolatedCadPartOption) => {
+      const targetId = typeof partIdOrOpt === "string" ? partIdOrOpt : partIdOrOpt.id;
+      const cam = stateRef.current.camera;
+      const ctrl = stateRef.current.controls;
+      if (!savedSinglePartCamRef.current && cam && ctrl) {
+        savedSinglePartCamRef.current = {
+          pos: cam.position.clone(),
+          target: ctrl.target.clone(),
+        };
+      }
+      setPinnedPart(null);
+      if (stateRef.current.pinnedMesh) {
+        applyInspectHighlight(stateRef.current.pinnedMesh, "none");
+        stateRef.current.pinnedMesh = null;
+        stateRef.current.pinnedKey = null;
+      }
+      setPartFeaInspector((prev) => ({
+        partId: targetId,
+        metric: prev?.metric ?? "stress",
+        clipAxis: prev?.clipAxis ?? "off",
+        clipFrac: prev?.clipFrac ?? 0.5,
+        clipFlip: prev?.clipFlip ?? false,
+        showPointCloud: prev?.showPointCloud ?? true,
+        flexExaggeration: prev?.flexExaggeration ?? 2.0,
+      }));
+    },
+    []
+  );
+
+  const exitSinglePartInspector = useCallback(() => {
+    setPartFeaInspector(null);
+    lastIsolatedPartIdRef.current = null;
+    setIsolatedPartBoundsMm(null);
+    const isoGrp = stateRef.current.isolatedPartGroup;
+    const dynGrp = stateRef.current.dynamicGroup;
+    if (isoGrp) {
+      disposeGroupChildren(isoGrp);
+      isoGrp.visible = false;
+    }
+    if (dynGrp) {
+      dynGrp.visible = true;
+    }
+    if (savedSinglePartCamRef.current) {
+      cameraAnimRef.current.targetPos.copy(savedSinglePartCamRef.current.pos);
+      cameraAnimRef.current.targetLook.copy(savedSinglePartCamRef.current.target);
+      cameraAnimRef.current.active = true;
+      savedSinglePartCamRef.current = null;
+    }
+    requestRenderRef.current?.();
+  }, []);
+
+  // Automatically close single-part inspector if switching away from printer structural views
+  useEffect(() => {
+    if (
+      partFeaInspector &&
+      viewMode !== "assembly" &&
+      viewMode !== "fea_stress" &&
+      viewMode !== "modal" &&
+      viewMode !== "sensitivity"
+    ) {
+      exitSinglePartInspector();
+    }
+  }, [viewMode, partFeaInspector, exitSinglePartInspector]);
+
+  // Build & update the isolated single-object 3D FEA cutaway scene
+  useEffect(() => {
+    const isoGrp = stateRef.current.isolatedPartGroup;
+    const dynGrp = stateRef.current.dynamicGroup;
+    if (!isoGrp || !dynGrp) return;
+
+    if (!partFeaInspector || !activeIsolatedPartOption) {
+      disposeGroupChildren(isoGrp);
+      isoGrp.visible = false;
+      dynGrp.visible = true;
+      requestRenderRef.current?.();
+      return;
+    }
+
+    dynGrp.visible = false;
+    isoGrp.visible = true;
+    disposeGroupChildren(isoGrp);
+
+    const opt = activeIsolatedPartOption;
+    const isModalIso = viewMode === "modal";
+    const field = activeIsolatedPartField;
+    const preparedField = prepareIntraPartField(
+      field ?? undefined,
+      isModalIso,
+      partFeaInspector.metric
+    );
+    const port0Mm: [number, number, number] = opt.port0Mm ?? [0, 0, 0];
+    const port1Mm: [number, number, number] = opt.port1Mm ?? [0, -25, 0];
+    const cachedGlb = opt.glbUrl ? (cadGlbResolvedCache.get(opt.glbUrl) ?? null) : null;
+
+    // 1. Compute CAD-local bounding box (in mm) from GLB or field points
+    const cadMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const cadMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    if (cachedGlb) {
+      const tmpBox = new THREE.Box3();
+      cachedGlb.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.geometry) {
+          if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+          if (obj.geometry.boundingBox) {
+            tmpBox.copy(obj.geometry.boundingBox);
+            cadMin.min(tmpBox.min.clone().multiplyScalar(1000));
+            cadMax.max(tmpBox.max.clone().multiplyScalar(1000));
+          }
+        }
+      });
+    }
+    if (!Number.isFinite(cadMin.x) && field?.points_mm && field.points_mm.length > 0) {
+      for (const p of field.points_mm) {
+        cadMin.x = Math.min(cadMin.x, p[0]);
+        cadMin.y = Math.min(cadMin.y, p[1]);
+        cadMin.z = Math.min(cadMin.z, p[2]);
+        cadMax.x = Math.max(cadMax.x, p[0]);
+        cadMax.y = Math.max(cadMax.y, p[1]);
+        cadMax.z = Math.max(cadMax.z, p[2]);
+      }
+    }
+    if (!Number.isFinite(cadMin.x)) {
+      cadMin.set(-20, -20, -20);
+      cadMax.set(20, 20, 20);
+    }
+
+    setIsolatedPartBoundsMm({
+      min: [cadMin.x, cadMin.y, cadMin.z],
+      max: [cadMax.x, cadMax.y, cadMax.z],
+    });
+
+    const cadCenterMm = cadMin.clone().add(cadMax).multiplyScalar(0.5);
+    const cadSizeMm = cadMax.clone().sub(cadMin);
+    const maxDimMm = Math.max(cadSizeMm.x, cadSizeMm.y, cadSizeMm.z, 12.0);
+    // Normalize display size so any part (15 mm carriage or 120 mm gantry joint) fits ~3.2 units
+    const mmToDisplay = 3.2 / maxDimMm;
+    const displayOriginY = 1.9;
+
+    // Helper: CAD mm -> world Three.js display space (Rx(-90 deg) maps CAD (x,y,z) -> Three (x,z,-y))
+    const cadMmToWorld = (xMm: number, yMm: number, zMm: number, out: THREE.Vector3) => {
+      const dx = (xMm - cadCenterMm.x) * mmToDisplay;
+      const dy = (yMm - cadCenterMm.y) * mmToDisplay;
+      const dz = (zMm - cadCenterMm.z) * mmToDisplay;
+      out.set(dx, dz + displayOriginY, -dy);
+      return out;
+    };
+
+    // 2. Build Three.js world-space clipping plane for X / Y / Z cutaway in CAD mm
+    const clipPlanes: THREE.Plane[] = [];
+    let clipWorldCoord = 0;
+    let clipAxisNormalWorld: THREE.Vector3 | null = null;
+    if (partFeaInspector.clipAxis !== "off") {
+      const sign = partFeaInspector.clipFlip ? -1 : 1;
+      const axis = partFeaInspector.clipAxis;
+      const frac = partFeaInspector.clipFrac;
+      if (axis === "x") {
+        const cutMm = cadMin.x + cadSizeMm.x * frac;
+        const cutW = (cutMm - cadCenterMm.x) * mmToDisplay;
+        clipWorldCoord = cutW;
+        clipAxisNormalWorld = new THREE.Vector3(1, 0, 0);
+        clipPlanes.push(new THREE.Plane(new THREE.Vector3(-sign, 0, 0), sign * cutW));
+      } else if (axis === "y") {
+        // CAD +Y maps to Three -Z
+        const cutMm = cadMin.y + cadSizeMm.y * frac;
+        const cutW = -(cutMm - cadCenterMm.y) * mmToDisplay;
+        clipWorldCoord = cutW;
+        clipAxisNormalWorld = new THREE.Vector3(0, 0, 1);
+        clipPlanes.push(new THREE.Plane(new THREE.Vector3(0, 0, sign), -sign * cutW));
+      } else {
+        // CAD +Z maps to Three +Y
+        const cutMm = cadMin.z + cadSizeMm.z * frac;
+        const cutW = (cutMm - cadCenterMm.z) * mmToDisplay + displayOriginY;
+        clipWorldCoord = cutW;
+        clipAxisNormalWorld = new THREE.Vector3(0, 1, 0);
+        clipPlanes.push(new THREE.Plane(new THREE.Vector3(0, -sign, 0), sign * cutW));
+      }
+    }
+
+    // Cantilever bend direction for exaggerated elastic flex preview (perpendicular to Port0->Port1)
+    const pVec = new THREE.Vector3(
+      port1Mm[0] - port0Mm[0],
+      port1Mm[1] - port0Mm[1],
+      port1Mm[2] - port0Mm[2]
+    );
+    const pLen = Math.max(pVec.length(), 10.0);
+    const pDir = pVec.lengthSq() > 1e-4 ? pVec.clone().normalize() : new THREE.Vector3(0, -1, 0);
+    const bendDir = new THREE.Vector3(1, 0, 0);
+    if (Math.abs(pDir.dot(bendDir)) > 0.9) bendDir.set(0, 0, 1);
+    bendDir.crossVectors(pDir, bendDir).normalize();
+    const maxBendMm = maxDimMm * 0.014 * partFeaInspector.flexExaggeration;
+
+    const flexPrepared = prepareIntraPartField(field ?? undefined, isModalIso, "flex");
+    const evalNormFlex = (xMm: number, yMm: number, zMm: number): number => {
+      if (flexPrepared && flexPrepared.count >= 4) {
+        const { pts, vals, count } = flexPrepared;
+        let bestD2 = 1e18;
+        let bestV = 0;
+        for (let i = 0; i < count; i++) {
+          const dx = xMm - pts[i * 3];
+          const dy = yMm - pts[i * 3 + 1];
+          const dz = zMm - pts[i * 3 + 2];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            bestV = vals[i];
+          }
+        }
+        return bestV;
+      }
+      const s = Math.min(
+        1.1,
+        Math.max(
+          0,
+          ((xMm - port0Mm[0]) * pDir.x +
+            (yMm - port0Mm[1]) * pDir.y +
+            (zMm - port0Mm[2]) * pDir.z) /
+            pLen
+        )
+      );
+      return s * s;
+    };
+
+    const vertexColorFn = createIntraPartVertexColorFn({
+      isStructural: true,
+      baseHeat01: 0.92,
+      isModalMode: isModalIso,
+      defaultStage: opt.id === "nozzle_stem" ? "hotend_neck" : "chassis",
+      preparedField,
+      port0Mm,
+      port1Mm,
+    });
+
+    // 3. Render the isolated CAD solid mesh with vertex FEA colors, DoubleSide interior, and clip plane
+    if (cachedGlb) {
+      const partClone = cachedGlb.clone(true);
+      const tmpCol = new THREE.Color();
+      partClone.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh) || !obj.geometry) return;
+        obj.geometry = obj.geometry.clone();
+        const posAttr = obj.geometry.getAttribute("position");
+        if (posAttr && posAttr.count > 0) {
+          const colors = new Float32Array(posAttr.count * 3);
+          for (let vi = 0; vi < posAttr.count; vi++) {
+            const xMm = posAttr.getX(vi) * 1000;
+            const yMm = posAttr.getY(vi) * 1000;
+            const zMm = posAttr.getZ(vi) * 1000;
+            if (vertexColorFn) {
+              vertexColorFn(xMm, yMm, zMm, tmpCol);
+            } else {
+              stressColorInto(0.35, tmpCol);
+            }
+            colors[vi * 3] = tmpCol.r;
+            colors[vi * 3 + 1] = tmpCol.g;
+            colors[vi * 3 + 2] = tmpCol.b;
+
+            if (maxBendMm > 1e-4) {
+              const fNorm = evalNormFlex(xMm, yMm, zMm);
+              const shiftM = (fNorm * maxBendMm) / 1000;
+              posAttr.setXYZ(
+                vi,
+                posAttr.getX(vi) + bendDir.x * shiftM,
+                posAttr.getY(vi) + bendDir.y * shiftM,
+                posAttr.getZ(vi) + bendDir.z * shiftM
+              );
+            }
+          }
+          if (maxBendMm > 1e-4) {
+            posAttr.needsUpdate = true;
+            obj.geometry.computeVertexNormals();
+          }
+          obj.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        }
+
+        const isoMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          vertexColors: true,
+          metalness: 0.22,
+          roughness: 0.36,
+          side: THREE.DoubleSide,
+          clippingPlanes: clipPlanes,
+          clipShadows: true,
+          transparent: partFeaInspector.showPointCloud && partFeaInspector.clipAxis === "off",
+          opacity:
+            partFeaInspector.showPointCloud && partFeaInspector.clipAxis === "off" ? 0.68 : 1.0,
+        });
+        obj.material = isoMat;
+      });
+
+      const partWrap = new THREE.Group();
+      const cadScale = 1000 * mmToDisplay;
+      partClone.scale.setScalar(cadScale);
+      partClone.rotation.x = -Math.PI * 0.5;
+      // Offset so CAD bounding-box center lands at (0, displayOriginY, 0)
+      partClone.position.set(
+        -cadCenterMm.x * mmToDisplay,
+        -cadCenterMm.z * mmToDisplay + displayOriginY,
+        cadCenterMm.y * mmToDisplay
+      );
+      partWrap.add(partClone);
+      isoGrp.add(partWrap);
+    }
+
+    // 4. Internal 3D FEA Point Cloud (from `field.points_mm`, showing internal stress & flex!)
+    if (partFeaInspector.showPointCloud && preparedField && preparedField.count >= 4) {
+      const k = preparedField.count;
+      const cloudPos = new Float32Array(k * 3);
+      const cloudCol = new Float32Array(k * 3);
+      const tmpW = new THREE.Vector3();
+      const tmpC = new THREE.Color();
+      for (let i = 0; i < k; i++) {
+        let xMm = preparedField.pts[i * 3];
+        let yMm = preparedField.pts[i * 3 + 1];
+        let zMm = preparedField.pts[i * 3 + 2];
+        if (maxBendMm > 1e-4) {
+          const fNorm = flexPrepared ? flexPrepared.vals[i] : preparedField.vals[i];
+          xMm += bendDir.x * fNorm * maxBendMm;
+          yMm += bendDir.y * fNorm * maxBendMm;
+          zMm += bendDir.z * fNorm * maxBendMm;
+        }
+        cadMmToWorld(xMm, yMm, zMm, tmpW);
+        cloudPos[i * 3] = tmpW.x;
+        cloudPos[i * 3 + 1] = tmpW.y;
+        cloudPos[i * 3 + 2] = tmpW.z;
+
+        const val = Math.min(1, Math.max(0.03, preparedField.vals[i]));
+        stressColorInto(val, tmpC);
+        cloudCol[i * 3] = tmpC.r;
+        cloudCol[i * 3 + 1] = tmpC.g;
+        cloudCol[i * 3 + 2] = tmpC.b;
+      }
+      const cloudGeo = new THREE.BufferGeometry();
+      cloudGeo.setAttribute("position", new THREE.BufferAttribute(cloudPos, 3));
+      cloudGeo.setAttribute("color", new THREE.BufferAttribute(cloudCol, 3));
+      const cloudMat = new THREE.PointsMaterial({
+        size: 0.085,
+        vertexColors: true,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.94,
+        clippingPlanes: clipPlanes,
+      });
+      const cloudPts = new THREE.Points(cloudGeo, cloudMat);
+      cloudPts.name = "isolated_internal_fea_cloud";
+      isoGrp.add(cloudPts);
+    }
+
+    // 5. Visual Cutaway Slice Frame when Clip Plane is active
+    if (partFeaInspector.clipAxis !== "off" && clipAxisNormalWorld) {
+      const planeSize = 3.8;
+      const planeGeo = new THREE.PlaneGeometry(planeSize, planeSize);
+      const edgesGeo = new THREE.EdgesGeometry(planeGeo);
+      planeGeo.dispose();
+      const frameMat = new THREE.LineBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.65,
+      });
+      const frameLines = new THREE.LineSegments(edgesGeo, frameMat);
+      if (partFeaInspector.clipAxis === "x") {
+        frameLines.rotation.y = Math.PI * 0.5;
+        frameLines.position.set(clipWorldCoord, displayOriginY, 0);
+      } else if (partFeaInspector.clipAxis === "y") {
+        frameLines.position.set(0, displayOriginY, clipWorldCoord);
+      } else {
+        frameLines.rotation.x = Math.PI * 0.5;
+        frameLines.position.set(0, clipWorldCoord, 0);
+      }
+      isoGrp.add(frameLines);
+    }
+
+    // Auto-frame camera when entering isolated mode or switching to a different part
+    if (lastIsolatedPartIdRef.current !== opt.id) {
+      lastIsolatedPartIdRef.current = opt.id;
+      frameIsolatedPartCamera();
+    } else {
+      requestRenderRef.current?.();
+    }
+  }, [
+    partFeaInspector,
+    activeIsolatedPartOption,
+    activeIsolatedPartField,
+    viewMode,
+    cadGlbVersion,
+    frameIsolatedPartCamera,
+  ]);
+
   return (
     <div className="viewport-wrap">
       <div
@@ -7282,6 +8196,29 @@ export const PrinterViewport: React.FC<Props> = ({
                 )}
 
                 {hasContextTools && <div className="hud-tools-divider" />}
+
+                {isolatedCadPartOptions.length > 0 && (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={Boolean(partFeaInspector)}
+                    className={`hud-tools-item ${partFeaInspector ? "active" : ""}`}
+                    onClick={() => {
+                      setToolsMenuOpen(false);
+                      if (partFeaInspector) {
+                        exitSinglePartInspector();
+                      } else {
+                        openSinglePartInspector(isolatedCadPartOptions[0]);
+                      }
+                    }}
+                    title="Isolate any CAD part on the printer and slice inside it with a 3D cutaway plane and internal FEA stress/flex field cloud"
+                  >
+                    <span className="hud-tools-item-label">Inspect Inside Part (3D FEA)</span>
+                    <span className={`hud-tools-toggle ${partFeaInspector ? "on" : ""}`}>
+                      {partFeaInspector ? "ON" : "OFF"}
+                    </span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -8096,7 +9033,38 @@ export const PrinterViewport: React.FC<Props> = ({
               <span className="sens-fix-prefix">Main limit:</span> {pinnedPart.actionHint}
             </div>
           )}
+          {pinnedPartCadOption && (
+            <button
+              type="button"
+              className="part-inspector-inspect-btn"
+              onClick={() => openSinglePartInspector(pinnedPartCadOption)}
+              title={`Isolate ${pinnedPartCadOption.label} and inspect internal 3D FEA stress & elastic flex with cutaway plane`}
+            >
+              Inspect Inside Part (3D FEA)
+            </button>
+          )}
         </div>
+      )}
+
+      {/* Single-Object In-Part 3D FEA Cutaway Inspector */}
+      {partFeaInspector && activeIsolatedPartOption && (
+        <PartFeaInspector
+          options={isolatedCadPartOptions}
+          activeOption={activeIsolatedPartOption}
+          state={partFeaInspector}
+          field={activeIsolatedPartField}
+          isModalMode={viewMode === "modal"}
+          modeLabel={activeMode ? `Mode ${activeMode.mode_number} (${activeMode.frequency_hz.toFixed(1)} Hz)` : undefined}
+          boundsMm={isolatedPartBoundsMm}
+          onChangePart={(nextPartId) =>
+            setPartFeaInspector((prev) => (prev ? { ...prev, partId: nextPartId } : prev))
+          }
+          onChangeState={(patch) =>
+            setPartFeaInspector((prev) => (prev ? { ...prev, ...patch } : prev))
+          }
+          onResetCamera={frameIsolatedPartCamera}
+          onExit={exitSinglePartInspector}
+        />
       )}
 
       <div className="viewport-hud-bottom">

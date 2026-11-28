@@ -115,6 +115,7 @@ class ModeShape:
     is_primary_limiting_mode: bool = False
     toolhead_part_flex: list[dict] = field(default_factory=list)
     toolhead_mode_fields: dict[str, dict] = field(default_factory=dict)
+    mode_part_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -199,6 +200,7 @@ class ModalResult:
                     "is_primary_limiting_mode": m.is_primary_limiting_mode,
                     "toolhead_part_flex": m.toolhead_part_flex,
                     "toolhead_mode_fields": m.toolhead_mode_fields,
+                    "mode_part_fields": m.mode_part_fields,
                 }
                 for m in self.modes
             ],
@@ -2745,7 +2747,7 @@ def solve_modal_fea(
 
         from printsim.fea.toolhead_parts import (
             compute_modal_toolhead_parts,
-            compute_toolhead_part_fields,
+            compute_printer_part_fields,
         )
 
         phi_norm = np.hstack([np.asarray(trans, dtype=np.float64), np.asarray(rot, dtype=np.float64)]).ravel()
@@ -2755,12 +2757,15 @@ def solve_modal_fea(
             phi_vec=phi_norm,
             max_node_disp=1.0,
         )
-        th_mode_fields = compute_toolhead_part_fields(
+        mode_part_fields = compute_printer_part_fields(
             assembly=assembly,
             node_idx=node_idx,
             u_vec=phi_norm,
             normalized=True,
         )
+        th_mode_fields = {
+            k: v for k, v in mode_part_fields.items() if k in ("toolhead_mount", "nozzle_stem")
+        }
 
         c_k = (float(c["rec_x"]) + float(c["rec_y"])) / max(freq_hz**2, 1.0)
         ms = ModeShape(
@@ -2782,6 +2787,7 @@ def solve_modal_fea(
             dominant_problem_area=dom_area,
             toolhead_part_flex=th_part_flex,
             toolhead_mode_fields=th_mode_fields,
+            mode_part_fields=mode_part_fields,
         )
         return ms, c_k
 
