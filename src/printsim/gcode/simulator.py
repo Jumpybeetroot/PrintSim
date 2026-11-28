@@ -118,14 +118,26 @@ class VirtualPrintReport:
 
 
 def _trapezoidal_segment_time(
-    dist: float, v_entry: float, v_cruise: float, v_exit: float, accel: float
+    dist: float,
+    v_entry: float,
+    v_cruise: float,
+    v_exit: float,
+    accel: float,
+    minimum_cruise_ratio: float = 0.0,
 ) -> tuple[float, float]:
-    """Compute exact trapezoidal/triangular segment duration and peak velocity."""
+    """Compute exact trapezoidal/triangular segment duration and peak velocity.
+
+    Supports Klipper's ``minimum_cruise_ratio`` (0.0 = pure trapezoidal, 0.5 = Klipper default),
+    limiting peak velocity on short segments so at least ``minimum_cruise_ratio`` of the
+    acceleration-change distance is spent cruising.
+    """
     if dist <= 1e-6 or accel <= 1e-6:
         return 0.0, v_cruise
 
+    mcr = float(np.clip(minimum_cruise_ratio, 0.0, 0.95))
     # Peak velocity achievable given entry/exit speeds and segment distance
-    v_tri_sq = 0.5 * (v_entry**2 + v_exit**2) + accel * dist
+    eff_accel = accel * (1.0 - mcr) if mcr > 0.0 else accel
+    v_tri_sq = 0.5 * (v_entry**2 + v_exit**2) + max(eff_accel, 1e-6) * dist
     v_peak = min(v_cruise, math.sqrt(max(v_tri_sq, 0.0)))
     v_peak = max(v_peak, min(v_entry, v_exit))
 
@@ -222,6 +234,7 @@ def simulate_gcode(
     modal: ModalResult,
     kinematics: KinematicsReport,
     thermal: HotendThermalReport,
+    minimum_cruise_ratio: float = 0.0,
 ) -> VirtualPrintReport:
     """Execute a virtual print of G-code through lookahead motion & multiphysics defect models."""
     moves = parse_gcode(gcode_text)
@@ -333,17 +346,40 @@ def simulate_gcode(
             v_peaks[i] = 0.0
         else:
             durations[i], v_peaks[i] = _trapezoidal_segment_time(
-                lengths[i], junction_v[i], v_targets[i], junction_v[i + 1], accels[i]
+                lengths[i],
+                junction_v[i],
+                v_targets[i],
+                junction_v[i + 1],
+                accels[i],
+                minimum_cruise_ratio=minimum_cruise_ratio,
             )
 
     # Physical modal & input-shaper response per axis for junction ringing + corner smoothing
     fallback_f = max(float(modal.fundamental_freq_hz), 5.0)
     fallback_zeta = max(float(modal.frame_damping_ratio), 0.02)
-    f_nx, _, v_sh_x, smooth_sh_x = _resolve_axis_shaper_response(
+    f_nx, zeta_x, v_sh_x, smooth_sh_x = _resolve_axis_shaper_response(
         modal.shaper_x, modal.shaper_graph_x, kin.input_shaper, fallback_f, fallback_zeta
     )
-    f_ny, _, v_sh_y, smooth_sh_y = _resolve_axis_shaper_response(
+    f_ny, zeta_y, v_sh_y, smooth_sh_y = _resolve_axis_shaper_response(
         modal.shaper_y, modal.shaper_graph_y, kin.input_shaper, fallback_f, fallback_zeta
+    )
+    # CoreXY A/B belt tension mismatch couples X and Y modes; the primary shaper tuned to f_nx
+    # imperfectly cancels cross-coupled excitation at f_ny (and vice versa).
+    mismatch_pct = (
+        max(0.0, float(spec.gantry.belt.tension_mismatch_pct))
+        if spec.architecture == "corexy"
+        else 0.0
+    )
+    eta_xy_cross = min(0.45, 0.008 * mismatch_pct)
+    v_cross_x_to_y = (
+        float(estimate_shaper(smooth_sh_x, [f_ny], test_damping_ratio=zeta_y)[0])
+        if (eta_xy_cross > 0.0 and smooth_sh_x is not None)
+        else 1.0
+    )
+    v_cross_y_to_x = (
+        float(estimate_shaper(smooth_sh_y, [f_nx], test_damping_ratio=zeta_x)[0])
+        if (eta_xy_cross > 0.0 and smooth_sh_y is not None)
+        else 1.0
     )
 
     corner_smoothing_um_by_accel: dict[float, tuple[float, float]] = {}
@@ -411,7 +447,18 @@ def simulate_gcode(
                 omega_n = 2.0 * math.pi * f_n
                 dv_m_s = dv_mm_s * 1e-3
                 a_m_s2 = float(accels[i]) * 1e-3
-                amp_um = min(dv_m_s / omega_n, a_m_s2 / (omega_n * omega_n)) * v_shaper * 1e6
+                amp_direct_um = min(dv_m_s / omega_n, a_m_s2 / (omega_n * omega_n)) * v_shaper * 1e6
+                if eta_xy_cross > 0.0:
+                    # Cross-axis CoreXY A/B mismatch beat-frequency ringing (RSS with direct mode)
+                    omega_nx = 2.0 * math.pi * f_nx
+                    omega_ny = 2.0 * math.pi * f_ny
+                    dv_x_m = abs(float(dv_xy[0])) * 1e-3
+                    dv_y_m = abs(float(dv_xy[1])) * 1e-3
+                    amp_cxy = eta_xy_cross * min(dv_x_m / omega_ny, a_m_s2 / (omega_ny * omega_ny)) * v_cross_x_to_y * 1e6
+                    amp_cyx = eta_xy_cross * min(dv_y_m / omega_nx, a_m_s2 / (omega_nx * omega_nx)) * v_cross_y_to_x * 1e6
+                    amp_um = math.sqrt(amp_direct_um**2 + amp_cxy**2 + amp_cyx**2)
+                else:
+                    amp_um = amp_direct_um
                 ringing_sev = amp_um / RINGING_SEVERE_AMPLITUDE_UM
                 max_ringing_um = max(max_ringing_um, amp_um)
                 max_ringing = max(max_ringing, ringing_sev)
@@ -432,7 +479,9 @@ def simulate_gcode(
                         )
                         corner_smoothing_um_by_accel[accel_i] = sm_pair
                     sm_x_um, sm_y_um = sm_pair
-                    corner_smooth_um = (wx * sm_x_um + wy * sm_y_um) / w_sum
+                    # Geometric turn-angle scaling: 1.0 at 90 deg, smaller for shallow bends, up to sqrt(2) at 180 deg
+                    angle_scale = math.sin(0.5 * math.radians(float(corner_angles_deg[i]))) / math.sin(0.25 * math.pi)
+                    corner_smooth_um = ((wx * sm_x_um + wy * sm_y_um) / w_sum) * angle_scale
                     max_smoothing_um = max(max_smoothing_um, corner_smooth_um)
 
         # Classify primary defect for segment heatmap

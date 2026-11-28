@@ -1009,19 +1009,37 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                   }}
                 >
                   {selectedToolheadPresetVal === "__custom__" && (
-                    <option value="__custom__">
-                      {spec.toolhead.name || "Custom Toolhead"} (Custom)
-                    </option>
-                  )}
-                  {toolheadPresets.map((tp) => {
-                    const isSelectedTh = tp.preset_id === spec.toolhead.preset_id;
-                    const displayMassG = isSelectedTh
-                      ? fmtMassG(effectiveBodyMassG)
-                      : String(tp.total_mass_g);
-                    return (
-                      <option key={tp.preset_id} value={tp.preset_id}>
-                        {tp.name} ({displayMassG}g)
+                    <optgroup label="Generic Stand-Ins">
+                      <option value="__custom__">
+                        {spec.toolhead.name || "Custom Toolhead"} (Generic)
                       </option>
+                    </optgroup>
+                  )}
+                  {(
+                    [
+                      ["complete", "Complete Models"],
+                      ["wip_specific", "WIP Specific Models"],
+                      ["generic_standin", "Generic Stand-Ins"],
+                    ] as const
+                  ).map(([statusKey, groupLabel]) => {
+                    const groupItems = toolheadPresets.filter(
+                      (tp) => (tp.model_status ?? "complete") === statusKey
+                    );
+                    if (groupItems.length === 0) return null;
+                    return (
+                      <optgroup key={statusKey} label={groupLabel}>
+                        {groupItems.map((tp) => {
+                          const isSelectedTh = tp.preset_id === spec.toolhead.preset_id;
+                          const displayMassG = isSelectedTh
+                            ? fmtMassG(effectiveBodyMassG)
+                            : String(tp.total_mass_g);
+                          return (
+                            <option key={tp.preset_id} value={tp.preset_id}>
+                              {tp.name} ({displayMassG}g)
+                            </option>
+                          );
+                        })}
+                      </optgroup>
                     );
                   })}
                   {extraBakedToolheads.length > 0 && (
@@ -1046,11 +1064,24 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                   const presetMeta =
                     matchedToolheadPreset ??
                     toolheadPresets.find((tp) => tp.preset_id === spec.toolhead.preset_id);
-                  if (!presetMeta?.default_hardware_summary) return null;
+                  if (!presetMeta?.default_hardware_summary && !presetMeta?.wip_notes) return null;
                   return (
-                    <div className="hint-line">
-                      <strong>Included by default:</strong> {presetMeta.default_hardware_summary}
-                    </div>
+                    <>
+                      {presetMeta.wip_notes && (
+                        <div className="hint-line">
+                          <strong>
+                            {presetMeta.model_status === "wip_specific" ? "WIP:" : "Stand-In:"}
+                          </strong>{" "}
+                          {presetMeta.wip_notes}
+                        </div>
+                      )}
+                      {presetMeta.default_hardware_summary && (
+                        <div className="hint-line">
+                          <strong>Included by default:</strong>{" "}
+                          {presetMeta.default_hardware_summary}
+                        </div>
+                      )}
+                    </>
                   );
                 })()}
                 <PresetAffectsStrip
@@ -1110,12 +1141,34 @@ export const DesignToolheadSection: React.FC<DesignToolheadSectionProps> = ({
                     );
                   }}
                 >
-                  {Z_PROBE_OPTIONS.map((opt) => {
-                    const catItem = catalog.z_probes?.find((p) => p.id === opt.id);
+                  {(
+                    [
+                      ["complete", "Complete Models"],
+                      ["wip_specific", "WIP Specific Models"],
+                      ["generic_standin", "Generic Stand-Ins"],
+                    ] as const
+                  ).map(([statusKey, groupLabel]) => {
+                    const groupItems = Z_PROBE_OPTIONS.filter((opt) => {
+                      const catItem = catalog.z_probes?.find((p) => p.id === opt.id);
+                      const st =
+                        catItem?.model_status ??
+                        (opt.id === "static_eddy" || opt.id === "printed_tap"
+                          ? "complete"
+                          : "wip_specific");
+                      return st === statusKey;
+                    });
+                    if (groupItems.length === 0) return null;
                     return (
-                      <option key={opt.id} value={opt.id}>
-                        {catItem?.name ?? opt.label}
-                      </option>
+                      <optgroup key={statusKey} label={groupLabel}>
+                        {groupItems.map((opt) => {
+                          const catItem = catalog.z_probes?.find((p) => p.id === opt.id);
+                          return (
+                            <option key={opt.id} value={opt.id}>
+                              {catItem?.name ?? opt.label}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
                     );
                   })}
                 </select>

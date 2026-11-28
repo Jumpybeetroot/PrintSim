@@ -40,6 +40,14 @@ from printsim.geometry import (
     generate_bom,
 )
 from printsim.presets import (
+    annotate_bed_mounts,
+    annotate_gantry_hardware_kits,
+    annotate_hotend_presets,
+    annotate_profiles,
+    annotate_toolhead_presets,
+    annotate_z_drive_mechanisms,
+    annotate_z_probes,
+    annotate_z_rail_profiles,
     build_catalog_presets_payload,
     find_examples_dir as _find_examples_dir,
     load_presets,
@@ -92,14 +100,14 @@ _BRACKET_TYPE_TO_CMS: dict[str, str] = {
 def build_catalog_payload() -> dict[str, Any]:
     return {
         "materials": [m.model_dump(mode="json") for m in MATERIAL_CATALOG.values()],
-        "profiles": [p.model_dump(mode="json") for p in PROFILE_CATALOG.values()],
+        "profiles": annotate_profiles(PROFILE_CATALOG),
         "filaments": [f.model_dump(mode="json") for f in FILAMENT_CATALOG.values()],
         "steppers": list(STEPPER_CATALOG.values()),
-        "toolhead_presets": list(TOOLHEAD_PRESETS.values()),
+        "toolhead_presets": annotate_toolhead_presets(TOOLHEAD_PRESETS),
         "toolhead_constructions": list(TOOLHEAD_CONSTRUCTION_CATALOG.values()),
         "extrusion_fillings": list(EXTRUSION_FILLINGS.values()),
         "gantry_brackets": list(GANTRY_BRACKET_CATALOG.values()),
-        "gantry_hardware_kits": list(GANTRY_HARDWARE_KIT_CATALOG.values()),
+        "gantry_hardware_kits": annotate_gantry_hardware_kits(GANTRY_HARDWARE_KIT_CATALOG),
         "gantry_weight_classes": list(GANTRY_WEIGHT_CLASSES.values()),
         "x_rail_mounts": [
             {"id": "front", "name": "Front Face (Voron Standard)", "short_name": "Front", "notes": "Bolted to front (-Y) face: max Y-accel bending stiffness; standard forward CoG"},
@@ -155,15 +163,15 @@ def build_catalog_payload() -> dict[str, Any]:
             {"id": "titanium_grade5", "name": "Ti-6Al-4V Grade 5 Backer", "short_name": "Titanium"},
             {"id": "steel_4140", "name": "4140 Steel Backer", "short_name": "Steel 4140"},
         ],
-        "bed_mounts": list(BED_MOUNT_CATALOG.values()),
+        "bed_mounts": annotate_bed_mounts(BED_MOUNT_CATALOG),
         "frame_feet": list(FRAME_FEET_CATALOG.values()),
         "suspension_lines": list(SUSPENSION_LINE_CATALOG.values()),
-        "z_probes": list(Z_PROBE_CATALOG.values()),
+        "z_probes": annotate_z_probes(Z_PROBE_CATALOG),
         "belts": list(BELT_CATALOG.values()),
         "belt_routings": list(BELT_ROUTING_CATALOG.values()),
         "cpap_blowers": list(CPAP_BLOWER_CATALOG.values()),
         "chamber_heaters": list(CHAMBER_HEATER_CATALOG.values()),
-        "hotend_presets": list(HOTEND_CATALOG.values()),
+        "hotend_presets": annotate_hotend_presets(HOTEND_CATALOG),
         "hotend_mount_styles": [
             {
                 "id": msid,
@@ -178,8 +186,8 @@ def build_catalog_payload() -> dict[str, Any]:
                 ("chube_6bolt_m3_18pcd", "6-Bolt M3 18mm PCD Monocoque Flange (Chube)", "6-Bolt M3 18PCD"),
             )
         ],
-        "z_drive_mechanisms": list(Z_DRIVE_MECHANISM_CATALOG.values()),
-        "z_rail_profiles": list(Z_RAIL_PROFILES.values()),
+        "z_drive_mechanisms": annotate_z_drive_mechanisms(Z_DRIVE_MECHANISM_CATALOG),
+        "z_rail_profiles": annotate_z_rail_profiles(Z_RAIL_PROFILES),
         "frame_bracing": list(FRAME_BRACING_CATALOG.values()),
         "top_braces": list(TOP_BRACE_CATALOG.values()),
         "front_braces": list(FRONT_BRACE_CATALOG.values()),
@@ -617,6 +625,36 @@ def dispatch_api_request(
                     "injected_yaml": injected_spec.to_yaml(),
                 }
             )
+
+        if verb == "POST" and clean_path == "/api/vfa-sweep":
+            from printsim.fea.mechatronics import DriveControlConfig, compute_vfa_speed_sweep
+            from printsim.fea.modal import solve_modal_fea
+
+            spec = _resolve_spec_payload(payload)
+            asm = build_assembly(spec)
+            mod = solve_modal_fea(asm)
+            drive_cfg = DriveControlConfig(
+                drive_type=str(payload.get("drive_type", "open_loop_stepper")),  # type: ignore[arg-type]
+                servo_vel_bw_hz=float(payload.get("servo_vel_bw_hz", 120.0)),
+                servo_pos_bw_hz=float(payload.get("servo_pos_bw_hz", 25.0)),
+                servo_curr_bw_hz=float(payload.get("servo_curr_bw_hz", 1000.0)),
+                encoder_ppr=int(payload.get("encoder_ppr", 4000)),
+            )
+            res = compute_vfa_speed_sweep(
+                asm,
+                mod,
+                drive_cfg=drive_cfg,
+                axis="Y" if str(payload.get("axis", "X")).upper() == "Y" else "X",
+                shaper_name=payload.get("shaper_name"),
+                speed_min_mm_s=float(payload.get("speed_min_mm_s", 20.0)),
+                speed_max_mm_s=(
+                    float(payload["speed_max_mm_s"])
+                    if payload.get("speed_max_mm_s") is not None
+                    else None
+                ),
+                n_points=int(payload.get("n_points", 40)),
+            )
+            return _ok_json(res.to_dict())
 
         if verb == "POST" and clean_path == "/api/export/stl":
             spec = _resolve_spec_payload(payload)

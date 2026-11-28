@@ -778,6 +778,9 @@ machines:
         belt:
           type: gt2_9mm
           pretension_n: 75.0
+      toolhead:
+        preset_id: monolith_toolhead_cpap
+        total_mass_g: 218.0
       bed:
         z_drive: belted_quad_z
     measured:

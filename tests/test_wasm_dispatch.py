@@ -16,12 +16,23 @@ def test_wasm_dispatch_catalog_presets_and_hardware() -> None:
     cat_env = dispatch_api_request("GET", "/api/catalog")
     assert cat_env["status"] == 200
     cat = json.loads(cat_env["body_text"])
-    assert len(cat["presets"]) >= 10
-    assert {p["category"] for p in cat["presets"]} == {"siboor_kit", "ldo_kit", "diy_build"}
-    assert "siboor_voron_trident_awd_300" in {p["id"] for p in cat["presets"]}
-    assert "ldo_voron_trident_revd_300" in {p["id"] for p in cat["presets"]}
-    assert "corexy_fixed_gantry_300" in {p["id"] for p in cat["presets"]}
-    assert "cw_fixed_gantry_300" not in {p["id"] for p in cat["presets"]}
+    assert len(cat["presets"]) >= 20
+    assert {p["category"] for p in cat["presets"]} == {
+        "complete",
+        "wip_specific",
+        "generic_standin",
+    }
+    preset_by_id = {p["id"]: p for p in cat["presets"]}
+    assert preset_by_id["siboor_voron_trident_awd_300"]["category"] == "complete"
+    assert preset_by_id["ldo_voron_trident_revd_300"]["category"] == "complete"
+    assert preset_by_id["ratrig_vcore31_300"]["category"] == "wip_specific"
+    assert preset_by_id["cw_fixed_gantry_300"]["category"] == "wip_specific"
+    assert preset_by_id["corexy_fixed_gantry_300"]["category"] == "generic_standin"
+    assert any(t.get("model_status") == "wip_specific" for t in cat["toolhead_presets"])
+    assert any(k.get("model_status") == "generic_standin" for k in cat["gantry_hardware_kits"])
+    assert any(p.get("model_status") == "complete" for p in cat["profiles"])
+    assert any(z.get("model_status") == "wip_specific" for z in cat["z_drive_mechanisms"])
+    assert any(m.get("model_status") == "wip_specific" for m in cat["bed_mounts"])
     assert len(cat["materials"]) >= 10
     assert len(cat["steppers"]) >= 10
 

@@ -1299,13 +1299,33 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                         );
                       }}
                     >
-                      {gantryHardwareKits
-                        .filter((kit) => kit.id !== "auto" || currentHardwareKit === "auto")
-                        .map((kit) => (
-                          <option key={kit.id} value={kit.id}>
-                            {kit.name}
-                          </option>
-                        ))}
+                      {(
+                        [
+                          ["complete", "Complete Models"],
+                          ["wip_specific", "WIP Specific Models"],
+                          ["generic_standin", "Generic Stand-Ins"],
+                        ] as const
+                      ).map(([statusKey, groupLabel]) => {
+                        const groupKits = gantryHardwareKits.filter((kit) => {
+                          if (kit.id === "auto" && currentHardwareKit !== "auto") return false;
+                          const kitStatus =
+                            kit.model_status ??
+                            (kit.id === "auto" || kit.id === "procedural"
+                              ? "generic_standin"
+                              : "complete");
+                          return kitStatus === statusKey;
+                        });
+                        if (groupKits.length === 0) return null;
+                        return (
+                          <optgroup key={statusKey} label={groupLabel}>
+                            {groupKits.map((kit) => (
+                              <option key={kit.id} value={kit.id}>
+                                {kit.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
                     </select>
                     <PresetAffectsStrip
                       visible={kitAffectsItems.length > 0}
@@ -1426,38 +1446,44 @@ export const DesignGantrySection: React.FC<DesignGantrySectionProps> = ({
                     }}
                   >
                     {(() => {
-                      const metalBeams = catalog.profiles.filter((p) =>
-                        X_BEAM_METAL_PROFILE_IDS.has(p.id)
+                      const xBeamProfiles = catalog.profiles.filter(
+                        (p) =>
+                          X_BEAM_METAL_PROFILE_IDS.has(p.id) ||
+                          X_BEAM_LIGHTWEIGHT_TUBE_IDS.has(p.id)
                       );
-                      const lightTubes = catalog.profiles.filter((p) =>
-                        X_BEAM_LIGHTWEIGHT_TUBE_IDS.has(p.id)
+                      const hasCurrent = xBeamProfiles.some(
+                        (p) => p.id === spec.gantry.x_beam_profile
                       );
-                      const hasCurrent =
-                        metalBeams.some((p) => p.id === spec.gantry.x_beam_profile) ||
-                        lightTubes.some((p) => p.id === spec.gantry.x_beam_profile);
                       return (
                         <>
                           {!hasCurrent && (
-                            <option value={spec.gantry.x_beam_profile}>
-                              {profileLabel(spec.gantry.x_beam_profile)} (Custom)
-                            </option>
-                          )}
-                          <optgroup label="Extrusions & Aluminum Beams">
-                            {metalBeams.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
+                            <optgroup label="Generic Stand-Ins">
+                              <option value={spec.gantry.x_beam_profile}>
+                                {profileLabel(spec.gantry.x_beam_profile)} (Custom)
                               </option>
-                            ))}
-                          </optgroup>
-                          {lightTubes.length > 0 && (
-                            <optgroup label="Carbon Fiber, Titanium & Bare Rail">
-                              {lightTubes.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name}
-                                </option>
-                              ))}
                             </optgroup>
                           )}
+                          {(
+                            [
+                              ["complete", "Complete Models"],
+                              ["wip_specific", "WIP Specific Models"],
+                              ["generic_standin", "Generic Stand-Ins"],
+                            ] as const
+                          ).map(([statusKey, groupLabel]) => {
+                            const groupItems = xBeamProfiles.filter(
+                              (p) => (p.model_status ?? "generic_standin") === statusKey
+                            );
+                            if (groupItems.length === 0) return null;
+                            return (
+                              <optgroup key={statusKey} label={groupLabel}>
+                                {groupItems.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            );
+                          })}
                         </>
                       );
                     })()}

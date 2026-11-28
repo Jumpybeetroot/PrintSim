@@ -25,7 +25,11 @@ from printsim.fea.components import (
     gerbert_tooth_mesh_stiffness_n_m,
     idler_shaft_and_bearing_stiffness,
 )
-from printsim.fea.klipper_shaper import biquad_notch_params_from_db_q
+from printsim.fea.klipper_shaper import (
+    biquad_notch_params_from_db_q,
+    compute_vfa_forcing_harmonics,
+    get_shaper_pulses,
+)
 from printsim.kinematics.solvers import (
     compute_bracket_stiffness_n_per_m,
     compute_drive_stiffness_details_n_per_m,
@@ -35,6 +39,7 @@ from printsim.schema import get_material
 if TYPE_CHECKING:
     from printsim.fea.modal import ModalResult
     from printsim.geometry.builder import AssemblyModel
+    from printsim.schema.printer import StepperSpec
 
 
 _UNSET_CFG = object()
@@ -47,6 +52,8 @@ class DriveControlConfig:
     drive_type: Literal["open_loop_stepper", "closed_loop_stepper", "foc_servo"] = "open_loop_stepper"
     servo_vel_bw_hz: float = 120.0
     servo_pos_bw_hz: float = 25.0
+    servo_curr_bw_hz: float = 1000.0
+    encoder_ppr: int = 4000
     notch_filter_hz: float | None = None
     notch_zeta_zero: float = 0.03
     notch_zeta_pole: float = 0.35
@@ -73,10 +80,14 @@ class DriveControlConfig:
         pin_rotor_ff: bool = False,
         toolhead_imu_active_damping: bool = False,
         mode_space_torque_ff: bool = False,
+        servo_curr_bw_hz: float = 1000.0,
+        encoder_ppr: int = 4000,
     ) -> None:
         self.drive_type = drive_type
         self.servo_vel_bw_hz = float(servo_vel_bw_hz)
         self.servo_pos_bw_hz = float(servo_pos_bw_hz)
+        self.servo_curr_bw_hz = max(float(servo_curr_bw_hz), 50.0)
+        self.encoder_ppr = max(int(encoder_ppr), 200)
         self.notch_filter_hz = notch_filter_hz
         has_db_q = (notch_depth_db is not _UNSET_CFG) or (notch_q is not _UNSET_CFG)
         has_zeta = (notch_zeta_zero is not _UNSET_CFG) or (notch_zeta_pole is not _UNSET_CFG)
@@ -376,6 +387,47 @@ def _estimate_structural_modal_params(
     return f_sx, f_sy, zeta_frame, m_fx, m_fy, m_cx, m_cy
 
 
+def stepper_em_damping_at_rpm(
+    stepper: StepperSpec,
+    rpm: float,
+    k_theta: float | None = None,
+) -> tuple[float, float, float]:
+    """Acarnley (2002) & Leenhouts (1991) open-loop stepper rotational damping at `rpm`.
+
+    Returns `(b_rot_raw_nms_rad, zeta_raw, chop_sat)`.
+    """
+    rpm_f = max(float(rpm), 0.0)
+    omega_m = rpm_f * (2.0 * math.pi / 60.0)
+    k_th = float(k_theta) if k_theta is not None else stepper.torsional_stiffness_nm_per_rad(rpm=rpm_f)
+    j_m = stepper.rotor_inertia_kg_m2
+    r_ohm = max(float(stepper.phase_resistance_ohm), 0.05)
+    l_h = max(float(stepper.inductance_mh) * 1e-3, 1e-5)
+    tau_e = l_h / r_ohm
+    omega_e = stepper.pole_pairs * omega_m
+    wt = omega_e * tau_e
+    eta_v = stepper.dynamic_voltage_efficiency(rpm=rpm_f)
+    k_e = stepper.holding_torque_nm / (math.sqrt(2.0) * max(stepper.rated_current_a, 0.1))
+
+    # Mechanical + microstepping hysteresis baseline damping (~5.5% critical)
+    b_mech_rot = 2.0 * 0.055 * math.sqrt(max(k_th * j_m, 1e-12))
+
+    # Chopper current-loop saturation (1 - eta_v^2) transitions driver from current-source
+    # toward voltage-fed mode where Acarnley negative electrical damping emerges for wt > 1.
+    chop_sat = max(0.0, 1.0 - eta_v * eta_v)
+    b_bemf_rot = ((k_e**2) / r_ohm) * ((1.0 - wt * wt) / ((1.0 + wt * wt) ** 2)) * (0.40 * chop_sat)
+    b_ind_lag_rot = (
+        0.14
+        * stepper.pole_pairs
+        * stepper.effective_holding_torque_nm
+        * tau_e
+        * (wt / (1.0 + wt * wt))
+        * chop_sat
+    )
+    b_rot_raw = b_mech_rot + b_bemf_rot - b_ind_lag_rot
+    zeta_raw = b_rot_raw / max(2.0 * math.sqrt(max(k_th * j_m, 1e-12)), 1e-12)
+    return float(b_rot_raw), float(zeta_raw), float(chop_sat)
+
+
 def _stepper_em_params(
     assembly: AssemblyModel,
     m_ref_1: float,
@@ -394,59 +446,41 @@ def _stepper_em_params(
     )
     max_rpm = (motor_lin_v / (2.0 * math.pi * r_p)) * 60.0
     rpm_op = max(120.0, 0.35 * max_rpm)
-    omega_m0 = rpm_op * (2.0 * math.pi / 60.0)
 
     k_theta = stepper.torsional_stiffness_nm_per_rad(rpm=rpm_op)
     k_em_stepper = k_theta / (r_p**2)
 
     if drive_cfg.drive_type == "foc_servo":
-        omega_v = 2.0 * math.pi * max(float(drive_cfg.servo_vel_bw_hz), 10.0)
+        omega_c = 2.0 * math.pi * max(float(drive_cfg.servo_curr_bw_hz), 50.0)
+        omega_v_req = 2.0 * math.pi * max(float(drive_cfg.servo_vel_bw_hz), 10.0)
+        # Current-loop phase lag degrades velocity-loop phase margin when f_vel approaches f_curr
+        omega_v = min(omega_v_req, 0.45 * omega_c)
+        phase_lag_rad = math.atan(omega_v / omega_c)
+        phase_margin_scale = max(0.35, math.cos(phase_lag_rad))
         omega_p = 2.0 * math.pi * max(float(drive_cfg.servo_pos_bw_hz), 2.0)
         m_eff = m_ref_1 + m_carriage_per_motor
-        b_em = m_eff * omega_v
+        b_em = m_eff * omega_v * phase_margin_scale
         k_em = m_eff * omega_v * omega_p
         return k_em, b_em, False
 
     if drive_cfg.drive_type == "closed_loop_stepper":
         # Encoder-locked FOC microstepping suppresses mid-band negative damping & adds velocity damping
-        omega_v = 2.0 * math.pi * max(float(drive_cfg.servo_vel_bw_hz), 10.0)
+        omega_c = 2.0 * math.pi * max(float(drive_cfg.servo_curr_bw_hz), 50.0)
+        omega_v = min(2.0 * math.pi * max(float(drive_cfg.servo_vel_bw_hz), 10.0), 0.45 * omega_c)
         k_em = k_em_stepper
-        b_em = max(0.32 * 2.0 * math.sqrt(k_em * (m_ref_1 + m_carriage_per_motor)), 0.15 * (m_ref_1 + m_carriage_per_motor) * omega_v)
+        b_em = max(
+            0.32 * 2.0 * math.sqrt(k_em * (m_ref_1 + m_carriage_per_motor)),
+            0.15 * (m_ref_1 + m_carriage_per_motor) * omega_v,
+        )
         return k_em, b_em, False
 
     # Open-loop stepper: Acarnley (2002) & Leenhouts (1991) speed-dependent electrical damping
-    # tau_e = L / R, electrical commutation frequency omega_e = pole_pairs * omega_m0
     j_m = stepper.rotor_inertia_kg_m2
-    r_ohm = max(float(stepper.phase_resistance_ohm), 0.05)
-    l_h = max(float(stepper.inductance_mh) * 1e-3, 1e-5)
-    tau_e = l_h / r_ohm
-    omega_e = stepper.pole_pairs * omega_m0
-    wt = omega_e * tau_e
-    eta_v = stepper.dynamic_voltage_efficiency(rpm=rpm_op)
-    k_e = stepper.holding_torque_nm / (math.sqrt(2.0) * max(stepper.rated_current_a, 0.1))
-
-    # Mechanical + microstepping hysteresis baseline damping (~5.5% critical)
-    b_mech_rot = 2.0 * 0.055 * math.sqrt(max(k_theta * j_m, 1e-12))
-
-    # Chopper current-loop saturation (1 - eta_v^2) transitions driver from current-source
-    # toward voltage-fed mode where Acarnley negative electrical damping emerges for wt > 1.
-    chop_sat = max(0.0, 1.0 - eta_v * eta_v)
-    b_bemf_rot = ((k_e**2) / r_ohm) * ((1.0 - wt * wt) / ((1.0 + wt * wt) ** 2)) * (0.40 * chop_sat)
-    b_ind_lag_rot = (
-        0.14
-        * stepper.pole_pairs
-        * stepper.effective_holding_torque_nm
-        * tau_e
-        * (wt / (1.0 + wt * wt))
-        * chop_sat
-    )
-    b_rot_raw = b_mech_rot + b_bemf_rot - b_ind_lag_rot
-
-    zeta_raw = b_rot_raw / max(2.0 * math.sqrt(k_theta * j_m), 1e-12)
+    b_rot_raw, zeta_raw, _ = stepper_em_damping_at_rpm(stepper, rpm=rpm_op, k_theta=k_theta)
     midband_risk = bool(zeta_raw < 0.015)
 
     # Enforce tiny positive LTI floor so linearized state-space stays numerically bounded in time domain
-    b_rot_floor = 2.0 * 0.005 * math.sqrt(k_theta * j_m)
+    b_rot_floor = 2.0 * 0.005 * math.sqrt(max(k_theta * j_m, 1e-12))
     b_rot_eff = max(b_rot_raw, b_rot_floor)
     b_em = b_rot_eff / (r_p**2)
     return k_em_stepper, b_em, midband_risk
@@ -932,4 +966,351 @@ def compute_workspace_frf_map(
         drive_type=cfg.drive_type,
         midband_instability_risk=midband_any,
         is_spatial_spread_pct=is_spatial_spread_pct,
+    )
+
+
+@dataclass
+class MidbandSweepResult:
+    """Speed-dependent Acarnley (2002) stepper mid-band electrical damping sweep."""
+
+    drive_type: str
+    speeds_mm_s: list[float]
+    zeta_em_values: list[float]
+    chop_sat_values: list[float]
+    min_damping_ratio: float
+    worst_speed_mm_s: float
+    instability_band_mm_s: tuple[float, float] | None
+    midband_instability_risk: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "drive_type": self.drive_type,
+            "speeds_mm_s": [round(float(v), 1) for v in self.speeds_mm_s],
+            "zeta_em_values": [round(float(z), 4) for z in self.zeta_em_values],
+            "chop_sat_values": [round(float(c), 3) for c in self.chop_sat_values],
+            "min_damping_ratio": round(float(self.min_damping_ratio), 4),
+            "worst_speed_mm_s": round(float(self.worst_speed_mm_s), 1),
+            "instability_band_mm_s": (
+                [round(float(self.instability_band_mm_s[0]), 1), round(float(self.instability_band_mm_s[1]), 1)]
+                if self.instability_band_mm_s is not None
+                else None
+            ),
+            "midband_instability_risk": bool(self.midband_instability_risk),
+        }
+
+
+def analyze_midband_resonance_sweep(
+    assembly: AssemblyModel,
+    drive_cfg: DriveControlConfig | None = None,
+    speed_min_mm_s: float = 20.0,
+    speed_max_mm_s: float | None = None,
+    n_points: int = 36,
+) -> MidbandSweepResult:
+    """Sweep print speed to locate Acarnley (2002) open-loop stepper mid-band instability bands."""
+    cfg = drive_cfg or DriveControlConfig()
+    spec = assembly.spec
+    stepper = spec.kinematics.xy_stepper
+    belt = spec.gantry.belt
+    r_p = belt.pitch_radius_m
+
+    v_lo = max(float(speed_min_mm_s), 5.0)
+    v_hi = (
+        float(speed_max_mm_s)
+        if speed_max_mm_s is not None
+        else max(float(spec.kinematics.max_velocity_mm_s), v_lo + 40.0)
+    )
+    v_hi = max(v_hi, v_lo + 10.0)
+    speeds = np.linspace(v_lo, v_hi, max(int(n_points), 8), dtype=float)
+    arch_speed_mult = 1.4142 if spec.architecture == "corexy" else 1.0
+
+    zetas: list[float] = []
+    chops: list[float] = []
+    for v_mm_s in speeds:
+        if cfg.drive_type == "foc_servo":
+            omega_c = 2.0 * math.pi * max(float(cfg.servo_curr_bw_hz), 50.0)
+            omega_v = min(2.0 * math.pi * max(float(cfg.servo_vel_bw_hz), 10.0), 0.45 * omega_c)
+            phase_scale = max(0.35, math.cos(math.atan(omega_v / omega_c)))
+            zetas.append(0.50 * phase_scale)
+            chops.append(0.0)
+        elif cfg.drive_type == "closed_loop_stepper":
+            zetas.append(0.32)
+            chops.append(0.0)
+        else:
+            motor_lin_v = (float(v_mm_s) * 1e-3) * arch_speed_mult
+            rpm = (motor_lin_v / (2.0 * math.pi * r_p)) * 60.0
+            _, z_raw, c_sat = stepper_em_damping_at_rpm(stepper, rpm=rpm)
+            zetas.append(z_raw)
+            chops.append(c_sat)
+
+    z_arr = np.asarray(zetas, dtype=float)
+    idx_min = int(np.argmin(z_arr))
+    min_zeta = float(z_arr[idx_min])
+    worst_v = float(speeds[idx_min])
+    unstable_idx = np.flatnonzero(z_arr < 0.015)
+    if unstable_idx.size > 0:
+        band: tuple[float, float] | None = (
+            float(speeds[int(unstable_idx[0])]),
+            float(speeds[int(unstable_idx[-1])]),
+        )
+        risk = True
+    else:
+        band = None
+        risk = False
+
+    return MidbandSweepResult(
+        drive_type=cfg.drive_type,
+        speeds_mm_s=[float(v) for v in speeds],
+        zeta_em_values=zetas,
+        chop_sat_values=chops,
+        min_damping_ratio=min_zeta,
+        worst_speed_mm_s=worst_v,
+        instability_band_mm_s=band,
+        midband_instability_risk=risk,
+    )
+
+
+@dataclass
+class VFASpeedSweepResult:
+    """Speed-dependent Vertical Fine Artifacts (VFA) surface-ripple map via coupled MIMO FRF."""
+
+    axis: str
+    drive_type: str
+    shaper_used: str
+    speeds_mm_s: list[float]
+    belt_mesh_ripple_um: list[float]
+    motor_elec_ripple_um: list[float]
+    motor_step_ripple_um: list[float]
+    total_vfa_ripple_um: list[float]
+    peak_vfa_um: float
+    peak_vfa_speed_mm_s: float
+    dominant_source: Literal["belt_mesh", "motor_elec", "motor_step", "pulley_ecc"]
+    resonant_speed_bands_mm_s: list[list[float]]
+    recommended_clean_speed_mm_s: float
+    encoder_quantization_um: float
+    midband_sweep: MidbandSweepResult
+
+    def to_dict(self) -> dict:
+        return {
+            "axis": self.axis,
+            "drive_type": self.drive_type,
+            "shaper_used": self.shaper_used,
+            "speeds_mm_s": [round(float(v), 1) for v in self.speeds_mm_s],
+            "belt_mesh_ripple_um": [round(float(x), 3) for x in self.belt_mesh_ripple_um],
+            "motor_elec_ripple_um": [round(float(x), 3) for x in self.motor_elec_ripple_um],
+            "motor_step_ripple_um": [round(float(x), 3) for x in self.motor_step_ripple_um],
+            "total_vfa_ripple_um": [round(float(x), 3) for x in self.total_vfa_ripple_um],
+            "peak_vfa_um": round(float(self.peak_vfa_um), 3),
+            "peak_vfa_speed_mm_s": round(float(self.peak_vfa_speed_mm_s), 1),
+            "dominant_source": self.dominant_source,
+            "resonant_speed_bands_mm_s": [
+                [round(float(b[0]), 1), round(float(b[1]), 1)] for b in self.resonant_speed_bands_mm_s
+            ],
+            "recommended_clean_speed_mm_s": round(float(self.recommended_clean_speed_mm_s), 1),
+            "encoder_quantization_um": round(float(self.encoder_quantization_um), 3),
+            "midband_sweep": self.midband_sweep.to_dict(),
+        }
+
+
+def _shaper_magnitude_at_freqs(
+    pulses: tuple[np.ndarray, np.ndarray],
+    freqs_hz: np.ndarray,
+) -> np.ndarray:
+    """Exact input-shaper frequency-response magnitude |S(j*2*pi*f)|."""
+    amps, times = pulses
+    if len(amps) <= 1:
+        return np.ones_like(freqs_hz, dtype=float)
+    a_sum = max(float(np.sum(amps)), 1e-12)
+    phase = -2.0 * math.pi * np.outer(freqs_hz, times)
+    resp = np.sum((amps / a_sum)[None, :] * np.exp(1j * phase), axis=1)
+    return np.abs(resp).astype(float)
+
+
+def compute_vfa_speed_sweep(
+    assembly: AssemblyModel,
+    modal_result: ModalResult,
+    drive_cfg: DriveControlConfig | None = None,
+    axis: Literal["X", "Y"] = "X",
+    shaper_name: str | None = None,
+    speed_min_mm_s: float = 20.0,
+    speed_max_mm_s: float | None = None,
+    n_points: int = 40,
+    u_rel: float = 0.5,
+    v_rel: float = 0.5,
+) -> VFASpeedSweepResult:
+    """Propagate belt-mesh & motor-pole VFA harmonics through the coupled MIMO FRF across speed.
+
+    Distinguishes plant-side belt-tooth mesh excitation (unattenuated by command-side input shaping)
+    from motor-side electrical/detent cogging harmonics (amplified by speed-dependent Acarnley
+    mid-band damping drops and attenuated by closed-loop FOC or input shaping).
+    """
+    cfg = drive_cfg or DriveControlConfig()
+    spec = assembly.spec
+    stepper = spec.kinematics.xy_stepper
+    belt = spec.gantry.belt
+    ax_upper = "Y" if str(axis).upper() == "Y" else "X"
+    ax_idx = 1 if ax_upper == "Y" else 0
+
+    coupled = build_coupled_state_space(
+        assembly, modal_result, u_rel=u_rel, v_rel=v_rel, drive_cfg=cfg
+    )
+
+    # Resolve active input shaper for command-side attenuation
+    sh_rec = modal_result.shaper_y if ax_upper == "Y" else modal_result.shaper_x
+    if shaper_name is not None:
+        sh_used = shaper_name.strip().upper()
+    elif spec.kinematics.input_shaper.strip().lower() == "none":
+        sh_used = "NONE"
+    elif sh_rec is not None and sh_rec.recommended_shaper:
+        sh_used = sh_rec.recommended_shaper.strip().upper()
+    else:
+        sh_used = "EI"
+
+    f_sh = (
+        float(sh_rec.effective_freq_hz)
+        if (sh_rec is not None and sh_rec.effective_freq_hz > 0.0)
+        else (coupled.coupled_freq_y_hz if ax_upper == "Y" else coupled.coupled_freq_x_hz)
+    )
+    z_sh = coupled.coupled_damping_y if ax_upper == "Y" else coupled.coupled_damping_x
+    pulses = (
+        get_shaper_pulses("NONE", max(f_sh, 8.0))
+        if sh_used == "NONE"
+        else get_shaper_pulses(sh_used, max(f_sh, 8.0), damping_ratio=float(np.clip(z_sh, 0.02, 0.25)))
+    )
+
+    v_lo = max(float(speed_min_mm_s), 10.0)
+    v_hi = (
+        float(speed_max_mm_s)
+        if speed_max_mm_s is not None
+        else min(max(float(spec.kinematics.max_velocity_mm_s), v_lo + 60.0), 350.0)
+    )
+    v_hi = max(v_hi, v_lo + 20.0)
+    n_pts = max(int(n_points), 10)
+    speeds = np.linspace(v_lo, v_hi, n_pts, dtype=float)
+
+    midband = analyze_midband_resonance_sweep(
+        assembly, drive_cfg=cfg, speed_min_mm_s=v_lo, speed_max_mm_s=v_hi, n_points=n_pts
+    )
+
+    steps_per_rev = max(int(round(4.0 * float(stepper.pole_pairs))), 40)
+    f_belt = np.empty(n_pts, dtype=float)
+    f_elec = np.empty(n_pts, dtype=float)
+    f_step = np.empty(n_pts, dtype=float)
+    f_rps = np.empty(n_pts, dtype=float)
+    for i, v_val in enumerate(speeds):
+        h_v = compute_vfa_forcing_harmonics(
+            speed_mm_s=float(v_val),
+            pulley_teeth=int(belt.pulley_teeth),
+            belt_pitch_mm=float(belt.pitch_mm),
+            steps_per_rev=steps_per_rev,
+        )
+        f_belt[i] = float(h_v["belt_mesh_hz"])
+        f_elec[i] = float(h_v["motor_elec_hz"])
+        f_step[i] = float(h_v["vfa_step_hz"])
+        f_rps[i] = float(h_v["motor_rps_hz"])
+
+    # Vectorized MIMO FRF evaluation for all 4 harmonic families in one batch
+    all_freqs = np.concatenate([f_belt, f_elec, f_step, f_rps])
+    h_all = _eval_mimo_frf(coupled.A, coupled.B, coupled.C_noz, coupled.D, all_freqs)
+    mag_all = np.abs(h_all[:, ax_idx, ax_idx])
+    mag_belt = mag_all[0:n_pts]
+    mag_elec = mag_all[n_pts : 2 * n_pts]
+    mag_step = mag_all[2 * n_pts : 3 * n_pts]
+    mag_rps = mag_all[3 * n_pts : 4 * n_pts]
+
+    # Command-side shaper attenuation applies to motor-command/electrical harmonics (not belt-idler mesh)
+    sh_elec = _shaper_magnitude_at_freqs(pulses, f_elec)
+    sh_step = _shaper_magnitude_at_freqs(pulses, f_step)
+
+    # Physical source excitation amplitudes (peak-to-peak equivalent displacement at DC, µm)
+    pitch_mm = float(belt.pitch_mm)
+    z_teeth = max(float(belt.pulley_teeth), 12.0)
+    t0_n = max(float(belt.pretension_n), 5.0)
+    # Polygonal chordal action + belt tooth-on-smooth-idler seating ripple
+    a_belt_src_um = 1.6 * ((pitch_mm / 2.0) ** 1.5) * ((20.0 / z_teeth) ** 1.4) * (
+        0.75 + 0.25 * min(t0_n / 50.0, 2.5)
+    )
+    if spec.architecture == "corexy" and spec.gantry.drive_mode == "awd":
+        # Opposed AWD phasing averages out part of single-loop belt mesh ripple
+        a_belt_src_um *= 0.85
+
+    # Stepper electrical (1x f_elec) & detent/cogging (4x f_elec) source amplitudes (µm)
+    r_p_um = belt.pitch_radius_m * 1e6
+    enc_quant_um = (2.0 * math.pi * r_p_um) / max(float(cfg.encoder_ppr), 200.0)
+    if cfg.drive_type == "foc_servo":
+        a_elec_src_um = 0.15
+        a_step_src_um = 0.10 + 0.5 * enc_quant_um
+    elif cfg.drive_type == "closed_loop_stepper":
+        a_elec_src_um = 0.35
+        a_step_src_um = 0.22 + 0.5 * enc_quant_um
+    else:
+        step_scale = 0.50 if steps_per_rev >= 360 else 1.0  # 0.9° halves step angle & cogging ripple
+        a_elec_src_um = 2.2 * step_scale
+        a_step_src_um = 1.4 * step_scale
+
+    # Speed-dependent Acarnley mid-band amplification on open-loop steppers
+    zeta_arr = np.asarray(midband.zeta_em_values, dtype=float)
+    if cfg.drive_type == "open_loop_stepper":
+        midband_amp = np.sqrt(0.055 / np.maximum(zeta_arr, 0.008))
+    else:
+        midband_amp = np.ones(n_pts, dtype=float)
+
+    belt_ripple_um = a_belt_src_um * mag_belt
+    elec_ripple_um = a_elec_src_um * midband_amp * mag_elec * (0.35 + 0.65 * sh_elec)
+    step_ripple_um = a_step_src_um * midband_amp * mag_step * (0.35 + 0.65 * sh_step)
+    ecc_ripple_um = 1.2 * mag_rps
+    total_ripple_um = np.sqrt(
+        belt_ripple_um**2 + elec_ripple_um**2 + step_ripple_um**2 + ecc_ripple_um**2
+    )
+
+    idx_peak = int(np.argmax(total_ripple_um))
+    peak_vfa = float(total_ripple_um[idx_peak])
+    peak_speed = float(speeds[idx_peak])
+    comps_at_peak = {
+        "belt_mesh": float(belt_ripple_um[idx_peak]),
+        "motor_elec": float(elec_ripple_um[idx_peak]),
+        "motor_step": float(step_ripple_um[idx_peak]),
+        "pulley_ecc": float(ecc_ripple_um[idx_peak]),
+    }
+    dominant_source: Literal["belt_mesh", "motor_elec", "motor_step", "pulley_ecc"] = max(
+        comps_at_peak, key=lambda k: comps_at_peak[k]
+    )  # type: ignore[assignment]
+
+    # Identify contiguous resonant speed bands where VFA >= 4.0 µm (visible gloss-wall threshold)
+    vfa_thresh_um = 4.0
+    bands: list[list[float]] = []
+    in_band = False
+    band_start = 0.0
+    for i in range(n_pts):
+        if total_ripple_um[i] >= vfa_thresh_um and not in_band:
+            in_band = True
+            band_start = float(speeds[i])
+        elif total_ripple_um[i] < vfa_thresh_um and in_band:
+            in_band = False
+            bands.append([band_start, float(speeds[i - 1])])
+    if in_band:
+        bands.append([band_start, float(speeds[-1])])
+
+    # Recommended clean outer-wall speed: fastest speed >= 40 mm/s below threshold (else min-ripple speed)
+    clean_mask = (speeds >= 40.0) & (total_ripple_um < vfa_thresh_um)
+    if np.any(clean_mask):
+        rec_clean_speed = float(speeds[np.flatnonzero(clean_mask)[-1]])
+    else:
+        rec_clean_speed = float(speeds[int(np.argmin(total_ripple_um))])
+
+    return VFASpeedSweepResult(
+        axis=ax_upper,
+        drive_type=cfg.drive_type,
+        shaper_used=sh_used,
+        speeds_mm_s=[float(v) for v in speeds],
+        belt_mesh_ripple_um=[float(x) for x in belt_ripple_um],
+        motor_elec_ripple_um=[float(x) for x in elec_ripple_um],
+        motor_step_ripple_um=[float(x) for x in step_ripple_um],
+        total_vfa_ripple_um=[float(x) for x in total_ripple_um],
+        peak_vfa_um=peak_vfa,
+        peak_vfa_speed_mm_s=peak_speed,
+        dominant_source=dominant_source,
+        resonant_speed_bands_mm_s=bands,
+        recommended_clean_speed_mm_s=rec_clean_speed,
+        encoder_quantization_um=enc_quant_um,
+        midband_sweep=midband,
     )

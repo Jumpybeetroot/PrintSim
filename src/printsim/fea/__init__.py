@@ -49,10 +49,15 @@ from .klipper_shaper import (
 from .mechatronics import (
     CoupledMechatronicsModel,
     DriveControlConfig,
+    MidbandSweepResult,
+    VFASpeedSweepResult,
     WorkspaceFRFMap,
+    analyze_midband_resonance_sweep,
     build_coupled_state_space,
+    compute_vfa_speed_sweep,
     compute_workspace_frf_map,
     corexy_belt_span_stiffness_matrix,
+    stepper_em_damping_at_rpm,
 )
 from .modal import InputShaperRecommendation, ModalResult, ModeShape, solve_modal_fea
 from .rcsa import (
@@ -140,10 +145,15 @@ __all__ = [
     "synthesize_axis_psd",
     "CoupledMechatronicsModel",
     "DriveControlConfig",
+    "MidbandSweepResult",
+    "VFASpeedSweepResult",
     "WorkspaceFRFMap",
+    "analyze_midband_resonance_sweep",
     "build_coupled_state_space",
+    "compute_vfa_speed_sweep",
     "compute_workspace_frf_map",
     "corexy_belt_span_stiffness_matrix",
+    "stepper_em_damping_at_rpm",
     "InputShaperRecommendation",
     "ModalResult",
     "ModeShape",

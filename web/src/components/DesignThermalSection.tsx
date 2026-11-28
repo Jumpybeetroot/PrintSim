@@ -568,30 +568,48 @@ export const DesignThermalSection: React.FC<DesignThermalSectionProps> = ({
                   }}
                 >
                   {selectedHotendPresetVal === "__custom__" && (
-                    <option value="__custom__">
-                      {spec.toolhead.hotend.name || "Custom Hotend"} — {specHotendStiffness} N/mm ·{" "}
-                      {specHotendMassG}g (Custom)
-                    </option>
-                  )}
-                  {hotendPresets.map((hp) => {
-                    const isSelectedPreset = hp.id === spec.toolhead.hotend.preset_id;
-                    const displayK =
-                      isSelectedPreset && activeHotendCadK != null
-                        ? effectiveHotendDisplayK
-                        : Math.round(hp.structural_stiffness_n_per_mm);
-                    const displayMassG =
-                      isSelectedPreset && effectiveHotendMassG != null
-                        ? effectiveHotendMassG
-                        : hp.mass_g;
-                    const tier = hotendStiffnessTier(displayK);
-                    const tierLabel =
-                      isSelectedPreset && isBracedHotendCms ? "Ti Braced" : tier.label;
-                    const wtStr =
-                      displayMassG != null ? ` · ${fmtMassG(displayMassG)}g` : "";
-                    return (
-                      <option key={hp.id} value={hp.id}>
-                        {hp.name} — {displayK.toLocaleString()} N/mm{wtStr} ({tierLabel})
+                    <optgroup label="Generic Stand-Ins">
+                      <option value="__custom__">
+                        {spec.toolhead.hotend.name || "Custom Hotend"} — {specHotendStiffness}{" "}
+                        N/mm · {specHotendMassG}g (Generic)
                       </option>
+                    </optgroup>
+                  )}
+                  {(
+                    [
+                      ["complete", "Complete Models"],
+                      ["wip_specific", "WIP Specific Models"],
+                      ["generic_standin", "Generic Stand-Ins"],
+                    ] as const
+                  ).map(([statusKey, groupLabel]) => {
+                    const groupItems = hotendPresets.filter(
+                      (hp) => (hp.model_status ?? "complete") === statusKey
+                    );
+                    if (groupItems.length === 0) return null;
+                    return (
+                      <optgroup key={statusKey} label={groupLabel}>
+                        {groupItems.map((hp) => {
+                          const isSelectedPreset = hp.id === spec.toolhead.hotend.preset_id;
+                          const displayK =
+                            isSelectedPreset && activeHotendCadK != null
+                              ? effectiveHotendDisplayK
+                              : Math.round(hp.structural_stiffness_n_per_mm);
+                          const displayMassG =
+                            isSelectedPreset && effectiveHotendMassG != null
+                              ? effectiveHotendMassG
+                              : hp.mass_g;
+                          const tier = hotendStiffnessTier(displayK);
+                          const tierLabel =
+                            isSelectedPreset && isBracedHotendCms ? "Ti Braced" : tier.label;
+                          const wtStr =
+                            displayMassG != null ? ` · ${fmtMassG(displayMassG)}g` : "";
+                          return (
+                            <option key={hp.id} value={hp.id}>
+                              {hp.name} — {displayK.toLocaleString()} N/mm{wtStr} ({tierLabel})
+                            </option>
+                          );
+                        })}
+                      </optgroup>
                     );
                   })}
                   {extraBakedHotends.length > 0 && (

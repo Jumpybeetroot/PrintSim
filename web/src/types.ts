@@ -19,16 +19,24 @@ export interface ProfileItem {
   shape: string;
   width_m: number;
   height_m: number;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
+
+export type ModelStatus = "complete" | "wip_specific" | "generic_standin";
 
 export interface PresetItem {
   id: string;
   name: string;
   short_name?: string;
   architecture: string;
-  base_kit?: "siboor" | "ldo" | "diy" | string;
-  category?: string;
+  base_kit?: "siboor" | "ldo" | "diy" | "generic" | string;
+  category?: ModelStatus | string;
   category_label?: string;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
   hardware_kit?: string;
   summary?: string;
   highlights?: string[];
@@ -129,6 +137,9 @@ export interface GantryHardwareKitItem {
   default_bracket_material?: string;
   drive_mode?: string;
   kit_settings?: GantryHardwareKitSettings | null;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export interface CadGantryStationAsset {
@@ -424,6 +435,9 @@ export interface BedMountCatalogItem {
   standoff_height_mm?: number;
   cost_usd?: number;
   notes?: string;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export interface FrameFeetCatalogItem {
@@ -488,6 +502,9 @@ export interface ZProbeCatalogItem {
   compliance_factor?: number;
   cog_y_shift_mm?: number;
   notes?: string;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export interface BeltRoutingCatalogItem {
@@ -531,6 +548,9 @@ export interface ToolheadPresetItem {
   belt_plane_z_offset_mm?: number;
   offset_datum_rail_mount?: "front" | "top";
   default_hardware_summary?: string;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export type ToolheadPresetData = ToolheadPresetItem;
@@ -556,6 +576,9 @@ export interface HotendPresetItem {
   max_temp_c: number;
   cost_usd?: number;
   notes?: string;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export interface ZDriveMechanismItem {
@@ -574,12 +597,18 @@ export interface ZDriveMechanismItem {
   gear_ratio?: number;
   cost_per_axis_usd?: number;
   notes?: string;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export interface ZRailProfileItem {
   id: string;
   name: string;
   mass_kg_per_m?: number;
+  model_status?: ModelStatus;
+  model_status_label?: string;
+  wip_notes?: string;
 }
 
 export interface CornerJointCatalogItem {

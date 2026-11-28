@@ -740,26 +740,33 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
             );
           }}
         >
-          <optgroup label="3-Pt Kinematic Mounts">
-            {kinematicBedMountOptions.map((opt) => {
-              const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
-              return (
-                <option key={opt.id} value={opt.id}>
-                  {catItem?.name ?? opt.label}
-                </option>
-              );
-            })}
-          </optgroup>
-          <optgroup label="Standard Standoffs & 4-Pt Mounts">
-            {standardBedMountOptions.map((opt) => {
-              const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
-              return (
-                <option key={opt.id} value={opt.id}>
-                  {catItem?.name ?? opt.label}
-                </option>
-              );
-            })}
-          </optgroup>
+          {(
+            [
+              ["complete", "Complete Models"],
+              ["wip_specific", "WIP Specific Models"],
+              ["generic_standin", "Generic Stand-Ins"],
+            ] as const
+          ).map(([statusKey, groupLabel]) => {
+            const groupItems = [...kinematicBedMountOptions, ...standardBedMountOptions].filter(
+              (opt) => {
+                const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
+                return (catItem?.model_status ?? "generic_standin") === statusKey;
+              }
+            );
+            if (groupItems.length === 0) return null;
+            return (
+              <optgroup key={statusKey} label={groupLabel}>
+                {groupItems.map((opt) => {
+                  const catItem = catalog.bed_mounts?.find((m) => m.id === opt.id);
+                  return (
+                    <option key={opt.id} value={opt.id}>
+                      {catItem?.name ?? opt.label}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            );
+          })}
         </select>
         <div className="mount-physics-strip" aria-label="Bed mount physics summary">
           <span
@@ -1018,13 +1025,37 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
               }}
             >
               {!zRailProfileOptions.some((opt) => opt.id === currentZRailProfile) && (
-                <option value={currentZRailProfile}>{currentZRailProfile} (Custom)</option>
+                <optgroup label="Generic Stand-Ins">
+                  <option value={currentZRailProfile}>{currentZRailProfile} (Custom)</option>
+                </optgroup>
               )}
-              {zRailProfileOptions.map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {opt.name}
-                </option>
-              ))}
+              {(
+                [
+                  ["complete", "Complete Models"],
+                  ["wip_specific", "WIP Specific Models"],
+                  ["generic_standin", "Generic Stand-Ins"],
+                ] as const
+              ).map(([statusKey, groupLabel]) => {
+                const groupItems = zRailProfileOptions.filter((opt) => {
+                  const catItem = catalog.z_rail_profiles?.find((r) => r.id === opt.id);
+                  const st =
+                    catItem?.model_status ??
+                    (opt.id === "mgn12_rail" || opt.id === "mgn9_rail"
+                      ? "complete"
+                      : "generic_standin");
+                  return st === statusKey;
+                });
+                if (groupItems.length === 0) return null;
+                return (
+                  <optgroup key={statusKey} label={groupLabel}>
+                    {groupItems.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </select>
           </div>
 
@@ -1060,44 +1091,49 @@ export const DesignBedZSection: React.FC<DesignBedZSectionProps> = ({
               }}
             >
               <option value="auto">Auto (Match Z Architecture)</option>
-              {isBeltedQuadZ ? (
-                <>
-                  {currentZLeadscrewType !== "auto" &&
-                    !beltDriveOptions.some((o) => o.id === currentZLeadscrewType) && (
-                      <option value={currentZLeadscrewType}>
-                        {zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)
-                          ?.name ?? currentZLeadscrewType}{" "}
-                        (Custom)
-                      </option>
-                    )}
-                  <optgroup label="Belted Z Drives">
-                    {beltDriveOptions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                </>
-              ) : (
-                <>
-                  <optgroup label="Leadscrews & Ballscrews">
-                    {screwDriveOptions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  {beltDriveOptions.length > 0 && (
-                    <optgroup label="Belted Z Conversions">
-                      {beltDriveOptions.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.name}
+              {(() => {
+                const visibleDrives = isBeltedQuadZ
+                  ? beltDriveOptions
+                  : [...screwDriveOptions, ...beltDriveOptions];
+                const hasCurrent =
+                  currentZLeadscrewType === "auto" ||
+                  visibleDrives.some((o) => o.id === currentZLeadscrewType);
+                return (
+                  <>
+                    {!hasCurrent && (
+                      <optgroup label="Generic Stand-Ins">
+                        <option value={currentZLeadscrewType}>
+                          {zDriveMechanismOptions.find((o) => o.id === currentZLeadscrewType)
+                            ?.name ?? currentZLeadscrewType}{" "}
+                          (Custom)
                         </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </>
-              )}
+                      </optgroup>
+                    )}
+                    {(
+                      [
+                        ["complete", "Complete Models"],
+                        ["wip_specific", "WIP Specific Models"],
+                        ["generic_standin", "Generic Stand-Ins"],
+                      ] as const
+                    ).map(([statusKey, groupLabel]) => {
+                      const groupItems = visibleDrives.filter((opt) => {
+                        const catItem = catalog.z_drive_mechanisms?.find((z) => z.id === opt.id);
+                        return (catItem?.model_status ?? "generic_standin") === statusKey;
+                      });
+                      if (groupItems.length === 0) return null;
+                      return (
+                        <optgroup key={statusKey} label={groupLabel}>
+                          {groupItems.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
+                  </>
+                );
+              })()}
             </select>
             {activeZDriveMeta && (
               <div className="mount-physics-strip" aria-label="Z drive physics summary">

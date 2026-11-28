@@ -26,9 +26,22 @@ import {
   TopoOptRequestParams,
 } from "../types";
 
-const PRINTER_TYPE_ORDER = ["siboor_kit", "ldo_kit", "diy_build", "corexy", "cartesian_bedslinger", "delta"] as const;
+const PRINTER_TYPE_ORDER = [
+  "complete",
+  "wip_specific",
+  "generic_standin",
+  "siboor_kit",
+  "ldo_kit",
+  "diy_build",
+  "corexy",
+  "cartesian_bedslinger",
+  "delta",
+] as const;
 
 const PRINTER_TYPE_FALLBACK_LABELS: Record<string, string> = {
+  complete: "Complete Models",
+  wip_specific: "WIP Specific Models",
+  generic_standin: "Generic Stand-Ins",
   siboor_kit: "Siboor Kit",
   ldo_kit: "LDO Kit",
   diy_build: "DIY / Self-Sourced Build",
@@ -378,15 +391,15 @@ export const DesignPanel: React.FC<Props> = ({
               aria-controls="design-preset-panel"
               title={
                 activePreset
-                  ? `${activePreset.name} — click to switch base kit (Siboor, LDO, or DIY)`
-                  : "Custom or saved configuration — click to pick a base machine kit"
+                  ? `${activePreset.name} — click to switch base machine (Complete, WIP, or Generic)`
+                  : "Custom or saved configuration — click to pick a base machine"
               }
               onClick={() => {
                 if (printerPickerOpen) {
                   closePrinterPicker();
                 } else {
                   const activeCat = activePreset?.category;
-                  setExpandedPrinterTypes(activeCat ? { [activeCat]: true } : { siboor_kit: true });
+                  setExpandedPrinterTypes(activeCat ? { [activeCat]: true } : { complete: true });
                   setPrinterPickerOpen(true);
                 }
               }}

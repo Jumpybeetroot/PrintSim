@@ -16,6 +16,7 @@ import numpy as np
 from scipy.linalg import expm
 
 from printsim.fea.components import (
+    compute_bearing_cte_clearance_um,
     hertzian_rail_carriage_stiffness,
     idler_shaft_and_bearing_stiffness,
 )
@@ -31,8 +32,27 @@ from printsim.schema.overrides import resolve_rail_quality
 if TYPE_CHECKING:
     from printsim.fea.modal import ModalResult
     from printsim.geometry.builder import AssemblyModel
+    from printsim.schema.printer import PrinterSpec
 
 _DT_S: float = 0.0005
+
+
+def _belt_tooth_backlash_um(spec: PrinterSpec) -> float:
+    """Estimate belt tooth-flank reversal backlash (µm) by tooth profile, pretension, and AWD."""
+    belt = spec.gantry.belt
+    btype = str(belt.type).lower()
+    if "htd" in btype:
+        base_um = 18.0  # Semicircular HTD profile exhibits high tooth-flank clearance
+    elif btype.startswith("at"):
+        base_um = 2.0  # Trapezoidal AT3/AT5 precision profile
+    elif btype.startswith("3gt"):
+        base_um = 5.0  # 3 mm pitch curvilinear 3GT
+    else:
+        base_um = 3.0  # Gates PowerGrip 2GT / GT3 modified curvilinear profile
+    t0 = max(float(belt.pretension_n), 1.0)
+    tension_scale = 1.0 / (1.0 + t0 / 35.0)
+    awd_scale = 0.55 if (spec.architecture == "corexy" and spec.gantry.drive_mode == "awd") else 1.0
+    return float(base_um * tension_scale * awd_scale)
 
 
 @dataclass
@@ -74,6 +94,12 @@ class TimeDomainMetrologyResult:
     zigzag_unshaped_ringing_um: float = 0.0
     zigzag_trace: dict[str, list[float]] = field(default_factory=dict)
 
+    # ISO 230-4 reversal backlash & per-axis stiction diagnostics
+    diagonal_glitch_45deg_um: float = 0.0
+    reversal_backlash_um: float = 0.0
+    rail_stiction_x_n: float = 0.0
+    rail_stiction_y_n: float = 0.0
+
     def to_dict(self) -> dict:
         return {
             "corner_rounding_um": round(float(self.corner_rounding_um), 2),
@@ -96,6 +122,10 @@ class TimeDomainMetrologyResult:
             "circularity_gxy_um": round(float(self.circularity_gxy_um), 2),
             "mean_radial_lag_um": round(float(self.mean_radial_lag_um), 2),
             "quadrant_glitch_um": round(float(self.quadrant_glitch_um), 2),
+            "diagonal_glitch_45deg_um": round(float(self.diagonal_glitch_45deg_um), 2),
+            "reversal_backlash_um": round(float(self.reversal_backlash_um), 2),
+            "rail_stiction_x_n": round(float(self.rail_stiction_x_n), 3),
+            "rail_stiction_y_n": round(float(self.rail_stiction_y_n), 3),
             "ballbar_angles_deg": [round(float(a), 1) for a in self.ballbar_angles_deg],
             "ballbar_radial_error_um": [round(float(e), 2) for e in self.ballbar_radial_error_um],
             "zigzag_path_error_um": round(float(self.zigzag_path_error_um), 2),
@@ -535,9 +565,9 @@ def simulate_time_domain_metrology(
         if is_foc and cfg.mode_space_torque_ff:
             dk_sectors *= 0.65
 
-    # Stribeck rail friction + ISO 5753 bearing radial clearance play
+    # Per-axis Stribeck rail friction + ISO 5753 bearing radial clearance + CTE & belt tooth backlash
     rail_qual = resolve_rail_quality(spec)
-    rail_info = hertzian_rail_carriage_stiffness(
+    rail_info_x = hertzian_rail_carriage_stiffness(
         spec.gantry.x_rail_profile,
         preload=spec.gantry.rail_preload,
         block_type=spec.gantry.rail_block_type,
@@ -546,25 +576,54 @@ def simulate_time_domain_metrology(
         stiffness_mult_override=rail_qual["stiffness_mult"],
         drag_mult_override=rail_qual["drag_mult"],
     )
-    f_coulomb = float(rail_info["rolling_friction_n"] + rail_info["seal_drag_n"])
-    f_break = float(rail_info["breakaway_friction_n"])
+    rail_info_y = hertzian_rail_carriage_stiffness(
+        spec.gantry.y_rail_profile,
+        preload=spec.gantry.rail_preload,
+        block_type=spec.gantry.rail_block_type,
+        rail_quality=spec.gantry.rail_quality,
+        preload_fraction_override=spec.model_overrides.rail_preload.preload_fraction,
+        stiffness_mult_override=rail_qual["stiffness_mult"],
+        drag_mult_override=rail_qual["drag_mult"],
+    )
+    n_x_blocks = 2.0 if (spec.gantry.dual_x_rails or spec.gantry.x_rail_mount == "dual_top_bottom") else 1.0
+    n_y_blocks = 2.0 if spec.architecture in ("corexy", "cartesian_bedslinger") else 1.0
+    f_coulomb_x = n_x_blocks * float(rail_info_x["rolling_friction_n"] + rail_info_x["seal_drag_n"])
+    f_break_x = n_x_blocks * float(rail_info_x["breakaway_friction_n"])
+    f_coulomb_y = n_y_blocks * float(rail_info_y["rolling_friction_n"] + rail_info_y["seal_drag_n"])
+    f_break_y = n_y_blocks * float(rail_info_y["breakaway_friction_n"])
     v_str = 0.008
     v_eps = 0.0015
 
     bkt_mat = get_material(spec.gantry.bracket_material)
     e_bkt_eff = bkt_mat.effective_modulus_pa(spec.frame.chamber_temp_c)
+    cte_play_um, _ = compute_bearing_cte_clearance_um(spec, spec.frame.chamber_temp_c)
     idler_info = idler_shaft_and_bearing_stiffness(
         spec.gantry.belt,
         double_shear=spec.gantry.double_shear_pulleys,
         bracket_e_pa=e_bkt_eff,
+        radial_play_um_override=spec.model_overrides.bearing_clearance.radial_play_um,
+        thermal_clearance_um=cte_play_um,
     )
-    half_play_m = 0.5 * float(idler_info["bearing_play_um"]) * 1e-6
+    bearing_play_um = float(idler_info["bearing_play_um"])
+    tooth_backlash_um = _belt_tooth_backlash_um(spec)
+    reversal_backlash_um = bearing_play_um + tooth_backlash_um
+    half_play_xy_m = 0.5 * bearing_play_um * 1e-6
+    half_play_ab_m = (
+        0.5 * (0.35 * bearing_play_um + tooth_backlash_um) * 1e-6
+        if spec.architecture == "corexy"
+        else 0.0
+    )
+    if spec.architecture != "corexy":
+        half_play_xy_m += 0.5 * tooth_backlash_um * 1e-6
 
     if is_foc and cfg.mode_space_torque_ff:
         # Mode-space torque FF + AWD direction_split compensates quadrant reversal stiction & play
-        f_coulomb *= 0.55
-        f_break *= 0.55
-        half_play_m *= 0.70
+        f_coulomb_x *= 0.55
+        f_break_x *= 0.55
+        f_coulomb_y *= 0.55
+        f_break_y *= 0.55
+        half_play_xy_m *= 0.70
+        half_play_ab_m *= 0.70
 
     # Initialize state cleanly at phi = -pi/2: pos=(0, +R), vel=(+v_ball, 0)
     x_state = np.zeros(n_state, dtype=float)
@@ -587,11 +646,13 @@ def simulate_time_domain_metrology(
     x_state[idx_vx] = v_ball
     x_state[idx_vy] = 0.0
 
-    # Precompute contouring lag + ISO 5753 bearing radial play command sequence
+    # Precompute contouring lag + ISO 5753 bearing play (Cartesian X/Y + CoreXY A/B belt loops)
     u_trk_x = float(u_start[0])
     u_trk_y = float(u_start[1])
     bx_play = u_trk_x
-    by_play = u_trk_y - half_play_m
+    by_play = u_trk_y - half_play_xy_m
+    ba_play = bx_play + by_play
+    bb_play = bx_play - by_play
 
     a_t = A_d.T
     b_t = B_d.T
@@ -607,28 +668,46 @@ def simulate_time_domain_metrology(
     one_m_alpha = 1.0 - alpha_trk
     prev_sh_x = float(u_sh_x[0])
     prev_sh_y = float(u_sh_y[0])
+    use_ab_play = half_play_ab_m > 0.0
 
     for k in range(n_b):
         cur_sh_x = float(u_sh_x[k])
         cur_sh_y = float(u_sh_y[k])
         u_trk_x = one_m_alpha * u_trk_x + alpha_trk * cur_sh_x
         u_trk_y = one_m_alpha * u_trk_y + alpha_trk * cur_sh_y
-        if u_trk_x - bx_play > half_play_m:
-            bx_play = u_trk_x - half_play_m
-        elif bx_play - u_trk_x > half_play_m:
-            bx_play = u_trk_x + half_play_m
-        if u_trk_y - by_play > half_play_m:
-            by_play = u_trk_y - half_play_m
-        elif by_play - u_trk_y > half_play_m:
-            by_play = u_trk_y + half_play_m
+        if u_trk_x - bx_play > half_play_xy_m:
+            bx_play = u_trk_x - half_play_xy_m
+        elif bx_play - u_trk_x > half_play_xy_m:
+            bx_play = u_trk_x + half_play_xy_m
+        if u_trk_y - by_play > half_play_xy_m:
+            by_play = u_trk_y - half_play_xy_m
+        elif by_play - u_trk_y > half_play_xy_m:
+            by_play = u_trk_y + half_play_xy_m
+        if use_ab_play:
+            # CoreXY A/B belt-loop reversal play (reverses at 45°/135°/225°/315°)
+            ua_in = bx_play + by_play
+            ub_in = bx_play - by_play
+            if ua_in - ba_play > half_play_ab_m:
+                ba_play = ua_in - half_play_ab_m
+            elif ba_play - ua_in > half_play_ab_m:
+                ba_play = ua_in + half_play_ab_m
+            if ub_in - bb_play > half_play_ab_m:
+                bb_play = ub_in - half_play_ab_m
+            elif bb_play - ub_in > half_play_ab_m:
+                bb_play = ub_in + half_play_ab_m
+            px_out = 0.5 * (ba_play + bb_play)
+            py_out = 0.5 * (ba_play - bb_play)
+        else:
+            px_out = bx_play
+            py_out = by_play
         if tau_vff_foc > 0.0:
             vx_ff = (cur_sh_x - prev_sh_x) / dt if k > 0 else v_ball
             vy_ff = (cur_sh_y - prev_sh_y) / dt if k > 0 else 0.0
-            u_eff_arr[k, 0] = bx_play + tau_vff_foc * vx_ff
-            u_eff_arr[k, 1] = by_play + tau_vff_foc * vy_ff
+            u_eff_arr[k, 0] = px_out + tau_vff_foc * vx_ff
+            u_eff_arr[k, 1] = py_out + tau_vff_foc * vy_ff
         else:
-            u_eff_arr[k, 0] = bx_play
-            u_eff_arr[k, 1] = by_play
+            u_eff_arr[k, 0] = px_out
+            u_eff_arr[k, 1] = py_out
         prev_sh_x = cur_sh_x
         prev_sh_y = cur_sh_y
 
@@ -639,7 +718,8 @@ def simulate_time_domain_metrology(
     f_dist_vec = np.zeros(2, dtype=float)
     is_corexy = spec.architecture == "corexy"
     is_awd = is_corexy and coupled.n_mot == 4
-    f_delta = f_break - f_coulomb
+    f_delta_x = f_break_x - f_coulomb_x
+    f_delta_y = f_break_y - f_coulomb_y
     m_exp = math.exp
     m_tanh = math.tanh
     inv_v_str = 1.0 / v_str
@@ -650,8 +730,8 @@ def simulate_time_domain_metrology(
 
         vx = float(x_state[idx_vx])
         vy = float(x_state[idx_vy])
-        fx_fric = -(f_coulomb + f_delta * m_exp(-((vx * inv_v_str) ** 2))) * m_tanh(vx * inv_v_eps)
-        fy_fric = -(f_coulomb + f_delta * m_exp(-((vy * inv_v_str) ** 2))) * m_tanh(vy * inv_v_eps)
+        fx_fric = -(f_coulomb_x + f_delta_x * m_exp(-((vx * inv_v_str) ** 2))) * m_tanh(vx * inv_v_eps)
+        fy_fric = -(f_coulomb_y + f_delta_y * m_exp(-((vy * inv_v_str) ** 2))) * m_tanh(vy * inv_v_eps)
 
         if is_corexy:
             if is_awd:
@@ -709,6 +789,18 @@ def simulate_time_domain_metrology(
             spike_val = float(np.max(np.abs(e_r_um[win_spike] - base_val)))
             quad_glitches.append(spike_val)
     quadrant_glitch_um = max(quad_glitches) if quad_glitches else 0.0
+
+    # Measure 45° diagonal reversal glitch (CoreXY A/B belt & idler reversals at 45°, 135°, 225°, 315°)
+    diag_glitches: list[float] = []
+    for d_deg in (45.0, 135.0, 225.0, 315.0):
+        d_q = ((phi_rev - d_deg + 180.0) % 360.0) - 180.0
+        win_spike = (d_q >= -8.0) & (d_q <= 16.0)
+        win_base = ((d_q >= -24.0) & (d_q < -10.0)) | ((d_q > 18.0) & (d_q <= 28.0))
+        if np.any(win_spike) and np.any(win_base):
+            base_val = float(np.median(e_r_um[win_base]))
+            spike_val = float(np.max(np.abs(e_r_um[win_spike] - base_val)))
+            diag_glitches.append(spike_val)
+    diagonal_glitch_45deg_um = max(diag_glitches) if diag_glitches else 0.0
 
     # =========================================================================
     # Benchmark C: Multi-Segment Zig-Zag S-Curve (Klipper SCV Junction Deviation)
@@ -880,4 +972,8 @@ def simulate_time_domain_metrology(
         zigzag_residual_ringing_um=zigzag_residual_ringing_um,
         zigzag_unshaped_ringing_um=zigzag_unshaped_ringing_um,
         zigzag_trace=zigzag_trace,
+        diagonal_glitch_45deg_um=diagonal_glitch_45deg_um,
+        reversal_backlash_um=reversal_backlash_um,
+        rail_stiction_x_n=f_break_x,
+        rail_stiction_y_n=f_break_y,
     )

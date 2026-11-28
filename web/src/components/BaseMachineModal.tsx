@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { PresetItem } from "../types";
+import { ModelStatus, PresetItem } from "../types";
 
 export interface BaseMachineModalProps {
   open: boolean;
@@ -9,27 +9,49 @@ export interface BaseMachineModalProps {
   onClose: () => void;
 }
 
-const BASE_KIT_TABS: Array<{
-  id: string;
+const MODEL_TIER_TABS: Array<{
+  id: ModelStatus;
   label: string;
   subtitle: string;
+  pillClass: string;
 }> = [
   {
-    id: "siboor_kit",
-    label: "Siboor Kit",
-    subtitle: "CNC 6061 gantry, double-shear pulleys, MGN12/MGN9 rails & kit Z geometry",
+    id: "complete",
+    label: "Complete Models",
+    subtitle:
+      "Full CAD-backed real machines with dedicated gantry, toolhead, hotend & Z-mount superelements and PrintDB/benchmark validation.",
+    pillClass: "ok",
   },
   {
-    id: "ldo_kit",
-    label: "LDO Kit",
-    subtitle: "LDO Rev D matched rails, 2504AC steppers, umbilical & authentic Z spacing",
+    id: "wip_specific",
+    label: "WIP Specific Models",
+    subtitle:
+      "Named community & commercial machines that are partially modeled (e.g., borrowing gantry brackets or awaiting dedicated toolhead/frame CAD).",
+    pillClass: "warn",
   },
   {
-    id: "diy_build",
-    label: "DIY / Self-Sourced",
-    subtitle: "Stock printed Voron, Monolith custom builds, generic CoreXY, Bedslinger & Delta",
+    id: "generic_standin",
+    label: "Generic Stand-Ins",
+    subtitle:
+      "Parametric & procedural archetype baselines (CoreXY, Bedslinger, Delta) not tied to a single vendor CAD kit.",
+    pillClass: "",
   },
 ];
+
+const BASE_KIT_BADGE_LABELS: Record<string, string> = {
+  siboor: "Siboor Kit",
+  ldo: "LDO Kit",
+  diy: "DIY",
+  generic: "Generic",
+};
+
+function resolvePresetTier(p: PresetItem): ModelStatus {
+  const raw = p.model_status || p.category;
+  if (raw === "complete" || raw === "wip_specific" || raw === "generic_standin") {
+    return raw;
+  }
+  return "generic_standin";
+}
 
 export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
   open,
@@ -38,21 +60,19 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
   onSelectPreset,
   onClose,
 }) => {
-  const initialTab = (() => {
+  const initialTab = ((): ModelStatus => {
     const active = presets.find((p) => p.id === selectedPreset);
-    if (active?.category && BASE_KIT_TABS.some((t) => t.id === active.category)) {
-      return active.category;
-    }
-    return "siboor_kit";
+    if (active) return resolvePresetTier(active);
+    return "complete";
   })();
 
-  const [activeTab, setActiveTab] = useState<string>(initialTab);
+  const [activeTab, setActiveTab] = useState<ModelStatus>(initialTab);
 
   useEffect(() => {
     if (!open) return;
     const active = presets.find((p) => p.id === selectedPreset);
-    if (active?.category && BASE_KIT_TABS.some((t) => t.id === active.category)) {
-      setActiveTab(active.category);
+    if (active) {
+      setActiveTab(resolvePresetTier(active));
     }
   }, [open, presets, selectedPreset]);
 
@@ -67,14 +87,15 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
 
   if (!open) return null;
 
-  const visibleTabs = BASE_KIT_TABS.filter((tab) =>
-    presets.some((p) => (p.category || "diy_build") === tab.id)
+  const visibleTabs = MODEL_TIER_TABS.filter((tab) =>
+    presets.some((p) => resolvePresetTier(p) === tab.id)
   );
-  const currentTabId = visibleTabs.some((t) => t.id === activeTab)
+  const currentTabId: ModelStatus = visibleTabs.some((t) => t.id === activeTab)
     ? activeTab
-    : visibleTabs[0]?.id ?? "diy_build";
-  const currentTabMeta = visibleTabs.find((t) => t.id === currentTabId) ?? BASE_KIT_TABS[0];
-  const tabPresets = presets.filter((p) => (p.category || "diy_build") === currentTabId);
+    : visibleTabs[0]?.id ?? "complete";
+  const currentTabMeta =
+    visibleTabs.find((t) => t.id === currentTabId) ?? MODEL_TIER_TABS[0];
+  const tabPresets = presets.filter((p) => resolvePresetTier(p) === currentTabId);
 
   return (
     <div
@@ -93,13 +114,12 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
         <div className="modal-header">
           <div>
             <h2 id="base-kit-modal-title" className="modal-title">
-              What Is Your Machine Based On?
+              Choose a Base Machine
             </h2>
             <p className="base-kit-subtitle">
-              Pick your starting kit or DIY platform. PrintSim auto-configures the matching gantry
-              CAD kit, belt routing, rail types &amp; orientation, Z drive, bed mounts, and top
-              headroom — and you can upgrade any subsystem (like swapping to a Monolith LDO gantry)
-              afterward.
+              Browse by model fidelity: <strong>Complete Models</strong> with full CAD
+              superelements, <strong>WIP Specific Models</strong> still under active CAD
+              development, or <strong>Generic Stand-Ins</strong> for clean parametric baselines.
             </p>
           </div>
           <button
@@ -112,9 +132,9 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
           </button>
         </div>
 
-        <div className="base-kit-tabs" role="tablist" aria-label="Base machine kit family">
+        <div className="base-kit-tabs" role="tablist" aria-label="Model maturity tier">
           {visibleTabs.map((tab) => {
-            const count = presets.filter((p) => (p.category || "diy_build") === tab.id).length;
+            const count = presets.filter((p) => resolvePresetTier(p) === tab.id).length;
             const isActive = tab.id === currentTabId;
             return (
               <button
@@ -126,7 +146,9 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
                 onClick={() => setActiveTab(tab.id)}
               >
                 <span>{tab.label}</span>
-                <span className="badge-pill">{count}</span>
+                <span className={`badge-pill${tab.pillClass ? ` ${tab.pillClass}` : ""}`}>
+                  {count}
+                </span>
               </button>
             );
           })}
@@ -137,6 +159,7 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
         <div className="base-kit-grid" role="tabpanel">
           {tabPresets.map((p) => {
             const isSelected = p.id === selectedPreset;
+            const kitBadge = p.base_kit ? BASE_KIT_BADGE_LABELS[p.base_kit] : null;
             return (
               <button
                 key={p.id}
@@ -150,9 +173,19 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
               >
                 <div className="base-kit-card-head">
                   <span className="base-kit-card-title">{p.short_name || p.name}</span>
-                  {isSelected && <span className="badge-pill accent">Active</span>}
+                  <span className="badge-pill-row">
+                    {kitBadge && kitBadge !== "Generic" && (
+                      <span className="badge-pill">{kitBadge}</span>
+                    )}
+                    {isSelected && <span className="badge-pill accent">Active</span>}
+                  </span>
                 </div>
                 {p.description && <p className="base-kit-card-desc">{p.description}</p>}
+                {p.wip_notes && (
+                  <p className="base-kit-card-desc">
+                    <strong>WIP:</strong> {p.wip_notes}
+                  </p>
+                )}
                 {p.highlights && p.highlights.length > 0 ? (
                   <div className="base-kit-tags">
                     {p.highlights.map((tag) => (
@@ -171,9 +204,9 @@ export const BaseMachineModal: React.FC<BaseMachineModalProps> = ({
 
         <div className="base-kit-footer">
           <span className="base-kit-tip">
-            Tip: After starting, switch <strong>Gantry Kit / Upgrade</strong> in the Gantry section
-            to upgrade to Monolith × LDO CNC, Siboor CNC, or custom DIY parts with all coupled
-            settings updated automatically.
+            Tip: After starting, switch <strong>Gantry Kit / Upgrade</strong> in the Gantry
+            section or <strong>Toolhead Preset</strong> in the Toolhead section — each picker is
+            also grouped into Complete, WIP, and Generic options.
           </span>
           <button type="button" className="btn" onClick={onClose}>
             Keep Current Build
