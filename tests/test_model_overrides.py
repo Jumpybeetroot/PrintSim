@@ -993,7 +993,7 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
     assert zp_scores == {
         "static_eddy": 94,
         "klicky_inductive": 86,
-        "cnc_tap": 74,
+        "cnc_tap": 80,
         "printed_tap": 70,
     }
 
@@ -1114,14 +1114,14 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     assert "9,200 N/mm" in cbo_entry["active_values"]
     assert [x for x in cbo_entry["options_breakdown"] if x["active"]] == []
 
-    # Z-probe: static_eddy -> 94%, klicky_inductive -> 86%, cnc_tap -> 74%, printed_tap -> 70%
+    # Z-probe: static_eddy -> 94%, klicky_inductive -> 86%, cnc_tap -> 80%, printed_tap -> 70%
     assert _by_id(spec)["z_probe"]["trust_pct"] == 94
     s_klicky = spec.model_copy(deep=True)
     s_klicky.toolhead.z_probe_type = "klicky_inductive"
     assert _by_id(s_klicky)["z_probe"]["trust_pct"] == 86
     s_cnc_tap = spec.model_copy(deep=True)
     s_cnc_tap.toolhead.z_probe_type = "cnc_tap"
-    assert _by_id(s_cnc_tap)["z_probe"]["trust_pct"] == 74
+    assert _by_id(s_cnc_tap)["z_probe"]["trust_pct"] == 80
     s_tap = spec.model_copy(deep=True)
     s_tap.toolhead.z_probe_type = "printed_tap"
     assert _by_id(s_tap)["z_probe"]["trust_pct"] == 70

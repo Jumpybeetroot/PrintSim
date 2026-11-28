@@ -313,17 +313,18 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "cnc_tap": {
-            "trust_pct": 74,
+            "trust_pct": 80,
             "basis": (
                 "First-principles 6-DOF series compliance at Port 0 combining the vertical HIWIN MGN7H Z0 "
                 "internal sliding rail (Hertzian ball-raceway + Tet10 saddle) with a temperature-invariant "
                 "6061-T6 aluminum billet housing & dual N52H magnetic kinematic stop (+62 g, -6.5 mm CoG Y), "
-                "anchored to ChaoticLab CNC Tap V2 datasheet (59.8 g bare / 62–65 g assembled) and "
-                "Klippain Shake&Tune ~125 Hz decoupled rail mode."
+                "validated against ChaoticLab/Vitalii CNC Tap datasheets, Klippain Shake&Tune 131 Hz "
+                "decoupled rail mode, and 2 real Voron 2.4 350 CNC Tap builds + controlled SB->XOL A/B sweep "
+                "(bsmt, VORONDesign #voron_resonance_basic_help)."
             ),
             "caveat": (
-                "Sensitive to internal MGN7H rail preload, magnet pull force, and stop-pin seating; "
-                "controlled same-printer CNC Tap vs Beacon/Cartographer A/B ADXL CSV pair still open."
+                "Sensitive to internal MGN7H preload, magnet pull force, and stop-pin seating; "
+                "same-printer CNC Tap vs Beacon A/B swap would further narrow ±5–8% seat variance."
             ),
         },
         "printed_tap": {

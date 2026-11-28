@@ -1,32 +1,32 @@
 {
-  "generated_at": "2026-11-28T17:19:44+00:00",
+  "generated_at": "2026-11-28T17:40:41+00:00",
   "manifest_version": 1,
   "summary": {
     "all": {
-      "machines_evaluated": 37,
-      "axes_evaluated": 65,
-      "x_mape_pct": 10.33,
-      "y_mape_pct": 9.11,
-      "overall_mape_pct": 9.68,
-      "x_mean_signed_error_pct": -0.82,
-      "y_mean_signed_error_pct": 1.16,
+      "machines_evaluated": 39,
+      "axes_evaluated": 69,
+      "x_mape_pct": 9.92,
+      "y_mape_pct": 8.86,
+      "overall_mape_pct": 9.35,
+      "x_mean_signed_error_pct": -1.0,
+      "y_mean_signed_error_pct": 0.86,
       "max_abs_error_pct": 36.85,
-      "within_10pct": 38,
-      "within_15pct": 50,
-      "within_20pct": 58
+      "within_10pct": 42,
+      "within_15pct": 54,
+      "within_20pct": 62
     },
     "tier1": {
-      "machines_evaluated": 35,
-      "axes_evaluated": 61,
-      "x_mape_pct": 10.47,
-      "y_mape_pct": 9.58,
-      "overall_mape_pct": 9.99,
-      "x_mean_signed_error_pct": -1.47,
-      "y_mean_signed_error_pct": 1.15,
+      "machines_evaluated": 37,
+      "axes_evaluated": 65,
+      "x_mape_pct": 10.02,
+      "y_mape_pct": 9.29,
+      "overall_mape_pct": 9.63,
+      "x_mean_signed_error_pct": -1.63,
+      "y_mean_signed_error_pct": 0.83,
       "max_abs_error_pct": 36.85,
-      "within_10pct": 35,
-      "within_15pct": 46,
-      "within_20pct": 54
+      "within_10pct": 39,
+      "within_15pct": 50,
+      "within_20pct": 58
     },
     "tier2": {
       "machines_evaluated": 2,
@@ -41,9 +41,9 @@
       "within_15pct": 4,
       "within_20pct": 4
     },
-    "sweeps_evaluated": 17,
-    "sweeps_direction_match": 17,
-    "sweeps_ratio_mape_pct": 3.06
+    "sweeps_evaluated": 19,
+    "sweeps_direction_match": 19,
+    "sweeps_ratio_mape_pct": 3.45
   },
   "machines": [
     {
@@ -622,6 +622,56 @@
       "predicted_max_accel_mm_s2": 4600.0
     },
     {
+      "id": "voron_24_350_cnctap_sb_bsmt",
+      "name": "Voron 2.4 350 + Vitalii CNC Tap + StealthBurner (bsmt)",
+      "tier": 1,
+      "architecture": "corexy",
+      "base_preset": "corexy_voron_style.yaml",
+      "source": "VORONDesign Discord #voron_resonance_basic_help (bsmt, 2024-12-21, thread 1320123565785223288)",
+      "x_shaper": "MZV",
+      "matched_x_shaper": "MZV",
+      "measured_x_hz": 49.8,
+      "predicted_x_hz": 49.38,
+      "predicted_x_eff_hz": 47.14,
+      "x_error_pct": -0.85,
+      "y_shaper": "RAW",
+      "matched_y_shaper": "RAW",
+      "measured_y_hz": 36.0,
+      "predicted_y_hz": 33.14,
+      "predicted_y_eff_hz": 33.14,
+      "y_error_pct": -7.94,
+      "measured_xy_ratio": 1.383,
+      "predicted_xy_ratio": 1.49,
+      "predicted_rec_x": "MZV@49.4",
+      "predicted_rec_y": "MZV@35.0",
+      "predicted_max_accel_mm_s2": 3600.0
+    },
+    {
+      "id": "voron_24_350_cnctap_xol_bsmt",
+      "name": "Voron 2.4 350 + Vitalii CNC Tap + XOL Umbilical (bsmt)",
+      "tier": 1,
+      "architecture": "corexy",
+      "base_preset": "corexy_voron_style.yaml",
+      "source": "VORONDesign Discord #voron_resonance_basic_help (bsmt, 2025-08-28, msg 1410449166915600456)",
+      "x_shaper": "MZV",
+      "matched_x_shaper": "MZV",
+      "measured_x_hz": 55.4,
+      "predicted_x_hz": 51.69,
+      "predicted_x_eff_hz": 49.48,
+      "x_error_pct": -6.7,
+      "y_shaper": "MZV",
+      "matched_y_shaper": "MZV",
+      "measured_y_hz": 38.0,
+      "predicted_y_hz": 37.66,
+      "predicted_y_eff_hz": 36.47,
+      "y_error_pct": -0.9,
+      "measured_xy_ratio": 1.458,
+      "predicted_xy_ratio": 1.373,
+      "predicted_rec_x": "MZV@51.7",
+      "predicted_rec_y": "ZV@36.7",
+      "predicted_max_accel_mm_s2": 5100.0
+    },
+    {
       "id": "voron_24_350_squiidz",
       "name": "Voron 2.4 350 Flying Gantry 0.9deg (squiidz)",
       "tier": 1,
@@ -1176,6 +1226,30 @@
       "ratio_error_pct": -4.54,
       "direction_match": true,
       "source": "Yak pinned #panels-and-frame before/after panel test"
+    },
+    {
+      "id": "bsmt_v24_350_cnctap_sb_to_xol_x",
+      "name": "bsmt V2.4 350 CNC Tap: StealthBurner+Chains -> XOL+Umbilical (X-axis)",
+      "axis": "X",
+      "baseline_machine": "voron_24_350_cnctap_sb_bsmt",
+      "variant_machine": "voron_24_350_cnctap_xol_bsmt",
+      "measured_ratio": 1.112,
+      "predicted_ratio": 1.047,
+      "ratio_error_pct": -5.85,
+      "direction_match": true,
+      "source": "VORONDesign #voron_resonance_basic_help bsmt 2024-12-21 -> 2025-08-28"
+    },
+    {
+      "id": "bsmt_v24_350_cnctap_sb_to_xol_y",
+      "name": "bsmt V2.4 350 CNC Tap: StealthBurner+Chains -> XOL+Umbilical (Y-axis)",
+      "axis": "Y",
+      "baseline_machine": "voron_24_350_cnctap_sb_bsmt",
+      "variant_machine": "voron_24_350_cnctap_xol_bsmt",
+      "measured_ratio": 1.056,
+      "predicted_ratio": 1.136,
+      "ratio_error_pct": 7.58,
+      "direction_match": true,
+      "source": "VORONDesign #voron_resonance_basic_help bsmt 2024-12-21 -> 2025-08-28"
     }
   ]
 }
