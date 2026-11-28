@@ -62,6 +62,10 @@
 - [x] **CAL-14 · Clip-In Enclosure Panels (`68%` → `80%`)** — *Frame (`enclosure_panels`)*
   - **New score:** Clip-in PMMA / Polycarbonate (**`80%`**). Calibrated ASTM D1056 closed-cell EPDM foam tape + ABS quarter-turn clip perimeter stiffness density (`clip_gasket_stiffness_per_m`) against same-printer panels-OFF vs clip-in 3 mm PMMA Voron 2.4r2 / Trident ADXL logs.
 
+- [ ] **CAL-16 · Pressure-Advance & Filament-Path Compliance (`55%` → target `>= 80%`)** — *Hotend (`pressure_advance`)*
+  - **Current state:** First-principles zero-fit series compliance (`thermal/pressure_advance.py`: solid filament column `L/(E·A)` + PTFE Bowden tube stretch + confined melt via ABS two-domain Tait bulk modulus proxy) coupled to Cross-WLF + Graetz `F(v)` (`K = C·F(v)/v`). Predictions are an honest lower bound (`~0.020 s` PLA direct drive vs Klipper's documented `0.050–1.000 s` range) because guide-clearance bowing, drive-gear tooth indentation, Bowden capstan friction, and heated-chamber softening are not yet modeled, and the `50 mm` direct-drive path length is an assumed default.
+  - **How to raise to `>= 80%`:** Collect real tuned Klipper PA (`pressure_advance`, nozzle, hotend, extruder, filament, temperature, volumetric flow) touchstones across direct-drive and Bowden printers (persisted to PrintDB), add per-polymer Tait PVT sets where published, measure real extruder-nip-to-heatbreak path lengths for catalog toolheads, and add first-principles gear-indentation / guide-bowing compliance terms without empirical fudge factors.
+
 ---
 
 ### Tier 3 — Final Polish to 80%+ (`76%`)

@@ -4841,6 +4841,53 @@ export const MetricsPanel: React.FC<Props> = ({
                   )}
                 </div>
               )}
+              {sim.pressure_advance && (() => {
+                const pa = sim.pressure_advance;
+                return (
+                  <div className="sub-block">
+                    <div className="sub-block-title">
+                      <span>Pressure Advance ({pa.extruder_type === "bowden" ? "Bowden" : "Direct Drive"})</span>
+                      <span className={`badge-pill ${pa.straight_column_valid ? "info" : "warn"}`}>
+                        {pa.straight_column_valid
+                          ? `${pa.reference_flow_mm3_s.toFixed(0)} mm³/s`
+                          : "Buckling Risk"}
+                      </span>
+                    </div>
+                    <div
+                      className="metric-kv"
+                      title={`Secant K = ${pa.pressure_advance_s.toFixed(4)} s · Tangent dA/dv = ${pa.pressure_advance_tangent_s.toFixed(4)} s · Compliance ${pa.system_compliance_um_per_n.toFixed(1)} µm/N (column ${pa.filament_column_compliance_um_per_n.toFixed(1)}, tube ${pa.bowden_tube_compliance_um_per_n.toFixed(1)}, melt ${pa.melt_compliance_um_per_n.toFixed(1)}) · Push ${pa.push_force_at_reference_n.toFixed(1)} N`}
+                    >
+                      <span>Predicted Klipper K (lower bound)</span>
+                      <span className={`metric-val ${pa.straight_column_valid ? "" : "tag-warn"}`}>
+                        {pa.pressure_advance_s.toFixed(4)} s
+                      </span>
+                    </div>
+                    <div
+                      className="metric-kv"
+                      title={`Stored compression ${pa.stored_filament_compression_mm.toFixed(3)} mm · Melt bulk modulus ${pa.melt_bulk_modulus_mpa.toFixed(0)} MPa (${pa.melt_bulk_modulus_source})`}
+                    >
+                      <span>Ooze / Depressurisation</span>
+                      <span className="metric-val">
+                        {pa.ooze_volume_mm3.toFixed(2)} mm³ · {pa.depressurization_time_s.toFixed(3)} s
+                      </span>
+                    </div>
+                    <div
+                      className="metric-kv"
+                      title={`Includes ${pa.bowden_slack_mm.toFixed(2)} mm Bowden slack · Extruder velocity spike at ${Math.round(pa.reference_accel_mm_s2)} mm/s²`}
+                    >
+                      <span>Retraction Floor / PA Spike</span>
+                      <span className="metric-val">
+                        {pa.min_retraction_mm.toFixed(2)} mm · +{pa.pa_extruder_velocity_spike_mm_s.toFixed(1)} mm/s
+                      </span>
+                    </div>
+                    {pa.warnings.length > 0 && (
+                      <div className="hint-line tag-warn" style={{ marginTop: 4 }}>
+                        {pa.warnings[0]}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {axPts.length > 0 && (
                 <svg viewBox="0 0 260 68" style={{ width: "100%", height: 68, marginTop: 4 }}>
                   <rect x="0" y="0" width="260" height="68" rx="4" fill="#0d131d" />

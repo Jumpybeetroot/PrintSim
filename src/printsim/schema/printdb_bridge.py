@@ -378,7 +378,7 @@ FILAMENT_PRINTDB_MAP: dict[str, str] = {
 
 
 def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
-    """Overlay PrintDB polymer density onto all matching ``FILAMENT_CATALOG`` entries."""
+    """Overlay PrintDB polymer density and solid tensile modulus onto ``FILAMENT_CATALOG`` entries."""
     mapping = FILAMENT_PRINTDB_MAP
     for key, rid in mapping.items():
         if key not in catalog:
@@ -389,6 +389,8 @@ def hydrate_filament_catalog(catalog: dict[str, Any]) -> None:
         fil = catalog[key]
         if si.get("density_kg_per_m3") is not None:
             fil.density_kg_m3 = float(si["density_kg_per_m3"])
+        if si.get("tensile_modulus_pa") is not None and hasattr(fil, "youngs_modulus_pa"):
+            fil.youngs_modulus_pa = float(si["tensile_modulus_pa"])
         # Note: keep PrintSim's calibrated melt-zone thermal_conductivity_w_mk and Tg
         # (e.g. PLA Tg=58 C, ABS/ASA k=0.18 W/mK) used by Graetz flow benchmarks.
 

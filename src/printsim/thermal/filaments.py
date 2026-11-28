@@ -80,6 +80,14 @@ class FilamentSpec(BaseModel):
     bagley_factor: float = Field(
         3.0, ge=0.0, le=12.0, description="Viscoelastic / extensional Bagley entry-loss factor e_B"
     )
+    youngs_modulus_pa: float = Field(
+        2.5e9,
+        gt=1.0e6,
+        description=(
+            "Room-temperature tensile modulus E of the solid filament (Pa); sets the axial "
+            "compliance of the filament column between drive gear and melt zone"
+        ),
+    )
 
     @property
     def effective_heat_creep_temp_c(self) -> float:
@@ -95,6 +103,7 @@ class FilamentSpec(BaseModel):
 FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     "pla": FilamentSpec(
         id="pla",
+        youngs_modulus_pa=3.5e9,  # PrintDB pla tensile_modulus_mpa
         name="PLA (Standard High-Speed)",
         print_temp_c=215.0,
         bed_temp_c=60.0,
@@ -128,6 +137,7 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     ),
     "petg": FilamentSpec(
         id="petg",
+        youngs_modulus_pa=2.1e9,  # PrintDB petg tensile_modulus_mpa
         name="PETG (Functional Structural)",
         print_temp_c=245.0,
         bed_temp_c=80.0,
@@ -160,6 +170,7 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     ),
     "abs": FilamentSpec(
         id="abs",
+        youngs_modulus_pa=2.1e9,  # PrintDB abs tensile_modulus_mpa
         name="ABS (Voron / Enclosed Parts)",
         print_temp_c=255.0,
         bed_temp_c=105.0,
@@ -192,6 +203,7 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     ),
     "asa": FilamentSpec(
         id="asa",
+        youngs_modulus_pa=2.2e9,  # PrintDB asa tensile_modulus_mpa
         name="ASA (UV-Resistant Structural)",
         print_temp_c=260.0,
         bed_temp_c=105.0,
@@ -223,6 +235,7 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     ),
     "pa12_cf": FilamentSpec(
         id="pa12_cf",
+        youngs_modulus_pa=6.2e9,  # PrintDB pa12_cf tensile_modulus_mpa
         name="PA12-CF15 (Carbon Nylon)",
         print_temp_c=285.0,
         bed_temp_c=100.0,
@@ -255,6 +268,7 @@ FILAMENT_CATALOG: dict[str, FilamentSpec] = {
     ),
     "tpu_95a": FilamentSpec(
         id="tpu_95a",
+        youngs_modulus_pa=2.6e7,  # PrintDB tpu_95a tensile_modulus_mpa
         name="TPU 95A (Flexible Elastomer)",
         print_temp_c=230.0,
         bed_temp_c=50.0,
