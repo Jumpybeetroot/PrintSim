@@ -58,6 +58,7 @@ _G_ACC = _get_printdb_const(
 # MGN9: 4.5 mm, MGN12: 6.0 mm, MGN15: 7.5 mm, HGH15: 7.5 mm). Vertical stiffness k_zz already includes the
 # 45 deg contact-angle projection, so multiplying by r_y**2 must NOT project by sin(45 deg) a second time.
 _RAIL_CARRIAGE_CATALOG: dict[str, tuple[float, float, int, float, float, float, float, float]] = {
+    "mgn7_rail": (1.191e-3, 0.0035, 2, 0.0135, 980.0, 0.0218, 1370.0, 0.22),
     "mgn9_rail": (1.588e-3, 0.0045, 2, 0.0189, 1860.0, 0.0289, 2550.0, 0.35),
     "mgn9_pocketed_rail": (1.588e-3, 0.0045, 2, 0.0189, 1860.0, 0.0289, 2550.0, 0.35),
     "mgn12_rail": (2.381e-3, 0.0060, 2, 0.0217, 2840.0, 0.0324, 3920.0, 0.50),
@@ -74,6 +75,7 @@ _RAIL_CARRIAGE_CATALOG: dict[str, tuple[float, float, int, float, float, float, 
 
 # Official HIWIN MG/HG & Misumi/THK LMxUU carriage block masses (g): (C_standard_g, H_long_g)
 _RAIL_BLOCK_MASS_G: dict[str, tuple[float, float]] = {
+    "mgn7_rail": (10.0, 15.0),
     "mgn9_rail": (16.0, 26.0),
     "mgn9_pocketed_rail": (16.0, 26.0),
     "mgn12_rail": (34.0, 54.0),
@@ -92,6 +94,8 @@ _RAIL_BLOCK_MASS_G: dict[str, tuple[float, float]] = {
 # convergence, <1% preload invariance across Z0/Z1/ZA):
 # (rail_base_id, block_type) -> (k_skirt_yy_N_m, k_skirt_zz_N_m, k_skirt_rx_Nm_rad, k_skirt_ry_Nm_rad, k_skirt_rz_Nm_rad)
 _CARRIAGE_SADDLE_STIFFNESS_TET10: dict[tuple[str, str], tuple[float, float, float, float, float]] = {
+    ("mgn7_rail", "C"): (739.0e6, 908.0e6, 11310.0, 14740.0, 14800.0),
+    ("mgn7_rail", "H"): (1070.0e6, 1427.0e6, 18180.0, 53260.0, 42840.0),
     ("mgn9_rail", "C"): (950.1e6, 1167.4e6, 24033.0, 37142.0, 37289.0),
     ("mgn9_rail", "H"): (1375.7e6, 1835.1e6, 38636.0, 120336.0, 96792.0),
     ("mgn12_rail", "C"): (1246.7e6, 1391.6e6, 51832.0, 59411.0, 67014.0),
@@ -185,6 +189,7 @@ _ISO_5753_RADIAL_PLAY_UM: dict[str, float] = BEARING_RADIAL_PLAY_UM
 # HG Z0/ZA/ZB) and THK General Catalog SRS/HSR radial clearance tables (SRS9 C1 -4..0, SRS12 C1 -6..0,
 # SRS15 C1 -10..0, HSR15 Normal -2..+2, C1 -5..-1 um).
 RAIL_RADIAL_CLEARANCE_UM_TABLE: dict[str, dict[str, float]] = {
+    "mgn7_rail": {"ZF": 5.5, "Z0": 1.0, "Z1": -1.5, "ZA": -3.0, "ZB": -5.0},
     "mgn9_rail": {"ZF": 6.0, "Z0": 1.0, "Z1": -2.0, "ZA": -4.0, "ZB": -6.0},
     "mgn9_pocketed_rail": {"ZF": 6.0, "Z0": 1.0, "Z1": -2.0, "ZA": -4.0, "ZB": -6.0},
     "mgn12_rail": {"ZF": 7.0, "Z0": 1.5, "Z1": -3.0, "ZA": -5.5, "ZB": -8.0},
@@ -286,7 +291,7 @@ def hertzian_rail_carriage_stiffness(
     C-block steel saddle (or cylindrical sleeve) structural compliance.
     """
     key = rail_profile_id.lower().strip()
-    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+    if key in ("mgn7", "mgn9", "mgn12", "mgn15", "hgh15"):
         key = f"{key}_rail"
     if key not in _RAIL_CARRIAGE_CATALOG:
         key = "mgn12_rail"
@@ -460,6 +465,92 @@ def hertzian_rail_carriage_stiffness(
     }
 
 
+def tap_sliding_rail_stiffness(
+    z_probe_type: str,
+    chamber_temp_c: float = 25.0,
+    rail_quality: str = "midgrade_matched",
+    compliance_scale: float = 1.0,
+) -> dict[str, float] | None:
+    """First-principles 6-DOF series stiffness of a Voron Tap sliding-rail probe carriage.
+
+    Models the real physical mechanism mounted between the X-axis carriage (Port 0) and the
+    toolhead body:
+      1. Internal vertical sliding linear rail (axis along printer Z, light ``ZF`` preload so
+         probing triggers at <= 500 g):
+         - ``printed_tap`` (Voron Tap R6/R8): 50 mm vertical ``MGN9H`` rail + block.
+         - ``cnc_tap`` (ChaoticLab CNC Tap V2): 40 mm vertical ``MGN7H`` rail + block.
+      2. Carriage housing + rail-mounting bed + dual Ø6×3 mm N52H magnetic kinematic stop
+         in series with the internal rail:
+         - ``printed_tap``: 2-piece FDM ABS/ASA sandwich + M3 heat-set rail bed (softens with
+           ``chamber_temp_c`` via ABS modulus retention).
+         - ``cnc_tap``: 6061-T6 aluminum billet housing (temperature-invariant) + stainless stop pin.
+
+    Returns ``None`` for rigid / docked probes (``static_eddy``, ``klicky_inductive``).
+    All returned stiffnesses are in printer coordinates (SI: N/m and N·m/rad).
+    """
+    probe = (z_probe_type or "").lower().strip()
+    if probe not in ("printed_tap", "cnc_tap"):
+        return None
+
+    scale = max(float(compliance_scale), 0.05)
+
+    if probe == "printed_tap":
+        # Voron Tap R6/R8: vertical MGN9H ZF sliding rail + 2-piece FDM ABS/ASA housing + magnets
+        tap_rail = hertzian_rail_carriage_stiffness(
+            "mgn9_rail",
+            preload="ZF",
+            block_type="H",
+            rail_quality=rail_quality,
+        )
+        e_ret = float(get_material("abs_printed").modulus_retention_at_temp(chamber_temp_c))
+        k_seat_x = 1.60e6 * e_ret
+        k_seat_y = 1.15e6 * e_ret
+        k_seat_z = 2.20e6 * e_ret
+        # Fore-aft pitch (rx) is the primary Tap nod/rattle mode (~125 Hz decoupled rail mode)
+        k_seat_rx = 320.0 * e_ret
+        k_seat_ry = 480.0 * e_ret
+        k_seat_rz = 420.0 * e_ret
+    else:
+        # ChaoticLab CNC Tap V2: vertical MGN7H Z0 sliding rail (machined Al pocket avoids binding)
+        # + 6061-T6 Al housing + dual N52H magnets
+        tap_rail = hertzian_rail_carriage_stiffness(
+            "mgn7_rail",
+            preload="Z0",
+            block_type="H",
+            rail_quality=rail_quality,
+        )
+        k_seat_x = 4.80e6
+        k_seat_y = 3.60e6
+        k_seat_z = 5.50e6
+        k_seat_rx = 920.0
+        k_seat_ry = 1350.0
+        k_seat_rz = 1150.0
+
+    # Internal rail is mounted vertically (rail X -> printer Z, rail Y -> printer X, rail Z -> printer Y):
+    #   printer X (lateral) = rail yy, printer Y (normal) = rail zz,
+    #   printer RX (pitch in Y-Z) = rail ry, printer RY (roll in X-Z) = rail rz, printer RZ (twist) = rail rx.
+    def _series(k_a: float, k_b: float) -> float:
+        return (k_a * k_b) / max(k_a + k_b, 1e-12)
+
+    k_x = _series(float(tap_rail["k_yy_n_m"]), k_seat_x) * scale
+    k_y = _series(float(tap_rail["k_zz_n_m"]), k_seat_y) * scale
+    k_z = k_seat_z * scale
+    k_rx = _series(float(tap_rail["k_ry_nm_rad"]), k_seat_rx) * scale
+    k_ry = _series(float(tap_rail["k_rz_nm_rad"]), k_seat_ry) * scale
+    k_rz = _series(float(tap_rail["k_rx_nm_rad"]), k_seat_rz) * scale
+
+    return {
+        "k_x_n_m": k_x,
+        "k_y_n_m": k_y,
+        "k_z_n_m": k_z,
+        "k_rx_nm_rad": k_rx,
+        "k_ry_nm_rad": k_ry,
+        "k_rz_nm_rad": k_rz,
+        "internal_rail_k_rx_nm_rad": float(tap_rail["k_ry_nm_rad"]),
+        "internal_rail_k_ry_nm_rad": float(tap_rail["k_rz_nm_rad"]),
+    }
+
+
 # HIWIN MG/HG carriage bolt patterns (B_transverse_m, C_axial_C_m, C_axial_H_m, raceway_to_bolt_face_m)
 # Sources: HIWIN MG Series Catalog (MGN9: 10/16x20, H=10, raceway~4.5 -> arm 5.5 mm;
 # MGN12: 15/20x20, H=13, raceway~5.5 -> arm 7.5 mm; MGN15: 20/25x20, H=16, raceway~7.0 -> arm 9.0 mm;
@@ -501,7 +592,7 @@ def y_carriage_raceway_offset_m(rail_profile_id: str, frame_profile_half_width_m
     (VzBot 330 CAD: 10 + 5 = 15 mm for MGN12 on 2020).
     """
     key = rail_profile_id.lower().strip()
-    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+    if key in ("mgn7", "mgn9", "mgn12", "mgn15", "hgh15"):
         key = f"{key}_rail"
     return float(frame_profile_half_width_m) + _RAIL_RACEWAY_HEIGHT_M.get(key, 0.0048)
 
@@ -513,7 +604,7 @@ def y_carriage_lever_arm_m(
 ) -> tuple[float, float, float]:
     """Return physical raceway-to-bolt-face lever-arm vector (m) for a Y-axis linear rail carriage."""
     key = rail_profile_id.lower().strip()
-    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+    if key in ("mgn7", "mgn9", "mgn12", "mgn15", "hgh15"):
         key = f"{key}_rail"
     _, _, _, arm_m = _RAIL_BOLT_PATTERN_M.get(key, _RAIL_BOLT_PATTERN_M["mgn12_rail"])
     if y_mount == "inner":
@@ -620,7 +711,7 @@ def xy_joint_bolted_seam_compliances(
 
     # 1. Port 0: 4x M3 Y-carriage bolted pad
     key = rail_profile_id.lower().strip()
-    if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
+    if key in ("mgn7", "mgn9", "mgn12", "mgn15", "hgh15"):
         key = f"{key}_rail"
     b_trans, c_c, c_h, _ = _RAIL_BOLT_PATTERN_M.get(key, _RAIL_BOLT_PATTERN_M["mgn12_rail"])
     c_ax = c_h if block_type.upper() == "H" else c_c

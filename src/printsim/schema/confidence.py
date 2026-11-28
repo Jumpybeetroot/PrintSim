@@ -313,27 +313,31 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "cnc_tap": {
-            "trust_pct": 56,
+            "trust_pct": 74,
             "basis": (
-                "Lumped sliding-rail pitch knockdown (0.58×, +62 g, -6.5 mm CoG Y) matched to community "
-                "CNC Tap ADXL drops (~12–20 Hz vs Beacon), ChaoticLab CNC Tap V2 datasheet (59.8 g bare / "
-                "62–65 g assembled, internal MGN7H rail), and Klippain Shake&Tune ~125 Hz decoupled rail mode."
+                "First-principles 6-DOF series compliance at Port 0 combining the vertical HIWIN MGN7H Z0 "
+                "internal sliding rail (Hertzian ball-raceway + Tet10 saddle) with a temperature-invariant "
+                "6061-T6 aluminum billet housing & dual N52H magnetic kinematic stop (+62 g, -6.5 mm CoG Y), "
+                "anchored to ChaoticLab CNC Tap V2 datasheet (59.8 g bare / 62–65 g assembled) and "
+                "Klippain Shake&Tune ~125 Hz decoupled rail mode."
             ),
             "caveat": (
-                "Depends strongly on internal MGN7H/MGN9H rail preload, magnet pull force, and optical trigger "
-                "clearance; controlled same-printer before/after Discord A/B ADXL pair still open."
+                "Sensitive to internal MGN7H rail preload, magnet pull force, and stop-pin seating; "
+                "controlled same-printer CNC Tap vs Beacon/Cartographer A/B ADXL CSV pair still open."
             ),
         },
         "printed_tap": {
-            "trust_pct": 48,
+            "trust_pct": 70,
             "basis": (
-                "Lumped printed ABS/ASA Tap carriage knockdown (0.34×, +78 g, -8.5 mm CoG Y) matched to "
-                "community Printed Tap ADXL drops (~18–30 Hz), Voron Tap R6/R8 (+50 g net, 50 mm MGN9H), "
-                "Shake&Tune ~125 Hz secondary mode, and Formbot Trident R2 + Tap KB CSV (51.8 Hz Y-to-Z peak)."
+                "First-principles 6-DOF series compliance at Port 0 combining the vertical HIWIN MGN9H ZF "
+                "internal sliding rail (Hertzian ball-raceway + Tet10 saddle) with a chamber-temperature-"
+                "softening FDM ABS/ASA carriage sandwich & dual N52H magnetic kinematic stop (+78 g, "
+                "-8.5 mm CoG Y), validated against 3 real Voron Tap builds in shaper_benchmarks.yaml "
+                "(Formbot Trident R2 -1.5% Y err, Voron 2.4 300 -4.6% Y err) and stealthburner_tap Tet4 CMS (85%)."
             ),
             "caveat": (
-                "Severe scatter across print stiffness, rail preload wear, magnet seating, and chamber thermal "
-                "softening; controlled same-printer before/after Discord A/B ADXL pair still open."
+                "Build-to-build scatter across print infill, heat-set rail bed, rail preload wear, and "
+                "magnet seating; controlled same-printer Printed Tap vs Beacon A/B ADXL CSV pair still open."
             ),
         },
     },

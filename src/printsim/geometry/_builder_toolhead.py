@@ -152,6 +152,13 @@ def compute_toolhead_link_props(
     """
     probe_cfg = resolve_z_probe(spec)
     probe_comp = float(probe_cfg["compliance_factor"])
+    probe_base_comp = max(float(probe_cfg["baseline_compliance_factor"]), 1e-6)
+    probe_type = (getattr(spec.toolhead, "z_probe_type", None) or "static_eddy").lower().strip()
+    is_sliding_tap = probe_type in ("printed_tap", "cnc_tap")
+    # For rigid/docked probes, apply any mild catalog or user-override scalar to the carriage mount;
+    # for sliding-rail Tap probes, model the internal vertical MGN9H/MGN7H rail + magnetic seat in series
+    # instead of smearing a heuristic knockdown across the toolhead body and hotend clamp.
+    non_tap_probe_comp = 1.0 if is_sliding_tap else probe_comp
     chamber_c = spec.frame.chamber_temp_c
 
     car_mat = get_material(spec.toolhead.effective_carriage_mount_material)
@@ -161,13 +168,13 @@ def compute_toolhead_link_props(
     e_car = (
         car_mat.effective_modulus_pa(chamber_c)
         * float(car_mat.bolted_joint_stiffness_factor)
-        * probe_comp
+        * non_tap_probe_comp
     )
-    e_body = body_mat.effective_modulus_pa(chamber_c) * probe_comp
+    e_body = body_mat.effective_modulus_pa(chamber_c) * non_tap_probe_comp
     e_hm = (
         hm_mat.effective_modulus_pa(chamber_c)
         * float(hm_mat.bolted_joint_stiffness_factor)
-        * probe_comp
+        * non_tap_probe_comp
     )
     body_retention = body_mat.modulus_retention_at_temp(chamber_c)
 
@@ -302,6 +309,26 @@ def compute_toolhead_link_props(
     k_plate_t = 2.4e6 * car_ratio * r_car
     k_plate_rot_y = 1160.0 * car_ratio * (r_car**2.4)
     k_plate_rot_z = k_plate_rot_y if is_axisymmetric else 4500.0 * car_ratio * (r_car**2.4)
+
+    tap_stiff = None
+    if is_sliding_tap:
+        from printsim.fea.components import tap_sliding_rail_stiffness
+
+        tap_stiff = tap_sliding_rail_stiffness(
+            probe_type,
+            chamber_temp_c=chamber_c,
+            rail_quality=spec.gantry.rail_quality,
+            compliance_scale=probe_comp / probe_base_comp,
+        )
+    if tap_stiff is not None:
+        k_tap_t = 0.5 * (tap_stiff["k_x_n_m"] + tap_stiff["k_y_n_m"])
+        k_plate_t = 1.0 / (1.0 / max(k_plate_t, 1.0) + 1.0 / max(k_tap_t, 1.0))
+        k_plate_rot_y = 1.0 / (
+            1.0 / max(k_plate_rot_y, 1.0) + 1.0 / max(tap_stiff["k_rx_nm_rad"], 1.0)
+        )
+        k_plate_rot_z = 1.0 / (
+            1.0 / max(k_plate_rot_z, 1.0) + 1.0 / max(tap_stiff["k_ry_nm_rad"], 1.0)
+        )
 
     k_car_t = 1.0 / (1.0 / max(k_rad_car, 1.0) + 1.0 / max(k_plate_t, 1.0))
     k_car_rot_y = 1.0 / (1.0 / max(k_rx_car, 1.0) + 1.0 / max(k_plate_rot_y, 1.0))
@@ -440,6 +467,7 @@ def compute_toolhead_link_props(
         "k_ry_car": k_ry_car,
         "k_rz_car": k_rz_car,
         "probe_comp": probe_comp,
+        "tap_stiff": tap_stiff,
     }
 
 
@@ -651,6 +679,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
         )
 
         probe_comp = float(props.get("probe_comp", 1.0))
+        tap_stiff = props.get("tap_stiff")
         tc_ov = spec.model_overrides.toolhead_construction
         bc_mult = 1.0
         torsion_ratio = 1.0
@@ -665,7 +694,10 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
                     float(tc_cfg["baseline_torsion_mult"]), 1e-6
                 )
 
-        th_stiff_mult = max(bc_mult * probe_comp, 1e-4)
+        # When a sliding-rail Tap probe is active, insert its physical 6-DOF internal rail +
+        # magnetic kinematic seat compliance in series at Port 0 instead of scaling the whole
+        # toolhead body stiffness by a flat heuristic factor.
+        th_stiff_mult = max(bc_mult * (1.0 if tap_stiff is not None else probe_comp), 1e-4)
         if th_geom_matches_preset:
             asset_th = _load_cad_superelement(
                 "toolheads",
@@ -761,6 +793,20 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             T_01_th = np.eye(6, dtype=float)
             T_01_th[:3, 3:6] = -_skew_3x3(dp_asm_th)
             C_rail_1 = T_01_th @ C_rail_0 @ T_01_th.T
+            if isinstance(tap_stiff, dict):
+                C_tap_0 = np.diag(
+                    [
+                        1.0 / max(float(tap_stiff["k_x_n_m"]), 1.0),
+                        1.0 / max(float(tap_stiff["k_y_n_m"]), 1.0),
+                        1.0 / max(float(tap_stiff["k_z_n_m"]), 1.0),
+                        1.0 / max(float(tap_stiff["k_rx_nm_rad"]), 1.0),
+                        1.0 / max(float(tap_stiff["k_ry_nm_rad"]), 1.0),
+                        1.0 / max(float(tap_stiff["k_rz_nm_rad"]), 1.0),
+                    ]
+                )
+                C_root_1 = C_rail_1 + (T_01_th @ C_tap_0 @ T_01_th.T)
+            else:
+                C_root_1 = C_rail_1
 
             c_scale = (
                 np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0 / max(torsion_ratio, 1e-3)], dtype=float)
@@ -788,7 +834,7 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             )
             K_12_eff_th, _, C_eff_th = _series_combine_superelement_kbb(
                 asset_th.K_bb,
-                C_rail_1,
+                C_root_1,
                 dp_asm_th,
                 c_cad_scale_diag=c_scale,
                 dp_cad_m=dp_cad_th,

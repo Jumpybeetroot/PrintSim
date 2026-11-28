@@ -146,3 +146,43 @@ def test_voron_tap_cad_superelement_and_monotonic_stiffness_order() -> None:
     assert rep_tap_preset.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"] == pytest.approx(
         k_printed, rel=0.05
     )
+
+
+def test_mgn7_and_tap_sliding_rail_series_physics() -> None:
+    """First-principles MGN7H + Tap sliding-rail series compliance respects physical invariants."""
+    from printsim.fea.components import hertzian_rail_carriage_stiffness, tap_sliding_rail_stiffness
+
+    # 1. HIWIN MGN7H is supported and strictly softer than MGN9H at identical preload/grade
+    c7 = hertzian_rail_carriage_stiffness("mgn7", preload="ZF", block_type="H")
+    c9 = hertzian_rail_carriage_stiffness("mgn9", preload="ZF", block_type="H")
+    assert c7["block_mass_g"] == pytest.approx(15.0)
+    assert 0.0 < c7["k_yy_n_m"] < c9["k_yy_n_m"]
+    assert 0.0 < c7["k_rx_nm_rad"] < c9["k_rx_nm_rad"]
+    assert 0.0 < c7["k_ry_nm_rad"] < c9["k_ry_nm_rad"]
+
+    # 2. Rigid/docked probes add zero sliding-rail compliance; CNC Tap > Printed Tap in all 6 DOFs
+    assert tap_sliding_rail_stiffness("static_eddy") is None
+    assert tap_sliding_rail_stiffness("klicky_inductive") is None
+    t_cnc_25 = tap_sliding_rail_stiffness("cnc_tap", chamber_temp_c=25.0)
+    t_pr_25 = tap_sliding_rail_stiffness("printed_tap", chamber_temp_c=25.0)
+    t_cnc_65 = tap_sliding_rail_stiffness("cnc_tap", chamber_temp_c=65.0)
+    t_pr_65 = tap_sliding_rail_stiffness("printed_tap", chamber_temp_c=65.0)
+    assert t_cnc_25 is not None and t_pr_25 is not None
+    assert t_cnc_65 is not None and t_pr_65 is not None
+    for key in ("k_x_n_m", "k_y_n_m", "k_z_n_m", "k_rx_nm_rad", "k_ry_nm_rad", "k_rz_nm_rad"):
+        assert t_cnc_25[key] > t_pr_25[key] > 0.0
+        # Printed ABS Tap softens in a 65 C heated chamber; CNC 6061-T6 Tap is temperature-invariant
+        assert t_pr_65[key] < t_pr_25[key]
+        assert t_cnc_65[key] == pytest.approx(t_cnc_25[key], rel=1e-6)
+
+    # 3. Series Tap compliance must NOT falsely soften the hotend clamp / neck stage
+    base = PrinterSpec.from_yaml(EXAMPLES_DIR / "corexy_voron_style.yaml")
+    s_eddy = base.model_copy(deep=True)
+    s_eddy.toolhead.z_probe_type = "static_eddy"
+    s_tap = base.model_copy(deep=True)
+    s_tap.toolhead.z_probe_type = "printed_tap"
+    r_eddy = evaluate_printer(s_eddy, include_advanced_analysis=False)
+    r_tap = evaluate_printer(s_tap, include_advanced_analysis=False)
+    assert r_tap.assembly.toolhead_stage_stiffnesses_n_per_mm["hotend_total_n_per_mm"] == pytest.approx(
+        r_eddy.assembly.toolhead_stage_stiffnesses_n_per_mm["hotend_total_n_per_mm"], rel=1e-4
+    )
