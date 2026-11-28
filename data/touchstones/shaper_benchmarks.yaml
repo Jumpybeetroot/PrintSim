@@ -526,7 +526,7 @@ machines:
     notes: "Serialized Voron 2.4 300 flying gantry with StealthBurner + Voron Tap, 2WD 6 mm belts."
 
   - id: voron_24_250_tap_richardjm
-    name: Voron 2.4 250 Flying Gantry + Tap (richardjm)
+    name: Voron 2.4 250 Flying Gantry + XOL + Tap (richardjm)
     tier: 1
     architecture: corexy
     base_preset: corexy_voron_style.yaml
@@ -542,7 +542,12 @@ machines:
           rated_current_a: 2.0
           run_current_a: 1.1
       toolhead:
-        total_mass_g: 455.0  # StealthBurner + Voron Tap + SHT36v3
+        preset_id: xol_compact
+        body_construction: compact_cage
+        total_mass_g: 350.0  # XOL (~285 g) + Voron Tap (~65 g) + Fly SHT36v3
+        cog_offset_mm: [0.0, -24.0, 4.0]
+        nozzle_offset_mm: [0.0, -31.0, -52.0]
+        umbilical_type: can_umbilical
         z_probe_type: printed_tap
       bed:
         size_mm: [250, 250]
@@ -552,8 +557,8 @@ machines:
       x_shaper: MZV
       y_freq_hz: 46.8
       y_shaper: MZV
-    source: "GitHub richardjm/voronpi-klipper-backup (printer.cfg)"
-    notes: "Voron 2.4 250 flying gantry, OMC 17HS19-2004S1 @ 1.1 A, Voron Tap + Fly SHT36v3."
+    source: "GitHub richardjm/voronpi-klipper-backup (README.md + printer.cfg)"
+    notes: "Voron 2.4 250 flying gantry (v2.1906), OMC 17HS19-2004S1 @ 1.1 A, XOL toolhead + Voron Tap + Fly SHT36v3 CAN bus umbilical + Rama idlers + GE5C."
 
   - id: voron_24_350_derholgi
     name: Voron 2.4 350 Flying Gantry + Cartographer (DerHolgi)
@@ -567,8 +572,11 @@ machines:
         height_mm: 530
       kinematics:
         build_volume_mm: [350, 350, 330]
+        xy_stepper:
+          run_current_a: 1.2  # stepper.cfg: run_current: 1.2
       toolhead:
         z_probe_type: static_eddy
+        umbilical_type: cable_chain
       bed:
         size_mm: [350, 350]
         mass_g: 3600
@@ -577,8 +585,8 @@ machines:
       x_shaper: MZV
       y_freq_hz: 29.8
       y_shaper: MZV
-    source: "GitHub DerHolgi/Voron24-Klipper-Backup (printer_data/config/printer.cfg.rori)"
-    notes: "Voron 2.4 350 flying gantry, StealthBurner + Cartographer eddy probe, 2WD 6 mm belts."
+    source: "GitHub DerHolgi/Voron24-Klipper-Backup (printer_data/config/printer.cfg.rori + stepper.cfg)"
+    notes: "Voron 2.4 350 flying gantry, StealthBurner + cable chains + Cartographer eddy probe, 2WD 6 mm belts @ 1.2 A."
 
   - id: voron_24_350_cnctap_sb_bsmt
     name: Voron 2.4 350 + Vitalii CNC Tap + StealthBurner (bsmt)
