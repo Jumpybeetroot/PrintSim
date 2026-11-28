@@ -725,8 +725,13 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
             # the carriage root without eliminating printed body compliance, while reducing
             # identically to the uniform-material factor whenever carriage == body.
             is_unibody_manifest = bool(asset_th.manifest.get("is_unibody", False))
+            eff_body_construction = getattr(spec.toolhead, "body_construction", None)
+            if eff_body_construction is None and th_pid:
+                from printsim.schema.printer import TOOLHEAD_PRESETS
+
+                eff_body_construction = (TOOLHEAD_PRESETS.get(th_pid) or {}).get("body_construction")
             is_compact_onepiece_body = (
-                getattr(spec.toolhead, "body_construction", None) == "compact_cage"
+                eff_body_construction == "compact_cage"
                 and not bool(asset_th.manifest.get("multi_piece_bolted", False))
             )
             is_split_carriage = is_split_carriage_cad_manifest(asset_th.manifest)

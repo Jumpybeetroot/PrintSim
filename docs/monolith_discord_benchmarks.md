@@ -40,7 +40,7 @@ Read-only community test data compiled from the **Monolith** Discord server (`#p
 | Build | Frame | Drive & Belts | Gantry / Panels | Measured X Shaper | Measured Y Shaper |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Hanarius** (VT 250) | 2020 Trident 250 | 2WD, 6 mm | Printed Monolith | MZV @ **86.8 Hz** (≤22k) | MZV @ **56.8 Hz** (≤9.4k) |
-| **onewayne** (Doomish) | 4040+2020 Trident | 2WD/AWD, 9 mm | 4 mm Al + PIR panels | MZV @ **100.4 Hz** (29.7k) | MZV @ **67.6 Hz** (13.5k) |
+| **onewayne** (Doomish) | 4040+2020 Trident | AWD, 9 mm | Printed Monolith, 2020 X-beam (measured 2025-04-06 before 4 mm Al panels) | MZV @ **100.4 Hz** (29.7k) | MZV @ **67.0 Hz** (13.2k) |
 | **Stas_Robotmaker** (HM350) | 3030 350³ | 2WD, 9 mm @ 190 Hz | Laser-cut gantry | MZV (~27k) | `smooth_zv` (~9k) |
 | **Beattune** | Stiff CoreXY | AWD, 9–10 mm (217–285 Hz) | Kalico >150 Hz scan | Raw **~136 Hz** (46k) | Raw **~83 Hz** |
 | **CloakedWayne** (300mm) | Stiff 300mm | AWD, 10 mm | Monolith testbed | MZV @ **175 Hz** | ZV @ **115 Hz** |

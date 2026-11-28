@@ -390,16 +390,26 @@ machines:
     tier: 1
     architecture: corexy
     base_preset: doomcube_4040.yaml
-    overrides: {}
+    overrides:
+      frame:
+        # Shaper graph (nitehawkadxl.png) was measured 2025-04-06, 2 months BEFORE 4 mm Al panels (2025-06-05)
+        enclosed_panels: false
+        panel_mounting: none
+      gantry:
+        bracket_material: abs_printed
+        x_beam_profile: extrusion_2020
+        x_beam_material: aluminum_6063_t5
+        belt:
+          pretension_n: 35.0
     measured:
       x_freq_hz: 100.4
       x_shaper: MZV
       x_max_accel_mm_s2: 29700
-      y_freq_hz: 67.6
+      y_freq_hz: 67.0
       y_shaper: MZV
-      y_max_accel_mm_s2: 13500
-    source: "Monolith Discord #monolith-builds (onewayne; docs/monolith_discord_benchmarks.md)"
-    notes: "4040+2020 Doomish Trident, AWD 9 mm, 4 mm Al + PIR panels."
+      y_max_accel_mm_s2: 13200
+    source: "Monolith Discord #Onewaynes Doomish 9mm AWD Trident (onewayne, 2025-04-06, msg 1358390985343766608)"
+    notes: "4040+2020 Doomish Trident, printed Monolith AWD 9 mm, 2020 X-beam; Klipper calibration_data 2025-04-06 (2 months before 4 mm Al panels added 2025-06-05): X MZV 100.4 Hz (ZV 96.6 Hz), Y MZV 67.0 Hz (ZV 65.0 Hz)."
 
   - id: dderg_vt300_awd_12mm
     name: dderg VT 300 AWD (4040, 12mm, K3Z SLM)
@@ -483,7 +493,10 @@ machines:
         preset_id: a4t_beacon
         name: A4T + WW-BMG + CNC XOL Carriage + Beacon RevH
         total_mass_g: 270.0
+        cog_offset_mm: [0.0, -19.0, 8.0]
+        nozzle_offset_mm: [0.0, -28.0, -58.0]
         mount_material: aluminum_6061_t6
+        umbilical_type: can_umbilical
         z_probe_type: static_eddy
     measured:
       x_freq_hz: 102.2
@@ -700,6 +713,11 @@ machines:
         width_mm: 405
         depth_mm: 405
         height_mm: 410
+      gantry:
+        # Stock V-Core 3.1 ships with standard printed polymer brackets & ~22 N 9 mm belt tension
+        bracket_material: abs_printed
+        belt:
+          pretension_n: 22.0
       kinematics:
         build_volume_mm: [200, 200, 200]
         xy_stepper:
