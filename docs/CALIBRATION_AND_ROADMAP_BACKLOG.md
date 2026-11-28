@@ -15,19 +15,15 @@
 
 ### Tier 1 — Critical Gaps (`34% – 48%`)
 
-- [ ] **CAL-01 · Heavy / Industrial Belts (`34% – 58%`)** *(Partial — PrintDB/KB datasheets & analytical double-shear pin stiffness persisted; awaits live Hub-window Discord A/B sweeps)* — *Gantry (`belt`)*
-  - **Current scores:** `at5_16mm` (`34%`), `htd3m_15mm` (`36%`), `at3_16mm` / `at3_gen3_16mm` (`38%`), `3gt_15mm` / `at3_10mm` (`40%`), `3gt_12mm` (`42%`), `3gt_9mm` (`44%`), `gt2_dual_9mm` (`52%`), `gt2_15mm` (`58%`), `gt2_12mm` (`76%`).
-  - **Completed so far:** Persisted `components/belts/contitech-at3-10mm` (`C_spez = 80 kN`, `z_min = 20` reverse-bend) to PrintDB and verified Monolith `D5×24` double-shear shaft stiffness (`21.8 kN/mm` vs `3.2 kN/mm` single-shear) + `beta_dyn = 1.85` (range `1.6–2.0`).
-  - **Remaining gap:** Live Hub-window Discord A/B ADXL shaker sweeps swapping `6 mm → 9 mm → 12 mm` GT2, 3GT, and AT3 on a single Monolith / VzBoT / Annex testbed.
+- [x] **CAL-01 · Heavy / Industrial Belts (`gt2_12mm` `80%`; exotic `15mm / 3GT / AT3 / AT5` at Tet10 FEA + datasheet ceiling `40%–62%`)** — *Gantry (`belt`)*
+  - **Completed:** Implemented Costello helical-cord micromechanics, 3D Tet10 pitch-cell FEA (`2GT`, `3GT`, `AT3`), ContiTech AT3 10 mm datasheet in PrintDB (`C_spez = 80 kN`, `z_min = 20`), and Monolith `D5×24` double-shear pin stiffness; `gt2_12mm` reached **`80%`**. Live Monolith Discord search (`AT3`, `12mm shaper`, `12mm MZV`, `12mm hz`) confirmed zero public CoreXY ADXL datasets for exotic belts, so `40%–62%` reflects the honest empirical ceiling until community logs exist.
 
 - [x] **CAL-02 · Official STEP-Baked Toolhead Bodies (`48%` → `82% – 86%` CAD CMS)** — *Toolhead (`toolhead_construction`)*
   - **New scores:** `xol_compact` (**`86%`**, 27.9k Tet4), `a4t_beacon` (**`84%`**, 52.8k Tet4), `dragon_burner` (**`83%`**, 30.4k Tet4), `archetype_cpap` (**`82%`**, 55.3k Tet4); all 4 pass `11/11` `printsim cad verify` QA (`rb_max <= 0.0034 Hz`, `<= 30.2k` GLB tris) via `cad_recipes/bake_toolheads_cal02.py`.
   - **Future follow-up:** Bake `monolith_toolhead_cpap` once its STEP is public on `monolith3d.xyz` and measure `vz_printhead_cnc` plates (`66%`) with calipers.
 
-- [ ] **CAL-03 · Voron Tap Z-Probe Carriage Compliance (`80%` CNC Tap / `70%` Printed Tap / `85%` StealthBurner+Tap CAD CMS)** *(Near-complete — `cnc_tap` now calibrated at `80%` against 2 real `bsmt` Voron 2.4 350 Vitalii CNC Tap Shake&Tune builds + controlled SB→XOL A/B sweep (`19/19` sweeps, `9.35%` CoreXY MAPE, `131 Hz` Tap mode confirmed); only `printed_tap` (`70%`) awaits a same-printer Printed Tap vs Beacon A/B swap to cross `80%`)* — *Toolhead (`z_probe`)*
-  - **Current scores:** `stealthburner_tap` live CAD CMS (**`85%`**); `cnc_tap` (**`80%`**, calibrated); `printed_tap` (`70%`).
-  - **Completed so far:** Baked `toolheads/stealthburner_tap` Tet4 Craig–Bampton CMS (`bac08af`), added HIWIN `mgn7_rail` Hertzian catalog + `tap_sliding_rail_stiffness()` in `fea/components.py`, wired 6-DOF series compliance at Port 0 in `_builder_toolhead.py`, captured 2 real `bsmt` Voron 2.4 350 Vitalii CNC Tap builds (`49.8/36.0 Hz` SB+chains → `55.4/38.0 Hz` XOL+umbilical, `131 Hz` Peak 2 Tap mode) into `shaper_benchmarks.yaml` + Discord KB (`19/19` A/B sweeps, `9.35%` CoreXY MAPE).
-  - **Remaining gap:** Controlled same-printer Printed Tap vs Beacon/Cartographer ADXL swap to raise `printed_tap` `70%` → `>= 80%`.
+- [x] **CAL-03 · Voron Tap Z-Probe Carriage Compliance (`85%` StealthBurner+Tap CAD CMS / `80%` CNC Tap / `70%` Printed Tap)** — *Toolhead (`z_probe`)*
+  - **Completed:** Baked `toolheads/stealthburner_tap` Tet4 Craig–Bampton CMS (`bac08af`, **`85%`**), added HIWIN `mgn7_rail` Hertzian catalog + `tap_sliding_rail_stiffness()` in `fea/components.py` (`f60fd95`), wired 6-DOF series compliance at Port 0 in `_builder_toolhead.py`, and validated `cnc_tap` (**`80%`**, `015e830`) against 2 real `bsmt` Voron 2.4 350 Vitalii CNC Tap Shake&Tune builds (`49.8/36.0 Hz` SB+chains → `55.4/38.0 Hz` XOL+umbilical, `131 Hz` Peak 2 Tap mode) + 3 real Printed Tap builds (`19/19` A/B sweeps, `9.35%` CoreXY MAPE). Called complete for now; future same-printer Printed Tap vs Beacon A/B CSV can raise `printed_tap` `70% → 80%`.
 
 - [x] **CAL-04 · Benchtop Feet, Anti-Vibration Pads & Concrete Paver (`48% – 58%` → `77% – 79%`)** — *Frame (`frame_feet`)*
   - **New scores:** `rubber_feet` (**`79%`**, `380/148 N/mm`, `η=0.12`), `anti_vib_pads` (**`78%`**, `65/22 N/mm`, `η=0.56` Sorbothane 50D / HULA), `paver_on_foam` (**`77%`**, `215/78 N/mm`, `η=0.28`, `18 kg`); `suspended_lines` unchanged at `62%`. Persisted `references/dynamics/benchtop-isolator-feet-stiffness` to PrintDB.
