@@ -24,10 +24,10 @@
   - **New scores:** `xol_compact` (**`86%`**, 27.9k Tet4), `a4t_beacon` (**`84%`**, 52.8k Tet4), `dragon_burner` (**`83%`**, 30.4k Tet4), `archetype_cpap` (**`82%`**, 55.3k Tet4); all 4 pass `11/11` `printsim cad verify` QA (`rb_max <= 0.0034 Hz`, `<= 30.2k` GLB tris) via `cad_recipes/bake_toolheads_cal02.py`.
   - **Future follow-up:** Bake `monolith_toolhead_cpap` once its STEP is public on `monolith3d.xyz` and measure `vz_printhead_cnc` plates (`66%`) with calipers.
 
-- [ ] **CAL-03 · Voron Tap Z-Probe Carriage Compliance (`48% – 56%`)** *(Partial — PrintDB/KB specs & Shake&Tune `~125 Hz` rail mode persisted; awaits live Hub-window Discord A/B ADXL swap)* — *Toolhead (`z_probe`)*
-  - **Current scores:** Printed Voron Tap (`48%`), CNC Voron Tap / ChaoticLab (`56%`).
-  - **Completed so far:** Documented ChaoticLab CNC Tap V2 (`59.8 g` bare / `62–65 g` assembled, internal `MGN7H` rail), Printed Tap (`+50 g` net, `50 mm` `MGN9H`), Klippain Shake&Tune `~125 Hz` decoupled internal rail peak, and Formbot Trident R2 + Tap KB CSV (`51.8 Hz` Y-to-Z peak).
-  - **Remaining gap:** Controlled same-printer before/after Klipper ADXL CSV swaps (Printed Tap vs CNC Tap vs Beacon/Cartographer) from VORONDesign Discord `#voron_tap`.
+- [ ] **CAL-03 · Voron Tap Z-Probe Carriage Compliance (`48% – 56%` lumped / `85%` StealthBurner+Tap CAD CMS)** *(Partial — `stealthburner_tap` Tet4 CAD CMS baked in `bac08af` (`42.1k` Tet4, `rb_max=0.0013 Hz`), PrintDB/KB specs & Shake&Tune `~125 Hz` rail mode persisted; awaits live Hub-window Discord A/B ADXL swap)* — *Toolhead (`z_probe`)*
+  - **Current scores:** `stealthburner_tap` live CAD CMS (`85%`); lumped `z_probe` fallback: Printed Voron Tap (`48%`), CNC Voron Tap / ChaoticLab (`56%`).
+  - **Completed so far:** Baked `toolheads/stealthburner_tap` Tet4 Craig–Bampton CMS (`bac08af`), documented ChaoticLab CNC Tap V2 (`59.8 g` bare / `62–65 g` assembled, internal `MGN7H` rail), Printed Tap (`+50 g` net, `50 mm` `MGN9H`), Klippain Shake&Tune `~125 Hz` decoupled internal rail peak, and Formbot Trident R2 + Tap KB CSV (`51.8 Hz` Y-to-Z peak).
+  - **Remaining gap:** Controlled same-printer before/after Klipper ADXL CSV swaps (Printed Tap vs CNC Tap vs Beacon/Cartographer) from VORONDesign Discord `#voron_tap` to calibrate the lumped sliding-rail pitch spring $k_{\text{tap}}$.
 
 - [x] **CAL-04 · Benchtop Feet, Anti-Vibration Pads & Concrete Paver (`48% – 58%` → `77% – 79%`)** — *Frame (`frame_feet`)*
   - **New scores:** `rubber_feet` (**`79%`**, `380/148 N/mm`, `η=0.12`), `anti_vib_pads` (**`78%`**, `65/22 N/mm`, `η=0.56` Sorbothane 50D / HULA), `paver_on_foam` (**`77%`**, `215/78 N/mm`, `η=0.28`, `18 kg`); `suspended_lines` unchanged at `62%`. Persisted `references/dynamics/benchtop-isolator-feet-stiffness` to PrintDB.
