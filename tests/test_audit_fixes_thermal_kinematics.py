@@ -36,7 +36,7 @@ def test_t1_open_tslot_extrusion_torsional_constants() -> None:
     assert len(extrusions) >= 5
 
     expected_j = {
-        "extrusion_2020": 0.11e-8,
+        "extrusion_2020": 0.0783e-8,
         "extrusion_2040": 0.36e-8,
         "extrusion_3030": 0.45e-8,
         "extrusion_4040": 1.30e-8,

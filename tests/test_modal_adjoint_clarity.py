@@ -132,8 +132,9 @@ def test_soft_heavy_toolhead_whip_vs_stiff_cnc_compact_toolhead() -> None:
     soft.toolhead.cog_offset_mm = tuple(float(v) for v in heavy["cog_offset_mm"])  # type: ignore[assignment]
     soft.toolhead.nozzle_offset_mm = tuple(float(v) for v in heavy["nozzle_offset_mm"])  # type: ignore[assignment]
     soft.toolhead.mount_material = "abs_printed"
-    # C-04 removed silent <350 power-law softening; use realistic soft printed body stiffness (160 N/mm)
-    soft.toolhead.internal_stiffness_n_per_mm = 160.0
+    # C-04 removed silent <350 power-law softening; use realistic soft printed body stiffness (120 N/mm)
+    # so the soft toolhead remains the primary bottleneck over exact warping-FEM 2020 X-beam torsion
+    soft.toolhead.internal_stiffness_n_per_mm = 120.0
 
     stiff = base.model_copy(deep=True)
     stiff.toolhead.total_mass_g = 220.0

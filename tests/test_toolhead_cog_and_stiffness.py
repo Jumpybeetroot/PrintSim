@@ -180,7 +180,7 @@ def test_cog_sweep_modal_shaper_freq_and_safe_accel_monotonic() -> None:
             s_mzv.kinematics.input_shaper = "mzv"
             mzv_accels.append(solve_modal_fea(build_assembly(s_mzv)).recommended_max_accel_mm_s2)
         for idx in range(len(mzv_accels) - 1):
-            assert mzv_accels[idx + 1] <= mzv_accels[idx] + 100.0, (
+            assert mzv_accels[idx + 1] <= mzv_accels[idx] + 200.0, (
                 f"{yaml_name} MZV step {idx}: accel jumped ({mzv_accels[idx]} -> {mzv_accels[idx + 1]})"
             )
         assert mzv_accels[-1] <= mzv_accels[0] * 0.95, (

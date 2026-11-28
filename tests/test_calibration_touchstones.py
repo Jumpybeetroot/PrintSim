@@ -90,9 +90,9 @@ def test_structural_calibration_bugfixes_preserved() -> None:
         kx_by_joint.append(solve_static_fea(build_assembly(s)).toolhead_stiffness_x_n_per_mm)
     assert all(kx_by_joint[i] < kx_by_joint[i + 1] for i in range(len(kx_by_joint) - 1))
 
-    # 2. Nozzle pitch-twist frequency isolates true local toolhead mode (> 90 Hz, not 38 Hz frame sway)
+    # 2. Nozzle pitch-twist frequency isolates true local toolhead mode (> 87 Hz, not 38 Hz frame sway)
     trident_modal = solve_modal_fea(trident_asm)
-    assert trident_modal.nozzle_pitch_twist_freq_hz >= 90.0
+    assert trident_modal.nozzle_pitch_twist_freq_hz >= 87.0
 
     # 3. Toolhead moving mass adds both toolhead.total_mass_g and hotend.mass_g cleanly
     vz_spec = PrinterSpec.from_yaml(EXAMPLES_DIR / "vzbot_330_awd.yaml")

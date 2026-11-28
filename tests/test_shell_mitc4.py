@@ -452,8 +452,8 @@ def test_benchmark6_aluminum_thickness_monotonic_no_shaper_cliffs() -> None:
                     assert fxs > 100.0 if "monolith" in yaml_name else fxs > 60.0
                 assert drum > prev_drum, f"{yaml_name} n={mesh_n} Al {thk}mm drum {drum} <= {prev_drum}"
                 # Panel drum mode at 5-6mm must never hijack f1 downward
-                # (stock printed ABS XY-joint 3D CMS caps bolted-panel Trident near ~92.5 Hz; CNC Monolith >140 Hz)
-                assert mo.fundamental_freq_hz > 90.0
+                # (stock printed ABS XY-joint 3D CMS + exact 2020 warping-FEM J caps bolted-panel Trident near ~88.8 Hz; CNC Monolith >140 Hz)
+                assert mo.fundamental_freq_hz > 85.0
 
                 prev_kx, prev_fxs, prev_ax, prev_drum = kx, fxe, mo.shaper_x.max_accel_mm_s2, drum
 

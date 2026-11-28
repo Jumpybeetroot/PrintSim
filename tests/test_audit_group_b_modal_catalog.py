@@ -65,12 +65,12 @@ def test_d01_through_d05_datasheet_catalog_values() -> None:
         prof = get_profile(pid)
         assert prof.area_m2 * rho_steel == pytest.approx(expected_kg_m, rel=1e-6)
 
-    # D-04: Misumi HFS5-2020 2020 T-slot extrusion cross-section & open torsion I_t
+    # D-04: Misumi HFS5-2020 2020 T-slot extrusion cross-section & warping-FEM open torsion I_t
     p2020 = get_profile("extrusion_2020")
     assert p2020.area_m2 == pytest.approx(1.83e-4, rel=1e-9)
     assert p2020.iy_m4 == pytest.approx(0.742e-8, rel=1e-9)
     assert p2020.iz_m4 == pytest.approx(0.742e-8, rel=1e-9)
-    assert p2020.j_m4 == pytest.approx(0.11e-8, rel=1e-9)
+    assert p2020.j_m4 == pytest.approx(0.0783e-8, rel=1e-9)
 
     # D-05: Roark rectangular St. Venant torsion constant for 25x5mm flat bar (9.104e-10 m^4)
     flat_bar = get_profile("al_flat_bar_25x5")
