@@ -199,9 +199,10 @@ def test_mgn12_substantial_boost_over_bare_beam_and_beats_mgn9() -> None:
     xg_12 = next(m for m in asm_mgn12.members if m.id == "x_gantry_l")
     xg_15 = next(m for m in asm_mgn15.members if m.id == "x_gantry_l")
 
-    # MGN12H adds substantial bending stiffness over hypothetical zero-rail bare beam (> +150% primary, > +45% secondary)
+    # MGN12H adds substantial bending stiffness over hypothetical zero-rail bare beam (> +150% primary, > +35% secondary
+    # with 3D Tet10 grooved+counterbored MGN12R section Iz=962.3 mm^4)
     assert xg_12.profile.iz_m4 > bare_2020.iz_m4 * 2.5
-    assert xg_12.profile.iy_m4 > bare_2020.iy_m4 * 1.45
+    assert xg_12.profile.iy_m4 > bare_2020.iy_m4 * 1.35
 
     st_9 = solve_static_fea(asm_mgn9)
     st_12 = solve_static_fea(asm_mgn12)

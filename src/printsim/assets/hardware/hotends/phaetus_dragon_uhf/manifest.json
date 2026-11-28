@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_dragon_uhf",
+  "name": "Phaetus Dragon UHF (4-Bolt Rigid, 30 mm Extended Cu Melt Zone)",
+  "source_cad": "phaetus_dragon_hf.step + Phaetus Dragon UHF 30 mm melt-zone B-Rep",
+  "source_url": "https://www.phaetus.com/products/dragon-hotend-uhf",
+  "baked_at": "2026-11-28T03:59:12Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 13554,
+  "num_elements": 55574,
+  "num_dofs": 40662,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.004833,
+  "mass_kg": 0.066758,
+  "com_mm": [
+    -1.2349,
+    0.0001,
+    -30.2594
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -64.9
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 513.223,
+    "ky": 509.169,
+    "kz": 53149.306
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 531.292,
+    "kry": 534.459,
+    "krz": 496.872
+  },
+  "fixed_interface_freqs_hz": [
+    3742.03,
+    3988.32,
+    5092.65,
+    10333.59,
+    12569.54,
+    13695.64,
+    15611.59,
+    15659.23
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23998,
+  "visual_bytes": 915152,
+  "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "dragon_uhf_v6_nozzle",
+      "name": "Dragon Uhf V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.97,
+      "com_mm": [
+        0.0,
+        0.0,
+        -58.05
+      ],
+      "num_elements": 1301
+    },
+    {
+      "id": "dragon_uhf_ti_standoffs_throat",
+      "name": "Dragon Uhf Ti Standoffs Throat",
+      "material_id": "titanium_grade5",
+      "mass_g": 0.28,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -26.97
+      ],
+      "num_elements": 9007
+    },
+    {
+      "id": "dragon_uhf_cu_block_extender",
+      "name": "Dragon Uhf Cu Block Extender",
+      "material_id": "copper_c110",
+      "mass_g": 49.26,
+      "com_mm": [
+        -1.67,
+        0.0,
+        -33.93
+      ],
+      "num_elements": 31769
+    },
+    {
+      "id": "dragon_uhf_heatsink",
+      "name": "Dragon Uhf Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 14.25,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -11.84
+      ],
+      "num_elements": 13497
+    }
+  ],
+  "source_hash": "99127a658fe67f7ae550cfc0055d518146629303dcff1b926b62084d8cf1a51c"
+}

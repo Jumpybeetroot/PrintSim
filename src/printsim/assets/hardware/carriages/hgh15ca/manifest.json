@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "category": "carriages",
+  "asset_id": "hgh15ca",
+  "name": "HIWIN HGH15CA Heavy-Load Linear Carriage Block",
+  "source_cad": "Parametric build123d HIWIN HGH15CA (61.4x34.0x19.7mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Heavy_Load_Ball_Type_Linear_Guideway_HG_Series-(E).pdf",
+  "baked_at": "2026-11-28T04:55:36Z",
+  "reference_material_id": "steel_4140",
+  "reference_youngs_modulus_pa": 205000000000.0,
+  "reference_density_kg_m3": 7850.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 5190,
+  "num_elements": 20895,
+  "num_dofs": 15570,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.001141,
+  "mass_kg": 0.180161,
+  "com_mm": [
+    -0.0001,
+    -0.0001,
+    6.9646
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    15.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 2079347.658,
+    "ky": 526965.352,
+    "kz": 3468306.113
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 334209.481,
+    "kry": 739926.825,
+    "krz": 626644.929
+  },
+  "fixed_interface_freqs_hz": [
+    13810.59,
+    17654.03,
+    27545.9,
+    31514.61,
+    32097.03,
+    36962.33,
+    39497.92,
+    40856.71
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 3536,
+  "visual_bytes": 133664,
+  "cad_trust_pct": 96,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "steel_4140",
+      "mass_g": 54.89,
+      "com_mm": [
+        0.02,
+        0.01,
+        -0.3
+      ],
+      "num_elements": 10318
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "steel_4140",
+      "mass_g": 59.65,
+      "com_mm": [
+        -0.09,
+        -0.04,
+        7.62
+      ],
+      "num_elements": 5680
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "steel_4140",
+      "mass_g": 30.49,
+      "com_mm": [
+        -0.08,
+        0.01,
+        13.75
+      ],
+      "num_elements": 2665
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "steel_4140",
+      "mass_g": 35.13,
+      "com_mm": [
+        0.19,
+        0.04,
+        11.32
+      ],
+      "num_elements": 2232
+    }
+  ],
+  "source_hash": "1dfa98642169769dd075d84c859f5075b248c7fc703f99e96973a6774b74e695"
+}

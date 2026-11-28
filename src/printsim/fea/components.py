@@ -59,9 +59,12 @@ _G_ACC = _get_printdb_const(
 # 45 deg contact-angle projection, so multiplying by r_y**2 must NOT project by sin(45 deg) a second time.
 _RAIL_CARRIAGE_CATALOG: dict[str, tuple[float, float, int, float, float, float, float, float]] = {
     "mgn9_rail": (1.588e-3, 0.0045, 2, 0.0189, 1860.0, 0.0289, 2550.0, 0.35),
+    "mgn9_pocketed_rail": (1.588e-3, 0.0045, 2, 0.0189, 1860.0, 0.0289, 2550.0, 0.35),
     "mgn12_rail": (2.381e-3, 0.0060, 2, 0.0217, 2840.0, 0.0324, 3920.0, 0.50),
     "mgn12_hollow_rail": (2.381e-3, 0.0060, 2, 0.0217, 2840.0, 0.0324, 3920.0, 0.50),
+    "mgn12_pocketed_rail": (2.381e-3, 0.0060, 2, 0.0217, 2840.0, 0.0324, 3920.0, 0.50),
     "mgn15_rail": (3.175e-3, 0.0075, 2, 0.0267, 4610.0, 0.0434, 6370.0, 0.75),
+    "mgn15_pocketed_rail": (3.175e-3, 0.0075, 2, 0.0267, 4610.0, 0.0434, 6370.0, 0.75),
     "hgh15_rail": (3.175e-3, 0.0075, 4, 0.0394, 11380.0, 0.0568, 14700.0, 1.20),
     # Round linear ball bushings (LM8UU/LM10UU/LM12UU & LUU long equivalent baseline)
     "steel_rod_8mm": (1.588e-3, 0.0040, 4, 0.0170, 265.0, 0.0240, 420.0, 0.40),
@@ -72,19 +75,91 @@ _RAIL_CARRIAGE_CATALOG: dict[str, tuple[float, float, int, float, float, float, 
 # Official HIWIN MG/HG & Misumi/THK LMxUU carriage block masses (g): (C_standard_g, H_long_g)
 _RAIL_BLOCK_MASS_G: dict[str, tuple[float, float]] = {
     "mgn9_rail": (16.0, 26.0),
+    "mgn9_pocketed_rail": (16.0, 26.0),
     "mgn12_rail": (34.0, 54.0),
     "mgn12_hollow_rail": (34.0, 54.0),
+    "mgn12_pocketed_rail": (34.0, 54.0),
     "mgn15_rail": (59.0, 92.0),
+    "mgn15_pocketed_rail": (59.0, 92.0),
     "hgh15_rail": (180.0, 180.0),
     "steel_rod_8mm": (16.0, 31.0),
     "steel_rod_10mm": (31.0, 56.0),
     "steel_rod_12mm": (41.0, 76.0),
 }
-_hydrate_rail_catalog(_RAIL_CARRIAGE_CATALOG, _RAIL_BLOCK_MASS_G)
-# Keep Hollow MGN12H synchronized with PrintDB-hydrated solid MGN12H ball geometry & block mass
-# (thin hollow-wall raceway compliance is applied via the 0.92x multiplier in hertzian_rail_carriage_stiffness).
-_RAIL_CARRIAGE_CATALOG["mgn12_hollow_rail"] = _RAIL_CARRIAGE_CATALOG["mgn12_rail"]
-_RAIL_BLOCK_MASS_G["mgn12_hollow_rail"] = _RAIL_BLOCK_MASS_G["mgn12_rail"]
+# 3D Tet10 (P2) calibrated preload-independent 5-DOF C-block steel saddle structural stiffness
+# (in series with Hertzian ball-raceway contact), replacing the unsourced 15% Hung scalar and
+# flat 1.25 roll opening factor (scripts/calibrate_all_rails_and_carriages_fea.py; <2% mesh
+# convergence, <1% preload invariance across Z0/Z1/ZA):
+# (rail_base_id, block_type) -> (k_skirt_yy_N_m, k_skirt_zz_N_m, k_skirt_rx_Nm_rad, k_skirt_ry_Nm_rad, k_skirt_rz_Nm_rad)
+_CARRIAGE_SADDLE_STIFFNESS_TET10: dict[tuple[str, str], tuple[float, float, float, float, float]] = {
+    ("mgn9_rail", "C"): (950.1e6, 1167.4e6, 24033.0, 37142.0, 37289.0),
+    ("mgn9_rail", "H"): (1375.7e6, 1835.1e6, 38636.0, 120336.0, 96792.0),
+    ("mgn12_rail", "C"): (1246.7e6, 1391.6e6, 51832.0, 59411.0, 67014.0),
+    ("mgn12_rail", "H"): (1765.9e6, 2026.4e6, 75539.0, 176255.0, 166389.0),
+    ("mgn15_rail", "C"): (1276.2e6, 1496.1e6, 86935.0, 95957.0, 102676.0),
+    ("mgn15_rail", "H"): (1859.5e6, 2261.3e6, 132976.0, 332985.0, 285707.0),
+    ("hgh15_rail", "C"): (1160.2e6, 2146.4e6, 206196.0, 328037.0, 199830.0),
+    # HGH15HA long block (L1 = 56.8 mm vs 39.4 mm CA): scaled linearly in yy/zz/rx and by L1^2 in ry/rz
+    ("hgh15_rail", "H"): (1672.5e6, 3094.3e6, 297254.0, 681868.0, 415373.0),
+    # Misumi LMxUU / LMxLUU hardened bearing-steel cylindrical sleeves in clamped pillow housing
+    # (axisymmetric yy == zz, ry == rz; closed cylinder has <0.1% structural sleeve compliance share)
+    ("steel_rod_8mm", "C"): (55635.0e6, 55635.0e6, 1.0e9, 1428106.0, 1428106.0),
+    ("steel_rod_8mm", "H"): (76419.2e6, 76419.2e6, 1.0e9, 3872341.0, 3872341.0),
+    ("steel_rod_10mm", "C"): (61653.0e6, 61653.0e6, 1.0e9, 2225222.0, 2225222.0),
+    ("steel_rod_10mm", "H"): (86336.3e6, 86336.3e6, 1.0e9, 6423166.0, 6423166.0),
+    ("steel_rod_12mm", "C"): (88827.3e6, 88827.3e6, 1.0e9, 4142404.0, 4142404.0),
+    ("steel_rod_12mm", "H"): (141980.1e6, 141980.1e6, 1.0e9, 16075072.0, 16075072.0),
+}
+
+_MILLED_TO_BASE_RAIL: dict[str, str] = {
+    "mgn9_pocketed_rail": "mgn9_rail",
+    "mgn12_hollow_rail": "mgn12_rail",
+    "mgn12_pocketed_rail": "mgn12_rail",
+    "mgn15_pocketed_rail": "mgn15_rail",
+}
+
+_hydrate_rail_catalog(_RAIL_CARRIAGE_CATALOG, _RAIL_BLOCK_MASS_G, _CARRIAGE_SADDLE_STIFFNESS_TET10)
+# Keep hollow/pocketed MGN rails synchronized with PrintDB-hydrated solid rail ball geometry & block mass
+# (anisotropic raceway backing compliance is applied via Tet10-calibrated series stiffness below).
+for _milled_id, _base_id in _MILLED_TO_BASE_RAIL.items():
+    _RAIL_CARRIAGE_CATALOG[_milled_id] = _RAIL_CARRIAGE_CATALOG[_base_id]
+    _RAIL_BLOCK_MASS_G[_milled_id] = _RAIL_BLOCK_MASS_G[_base_id]
+
+# 3D Tet10 (P2) calibrated differential steel raceway-backing stiffness (in series with Hertzian + skirt):
+# profile_id -> position ("travel_avg" | "mid_pocket" | "over_bridge") -> (k_back_yy_N_m, k_back_zz_N_m, k_back_rx_Nm_rad)
+# Calibrated via scripts/calibrate_pocketed_rails_fea.py (unilateral lift-off/roll & lateral portal-frame sway).
+_MILLED_RAIL_RACEWAY_BACKING_STIFFNESS: dict[str, dict[str, tuple[float, float, float]]] = {
+    "mgn9_pocketed_rail": {
+        "mid_pocket": (4466.4e6, 13840.0e6, 316714.0),
+        "over_bridge": (2759.8e6, 7608.9e6, 128971.0),
+        "travel_avg": (3411.4e6, 9820.6e6, 183303.0),
+    },
+    "mgn12_hollow_rail": {
+        "mid_pocket": (816.6e6, 6089.3e6, 180426.0),
+        "over_bridge": (754.7e6, 5129.4e6, 138662.0),
+        "travel_avg": (784.4e6, 5568.2e6, 156807.0),
+    },
+    "mgn12_pocketed_rail": {
+        "mid_pocket": (4150.3e6, 9904.1e6, 341451.0),
+        "over_bridge": (3144.4e6, 7111.5e6, 218002.0),
+        "travel_avg": (3578.0e6, 8278.5e6, 266097.0),
+    },
+    "mgn15_pocketed_rail": {
+        "mid_pocket": (1967.4e6, 4397.0e6, 149683.0),
+        "over_bridge": (2733.6e6, 5015.6e6, 185405.0),
+        "travel_avg": (2288.0e6, 4686.0e6, 165637.0),
+    },
+}
+
+# Bolted fastener-interface shear stiffness multiplier for milled rails (Tet10 composite calibration):
+# Continuous underside C-channel (mgn12_hollow_rail) straddles the M3 bolt axis on two narrow 2.7 mm feet,
+# lowering effective k_s by ~10% vs solid; periodic pocketed rails preserve full solid M3 bolt bridges (1.00x).
+_MILLED_RAIL_BOLT_KS_MULT: dict[str, float] = {
+    "mgn12_hollow_rail": 0.90,
+    "mgn12_pocketed_rail": 1.00,
+    "mgn9_pocketed_rail": 1.00,
+    "mgn15_pocketed_rail": 1.00,
+}
 
 _PRELOAD_FRACTION: dict[str, float] = RAIL_PRELOAD_FRACTIONS
 
@@ -111,9 +186,12 @@ _ISO_5753_RADIAL_PLAY_UM: dict[str, float] = BEARING_RADIAL_PLAY_UM
 # SRS15 C1 -10..0, HSR15 Normal -2..+2, C1 -5..-1 um).
 RAIL_RADIAL_CLEARANCE_UM_TABLE: dict[str, dict[str, float]] = {
     "mgn9_rail": {"ZF": 6.0, "Z0": 1.0, "Z1": -2.0, "ZA": -4.0, "ZB": -6.0},
+    "mgn9_pocketed_rail": {"ZF": 6.0, "Z0": 1.0, "Z1": -2.0, "ZA": -4.0, "ZB": -6.0},
     "mgn12_rail": {"ZF": 7.0, "Z0": 1.5, "Z1": -3.0, "ZA": -5.5, "ZB": -8.0},
     "mgn12_hollow_rail": {"ZF": 7.0, "Z0": 1.5, "Z1": -3.0, "ZA": -5.5, "ZB": -8.0},
+    "mgn12_pocketed_rail": {"ZF": 7.0, "Z0": 1.5, "Z1": -3.0, "ZA": -5.5, "ZB": -8.0},
     "mgn15_rail": {"ZF": 7.5, "Z0": 1.5, "Z1": -4.5, "ZA": -7.5, "ZB": -11.0},
+    "mgn15_pocketed_rail": {"ZF": 7.5, "Z0": 1.5, "Z1": -4.5, "ZA": -7.5, "ZB": -11.0},
     "hgh15_rail": {"ZF": 5.0, "Z0": 0.0, "Z1": -3.0, "ZA": -7.0, "ZB": -12.0},
     "steel_rod_8mm": {"ZF": 10.0, "Z0": 3.0, "Z1": -1.0, "ZA": -3.0, "ZB": -5.0},
     "steel_rod_10mm": {"ZF": 10.0, "Z0": 3.0, "Z1": -1.0, "ZA": -3.0, "ZB": -5.0},
@@ -198,12 +276,14 @@ def hertzian_rail_carriage_stiffness(
     preload_fraction_override: float | None = None,
     stiffness_mult_override: float | None = None,
     drag_mult_override: float | None = None,
+    raceway_position: str = "travel_avg",
 ) -> dict[str, float]:
     """Compute 6-DOF Hertzian ball-raceway contact stiffness & drag for a linear rail carriage.
 
     Uses HIWIN (ZF/Z0/Z1/ZA/ZB) & THK/NSK Grade P radial clearance, groove conformity
     (``f = r_g / d_b``), and ISO 3290 ball-diameter tolerance load-sharing tables rather than
-    a flat scalar multiplier, in series with 15% Hung et al. (2011) carriage-skirt compliance.
+    a flat scalar multiplier, in series with per-carriage 3D Tet10 (P2) calibrated 5-DOF
+    C-block steel saddle (or cylindrical sleeve) structural compliance.
     """
     key = rail_profile_id.lower().strip()
     if key in ("mgn9", "mgn12", "mgn15", "hgh15"):
@@ -224,7 +304,6 @@ def hertzian_rail_carriage_stiffness(
         if preload_fraction_override is not None
         else _PRELOAD_FRACTION.get(pre_key, 0.030)
     )
-    f_pre_z1 = _PRELOAD_FRACTION["Z1"]
 
     qual_key = str(rail_quality).lower().strip() if rail_quality else "hiwin_genuine"
     qual_cfg = RAIL_QUALITY_CATALOG.get(qual_key, RAIL_QUALITY_CATALOG["hiwin_genuine"])
@@ -291,22 +370,59 @@ def hertzian_rail_carriage_stiffness(
     # Apply preload- and grade-dependent Hertzian ball-sharing & conformity factor
     k_hertz_raw *= stiffness_mult
 
-    # 15% Hung carriage-skirt structural compliance referenced to Z1 nominal block stiffness
-    k_skirt = _raw_hertz_radial(f_pre_z1) / 0.15
-    k_eff_radial = (k_hertz_raw * k_skirt) / max(k_hertz_raw + k_skirt, 1e-9)
-    if key == "mgn12_hollow_rail":
-        # Thin hollow rail wall adds ~8% local raceway backing compliance vs solid MGN12R
-        k_eff_radial *= 0.92
+    # Pure Hertzian ball-raceway contact stiffnesses before steel saddle compliance
+    k_hertz_yy = k_hertz_raw
+    k_hertz_zz = k_hertz_raw * (1.05 if (n_rows == 4 and not is_rod_bushing) else 1.0)
+    k_hertz_rx = k_hertz_zz * (r_y**2)
+    k_hertz_ry = k_hertz_zz * ((l1**2) / 12.0)
+    k_hertz_rz = k_hertz_yy * ((l1**2) / 12.0)
 
-    k_yy = k_eff_radial
-    k_zz = k_eff_radial * (1.05 if (n_rows == 4 and not is_rod_bushing) else 1.0)
+    # 3D Tet10 (P2) calibrated preload-independent C-block steel saddle (or cylindrical sleeve)
+    # structural stiffness in series with Hertzian ball-raceway contact across all 5 load DOFs
+    # (replaces the unsourced 15% Hung scalar and flat 1.25 roll opening factor).
+    base_rail_key = _MILLED_TO_BASE_RAIL.get(key, key)
+    bt_key = "H" if is_h else "C"
+    k_sk_yy, k_sk_zz, k_sk_rx, k_sk_ry, k_sk_rz = _CARRIAGE_SADDLE_STIFFNESS_TET10.get(
+        (base_rail_key, bt_key),
+        _CARRIAGE_SADDLE_STIFFNESS_TET10[("mgn12_rail", bt_key)],
+    )
 
-    # Roll stiffness about rail X axis (two side tracks at +-r_y with 1.25 C-block skirt opening factor;
-    # k_zz already includes 45 deg contact-angle projection and Hung 15% carriage-skirt series compliance)
-    k_rx = k_zz * (r_y**2) / 1.25
-    # Pitch (Y) and yaw (Z) stiffness from ball distribution along raceway length L1
-    k_ry = k_zz * ((l1**2) / 12.0)
-    k_rz = k_yy * ((l1**2) / 12.0)
+    def _series_k(k_a: float, k_b: float) -> float:
+        return (k_a * k_b) / max(k_a + k_b, 1e-9)
+
+    k_yy_solid = _series_k(k_hertz_yy, k_sk_yy)
+    k_zz_solid = _series_k(k_hertz_zz, k_sk_zz)
+    k_rx_solid = _series_k(k_hertz_rx, k_sk_rx)
+    k_ry_solid = _series_k(k_hertz_ry, k_sk_ry)
+    k_rz_solid = _series_k(k_hertz_rz, k_sk_rz)
+
+    saddle_eta_yy = float(k_yy_solid / max(k_hertz_yy, 1e-9))
+    saddle_eta_zz = float(k_zz_solid / max(k_hertz_zz, 1e-9))
+    saddle_eta_rx = float(k_rx_solid / max(k_hertz_rx, 1e-9))
+    saddle_eta_ry = float(k_ry_solid / max(k_hertz_ry, 1e-9))
+    saddle_eta_rz = float(k_rz_solid / max(k_hertz_rz, 1e-9))
+
+    # 3D Tet10 (P2) calibrated anisotropic steel raceway-backing compliance in series with Hertzian+saddle
+    # (captures open C-channel lateral portal-frame sway & unilateral bolted roll lift-off mid-pocket vs bridge)
+    backing_by_pos = _MILLED_RAIL_RACEWAY_BACKING_STIFFNESS.get(key)
+    if backing_by_pos is not None:
+        pos_key = raceway_position.lower().strip()
+        k_back_yy, k_back_zz, k_back_rx = backing_by_pos.get(pos_key, backing_by_pos["travel_avg"])
+        k_yy = _series_k(k_yy_solid, k_back_yy)
+        k_zz = _series_k(k_zz_solid, k_back_zz)
+        k_rx = _series_k(k_rx_solid, k_back_rx)
+    else:
+        k_yy = k_yy_solid
+        k_zz = k_zz_solid
+        k_rx = k_rx_solid
+
+    eta_back_yy = float(k_yy / max(k_yy_solid, 1e-9))
+    eta_back_zz = float(k_zz / max(k_zz_solid, 1e-9))
+    eta_back_rx = float(k_rx / max(k_rx_solid, 1e-9))
+
+    # Pitch (Y) and yaw (Z) stiffness (solid saddle compliance already in series; propagate milled backing eta)
+    k_ry = k_ry_solid * eta_back_zz
+    k_rz = k_rz_solid * eta_back_yy
 
     q_total_preload = f_pre * c_dyn
     mu_roll = 0.0025
@@ -333,6 +449,14 @@ def hertzian_rail_carriage_stiffness(
         "active_ball_fraction": active_ball_frac,
         "groove_conformity_f": conformity_f,
         "effective_quality_stiffness_ratio": float(stiffness_mult),
+        "saddle_eta_yy": saddle_eta_yy,
+        "saddle_eta_zz": saddle_eta_zz,
+        "saddle_eta_rx": saddle_eta_rx,
+        "saddle_eta_ry": saddle_eta_ry,
+        "saddle_eta_rz": saddle_eta_rz,
+        "raceway_backing_eta_yy": eta_back_yy,
+        "raceway_backing_eta_zz": eta_back_zz,
+        "raceway_backing_eta_rx": eta_back_rx,
     }
 
 
@@ -342,9 +466,12 @@ def hertzian_rail_carriage_stiffness(
 # HGH15: 26x26, H=24, raceway~10.5 -> arm 13.5 mm).
 _RAIL_BOLT_PATTERN_M: dict[str, tuple[float, float, float, float]] = {
     "mgn9_rail": (0.020, 0.010, 0.016, 0.0055),
+    "mgn9_pocketed_rail": (0.020, 0.010, 0.016, 0.0055),
     "mgn12_rail": (0.020, 0.015, 0.020, 0.0075),
     "mgn12_hollow_rail": (0.020, 0.015, 0.020, 0.0075),
+    "mgn12_pocketed_rail": (0.020, 0.015, 0.020, 0.0075),
     "mgn15_rail": (0.025, 0.020, 0.020, 0.0090),
+    "mgn15_pocketed_rail": (0.025, 0.020, 0.020, 0.0090),
     "hgh15_rail": (0.026, 0.026, 0.026, 0.0135),
     "steel_rod_8mm": (0.018, 0.016, 0.024, 0.0070),
     "steel_rod_10mm": (0.021, 0.018, 0.028, 0.0085),
@@ -356,9 +483,12 @@ _RAIL_BOLT_PATTERN_M: dict[str, tuple[float, float, float, float]] = {
 # (HIWIN MGN rail H_R: MGN9 6.5 mm, MGN12 8.0 mm, MGN15 10.0 mm; VzBot 330 CAD MGN12 = 5 mm).
 _RAIL_RACEWAY_HEIGHT_M: dict[str, float] = {
     "mgn9_rail": 0.0039,
+    "mgn9_pocketed_rail": 0.0039,
     "mgn12_rail": 0.0048,
     "mgn12_hollow_rail": 0.0048,
+    "mgn12_pocketed_rail": 0.0048,
     "mgn15_rail": 0.0060,
+    "mgn15_pocketed_rail": 0.0060,
     "hgh15_rail": 0.0090,
 }
 
@@ -575,6 +705,7 @@ def newmark_rail_composite_gamma(
     wall_thickness_m: float | None = None,
     matrix_shear_retention: float = 1.0,
     cf_rail_mounting: str = "single_wall_bare",
+    rail_profile_id: str | None = None,
 ) -> float:
     """Newmark (1951) partial-interaction shear-lag composite factor gamma in (0, 1).
 
@@ -638,6 +769,9 @@ def newmark_rail_composite_gamma(
         k_s = _BOLT_SHEAR_STIFFNESS_N_M["solid_bar"]
     else:
         k_s = _BOLT_SHEAR_STIFFNESS_N_M["extrusion"]
+
+    if rail_profile_id:
+        k_s *= _MILLED_RAIL_BOLT_KS_MULT.get(rail_profile_id.lower().strip(), 1.0)
 
     return 1.0 / (1.0 + (math.pi**2) * ea_star * s / ((l_eff**2) * k_s))
 
@@ -1449,6 +1583,7 @@ def compute_thermal_structural_report(assembly: AssemblyModel) -> ThermalStructu
             wall_thickness_m=x_beam_prof.wall_thickness_m,
             matrix_shear_retention=x_beam_shear_ret,
             cf_rail_mounting=cf_mount,
+            rail_profile_id=x_rail_prof.id,
         )
 
     rail_qual = resolve_rail_quality(spec)

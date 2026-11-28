@@ -1800,7 +1800,7 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
     use_cad_se = bool(getattr(spec, "use_cad_superelements", True))
     th = spec.toolhead
     th_pid = (th.preset_id or "").lower().strip()
-    th_cad_id = "stealthburner" if th_pid == "stealthburner_tap" else th_pid
+    th_cad_id = th_pid
     th_cad_manifest = _get_cad_asset_manifest("toolheads", th_cad_id) if use_cad_se else None
     th_cad_active = th_cad_manifest is not None
     th_cad_trust = (
@@ -1851,9 +1851,7 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
                 f"Nozzle drop = {abs(float(tentry['nozzle_offset_mm'][2])):.0f} mm"
             ),
             cad_manifest=(
-                _get_cad_asset_manifest(
-                    "toolheads", "stealthburner" if tid == "stealthburner_tap" else tid
-                )
+                _get_cad_asset_manifest("toolheads", tid)
                 if use_cad_se
                 else None
             ),

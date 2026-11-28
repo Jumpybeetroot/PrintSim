@@ -26,6 +26,12 @@ class ProfileSpec(BaseModel):
     corner_radius_m: float = Field(
         0.0, ge=0, description="Outer corner fillet radius for roll-wrapped/formed hollow tubes (m)"
     )
+    shear_kappa_y: float | None = Field(
+        None, gt=0, description="Optional Tet10-calibrated Timoshenko shear factor kappa_y (local Y)"
+    )
+    shear_kappa_z: float | None = Field(
+        None, gt=0, description="Optional Tet10-calibrated Timoshenko shear factor kappa_z (local Z)"
+    )
 
     @property
     def max_c_y(self) -> float:
@@ -347,34 +353,134 @@ PROFILE_CATALOG: dict[str, ProfileSpec] = {
     "steel_tube_25x25x2": _hollow_square_tube(
         "steel_tube_25x25x2", "Steel Square Tube 25x25x2.0mm", 25.0, 2.0
     ),
-    # HIWIN MG Series linear guideways (D-03: exact HIWIN catalog linear mass @ 7850 kg/m^3 steel_4140:
-    # MGN9R = 0.38 kg/m, MGN12R = 0.65 kg/m, MGN15R = 1.06 kg/m; cross-section includes
-    # bolt counterbores and ball-raceway grooves vs nominal outer W x H bounding box).
+    # HIWIN MG / HG Series linear guideways — 3D Tet10 (P2) continuum FEA calibrated cross-sections
+    # (scripts/calibrate_all_rails_and_carriages_fea.py): exact Gothic-arch (MGN) / waisted 4-row
+    # circular-arc (HGR15) raceway grooves + M3/M4 counterbored holes on catalog pitch (20/25/40/60 mm),
+    # with exact HIWIN catalog linear mass @ 7850 kg/m^3 steel_4140 (0.38 / 0.65 / 1.06 / 1.45 kg/m).
     "mgn9_rail": _solid_rect("mgn9_rail", "MGN9H Linear Rail (9x6.5mm)", 9.0, 6.5, "rail").model_copy(
-        update={"area_m2": 0.380 / 7850.0}
+        update={
+            "area_m2": 0.380 / 7850.0,
+            "iy_m4": 1.480e-10,
+            "iz_m4": 3.365e-10,
+            "j_m4": 2.872e-10,
+            "shear_kappa_y": 0.508,
+            "shear_kappa_z": 0.842,
+        }
     ),
-    "mgn12_rail": _solid_rect("mgn12_rail", "MGN12H Linear Rail (12x8mm)", 12.0, 8.0, "rail").model_copy(
-        update={"area_m2": 0.650 / 7850.0}
-    ),
-    # Monolith revised Hollow MGN12 / ULS lightweight X-rail (~32% lighter linear mass: 0.44 kg/m,
-    # ~18% lower Iy/Iz due to machined internal cavity; Monolith3D/MISC/Hollow_MGN12_rails).
-    "mgn12_hollow_rail": _solid_rect(
-        "mgn12_hollow_rail", "Hollow MGN12H Linear Rail (12x8mm, 440 g/m)", 12.0, 8.0, "rail"
+    # 3D Tet10 (P2) FEA-calibrated periodic bottom-pocketed MGN9H rail (12x4.6x4.3 mm pockets between
+    # 8 mm solid M3 bolt bridges, 1.35 mm min raceway wall; 299.0 g/m, -22.9% mass vs solid MGN9R).
+    "mgn9_pocketed_rail": _solid_rect(
+        "mgn9_pocketed_rail",
+        "Pocketed MGN9H Linear Rail (9x6.5mm, 299 g/m)",
+        9.0,
+        6.5,
+        "rail",
     ).model_copy(
         update={
-            "area_m2": 0.440 / 7850.0,
-            "iy_m4": 4.10e-10,
-            "iz_m4": 9.40e-10,
-            "j_m4": 6.90e-10,
+            "area_m2": 38.09e-6,
+            "iy_m4": 1.149e-10,
+            "iz_m4": 3.105e-10,
+            "j_m4": 1.239e-10,
+            "shear_kappa_y": 0.329,
+            "shear_kappa_z": 0.85,
+        }
+    ),
+    "mgn12_rail": _solid_rect("mgn12_rail", "MGN12H Linear Rail (12x8mm)", 12.0, 8.0, "rail").model_copy(
+        update={
+            "area_m2": 0.650 / 7850.0,
+            "iy_m4": 4.119e-10,
+            "iz_m4": 9.623e-10,
+            "j_m4": 8.562e-10,
+            "shear_kappa_y": 0.646,
+            "shear_kappa_z": 0.812,
+        }
+    ),
+    # 3D Tet10 (P2) FEA-calibrated Monolith/ULS continuous bottom-channel hollow MGN12H rail
+    # (6.6x4.98 mm open C-channel, 1.45 mm min raceway wall, 440.9 g/m, -33.1% mass vs solid MGN12R;
+    # captures true open-section C-channel torsion loss J = 130.1 mm^4 and shear kappa_y = 0.179).
+    "mgn12_hollow_rail": _solid_rect(
+        "mgn12_hollow_rail", "Hollow MGN12H Linear Rail (12x8mm, 441 g/m)", 12.0, 8.0, "rail"
+    ).model_copy(
+        update={
+            "area_m2": 56.16e-6,
+            "iy_m4": 2.975e-10,
+            "iz_m4": 8.882e-10,
+            "j_m4": 1.301e-10,
+            "shear_kappa_y": 0.179,
+            "shear_kappa_z": 0.769,
+        }
+    ),
+    # 3D Tet10 (P2) FEA-calibrated periodic bottom-pocketed MGN12H rail (16x6.6x5.5 mm pockets between
+    # 9 mm solid M3 bolt bridges, 1.45 mm min raceway wall; 484.6 g/m, -26.5% mass, 2.26x bare GJ vs hollow).
+    "mgn12_pocketed_rail": _solid_rect(
+        "mgn12_pocketed_rail",
+        "Pocketed MGN12H Linear Rail (12x8mm, 485 g/m)",
+        12.0,
+        8.0,
+        "rail",
+    ).model_copy(
+        update={
+            "area_m2": 61.74e-6,
+            "iy_m4": 3.090e-10,
+            "iz_m4": 8.964e-10,
+            "j_m4": 2.942e-10,
+            "shear_kappa_y": 0.329,
+            "shear_kappa_z": 0.690,
         }
     ),
     # Sentinel for rail-only unsupported X-gantries (e.g. Monolith Zero bare MGN12H X-rail;
     # builder_gantry constructs the X member directly from x_rail_profile + optional rail backer).
     "unsupported_rail": _solid_rect(
         "unsupported_rail", "Unsupported Bare Linear Rail (No X-Beam)", 12.0, 8.0, "rail"
-    ).model_copy(update={"area_m2": 0.650 / 7850.0}),
+    ).model_copy(
+        update={
+            "area_m2": 0.650 / 7850.0,
+            "iy_m4": 4.119e-10,
+            "iz_m4": 9.623e-10,
+            "j_m4": 8.562e-10,
+            "shear_kappa_y": 0.646,
+            "shear_kappa_z": 0.812,
+        }
+    ),
     "mgn15_rail": _solid_rect("mgn15_rail", "MGN15H Linear Rail (15x10mm)", 15.0, 10.0, "rail").model_copy(
-        update={"area_m2": 1.060 / 7850.0}
+        update={
+            "area_m2": 1.060 / 7850.0,
+            "iy_m4": 11.290e-10,
+            "iz_m4": 24.134e-10,
+            "j_m4": 22.329e-10,
+            "shear_kappa_y": 0.777,
+            "shear_kappa_z": 0.796,
+        }
+    ),
+    # 3D Tet10 (P2) FEA-calibrated periodic bottom-pocketed MGN15H rail (30x8.4x7.0 mm pockets between
+    # 10 mm solid M3 bolt bridges, 1.65 mm min raceway wall; 730.6 g/m, -31.5% mass vs solid MGN15R).
+    "mgn15_pocketed_rail": _solid_rect(
+        "mgn15_pocketed_rail",
+        "Pocketed MGN15H Linear Rail (15x10mm, 731 g/m)",
+        15.0,
+        10.0,
+        "rail",
+    ).model_copy(
+        update={
+            "area_m2": 93.07e-6,
+            "iy_m4": 7.756e-10,
+            "iz_m4": 21.452e-10,
+            "j_m4": 5.272e-10,
+            "shear_kappa_y": 0.237,
+            "shear_kappa_z": 0.557,
+        }
+    ),
+    # 3D Tet10 (P2) FEA-calibrated HIWIN HGR15R heavy 4-row waisted linear rail (15x15 mm,
+    # P = 60 mm M4 counterbores, twin circular-arc ball tracks per side; 1.450 kg/m @ 7850 kg/m^3).
+    "hgh15_rail": _solid_rect("hgh15_rail", "HGR15R Heavy Linear Rail (15x15mm)", 15.0, 15.0, "rail").model_copy(
+        update={
+            "area_m2": 1.450 / 7850.0,
+            "iy_m4": 34.509e-10,
+            "iz_m4": 27.743e-10,
+            "j_m4": 38.583e-10,
+            "shear_kappa_y": 0.782,
+            "shear_kappa_z": 0.769,
+        }
     ),
     "steel_rod_8mm": _round_rod("steel_rod_8mm", "Hardened Linear Rod 8mm", 8.0),
     "steel_rod_10mm": _round_rod("steel_rod_10mm", "Hardened Linear Rod 10mm", 10.0),

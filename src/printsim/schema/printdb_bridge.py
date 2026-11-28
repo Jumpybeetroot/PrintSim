@@ -230,8 +230,9 @@ def hydrate_hotend_catalog(catalog: dict[str, dict[str, Any]]) -> None:
 def hydrate_rail_catalog(
     carriage_catalog: dict[str, tuple[float, float, int, float, float, float, float, float]],
     block_mass_g: dict[str, tuple[float, float]],
+    saddle_stiffness_tet10: dict[tuple[str, str], tuple[float, float, float, float, float]] | None = None,
 ) -> None:
-    """Overlay PrintDB linear rail specs onto ``_RAIL_CARRIAGE_CATALOG`` & ``_RAIL_BLOCK_MASS_G``."""
+    """Overlay PrintDB linear rail specs & Tet10 carriage saddle compliance onto rail catalogs."""
     # Map each rail profile key -> (short_c_id, long_h_id)
     mapping: dict[str, tuple[str | None, str | None]] = {
         "mgn9_rail": ("components/linear_rails/hiwin-mgn9c", "components/linear_rails/hiwin-mgn9h"),
@@ -261,6 +262,42 @@ def hydrate_rail_catalog(
             if raw_h and raw_h.get("dynamic_load_n") is not None:
                 c_h = float(raw_h["dynamic_load_n"])
             carriage_catalog[key] = (d_b, r_y, n_rows, l1_c, c_c, l1_h, c_h, seal_drag)
+
+    if saddle_stiffness_tet10 is not None:
+        ref_id = "references/materials_mechanics/tet10-carriage-saddle-compliance"
+        ref_specs = get_record_specs(ref_id, si=False)
+        if ref_specs:
+            slug_map: dict[tuple[str, str], str] = {
+                ("mgn9_rail", "C"): "mgn9c",
+                ("mgn9_rail", "H"): "mgn9h",
+                ("mgn12_rail", "C"): "mgn12c",
+                ("mgn12_rail", "H"): "mgn12h",
+                ("mgn15_rail", "C"): "mgn15c",
+                ("mgn15_rail", "H"): "mgn15h",
+                ("hgh15_rail", "C"): "hgh15ca",
+                ("steel_rod_8mm", "C"): "lm8uu",
+                ("steel_rod_8mm", "H"): "lm8luu",
+                ("steel_rod_10mm", "C"): "lm10uu",
+                ("steel_rod_10mm", "H"): "lm10luu",
+                ("steel_rod_12mm", "C"): "lm12uu",
+                ("steel_rod_12mm", "H"): "lm12luu",
+            }
+            for k_pair, slug in slug_map.items():
+                if k_pair not in saddle_stiffness_tet10:
+                    continue
+                cur = saddle_stiffness_tet10[k_pair]
+                kyy = ref_specs.get(f"{slug}_k_skirt_yy_mn_per_m")
+                kzz = ref_specs.get(f"{slug}_k_skirt_zz_mn_per_m")
+                krx = ref_specs.get(f"{slug}_k_skirt_rx_nm_per_rad")
+                kry = ref_specs.get(f"{slug}_k_skirt_ry_nm_per_rad")
+                krz = ref_specs.get(f"{slug}_k_skirt_rz_nm_per_rad")
+                saddle_stiffness_tet10[k_pair] = (
+                    float(kyy) * 1e6 if kyy is not None else cur[0],
+                    float(kzz) * 1e6 if kzz is not None else cur[1],
+                    float(krx) if krx is not None else cur[2],
+                    float(kry) if kry is not None else cur[3],
+                    float(krz) if krz is not None else cur[4],
+                )
 
 
 MATERIAL_PRINTDB_MAP: dict[str, str] = {
@@ -382,9 +419,13 @@ PROFILE_PRINTDB_MAP: dict[str, str] = {
     "al_tube_30x30x3": "components/profiles/al-tube-30x30x3",
     "steel_tube_25x25x2": "components/profiles/steel-tube-25x25x2",
     "mgn9_rail": "components/profiles/profile-mgn9-rail",
+    "mgn9_pocketed_rail": "components/profiles/profile-pocketed-mgn9-rail",
     "mgn12_rail": "components/profiles/profile-mgn12-rail",
     "mgn12_hollow_rail": "components/profiles/profile-hollow-mgn12-rail",
+    "mgn12_pocketed_rail": "components/profiles/profile-pocketed-mgn12-rail",
     "mgn15_rail": "components/profiles/profile-mgn15-rail",
+    "mgn15_pocketed_rail": "components/profiles/profile-pocketed-mgn15-rail",
+    "hgh15_rail": "components/profiles/profile-hgh15-rail",
     "steel_rod_8mm": "components/profiles/profile-steel-rod-8mm",
     "steel_rod_10mm": "components/profiles/profile-steel-rod-10mm",
     "steel_rod_12mm": "components/profiles/profile-steel-rod-12mm",
@@ -394,8 +435,9 @@ PROFILE_PRINTDB_MAP: dict[str, str] = {
 
 
 def hydrate_profile_catalog(catalog: dict[str, Any]) -> None:
-    """Overlay PrintDB cross-section SI geometry onto all matching ``PROFILE_CATALOG`` entries."""
+    """Overlay PrintDB cross-section SI geometry & Tet10 rail shear factors onto ``PROFILE_CATALOG``."""
     mapping = PROFILE_PRINTDB_MAP
+    ref_shear = get_record_specs("references/materials_mechanics/tet10-carriage-saddle-compliance", si=False)
     for key, rid in mapping.items():
         if key not in catalog:
             continue
@@ -411,6 +453,13 @@ def hydrate_profile_catalog(catalog: dict[str, Any]) -> None:
             prof.iz_m4 = float(si["iz_m4"])
         if si.get("j_m4") is not None:
             prof.j_m4 = float(si["j_m4"])
+        if ref_shear:
+            ky = ref_shear.get(f"{key}_shear_kappa_y_ratio")
+            kz = ref_shear.get(f"{key}_shear_kappa_z_ratio")
+            if ky is not None:
+                prof.shear_kappa_y = float(ky)
+            if kz is not None:
+                prof.shear_kappa_z = float(kz)
 
 
 def hydrate_z_drive_catalog(catalog: dict[str, dict[str, Any]]) -> None:

@@ -334,6 +334,12 @@ _CUT_FEE_USD = 0.75
 _RAIL_HARDWARE: dict[str, tuple[str, float, float, float, float]] = {
     # profile_id -> (series_label, rail_usd_per_m, carriage_usd, mass_c_g, mass_h_g)
     "mgn9_rail": ("MGN9", 32.0, 12.0, *_RAIL_BLOCK_MASS_G["mgn9_rail"]),
+    "mgn9_pocketed_rail": (
+        "Pocketed MGN9",
+        54.0,
+        12.0,
+        *_RAIL_BLOCK_MASS_G.get("mgn9_pocketed_rail", _RAIL_BLOCK_MASS_G["mgn9_rail"]),
+    ),
     "mgn12_rail": ("MGN12", 42.0, 16.0, *_RAIL_BLOCK_MASS_G["mgn12_rail"]),
     "mgn12_hollow_rail": (
         "Hollow MGN12",
@@ -341,7 +347,19 @@ _RAIL_HARDWARE: dict[str, tuple[str, float, float, float, float]] = {
         16.0,
         *_RAIL_BLOCK_MASS_G.get("mgn12_hollow_rail", _RAIL_BLOCK_MASS_G["mgn12_rail"]),
     ),
+    "mgn12_pocketed_rail": (
+        "Pocketed MGN12",
+        68.0,
+        16.0,
+        *_RAIL_BLOCK_MASS_G.get("mgn12_pocketed_rail", _RAIL_BLOCK_MASS_G["mgn12_rail"]),
+    ),
     "mgn15_rail": ("MGN15", 58.0, 22.0, *_RAIL_BLOCK_MASS_G["mgn15_rail"]),
+    "mgn15_pocketed_rail": (
+        "Pocketed MGN15",
+        88.0,
+        22.0,
+        *_RAIL_BLOCK_MASS_G.get("mgn15_pocketed_rail", _RAIL_BLOCK_MASS_G["mgn15_rail"]),
+    ),
     "hgh15_rail": ("HGH15CA", 72.0, 32.0, *_RAIL_BLOCK_MASS_G["hgh15_rail"]),
     "steel_rod_8mm": ("LM8UU", 14.0, 4.5, *_RAIL_BLOCK_MASS_G["steel_rod_8mm"]),
     "steel_rod_10mm": ("LM10UU", 18.0, 6.0, *_RAIL_BLOCK_MASS_G["steel_rod_10mm"]),

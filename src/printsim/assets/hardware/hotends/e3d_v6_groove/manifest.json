@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "e3d_v6_groove",
+  "name": "E3D V6 Groove-Mount (40W Al Block, 0.30 mm SS304 Throat)",
+  "source_cad": "E3D V6 Official Drawing parametric multi-material B-Rep (build123d)",
+  "source_url": "https://e3d-online.com/products/v6-all-metal-hotend",
+  "baked_at": "2026-11-28T03:59:03Z",
+  "reference_material_id": "stainless_304",
+  "reference_youngs_modulus_pa": 193000000000.0,
+  "reference_density_kg_m3": 8000.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 13763,
+  "num_elements": 47543,
+  "num_dofs": 41289,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005871,
+  "mass_kg": 0.033013,
+  "com_mm": [
+    -0.765,
+    0.0,
+    -34.6264
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -62.3
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 155.07,
+    "ky": 154.859,
+    "kz": 46700.393
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 56.265,
+    "kry": 56.478,
+    "krz": 48.7
+  },
+  "fixed_interface_freqs_hz": [
+    5514.57,
+    5720.36,
+    7650.73,
+    11067.5,
+    12141.51,
+    15225.6,
+    15961.52,
+    17483.22
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 14178,
+  "visual_bytes": 510748,
+  "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "v6_ss304_heatbreak",
+      "name": "V6 Ss304 Heatbreak",
+      "material_id": "stainless_304",
+      "mass_g": 2.32,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -42.26
+      ],
+      "num_elements": 3823
+    },
+    {
+      "id": "v6_brass_nozzle",
+      "name": "V6 Brass Nozzle",
+      "material_id": "brass_c360",
+      "mass_g": 2.63,
+      "com_mm": [
+        0.0,
+        0.0,
+        -55.87
+      ],
+      "num_elements": 1910
+    },
+    {
+      "id": "v6_al_heater_block",
+      "name": "V6 Al Heater Block",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 8.94,
+      "com_mm": [
+        -2.83,
+        0.0,
+        -52.88
+      ],
+      "num_elements": 11115
+    },
+    {
+      "id": "v6_groove_heatsink",
+      "name": "V6 Groove Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 19.13,
+      "com_mm": [
+        0.0,
+        0.0,
+        -22.25
+      ],
+      "num_elements": 30695
+    }
+  ],
+  "source_hash": "f05b38fbada5a9bbd9b2a44f8941af2dc9c81b162c3e364a616b6f5a5c20e7aa"
+}

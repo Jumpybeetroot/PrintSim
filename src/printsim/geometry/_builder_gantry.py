@@ -124,6 +124,7 @@ def _compute_newmark_rail_gamma(
         wall_thickness_m=member.profile.wall_thickness_m,
         matrix_shear_retention=member.material.shear_modulus_retention_at_temp(chamber_temp_c),
         cf_rail_mounting=cf_rail_mounting,
+        rail_profile_id=rail_profile.id,
     )
 
 
@@ -424,6 +425,8 @@ def _oriented_bare_rail_profile(x_rail_prof: ProfileSpec, x_mount: str) -> Profi
             "height_m": x_rail_prof.width_m,
             "iy_m4": x_rail_prof.iz_m4,
             "iz_m4": x_rail_prof.iy_m4,
+            "shear_kappa_y": x_rail_prof.shear_kappa_z,
+            "shear_kappa_z": x_rail_prof.shear_kappa_y,
         }
     )
 
@@ -677,6 +680,7 @@ def _populate_linear_rail_telemetry(model: AssemblyModel) -> None:
                 wall_thickness_m=base_x_prof.wall_thickness_m,
                 matrix_shear_retention=shear_ret,
                 cf_rail_mounting=spec.gantry.effective_cf_rail_mounting,
+                rail_profile_id=x_rail_prof.id,
             )
         model.x_beam_insert_mass_kg = sum(
             m.insert_mass_kg for m in model.members if m.role == "gantry"

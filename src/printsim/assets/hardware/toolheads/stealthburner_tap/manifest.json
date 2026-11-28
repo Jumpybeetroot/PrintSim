@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "stealthburner_tap",
+  "name": "Voron StealthBurner + CW2.5 + Voron Tap R8 (ABS/ASA Sliding Rail)",
+  "source_cad": "Stealthburner_CW2.5_Assembly.step + Voron Tap R8 MGN9H carriage (build123d)",
+  "source_url": "https://github.com/VoronDesign/Voron-Tap",
+  "baked_at": "2026-11-28T04:02:24Z",
+  "reference_material_id": "abs_printed",
+  "reference_youngs_modulus_pa": 2100000000.0,
+  "reference_density_kg_m3": 1040.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": true,
+  "element_type": "Tet4",
+  "num_vertices": 14196,
+  "num_elements": 42115,
+  "num_dofs": 42588,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 6,
+  "rigid_body_max_freq_hz": 0.001337,
+  "mass_kg": 0.133615,
+  "com_mm": [
+    -0.478,
+    -31.6133,
+    5.0084
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.2,
+    -37.4,
+    -1.9
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 1866.405,
+    "ky": 13499.352,
+    "kz": 2417.456
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 776.532,
+    "kry": 1028.473,
+    "krz": 1273.18
+  },
+  "fixed_interface_freqs_hz": [
+    370.66,
+    555.97,
+    937.58,
+    1216.47,
+    1492.98,
+    1597.95
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 32020,
+  "visual_bytes": 1583868,
+  "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 14.92,
+      "com_mm": [
+        -0.01,
+        -3.45,
+        -0.66
+      ],
+      "num_elements": 4708
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "abs_printed",
+      "mass_g": 25.72,
+      "com_mm": [
+        0.04,
+        -18.28,
+        -8.97
+      ],
+      "num_elements": 8104
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "abs_printed",
+      "mass_g": 69.42,
+      "com_mm": [
+        0.95,
+        -46.27,
+        -1.21
+      ],
+      "num_elements": 21853
+    },
+    {
+      "id": "upper_extruder_zone",
+      "name": "Upper Extruder Zone",
+      "material_id": "abs_printed",
+      "mass_g": 23.56,
+      "com_mm": [
+        -5.54,
+        -20.81,
+        42.19
+      ],
+      "num_elements": 7450
+    }
+  ],
+  "source_hash": "455a63006f1768c79f1ac1279595b02e77ab6267e0e07fe7d58221daf5b0329e"
+}

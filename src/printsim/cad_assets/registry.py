@@ -21,7 +21,10 @@ _DEFAULT_CATEGORIES: tuple[str, ...] = (
     "gantry_brackets",
     "frame_braces",
     "x_beams",
+    "carriages",
 )
+
+HARDWARE_CATEGORIES: tuple[str, ...] = _DEFAULT_CATEGORIES
 
 
 @dataclass(frozen=True)
@@ -673,3 +676,6 @@ def load_superelement(
         mass_scale_applied=scale_m,
         subpart_recovery=subpart_rec,
     )
+
+
+load_hardware_asset = load_superelement

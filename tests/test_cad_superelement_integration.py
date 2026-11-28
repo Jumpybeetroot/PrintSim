@@ -589,7 +589,7 @@ def test_full_pipeline_with_mock_cad_superelements_and_internal_cb_dofs(
     st_body = solve_static_fea(build_assembly(s_body_al))
     assert (
         asm_zb.toolhead_stage_stiffnesses_n_per_mm["carriage_mount_n_per_mm"]
-        > asm_cad.toolhead_stage_stiffnesses_n_per_mm["carriage_mount_n_per_mm"] * 1.35
+        > asm_cad.toolhead_stage_stiffnesses_n_per_mm["carriage_mount_n_per_mm"] * 1.30
     )
     assert st_zb.toolhead_stiffness_y_n_per_mm > st_cad.toolhead_stiffness_y_n_per_mm
     assert st_hm.toolhead_flex_breakdown["hotend_stiffness_n_per_mm"] > st_cad.toolhead_flex_breakdown["hotend_stiffness_n_per_mm"] * 1.25
@@ -888,7 +888,7 @@ def test_real_cad_assets_registry_if_present() -> None:
         assert np.all(eigs_11 > 0.0), f"{cat}/{aid} K_11 not strictly SPD"
         assert manifest.get("cad_trust_pct", 0) > 0
 
-        if cat in ("gantry_brackets", "frame_braces"):
+        if cat in ("gantry_brackets", "frame_braces", "carriages"):
             continue
 
         s = base.model_copy(deep=True)

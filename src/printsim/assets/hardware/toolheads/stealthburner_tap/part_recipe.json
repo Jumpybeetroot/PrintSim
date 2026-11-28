@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "category": "toolheads",
+  "asset_id": "stealthburner_tap",
+  "source_cad": "Stealthburner_CW2.5_Assembly.step + Voron Tap R8 MGN9H carriage (build123d)",
+  "source_url": "https://github.com/VoronDesign/Voron-Tap",
+  "regions": [
+    {
+      "label": "stealthburner_tap_body",
+      "material_id": "abs_printed",
+      "fdm_anisotropic": true
+    }
+  ],
+  "origin": "MGN12H front carriage face (0,0,0)",
+  "hotend_port_mm": [
+    0.2,
+    -37.4,
+    -1.9
+  ],
+  "tap_y_shift_mm": -8.5,
+  "baked_z_probe_type": "printed_tap",
+  "baked_probe_compliance_factor": 0.34,
+  "tap_mechanism": "50 mm vertical MGN9H sliding rail + 2x \u00d86x3 mm neodymium magnets + OptoTap PCB"
+}

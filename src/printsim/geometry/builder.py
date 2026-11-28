@@ -991,6 +991,18 @@ class AssemblyModel:
                 "visuals": self.frame_brace_visuals,
             },
             "x_beam_visual": _cad_xbeam_visual_dict(self.spec.gantry.x_beam_profile),
+            "x_rail_visual": _cad_xbeam_visual_dict(self.spec.gantry.x_rail_profile),
+            "y_rail_visual": _cad_xbeam_visual_dict(self.spec.gantry.y_rail_profile),
+            "z_rail_visual": _cad_xbeam_visual_dict(self.spec.bed.z_rail_profile),
+            "carriage_visuals": {
+                "x": _cad_carriage_visual_dict(
+                    self.spec.gantry.x_rail_profile, self.spec.gantry.rail_block_type
+                ),
+                "y": _cad_carriage_visual_dict(
+                    self.spec.gantry.y_rail_profile, self.spec.gantry.rail_block_type
+                ),
+                "z": _cad_carriage_visual_dict(self.spec.bed.z_rail_profile, "H"),
+            },
             "nodes": [
                 {
                     "id": n.id,
@@ -1621,7 +1633,7 @@ def _cad_visual_ports_mm(category: str, asset_id: str | None) -> dict[str, list[
 
 
 def _cad_xbeam_visual_dict(profile_id: str | None) -> dict[str, Any] | None:
-    """Return baked visual GLB metadata for a CAD-backed milled X-beam profile, else ``None``."""
+    """Return baked visual GLB metadata for a CAD-backed milled X-beam or linear rail profile, else ``None``."""
     if not profile_id or not _has_cad_visual("x_beams", profile_id):
         return None
     try:
@@ -1634,6 +1646,40 @@ def _cad_xbeam_visual_dict(profile_id: str | None) -> dict[str, Any] | None:
         "asset_id": profile_id,
         "visual_glb_url": f"/api/assets/hardware/x_beams/{profile_id}/visual.glb",
         "length_mm": length_mm,
+    }
+
+
+def _cad_carriage_visual_dict(
+    rail_profile_id: str | None,
+    block_type: str = "H",
+) -> dict[str, Any] | None:
+    """Return baked visual GLB metadata for a HIWIN MGN/HGH linear carriage block, else ``None``."""
+    if not rail_profile_id:
+        return None
+    rp = str(rail_profile_id).lower().strip()
+    suffix = "c" if str(block_type).upper().strip() == "C" else "h"
+    if "hgh15" in rp:
+        cid = "hgh15ca"
+    elif "mgn15" in rp:
+        cid = f"mgn15{suffix}"
+    elif "mgn9" in rp:
+        cid = f"mgn9{suffix}"
+    elif "mgn12" in rp:
+        cid = f"mgn12{suffix}"
+    else:
+        return None
+    if not _has_cad_visual("carriages", cid):
+        return None
+    try:
+        from printsim.cad_assets.registry import get_hardware_asset_manifest
+    except ImportError:
+        return None
+    man = get_hardware_asset_manifest("carriages", cid)
+    p1 = man.get("port1_mm", [0.0, 0.0, 8.2]) if man else [0.0, 0.0, 8.2]
+    return {
+        "asset_id": cid,
+        "visual_glb_url": f"/api/assets/hardware/carriages/{cid}/visual.glb",
+        "port1_z_mm": float(p1[2]) if isinstance(p1, list) and len(p1) == 3 else 8.2,
     }
 
 

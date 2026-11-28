@@ -218,9 +218,9 @@ def test_stealthburner_cw2_stiffness_realism_clamshell_and_tap_parity() -> None:
     rep_tap_preset = evaluate_printer(spec_tap_preset, include_advanced_analysis=False)
     geom_tap = rep_tap_preset.assembly.to_geometry_dict()
     assert geom_tap["toolhead_structure"]["toolhead_visual_glb_url"] == (
-        "/api/assets/hardware/toolheads/stealthburner/visual.glb"
+        "/api/assets/hardware/toolheads/stealthburner_tap/visual.glb"
     )
-    assert any(se.asset_id == "stealthburner" for se in rep_tap_preset.assembly.superelements)
+    assert any(se.asset_id == "stealthburner_tap" for se in rep_tap_preset.assembly.superelements)
     assert rep_tap_preset.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"] == pytest.approx(
         rep_tap_probe.assembly.toolhead_stage_stiffnesses_n_per_mm["body_n_per_mm"], rel=0.05
     )

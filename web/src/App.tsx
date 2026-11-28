@@ -189,8 +189,12 @@ const Y_RAIL_MOUNT_LABELS: Record<string, string> = {
 
 const RAIL_PROFILE_LABELS: Record<string, string> = {
   mgn9_rail: "MGN9H",
+  mgn9_pocketed_rail: "Pocketed MGN9H",
   mgn12_rail: "MGN12H",
   mgn12_hollow_rail: "Hollow MGN12H",
+  mgn12_pocketed_rail: "Pocketed MGN12H",
+  mgn15_rail: "MGN15H",
+  mgn15_pocketed_rail: "Pocketed MGN15H",
 };
 
 const DRIVE_TYPE_LABELS: Record<string, string> = {

@@ -35,8 +35,9 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "stealthburner_tap": {
             "trust_pct": 85,
             "basis": (
-                "Official StealthBurner CW2.5 STEP + Voron Tap hardware delta (+40 g net over stock 33 g printed "
-                "X-carriage for 50 mm MGN9H rail/block, PCB & magnets = 438 g on-rail excl. hotend, 484 g w/ Dragon HF)."
+                "Official StealthBurner CW2.5 STEP + Voron Tap R8 MGN9H sliding-rail carriage Tet4 CAD CMS "
+                "(42,115 tets, rb_max=0.0013 Hz, 133.6 g bare chassis) + PrintDB hardware delta "
+                "(+40 g net over stock 33 g printed X-carriage = 438 g on-rail excl. hotend, 484 g w/ Dragon HF)."
             ),
             "caveat": (
                 "Printed Tap rail carriage hardware, magnet stack, and optical PCB mass vary ±15 g by print infill and fasteners."
@@ -432,8 +433,8 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "e3d_v6_groove": {
             "trust_pct": 68,
             "basis": (
-                "E3D V6 CAD/mass specification (42 g, 62.3 mm) and classic J-head groove-mount lateral "
-                "neck deflection measurements (~45 N/mm)."
+                "E3D V6 CAD/mass specification (42 g dressed, 62.3 mm) and 47,543-elem multi-material Tet4 FEA "
+                "calibration (155/155 N/mm bare, rb_max=0.0059 Hz). Live CAD CMS raises trust to 85%."
             ),
             "caveat": (
                 "Groove-collar radial play varies dramatically with printed vs machined clamp fit and axial retention."
@@ -462,21 +463,21 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
         "phaetus_dragon_uhf": {
             "trust_pct": 60,
             "basis": (
-                "Phaetus Dragon UHF CAD/mass datasheet (56 g, 81.6 mm); reduced tip stiffness (~340 N/mm) "
-                "estimated from unsupported copper UHF extender cantilever."
+                "Phaetus Dragon UHF CAD/mass datasheet (56 g, 81.6 mm) and 55,574-elem multi-material Tet4 FEA "
+                "calibration (513/509 N/mm bare, rb_max=0.0048 Hz). Live CAD CMS raises trust to 85%."
             ),
             "caveat": (
-                "Copper melt-extender thread seating and long lower lever arm compliance are analytically estimated."
+                "Copper melt-extender thread seating and long lower lever arm compliance add ±10–12% real variance."
             ),
         },
         "phaetus_rapido_2_uhf": {
             "trust_pct": 58,
             "basis": (
-                "Phaetus Rapido 2 UHF CAD/mass datasheet (62 g, 79.2 mm, 85 W); lower UHF nozzle stiffness "
-                "(~320 N/mm) scaled from cantilever length."
+                "Phaetus Rapido 2 UHF CAD/mass datasheet (62 g, 79.2 mm, 85 W) and 47,955-elem multi-material "
+                "Tet4 FEA calibration (841/838 N/mm bare, rb_max=0.0053 Hz). Live CAD CMS raises trust to 85%."
             ),
             "caveat": (
-                "Extended UHF nut-extender flex and 3-screw upper standoff stiffness are unbenchmarked."
+                "Extended UHF nut-extender thread seating and 3-screw upper standoff preload add ±10–12% variance."
             ),
         },
         "mellow_goliath_air": {
@@ -493,11 +494,11 @@ ITEM_CONFIDENCE_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
             "trust_pct": 66,
             "basis": (
                 "Monolith 50 mm+V6 HF hotend specification (52 g dressed, 68 mm OAL, 50 mm melt zone, "
-                "80 W PT1000, 4-bolt M3 rigid flange, ~920 N/mm estimated tip stiffness)."
+                "80 W PT1000, 4-bolt M3 rigid flange) and 40,452-elem multi-material Tet4 FEA calibration "
+                "(568/630 N/mm bare, rb_max=0.0084 Hz). Live CAD CMS raises trust to 85%."
             ),
             "caveat": (
-                "50 mm extended melt-zone Graetz flow ceiling and Ti heatbreak lateral tip stiffness await "
-                "direct STEP Tet10 condensation and bench extrusion flow sweep."
+                "50 mm extended melt-zone Graetz flow ceiling still awaits direct bench extrusion flow sweep."
             ),
         },
     },
@@ -1380,14 +1381,88 @@ PROFILE_CONFIDENCE_REGISTRY: dict[str, dict[str, Any]] = {
             "Corner fillet radius and local M3 rail-mounting wall dimpling are idealized."
         ),
     },
-    "mgn12_hollow_rail": {
-        "trust_pct": 76,
+    "mgn9_rail": {
+        "trust_pct": 92,
         "basis": (
-            "Monolith revised Hollow MGN12H / ULS lightweight X-rail (0.44 kg/m vs 0.65 kg/m solid, "
-            "~18% lower beam Iy/Iz, 0.92× thin-wall raceway Hertzian stiffness, identical 54 g H-block)."
+            "3D Tet10 (P2) continuum FEA-calibrated solid HIWIN MGN9R linear rail with exact Gothic-arch "
+            "raceway grooves and M3 counterbored holes (P=20 mm, 380 g/m) + baked build123d PBR GLB."
         ),
         "caveat": (
-            "Thin-wall hollow raceway backing compliance (0.92×) is estimated pending direct 3D Tet10 carriage FEA."
+            "Minor ±3–5% variance from vendor raceway grind tolerances and bolt-head seating flatness."
+        ),
+    },
+    "mgn12_rail": {
+        "trust_pct": 92,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated solid HIWIN MGN12R linear rail with exact Gothic-arch "
+            "raceway grooves and M3 counterbored holes (P=25 mm, 650 g/m) + baked build123d PBR GLB."
+        ),
+        "caveat": (
+            "Minor ±3–5% variance from vendor raceway grind tolerances and bolt-head seating flatness."
+        ),
+    },
+    "mgn15_rail": {
+        "trust_pct": 92,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated solid HIWIN MGN15R linear rail with exact Gothic-arch "
+            "raceway grooves and M3 counterbored holes (P=40 mm, 1060 g/m) + baked build123d PBR GLB."
+        ),
+        "caveat": (
+            "Minor ±3–5% variance from vendor raceway grind tolerances and bolt-head seating flatness."
+        ),
+    },
+    "hgh15_rail": {
+        "trust_pct": 92,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated solid HIWIN HGR15R heavy 4-row linear rail with exact "
+            "circular-arc raceway grooves and M4 counterbored holes (P=60 mm, 1450 g/m) + baked build123d PBR GLB."
+        ),
+        "caveat": (
+            "Minor ±3–5% variance from vendor raceway grind tolerances and bolt-head seating flatness."
+        ),
+    },
+    "mgn9_pocketed_rail": {
+        "trust_pct": 88,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated periodic bottom-pocketed MGN9H linear rail "
+            "(12×4.6×4.3 mm pockets between 8 mm M3 bolt bridges, 1.35 mm min raceway wall, 299 g/m, -22.9% mass, "
+            "anisotropic mid-pocket vs bolt-bridge raceway backing compliance & baked build123d GLB)."
+        ),
+        "caveat": (
+            "EDM/CNC grinding distortion and local M3 bolt-boss preload scatter add ±6–8% variance on thin-wall rails."
+        ),
+    },
+    "mgn12_hollow_rail": {
+        "trust_pct": 88,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated Monolith/ULS continuous bottom-channel Hollow MGN12H rail "
+            "(6.6×4.98 mm open C-channel, 1.45 mm min raceway wall, 440.9 g/m, -33.1% mass; captures true "
+            "open-section torsion loss J=130.1 mm⁴, shear κ_y=0.179, and anisotropic raceway backing compliance)."
+        ),
+        "caveat": (
+            "Continuous open-channel walls are sensitive to post-machining raceway straightness and M3 mounting flatness."
+        ),
+    },
+    "mgn12_pocketed_rail": {
+        "trust_pct": 88,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated periodic bottom-pocketed MGN12H linear rail "
+            "(16×6.6×5.5 mm pockets between 9 mm M3 bolt bridges, 1.45 mm min raceway wall, 484.6 g/m, -26.5% mass, "
+            "2.26× bare GJ vs continuous hollow C-channel, anisotropic raceway backing compliance & baked GLB)."
+        ),
+        "caveat": (
+            "Pocket-fillet residual stress and M3 bolt-bridge flatness tolerance add ±6–8% stiffness scatter."
+        ),
+    },
+    "mgn15_pocketed_rail": {
+        "trust_pct": 88,
+        "basis": (
+            "3D Tet10 (P2) continuum FEA-calibrated periodic bottom-pocketed MGN15H linear rail "
+            "(30×8.4×7.0 mm pockets between 10 mm M3 bolt bridges, 1.65 mm min raceway wall, 730.6 g/m, -31.5% mass, "
+            "anisotropic mid-pocket vs bolt-bridge raceway backing compliance & baked build123d GLB)."
+        ),
+        "caveat": (
+            "Long 40 mm MGN15 bolt pitch increases mid-pocket vs bridge compliance ripple under high roll moments."
         ),
     },
     "unsupported_rail": {

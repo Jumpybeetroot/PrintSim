@@ -235,17 +235,19 @@ def test_b12_hgh15_datasheet_stiffness_and_rod_bushing_contact() -> None:
     hg_za = hertzian_rail_carriage_stiffness("hgh15_rail", preload="ZA", block_type="C")
     hg_zb = hertzian_rail_carriage_stiffness("hgh15_rail", preload="ZB", block_type="C")
 
-    # HIWIN HG15C catalog radial stiffness: Z0 = 196 N/um, ZA = 365 N/um (not old 413 / 572 N/um)
-    k_z0 = hg_z0["k_yy_n_m"] * 1e-6
-    k_z1 = hg_z1["k_yy_n_m"] * 1e-6
-    k_za = hg_za["k_yy_n_m"] * 1e-6
-    k_zb = hg_zb["k_yy_n_m"] * 1e-6
+    # HIWIN HG15C catalog radial stiffness (normal to mounting face -> k_zz): Z0 = 196 N/um, ZA = 365 N/um
+    k_z0 = hg_z0["k_zz_n_m"] * 1e-6
+    k_z1 = hg_z1["k_zz_n_m"] * 1e-6
+    k_za = hg_za["k_zz_n_m"] * 1e-6
+    k_zb = hg_zb["k_zz_n_m"] * 1e-6
     assert 180.0 <= k_z0 <= 215.0
     assert 310.0 <= k_za <= 390.0
     assert k_z0 < k_z1 < k_za < k_zb
+    assert hg_z0["k_yy_n_m"] < hg_z1["k_yy_n_m"] < hg_za["k_yy_n_m"] < hg_zb["k_yy_n_m"]
 
     mgn15_z1 = hertzian_rail_carriage_stiffness("mgn15_rail", preload="Z1", block_type="C")
-    assert mgn15_z1["k_yy_n_m"] * 1e-6 < k_z1
+    assert mgn15_z1["k_zz_n_m"] * 1e-6 < k_z1
+    assert mgn15_z1["k_yy_n_m"] < hg_z1["k_yy_n_m"]
 
     # Round LMxUU ball bushings on convex shaft have materially lower stiffness than profiled MGN rails
     rod8 = hertzian_rail_carriage_stiffness("steel_rod_8mm", preload="Z1", block_type="C")["k_yy_n_m"] * 1e-6

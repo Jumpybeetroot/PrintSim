@@ -514,14 +514,32 @@ const BUS_VOLTAGE_PRESETS = [24, 36, 48, 60];
 const LINEAR_RAIL_PROFILES: Array<{ id: string; label: string; shortLabel: string }> = [
   { id: "mgn9_rail", label: "MGN9H (9×6.5mm)", shortLabel: "MGN9H" },
   { id: "mgn12_rail", label: "MGN12H (12×8mm)", shortLabel: "MGN12H" },
+  { id: "mgn15_rail", label: "MGN15H (15×10mm)", shortLabel: "MGN15H" },
 ];
 
 const X_LINEAR_RAIL_PROFILES: Array<{ id: string; label: string; shortLabel: string }> = [
-  ...LINEAR_RAIL_PROFILES,
+  { id: "mgn9_rail", label: "MGN9H (9×6.5mm, 380 g/m)", shortLabel: "MGN9H" },
+  {
+    id: "mgn9_pocketed_rail",
+    label: "Pocketed MGN9H (9×6.5mm, 299 g/m · Tet10)",
+    shortLabel: "Pocketed MGN9H",
+  },
+  { id: "mgn12_rail", label: "MGN12H (12×8mm, 650 g/m)", shortLabel: "MGN12H" },
   {
     id: "mgn12_hollow_rail",
-    label: "Hollow MGN12H (12×8mm, 440 g/m)",
+    label: "Hollow MGN12H (12×8mm, 441 g/m · Tet10)",
     shortLabel: "Hollow MGN12H",
+  },
+  {
+    id: "mgn12_pocketed_rail",
+    label: "Pocketed MGN12H (12×8mm, 485 g/m · Tet10)",
+    shortLabel: "Pocketed MGN12H",
+  },
+  { id: "mgn15_rail", label: "MGN15H (15×10mm, 1060 g/m)", shortLabel: "MGN15H" },
+  {
+    id: "mgn15_pocketed_rail",
+    label: "Pocketed MGN15H (15×10mm, 731 g/m · Tet10)",
+    shortLabel: "Pocketed MGN15H",
   },
 ];
 

@@ -839,7 +839,14 @@ def serve(
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
 ) -> None:
     """Launch the PrintSim FastAPI server (backend + built Web 3D Studio)."""
-    uvicorn.run("printsim.api.server:app", host=host, port=port, reload=reload)
+    reload_dirs = [str(Path(__file__).resolve().parent)] if reload else None
+    uvicorn.run(
+        "printsim.api.server:app",
+        host=host,
+        port=port,
+        reload=reload,
+        reload_dirs=reload_dirs,
+    )
 
 
 @app.command("list-assets")

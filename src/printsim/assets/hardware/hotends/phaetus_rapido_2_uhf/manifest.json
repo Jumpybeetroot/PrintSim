@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_rapido_2_uhf",
+  "name": "Phaetus Rapido 2 UHF (85W Ceramic, 3x Ti Screws + UHF Extender)",
+  "source_cad": "phaetus_rapido_2_hf.step + Phaetus UHF +8.2 mm M6 Cu extender B-Rep",
+  "source_url": "https://www.phaetus.com/products/rapido2",
+  "baked_at": "2026-11-28T03:56:19Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 11671,
+  "num_elements": 47955,
+  "num_dofs": 35013,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.005272,
+  "mass_kg": 0.05034,
+  "com_mm": [
+    0.0004,
+    -0.0001,
+    -30.3789
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -62.7
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 841.086,
+    "ky": 837.564,
+    "kz": 66855.685
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 689.718,
+    "kry": 700.456,
+    "krz": 703.952
+  },
+  "fixed_interface_freqs_hz": [
+    5904.58,
+    5922.66,
+    9490.24,
+    17753.8,
+    17764.2,
+    18209.74,
+    21927.33,
+    22031.0
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 23992,
+  "visual_bytes": 919404,
+  "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "rapido2_uhf_v6_nozzle",
+      "name": "Rapido2 Uhf V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.97,
+      "com_mm": [
+        0.0,
+        0.0,
+        -55.85
+      ],
+      "num_elements": 1186
+    },
+    {
+      "id": "rapido2_uhf_3x_ti_screws_throat",
+      "name": "Rapido2 Uhf 3X Ti Screws Throat",
+      "material_id": "titanium_grade5",
+      "mass_g": 0.47,
+      "com_mm": [
+        0.03,
+        0.0,
+        -26.54
+      ],
+      "num_elements": 8170
+    },
+    {
+      "id": "rapido2_uhf_cu_core_extender",
+      "name": "Rapido2 Uhf Cu Core Extender",
+      "material_id": "copper_c110",
+      "mass_g": 29.98,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -38.07
+      ],
+      "num_elements": 17452
+    },
+    {
+      "id": "rapido2_uhf_heatsink",
+      "name": "Rapido2 Uhf Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 16.93,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -12.39
+      ],
+      "num_elements": 21147
+    }
+  ],
+  "source_hash": "699553b5fa1491e1a89131fe34832e8da94d2e56f4aa14698294ffb2b2a29b3e"
+}

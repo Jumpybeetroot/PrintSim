@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "monolith_50mm_hf",
+  "name": "Monolith 50mm+V6 HF Hotend (80W PT1000, 4x Vertical-Preload Ti)",
+  "source_cad": "Monolith3D 50mm+V6 HF multi-material parametric B-Rep (build123d)",
+  "source_url": "https://monolith3d.xyz",
+  "baked_at": "2026-11-28T04:01:35Z",
+  "reference_material_id": "titanium_grade5",
+  "reference_youngs_modulus_pa": 113800000000.0,
+  "reference_density_kg_m3": 4430.0,
+  "is_multi_material": true,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 10461,
+  "num_elements": 40452,
+  "num_dofs": 31383,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.008383,
+  "mass_kg": 0.055483,
+  "com_mm": [
+    -0.369,
+    -0.0942,
+    -29.894
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    -68.0
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 568.026,
+    "ky": 629.5,
+    "kz": 43066.382
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 656.872,
+    "kry": 565.918,
+    "krz": 588.117
+  },
+  "fixed_interface_freqs_hz": [
+    4900.81,
+    5347.48,
+    9201.02,
+    13088.35,
+    14895.23,
+    15168.39,
+    19634.85,
+    23010.73
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 6694,
+  "visual_bytes": 244696,
+  "cad_trust_pct": 85,
+  "subparts": [
+    {
+      "id": "monolith_v6_nozzle",
+      "name": "Monolith V6 Nozzle",
+      "material_id": "copper_c110",
+      "mass_g": 2.96,
+      "com_mm": [
+        0.0,
+        0.0,
+        -61.15
+      ],
+      "num_elements": 1101
+    },
+    {
+      "id": "monolith_ti_preload_posts_throat",
+      "name": "Monolith Ti Preload Posts Throat",
+      "material_id": "titanium_grade5",
+      "mass_g": 1.27,
+      "com_mm": [
+        -0.0,
+        -0.0,
+        -19.71
+      ],
+      "num_elements": 6637
+    },
+    {
+      "id": "monolith_50mm_cloverleaf_cu_core",
+      "name": "Monolith 50Mm Cloverleaf Cu Core",
+      "material_id": "copper_c110",
+      "mass_g": 36.68,
+      "com_mm": [
+        -0.56,
+        -0.14,
+        -36.42
+      ],
+      "num_elements": 18698
+    },
+    {
+      "id": "monolith_4bolt_heatsink",
+      "name": "Monolith 4Bolt Heatsink",
+      "material_id": "aluminum_6061_t6",
+      "mass_g": 14.58,
+      "com_mm": [
+        0.0,
+        -0.0,
+        -8.03
+      ],
+      "num_elements": 14016
+    }
+  ],
+  "source_hash": "3bb1d5285b789d54f4865a425ec27ffc9842584b9926494c8c804868ca997efb"
+}

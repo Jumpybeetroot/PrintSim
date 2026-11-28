@@ -1,0 +1,33 @@
+{
+  "asset_id": "mgn12_rail",
+  "category": "x_beams",
+  "name": "HIWIN MGN12R Solid Linear Rail (12x8mm)",
+  "source": "Parametric build123d 12x8.0x375mm HIWIN MG-series solid linear rail (P=25mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Miniature_Linear_Guideway_MG_Series-(E).pdf",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 375.0,
+  "width_mm": 12.0,
+  "height_mm": 8.0,
+  "visual_triangles": 10444,
+  "visual_bytes": 376468,
+  "fea_section_properties": {
+    "name": "mgn12_rail",
+    "kind": "solid",
+    "series": "MG",
+    "length_mm": 375.0,
+    "width_mm": 12.0,
+    "height_mm": 8.0,
+    "pitch_mm": 25.0,
+    "min_raceway_wall_mm": 4.75,
+    "volume_cm3": 31.657,
+    "mass_steel_g": 248.5,
+    "linear_mass_steel_g_m": 662.68,
+    "area_m2": 8.2802548e-05,
+    "iy_m4": 5.12e-10,
+    "iz_m4": 1.152e-09,
+    "j_m4": 1.202e-09,
+    "shear_kappa_y": null,
+    "shear_kappa_z": null
+  }
+}

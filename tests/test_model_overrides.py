@@ -962,11 +962,16 @@ def test_per_item_confidence_differentiation_and_options_breakdown() -> None:
         "tricorn_short": 87,      # elevated from 76 -> 87 by baked 112k-elem Tet4 CAD CMS superelement
         "chube_conduction": 86,   # elevated from 78 -> 86 by baked 80.2k-elem Tet4 CAD CMS superelement
         "phaetus_dragon_hf": 86,  # CAL-12 baked 46.9k-elem Tet4 CAD CMS superelement
-        "e3d_v6_groove": 68,
+        "e3d_v6_groove": 85,      # baked 47.5k-elem Tet4 CAD CMS superelement
         "mellow_goliath_air": 85, # CAL-12 baked 51.8k-elem Tet4 CAD CMS superelement
     }
     # Disabling CAD superelements reverts baked hotends to their catalog baselines
-    for hid, base_pct in (("tricorn_long", 78), ("tricorn_short", 76), ("chube_conduction", 78)):
+    for hid, base_pct in (
+        ("tricorn_long", 78),
+        ("tricorn_short", 76),
+        ("chube_conduction", 78),
+        ("e3d_v6_groove", 68),
+    ):
         s_off = base.model_copy(deep=True)
         s_off.toolhead.hotend.preset_id = hid
         s_off.use_cad_superelements = False
@@ -1121,10 +1126,12 @@ def test_model_confidence_audit_reflects_hardware_and_overrides() -> None:
     s_tap.toolhead.z_probe_type = "printed_tap"
     assert _by_id(s_tap)["z_probe"]["trust_pct"] == 48
 
-    # Hotend clamp: phaetus_dragon_hf -> 86% (CAL-12 CAD CMS), e3d_v6_groove -> 68%
+    # Hotend clamp: phaetus_dragon_hf -> 86% (CAL-12 CAD CMS), e3d_v6_groove -> 85% (CAD CMS, 68% w/o CAD)
     assert _by_id(spec)["hotend_clamp"]["trust_pct"] == 86
     s_v6 = spec.model_copy(deep=True)
     s_v6.toolhead.hotend.preset_id = "e3d_v6_groove"
+    assert _by_id(s_v6)["hotend_clamp"]["trust_pct"] == 85
+    s_v6.use_cad_superelements = False
     assert _by_id(s_v6)["hotend_clamp"]["trust_pct"] == 68
 
     # Bed mount: kinematic_3pt -> 85%, rigid_4pt -> 86%, springs_4pt -> 80%

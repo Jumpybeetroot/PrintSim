@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "category": "carriages",
+  "asset_id": "hgh15ca",
+  "source_cad": "Parametric build123d HIWIN HGH15CA (61.4x34.0x19.7mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Heavy_Load_Ball_Type_Linear_Guideway_HG_Series-(E).pdf",
+  "regions": [
+    {
+      "label": "steel_saddle",
+      "material_id": "steel_4140",
+      "fdm_anisotropic": null
+    }
+  ],
+  "rail_id": "hgh15_rail",
+  "series": "HG",
+  "width_mm": 34.0,
+  "length_total_mm": 61.4,
+  "l1_active_mm": 39.4,
+  "steel_body_len_mm": 49.8,
+  "assembly_height_mm": 24.0,
+  "clearance_h1_mm": 4.3,
+  "block_height_mm": 19.7,
+  "race_z_from_rail_bottom_mm": 9.0,
+  "h_bolt_mm": 15.0,
+  "bolt_b_mm": 26.0,
+  "bolt_c_mm": 26.0,
+  "target_mass_g": 180.0
+}

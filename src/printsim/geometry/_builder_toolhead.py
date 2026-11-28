@@ -558,14 +558,19 @@ _LEGACY_PRE_FEA_HOTEND_STIFFNESS: dict[str, tuple[float, ...]] = {
 }
 
 
-_TOOLHEAD_CAD_ASSET_ALIASES: dict[str, str] = {
-    "stealthburner_tap": "stealthburner",
-}
+_TOOLHEAD_CAD_ASSET_ALIASES: dict[str, str] = {}
 
 
-def resolve_toolhead_cad_asset_id(preset_id: str | None) -> str:
-    """Resolve toolhead preset ID to its baked CAD asset ID (e.g., stealthburner_tap -> stealthburner)."""
+def resolve_toolhead_cad_asset_id(
+    preset_id: str | None,
+    z_probe_type: str | None = None,
+) -> str:
+    """Resolve toolhead preset ID (and active Z-probe) to its baked CAD asset ID."""
     pid = (preset_id or "").lower().strip()
+    probe = (z_probe_type or "").lower().strip()
+    if pid == "stealthburner" and probe in ("printed_tap", "cnc_tap"):
+        if _has_cad_asset("toolheads", "stealthburner_tap"):
+            return "stealthburner_tap"
     return _TOOLHEAD_CAD_ASSET_ALIASES.get(pid, pid)
 
 
@@ -618,7 +623,9 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
     # 1. Self-contained Toolhead CAD Superelement (includes backplate + body + hotend mount;
     #    replaces heuristic toolhead_mount beam and places ONLY Hertzian MGN rail carriage contact in series)
     th_pid = (spec.toolhead.preset_id or "").lower().strip()
-    th_asset_id = resolve_toolhead_cad_asset_id(th_pid)
+    th_asset_id = resolve_toolhead_cad_asset_id(
+        th_pid, z_probe_type=getattr(spec.toolhead, "z_probe_type", None)
+    )
     he_pid = (spec.toolhead.hotend.preset_id or "").lower().strip()
     combo_id = f"{th_asset_id}__{he_pid}" if (th_asset_id and he_pid) else ""
     use_bottom_brace = bool(getattr(spec.toolhead, "use_hotend_bottom_brace", True))
@@ -639,7 +646,8 @@ def _inject_cad_toolhead_superelements(model: AssemblyModel) -> None:
         # StealthBurner + Clockwork 2 direct-drive assemblies have their extruder CoG above
         # the X-rail (cog_z > 0), so only attach the StealthBurner CAD SE when cog_z > 0.
         th_geom_matches_preset = not (
-            th_asset_id == "stealthburner" and float(spec.toolhead.cog_offset_mm[2]) <= 0.0
+            th_asset_id in ("stealthburner", "stealthburner_tap")
+            and float(spec.toolhead.cog_offset_mm[2]) <= 0.0
         )
 
         probe_comp = float(props.get("probe_comp", 1.0))

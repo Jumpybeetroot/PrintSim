@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "e3d_v6_groove",
+  "source_cad": "E3D V6 Official Drawing parametric multi-material B-Rep (build123d)",
+  "source_url": "https://e3d-online.com/products/v6-all-metal-hotend",
+  "regions": [
+    {
+      "label": "v6_ss304_heatbreak",
+      "material_id": "stainless_304",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "v6_brass_nozzle",
+      "material_id": "brass_c360",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "v6_al_heater_block",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "v6_groove_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "overall_length_mm": 62.3,
+  "meltzone_length_mm": 12.5,
+  "mount": "J-head groove collar \u00d816/\u00d812 mm @ Z=[0, -9.7] mm",
+  "heatbreak": "Unbraced SS304 \u00d82.60/\u00d82.00 mm (0.30 mm wall, 4.5 mm bare span)",
+  "block": "23x16x11.5 mm Al 6061-T6 40W block + V6 brass nozzle"
+}

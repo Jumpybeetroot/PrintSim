@@ -13,6 +13,7 @@ from typing import Any
 
 from .registry import (
     ASSETS_ROOT,
+    HARDWARE_CATEGORIES,
     LoadedHardwareAsset,
     clear_asset_cache,
     get_hardware_asset_manifest,
@@ -20,6 +21,7 @@ from .registry import (
     has_hardware_asset,
     has_visual_asset,
     list_hardware_assets,
+    load_hardware_asset,
     load_superelement,
 )
 

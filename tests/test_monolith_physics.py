@@ -119,13 +119,16 @@ def test_al_tube_12x12x1_on_1515_frame_evaluates_cleanly() -> None:
 
 
 def test_hollow_mgn12_lighter_and_slightly_softer_raceway() -> None:
-    """Hollow MGN12H rail is lighter than solid MGN12H with ~0.92x Hertzian raceway stiffness."""
+    """Hollow MGN12H rail is lighter than solid MGN12H with Tet10-calibrated anisotropic raceway backing."""
     car_solid = hertzian_rail_carriage_stiffness("mgn12_rail", preload="Z1", block_type="H")
     car_hollow = hertzian_rail_carriage_stiffness("mgn12_hollow_rail", preload="Z1", block_type="H")
 
     assert car_hollow["block_mass_g"] == pytest.approx(car_solid["block_mass_g"], rel=1e-9)
-    assert car_hollow["k_yy_n_m"] == pytest.approx(0.92 * car_solid["k_yy_n_m"], rel=1e-6)
-    assert car_hollow["k_rx_nm_rad"] == pytest.approx(0.92 * car_solid["k_rx_nm_rad"], rel=1e-6)
+    # 3D Tet10 C-channel backing: lateral k_yy drops ~20-21% (portal-frame leg sway),
+    # while vertical k_zz and roll k_rx drop ~3.5-4.5% in series with Hertzian + skirt compliance.
+    assert 0.75 < (car_hollow["k_yy_n_m"] / car_solid["k_yy_n_m"]) < 0.85
+    assert 0.93 < (car_hollow["k_zz_n_m"] / car_solid["k_zz_n_m"]) < 0.99
+    assert 0.93 < (car_hollow["k_rx_nm_rad"] / car_solid["k_rx_nm_rad"]) < 0.99
 
     spec_solid = _load_preset("monolith_sheet_metal_v2.yaml")
     spec_solid.gantry.x_rail_profile = "mgn12_rail"

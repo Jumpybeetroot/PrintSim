@@ -1093,37 +1093,59 @@ export function buildAssemblyHardwareMeshes({
             }
           };
 
+          const xRailVis = geom.x_rail_visual ?? null;
+          const cachedXRailGlb =
+            xRailVis?.visual_glb_url
+              ? (cadGlbResolvedCache.get(xRailVis.visual_glb_url) ?? null)
+              : null;
+
+          const addXRailFace = (
+            face: "front" | "top" | "bottom",
+            pos: THREE.Vector3
+          ) => {
+            if (cachedXRailGlb && xRailVis) {
+              const nativeLenThree = Math.max(xRailVis.length_mm * SCALE, 1e-4);
+              const railClone = cachedXRailGlb.clone(true);
+              const scaleX = (railLenX / nativeLenThree) * CAD_M_TO_THREE;
+              // Native GLB: X=length, Y=width (raceways ±Y), Z=height (top bolt face +Z, pockets -Z)
+              if (face === "top") {
+                railClone.rotation.x = -Math.PI * 0.5;
+              } else if (face === "bottom") {
+                railClone.rotation.x = Math.PI * 0.5;
+              }
+              railClone.scale.set(scaleX, CAD_M_TO_THREE, CAD_M_TO_THREE);
+              railClone.position.copy(pos);
+              railClone.name = `cad_x_rail_${xRailVis.asset_id}_${face}`;
+              group.add(railClone);
+              return;
+            }
+            const xGeo =
+              face === "front"
+                ? new THREE.BoxGeometry(railLenX, xRailW, xRailH)
+                : new THREE.BoxGeometry(railLenX, xRailH, xRailW);
+            const xEdges = new THREE.EdgesGeometry(xGeo);
+            addRailBar(xGeo, xEdges, pos);
+            addXCounterboresAndGrooves(face, pos);
+          };
+
           if (xRailMount === "front") {
             // CAD -Y face -> Three.js +Z face; wide face in CAD Z (Three.js Y), thickness in CAD -Y (Three.js +Z)
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailW, xRailH);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
             const pos = new THREE.Vector3(beamCX, beamCY, beamCZ + beamHalfCadY + xRailH * 0.5);
-            addRailBar(xGeo, xEdges, pos);
-            addXCounterboresAndGrooves("front", pos);
+            addXRailFace("front", pos);
           } else if (xRailMount === "top") {
             // CAD +Z face -> Three.js +Y face; wide face in CAD Y (Three.js Z), thickness in CAD +Z (Three.js +Y)
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
             const pos = new THREE.Vector3(beamCX, beamCY + beamHalfCadZ + xRailH * 0.5, beamCZ);
-            addRailBar(xGeo, xEdges, pos);
-            addXCounterboresAndGrooves("top", pos);
+            addXRailFace("top", pos);
           } else if (xRailMount === "bottom") {
             // CAD -Z face -> Three.js -Y face
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
             const pos = new THREE.Vector3(beamCX, beamCY - beamHalfCadZ - xRailH * 0.5, beamCZ);
-            addRailBar(xGeo, xEdges, pos);
-            addXCounterboresAndGrooves("bottom", pos);
+            addXRailFace("bottom", pos);
           } else if (xRailMount === "dual_top_bottom") {
             // Dual rails on both +Z (+Y Three.js) and -Z (-Y Three.js) faces
-            const xGeo = new THREE.BoxGeometry(railLenX, xRailH, xRailW);
-            const xEdges = new THREE.EdgesGeometry(xGeo);
             const posTop = new THREE.Vector3(beamCX, beamCY + beamHalfCadZ + xRailH * 0.5, beamCZ);
             const posBot = new THREE.Vector3(beamCX, beamCY - beamHalfCadZ - xRailH * 0.5, beamCZ);
-            addRailBar(xGeo, xEdges, posTop);
-            addXCounterboresAndGrooves("top", posTop);
-            addRailBar(xGeo, xEdges, posBot);
-            addXCounterboresAndGrooves("bottom", posBot);
+            addXRailFace("top", posTop);
+            addXRailFace("bottom", posBot);
           }
         }
 
@@ -1150,45 +1172,93 @@ export function buildAssemblyHardwareMeshes({
               0.5 * (pRF.z + pRR.z)
             );
 
+            const yRailVis = geom.y_rail_visual ?? null;
+            const cachedYRailGlb =
+              yRailVis?.visual_glb_url
+                ? (cadGlbResolvedCache.get(yRailVis.visual_glb_url) ?? null)
+                : null;
+            const addYRailBar = (
+              pos: THREE.Vector3,
+              normVec: THREE.Vector3,
+              fallbackGeo: THREE.BoxGeometry,
+              fallbackEdges: THREE.EdgesGeometry,
+              tag: string
+            ) => {
+              if (cachedYRailGlb && yRailVis) {
+                const nativeLenThree = Math.max(yRailVis.length_mm * SCALE, 1e-4);
+                const railClone = cachedYRailGlb.clone(true);
+                const lenVec = new THREE.Vector3(0, 0, 1);
+                const wVec = new THREE.Vector3().crossVectors(normVec, lenVec).normalize();
+                const q = new THREE.Quaternion().setFromRotationMatrix(
+                  new THREE.Matrix4().makeBasis(lenVec, wVec, normVec)
+                );
+                railClone.quaternion.copy(q);
+                railClone.scale.set(
+                  (railLenY / nativeLenThree) * CAD_M_TO_THREE,
+                  CAD_M_TO_THREE,
+                  CAD_M_TO_THREE
+                );
+                railClone.position.copy(pos);
+                railClone.name = `cad_y_rail_${yRailVis.asset_id}_${tag}`;
+                group.add(railClone);
+                return;
+              }
+              addRailBar(fallbackGeo, fallbackEdges, pos);
+            };
+
             if (yRailMount === "top") {
               const yGeo = new THREE.BoxGeometry(yRailW, yRailH, railLenY);
               const yEdges = new THREE.EdgesGeometry(yGeo);
-              addRailBar(
+              const up = new THREE.Vector3(0, 1, 0);
+              addYRailBar(
+                leftCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0)),
+                up,
                 yGeo,
                 yEdges,
-                leftCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0))
+                "l_top"
               );
-              addRailBar(
+              addYRailBar(
+                rightCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0)),
+                up,
                 yGeo,
                 yEdges,
-                rightCenter.clone().add(new THREE.Vector3(0, beamHalfCadZ + yRailH * 0.5, 0))
+                "r_top"
               );
             } else if (yRailMount === "bottom") {
               const yGeo = new THREE.BoxGeometry(yRailW, yRailH, railLenY);
               const yEdges = new THREE.EdgesGeometry(yGeo);
-              addRailBar(
+              const down = new THREE.Vector3(0, -1, 0);
+              addYRailBar(
+                leftCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0)),
+                down,
                 yGeo,
                 yEdges,
-                leftCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0))
+                "l_bot"
               );
-              addRailBar(
+              addYRailBar(
+                rightCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0)),
+                down,
                 yGeo,
                 yEdges,
-                rightCenter.clone().add(new THREE.Vector3(0, -(beamHalfCadZ + yRailH * 0.5), 0))
+                "r_bot"
               );
             } else if (yRailMount === "inner") {
               // +X (inner) face of left Y extrusion and -X (inner) face of right Y extrusion
               const yGeo = new THREE.BoxGeometry(yRailH, yRailW, railLenY);
               const yEdges = new THREE.EdgesGeometry(yGeo);
-              addRailBar(
+              addYRailBar(
+                leftCenter.clone().add(new THREE.Vector3(beamHalfCadX + yRailH * 0.5, 0, 0)),
+                new THREE.Vector3(1, 0, 0),
                 yGeo,
                 yEdges,
-                leftCenter.clone().add(new THREE.Vector3(beamHalfCadX + yRailH * 0.5, 0, 0))
+                "l_inner"
               );
-              addRailBar(
+              addYRailBar(
+                rightCenter.clone().add(new THREE.Vector3(-(beamHalfCadX + yRailH * 0.5), 0, 0)),
+                new THREE.Vector3(-1, 0, 0),
                 yGeo,
                 yEdges,
-                rightCenter.clone().add(new THREE.Vector3(-(beamHalfCadX + yRailH * 0.5), 0, 0))
+                "r_inner"
               );
             }
           }
@@ -1337,47 +1407,95 @@ export function buildAssemblyHardwareMeshes({
                 ? Math.hypot(normVec.x * colHalfX, normVec.z * colHalfZ)
                 : colHalfX;
 
-            const barGeo = new THREE.BoxGeometry(rW, railLen, rH);
-            const barMesh = new THREE.Mesh(barGeo, zRailSteelMat);
-            barMesh.position
-              .copy(p0)
+            const zRailPos = p0
+              .clone()
               .add(p1)
               .multiplyScalar(0.5)
               .addScaledVector(normVec, colHalfW + rH * 0.5);
-            barMesh.quaternion.copy(railQuat);
-            tagInspectable(barMesh, zRailInspect);
-            group.add(barMesh);
+            const zRailVis = geom.z_rail_visual ?? null;
+            const cachedZRailGlb =
+              zRailVis?.visual_glb_url && !toolheadPunchIn
+                ? (cadGlbResolvedCache.get(zRailVis.visual_glb_url) ?? null)
+                : null;
+            // Right-handed basis for native GLB (X=length, Y=width, Z=height/normal)
+            const glbWVec = new THREE.Vector3().crossVectors(normVec, axisDir).normalize();
+            const glbRailQuat = new THREE.Quaternion().setFromRotationMatrix(
+              new THREE.Matrix4().makeBasis(axisDir, glbWVec, normVec)
+            );
+            if (cachedZRailGlb && zRailVis) {
+              const nativeLenThree = Math.max(zRailVis.length_mm * SCALE, 1e-4);
+              const zRailClone = cachedZRailGlb.clone(true);
+              zRailClone.quaternion.copy(glbRailQuat);
+              zRailClone.scale.set(
+                (railLen / nativeLenThree) * CAD_M_TO_THREE,
+                CAD_M_TO_THREE,
+                CAD_M_TO_THREE
+              );
+              zRailClone.position.copy(zRailPos);
+              zRailClone.traverse((o) => {
+                if (o instanceof THREE.Mesh) tagInspectable(o, zRailInspect);
+              });
+              group.add(zRailClone);
+            } else {
+              const barGeo = new THREE.BoxGeometry(rW, railLen, rH);
+              const barMesh = new THREE.Mesh(barGeo, zRailSteelMat);
+              barMesh.position.copy(zRailPos);
+              barMesh.quaternion.copy(railQuat);
+              tagInspectable(barMesh, zRailInspect);
+              group.add(barMesh);
 
-            const barOutline = new THREE.LineSegments(new THREE.EdgesGeometry(barGeo), zRailEdgeMat);
-            barOutline.position.copy(barMesh.position);
-            barOutline.quaternion.copy(railQuat);
-            group.add(barOutline);
+              const barOutline = new THREE.LineSegments(new THREE.EdgesGeometry(barGeo), zRailEdgeMat);
+              barOutline.position.copy(barMesh.position);
+              barOutline.quaternion.copy(railQuat);
+              group.add(barOutline);
+            }
 
             // MGN metallic carriage block + wiper end-caps at carriage_z_mm
-            const carW = (isMgn9 ? 20 : 27) * SCALE;
-            const carL = (isMgn9 ? 36 : 44) * SCALE;
-            const carH = (isMgn9 ? 10 : 13) * SCALE;
-            const carGroup = new THREE.Group();
-            const carBody = new THREE.Mesh(
-              new THREE.BoxGeometry(carW, carL * 0.72, carH),
-              zCarriageBodyMat
-            );
-            tagInspectable(carBody, zCarInspect);
-            carGroup.add(carBody);
+            const isMgn15 = zr.profile_id.includes("mgn15");
+            const isHgh15 = zr.profile_id.includes("hgh15");
+            const carH = (isHgh15 ? 28 : isMgn15 ? 16 : isMgn9 ? 10 : 13) * SCALE;
+            const zCarVis = geom.carriage_visuals?.z ?? null;
+            const cachedZCarGlb =
+              zCarVis?.visual_glb_url && !toolheadPunchIn
+                ? (cadGlbResolvedCache.get(zCarVis.visual_glb_url) ?? null)
+                : null;
+            if (cachedZCarGlb && zCarVis) {
+              const carClone = cachedZCarGlb.clone(true);
+              const originOff = carH - zCarVis.port1_z_mm * SCALE;
+              carClone.quaternion.copy(glbRailQuat);
+              carClone.scale.setScalar(CAD_M_TO_THREE);
+              carClone.position
+                .set(zMidX, carY, zMidZ)
+                .addScaledVector(normVec, colHalfW + originOff);
+              carClone.traverse((o) => {
+                if (o instanceof THREE.Mesh) tagInspectable(o, zCarInspect);
+              });
+              group.add(carClone);
+            } else {
+              const carW = (isMgn9 ? 20 : 27) * SCALE;
+              const carL = (isMgn9 ? 36 : 44) * SCALE;
+              const carGroup = new THREE.Group();
+              const carBody = new THREE.Mesh(
+                new THREE.BoxGeometry(carW, carL * 0.72, carH),
+                zCarriageBodyMat
+              );
+              tagInspectable(carBody, zCarInspect);
+              carGroup.add(carBody);
 
-            const capGeo = new THREE.BoxGeometry(carW * 0.96, carL * 0.14, carH * 0.94);
-            const topCap = new THREE.Mesh(capGeo, zCarriageCapMat);
-            topCap.position.y = carL * 0.43;
-            carGroup.add(topCap);
-            const botCap = new THREE.Mesh(capGeo, zCarriageCapMat);
-            botCap.position.y = -carL * 0.43;
-            carGroup.add(botCap);
+              const capGeo = new THREE.BoxGeometry(carW * 0.96, carL * 0.14, carH * 0.94);
+              const topCap = new THREE.Mesh(capGeo, zCarriageCapMat);
+              topCap.position.y = carL * 0.43;
+              carGroup.add(topCap);
+              const botCap = new THREE.Mesh(capGeo, zCarriageCapMat);
+              botCap.position.y = -carL * 0.43;
+              carGroup.add(botCap);
 
-            carGroup.position
-              .set(zMidX, carY, zMidZ)
-              .addScaledVector(normVec, colHalfW + rH * 0.5 + carH * 0.42);
-            carGroup.quaternion.copy(railQuat);
-            group.add(carGroup);
+              carGroup.position
+                .set(zMidX, carY, zMidZ)
+                .addScaledVector(normVec, colHalfW + rH * 0.5 + carH * 0.42);
+              carGroup.quaternion.copy(railQuat);
+              group.add(carGroup);
+            }
           }
         }
 

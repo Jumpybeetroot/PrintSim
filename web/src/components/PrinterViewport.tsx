@@ -308,6 +308,12 @@ export const PrinterViewport: React.FC<Props> = ({
   const carriageMountVisualGlbUrl =
     sim?.geometry?.toolhead_structure?.carriage_mount_visual_glb_url ?? null;
   const xBeamVisualGlbUrl = sim?.geometry?.x_beam_visual?.visual_glb_url ?? null;
+  const xRailVisualGlbUrl = sim?.geometry?.x_rail_visual?.visual_glb_url ?? null;
+  const yRailVisualGlbUrl = sim?.geometry?.y_rail_visual?.visual_glb_url ?? null;
+  const zRailVisualGlbUrl = sim?.geometry?.z_rail_visual?.visual_glb_url ?? null;
+  const xCarriageVisualGlbUrl = sim?.geometry?.carriage_visuals?.x?.visual_glb_url ?? null;
+  const yCarriageVisualGlbUrl = sim?.geometry?.carriage_visuals?.y?.visual_glb_url ?? null;
+  const zCarriageVisualGlbUrl = sim?.geometry?.carriage_visuals?.z?.visual_glb_url ?? null;
   const gantryCadAssets = sim?.geometry?.gantry_brackets?.cad_assets;
   const frameBraceVisuals = sim?.geometry?.frame_bracing?.visuals;
 
@@ -317,6 +323,12 @@ export const PrinterViewport: React.FC<Props> = ({
     if (toolheadVisualGlbUrl) urls.add(toolheadVisualGlbUrl);
     if (carriageMountVisualGlbUrl) urls.add(carriageMountVisualGlbUrl);
     if (xBeamVisualGlbUrl) urls.add(xBeamVisualGlbUrl);
+    if (xRailVisualGlbUrl) urls.add(xRailVisualGlbUrl);
+    if (yRailVisualGlbUrl) urls.add(yRailVisualGlbUrl);
+    if (zRailVisualGlbUrl) urls.add(zRailVisualGlbUrl);
+    if (xCarriageVisualGlbUrl) urls.add(xCarriageVisualGlbUrl);
+    if (yCarriageVisualGlbUrl) urls.add(yCarriageVisualGlbUrl);
+    if (zCarriageVisualGlbUrl) urls.add(zCarriageVisualGlbUrl);
     if (gantryCadAssets) {
       for (const asset of Object.values(gantryCadAssets)) {
         if (asset?.visual_glb_url) urls.add(asset.visual_glb_url);
@@ -4838,50 +4850,81 @@ export const PrinterViewport: React.FC<Props> = ({
               })
             : null;
 
+        const xCarVis = geom.carriage_visuals?.x ?? null;
+        const cachedXCarGlb =
+          xCarVis?.visual_glb_url
+            ? (cadGlbResolvedCache.get(xCarVis.visual_glb_url) ?? null)
+            : null;
+
         const addMgnCarriage = (face: "front" | "top" | "bottom") => {
           const isFrontFace = face === "front";
           const ySign = face === "top" ? 1 : -1;
 
-          const bodyGeo = isFrontFace
-            ? new THREE.BoxGeometry(steelBodyLen, carWidth, carThick)
-            : new THREE.BoxGeometry(steelBodyLen, carThick, carWidth);
-          const wiperGeo = isFrontFace
-            ? new THREE.BoxGeometry(wiperLen, carWidth - 0.008, carThick - 0.006)
-            : new THREE.BoxGeometry(wiperLen, carThick - 0.006, carWidth - 0.008);
+          if (cachedXCarGlb && xCarVis) {
+            const port1Off = xCarVis.port1_z_mm * SCALE;
+            const carOriginOff = carTotalH - port1Off;
+            const carClone = cloneCachedCadGlb(cachedXCarGlb, {
+              isHeatMode,
+              heatColor: mgnBlockColorObj,
+              heatEmissive: mgnBlockEmissive,
+              heatEmissiveIntensity: mgnBlockEmissiveInt,
+              inspectInfo: carriageInspectInfo,
+              tagInspectable,
+            });
+            if (face === "top") {
+              carClone.rotation.x = -Math.PI * 0.5;
+              carClone.position.set(0, beamHalfY + carOriginOff, 0);
+            } else if (face === "bottom") {
+              carClone.rotation.x = Math.PI * 0.5;
+              carClone.position.set(0, -(beamHalfY + carOriginOff), 0);
+            } else {
+              carClone.position.set(0, 0, beamHalfZ + carOriginOff);
+            }
+            carClone.scale.setScalar(CAD_M_TO_THREE);
+            carClone.name = `cad_x_carriage_${xCarVis.asset_id}_${face}`;
+            thGroup.add(carClone);
+          } else {
+            const bodyGeo = isFrontFace
+              ? new THREE.BoxGeometry(steelBodyLen, carWidth, carThick)
+              : new THREE.BoxGeometry(steelBodyLen, carThick, carWidth);
+            const wiperGeo = isFrontFace
+              ? new THREE.BoxGeometry(wiperLen, carWidth - 0.008, carThick - 0.006)
+              : new THREE.BoxGeometry(wiperLen, carThick - 0.006, carWidth - 0.008);
 
-          const cx = 0;
-          const cy = isFrontFace ? 0 : ySign * (beamHalfY + carCenterOff);
-          const cz = isFrontFace ? beamHalfZ + carCenterOff : 0;
+            const cx = 0;
+            const cy = isFrontFace ? 0 : ySign * (beamHalfY + carCenterOff);
+            const cz = isFrontFace ? beamHalfZ + carCenterOff : 0;
 
-          // Brushed stainless steel central carriage block
-          const steelBlock = new THREE.Mesh(bodyGeo, mgnBlockMat);
-          steelBlock.position.set(cx, cy, cz);
-          tagInspectable(steelBlock, carriageInspectInfo);
-          thGroup.add(steelBlock);
+            // Brushed stainless steel central carriage block
+            const steelBlock = new THREE.Mesh(bodyGeo, mgnBlockMat);
+            steelBlock.position.set(cx, cy, cz);
+            tagInspectable(steelBlock, carriageInspectInfo);
+            thGroup.add(steelBlock);
 
-          // Left & right authentic HIWIN dark-green wiper end-caps
-          for (const sx of [-1, 1]) {
-            const wiper = new THREE.Mesh(wiperGeo, wiperMat);
-            wiper.position.set(sx * (steelBodyLen * 0.5 + wiperLen * 0.5), cy, cz);
-            tagInspectable(wiper, carriageInspectInfo);
-            thGroup.add(wiper);
-          }
+            // Left & right authentic HIWIN dark-green wiper end-caps
+            for (const sx of [-1, 1]) {
+              const wiper = new THREE.Mesh(wiperGeo, wiperMat);
+              wiper.position.set(sx * (steelBodyLen * 0.5 + wiperLen * 0.5), cy, cz);
+              tagInspectable(wiper, carriageInspectInfo);
+              thGroup.add(wiper);
+            }
 
-          // 4x dark metallic M3 mounting screw bosses on the carriage mounting face
-          for (const sx of [-0.5, 0.5]) {
-            for (const sw of [-0.5, 0.5]) {
-              const boss = new THREE.Mesh(m3BossGeo, darkScrewMat);
-              if (isFrontFace) {
-                boss.rotation.x = Math.PI * 0.5;
-                boss.position.set(sx * boltSpanX, sw * boltSpanW, beamHalfZ + carTotalH + 0.002);
-              } else {
-                boss.position.set(
-                  sx * boltSpanX,
-                  ySign * (beamHalfY + carTotalH + 0.002),
-                  sw * boltSpanW
-                );
+            // 4x dark metallic M3 mounting screw bosses on the carriage mounting face
+            for (const sx of [-0.5, 0.5]) {
+              for (const sw of [-0.5, 0.5]) {
+                const boss = new THREE.Mesh(m3BossGeo, darkScrewMat);
+                if (isFrontFace) {
+                  boss.rotation.x = Math.PI * 0.5;
+                  boss.position.set(sx * boltSpanX, sw * boltSpanW, beamHalfZ + carTotalH + 0.002);
+                } else {
+                  boss.position.set(
+                    sx * boltSpanX,
+                    ySign * (beamHalfY + carTotalH + 0.002),
+                    sw * boltSpanW
+                  );
+                }
+                thGroup.add(boss);
               }
-              thGroup.add(boss);
             }
           }
 

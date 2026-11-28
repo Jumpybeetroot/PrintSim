@@ -1953,6 +1953,26 @@ export interface GeometryData {
     visual_glb_url: string;
     length_mm: number;
   } | null;
+  x_rail_visual?: {
+    asset_id: string;
+    visual_glb_url: string;
+    length_mm: number;
+  } | null;
+  y_rail_visual?: {
+    asset_id: string;
+    visual_glb_url: string;
+    length_mm: number;
+  } | null;
+  z_rail_visual?: {
+    asset_id: string;
+    visual_glb_url: string;
+    length_mm: number;
+  } | null;
+  carriage_visuals?: {
+    x?: { asset_id: string; visual_glb_url: string; port1_z_mm: number } | null;
+    y?: { asset_id: string; visual_glb_url: string; port1_z_mm: number } | null;
+    z?: { asset_id: string; visual_glb_url: string; port1_z_mm: number } | null;
+  } | null;
   toolhead_node_id: string;
   nozzle_node_id?: string;
   toolhead_cog_node_id?: string;

@@ -88,14 +88,19 @@ def transformation_12x12(r_mat: np.ndarray) -> np.ndarray:
 
 
 def beam_shear_coefficients(member: StructuralMember) -> tuple[float, float]:
-    """Return Timoshenko shear correction factors ``(kappa_y, kappa_z)`` for anisotropic tubes.
+    """Return Timoshenko shear correction factors ``(kappa_y, kappa_z)`` for anisotropic tubes or milled rails.
 
-    Returns ``(0.0, 0.0)`` (pure Euler-Bernoulli) unless ``member.profile.shape == "tube"``
-    and ``E / G > 4.5``, preserving exact isotropic Euler-Bernoulli benchmarks while capturing
-    transverse shear deformation in high-E/G composite tubes. For anisotropic closed hollow
-    tubes, computes Cowper (1966) box-web shear factors using ``wall_thickness_m`` (or ``0.434``
-    fallback when unspecified).
+    Honors explicit Tet10-calibrated ``shear_kappa_y`` / ``shear_kappa_z`` when present on a
+    profile (e.g., hollow/pocketed linear rails on unsupported X-gantries), otherwise returns
+    ``(0.0, 0.0)`` (pure Euler-Bernoulli) unless ``member.profile.shape == "tube"`` and
+    ``E / G > 4.5``, preserving exact isotropic Euler-Bernoulli benchmarks while capturing
+    transverse shear deformation in high-E/G composite tubes.
     """
+    if member.profile.shear_kappa_y is not None or member.profile.shear_kappa_z is not None:
+        return (
+            float(member.profile.shear_kappa_y or 0.0),
+            float(member.profile.shear_kappa_z or 0.0),
+        )
     if member.profile.shape != "tube":
         return (0.0, 0.0)
     e_pa = float(member.material.youngs_modulus_pa)

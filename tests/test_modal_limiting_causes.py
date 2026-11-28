@@ -218,12 +218,13 @@ def test_analytical_fox_kapoor_mode1_stiffening_and_mass_agreement(preset_name: 
         key=lambda c: c["est_hz_gain"],
     )
     asm_stiff = build_assembly(spec)
-    _scale_group_stiffness(asm_stiff, stiff_top["id"], 1.10)
+    # Use a small +2% perturbation to stay linear and avoid Mode 1/Mode 2 crossing on closely-spaced modes
+    _scale_group_stiffness(asm_stiff, stiff_top["id"], 1.02)
     res_stiff = solve_modal_fea(asm_stiff)
 
-    # est_hz_gain is exact linear +Hz for +50% stiffness => +10% stiffness is 0.2 * est_hz_gain
+    # est_hz_gain is exact linear +Hz for +50% stiffness => +2% stiffness is 0.04 * est_hz_gain
     df_actual = res_stiff.modes[0].frequency_hz - m1.frequency_hz
-    df_pred = 0.2 * stiff_top["est_hz_gain"]
+    df_pred = 0.04 * stiff_top["est_hz_gain"]
     assert df_actual > 0.0
     assert df_actual == pytest.approx(df_pred, rel=0.15, abs=0.03)
 

@@ -3743,8 +3743,18 @@ export const MetricsPanel: React.FC<Props> = ({
                   inner: "Inner",
                   bottom: "Bottom",
                 };
-                const xProf = lr.x_rail_profile.includes("mgn9") ? "MGN9H" : "MGN12H";
-                const yProf = lr.y_rail_profile.includes("mgn9") ? "MGN9H" : "MGN12H";
+                const formatRailLabel = (id: string): string => {
+                  const base = id.includes("mgn9")
+                    ? "MGN9H"
+                    : id.includes("mgn15")
+                      ? "MGN15H"
+                      : "MGN12H";
+                  if (id.includes("hollow")) return `Hollow ${base}`;
+                  if (id.includes("pocketed")) return `Pocketed ${base}`;
+                  return base;
+                };
+                const xProf = formatRailLabel(lr.x_rail_profile);
+                const yProf = formatRailLabel(lr.y_rail_profile);
                 return (
                   <div
                     className="metric-kv"

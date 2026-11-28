@@ -1,0 +1,33 @@
+{
+  "asset_id": "hgh15_rail",
+  "category": "x_beams",
+  "name": "HIWIN HGR15R Solid Linear Rail (15x15mm)",
+  "source": "Parametric build123d 15x15.0x360mm HIWIN HG-series solid linear rail (P=60mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Heavy_Load_Ball_Type_Linear_Guideway_HG_Series-(E).pdf",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 360.0,
+  "width_mm": 15.0,
+  "height_mm": 15.0,
+  "visual_triangles": 5044,
+  "visual_bytes": 183048,
+  "fea_section_properties": {
+    "name": "hgh15_rail",
+    "kind": "solid",
+    "series": "HG",
+    "length_mm": 360.0,
+    "width_mm": 15.0,
+    "height_mm": 15.0,
+    "pitch_mm": 60.0,
+    "min_raceway_wall_mm": 5.8,
+    "volume_cm3": 72.812,
+    "mass_steel_g": 571.57,
+    "linear_mass_steel_g_m": 1587.7,
+    "area_m2": 0.00020225524916965597,
+    "iy_m4": 4.218749999999999e-09,
+    "iz_m4": 4.218749999999999e-09,
+    "j_m4": 7.129687499999999e-09,
+    "shear_kappa_y": 0.8333333333333334,
+    "shear_kappa_z": 0.8333333333333334
+  }
+}

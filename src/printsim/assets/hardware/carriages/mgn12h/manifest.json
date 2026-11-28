@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "category": "carriages",
+  "asset_id": "mgn12h",
+  "name": "HIWIN MGN12H Linear Carriage Block",
+  "source_cad": "Parametric build123d HIWIN MGN12H (45.4x27.0x10.0mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Miniature_Linear_Guideway_MG_Series-(E).pdf",
+  "baked_at": "2026-11-28T04:55:14Z",
+  "reference_material_id": "steel_4140",
+  "reference_youngs_modulus_pa": 205000000000.0,
+  "reference_density_kg_m3": 7850.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 3480,
+  "num_elements": 13624,
+  "num_dofs": 10440,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.001717,
+  "mass_kg": 0.05403,
+  "com_mm": [
+    0.0001,
+    0.0002,
+    4.1095
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    8.2
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 1693190.065,
+    "ky": 400601.863,
+    "kz": 2095023.348
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 98167.01,
+    "kry": 274290.053,
+    "krz": 297474.56
+  },
+  "fixed_interface_freqs_hz": [
+    16570.01,
+    24206.15,
+    38056.61,
+    41150.04,
+    46208.69,
+    51201.19,
+    52794.34,
+    59619.04
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 2776,
+  "visual_bytes": 105072,
+  "cad_trust_pct": 96,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "steel_4140",
+      "mass_g": 14.16,
+      "com_mm": [
+        0.03,
+        0.02,
+        0.21
+      ],
+      "num_elements": 6157
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "steel_4140",
+      "mass_g": 23.4,
+      "com_mm": [
+        -0.04,
+        -0.01,
+        4.38
+      ],
+      "num_elements": 4146
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "steel_4140",
+      "mass_g": 16.46,
+      "com_mm": [
+        0.03,
+        -0.01,
+        7.08
+      ],
+      "num_elements": 3321
+    }
+  ],
+  "source_hash": "ac82bc487fea0a606aac48ba022f082c599a33f9ddd6e7ff8171165053c159a9"
+}

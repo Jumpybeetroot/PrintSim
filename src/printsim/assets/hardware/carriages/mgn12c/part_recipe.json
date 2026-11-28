@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "category": "carriages",
+  "asset_id": "mgn12c",
+  "source_cad": "Parametric build123d HIWIN MGN12C (34.7x27.0x10.0mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Miniature_Linear_Guideway_MG_Series-(E).pdf",
+  "regions": [
+    {
+      "label": "steel_saddle",
+      "material_id": "steel_4140",
+      "fdm_anisotropic": null
+    }
+  ],
+  "rail_id": "mgn12_rail",
+  "series": "MG",
+  "width_mm": 27.0,
+  "length_total_mm": 34.7,
+  "l1_active_mm": 21.7,
+  "steel_body_len_mm": 22.9,
+  "assembly_height_mm": 13.0,
+  "clearance_h1_mm": 3.0,
+  "block_height_mm": 10.0,
+  "race_z_from_rail_bottom_mm": 4.8,
+  "h_bolt_mm": 8.2,
+  "bolt_b_mm": 20.0,
+  "bolt_c_mm": 15.0,
+  "target_mass_g": 34.0
+}

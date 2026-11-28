@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "category": "hotends",
+  "asset_id": "phaetus_rapido_2_uhf",
+  "source_cad": "phaetus_rapido_2_hf.step + Phaetus UHF +8.2 mm M6 Cu extender B-Rep",
+  "source_url": "https://www.phaetus.com/products/rapido2",
+  "regions": [
+    {
+      "label": "rapido2_uhf_v6_nozzle",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "rapido2_uhf_3x_ti_screws_throat",
+      "material_id": "titanium_grade5",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "rapido2_uhf_cu_core_extender",
+      "material_id": "copper_c110",
+      "fdm_anisotropic": false
+    },
+    {
+      "label": "rapido2_uhf_heatsink",
+      "material_id": "aluminum_6061_t6",
+      "fdm_anisotropic": false
+    }
+  ],
+  "rigid_mount_length_mm": 62.7,
+  "groove_adapter_oal_mm": 79.2,
+  "meltzone_length_mm": 34.0,
+  "standoffs": "3x \u00d82.6x11.0 mm Ti-6Al-4V screws @ 120 deg (r = 7.5 mm)",
+  "block": "85W cylindrical ceramic Cu core + 8.2 mm M6 Cu UHF extender + V6 nozzle"
+}

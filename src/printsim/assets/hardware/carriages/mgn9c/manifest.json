@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "category": "carriages",
+  "asset_id": "mgn9c",
+  "name": "HIWIN MGN9C Linear Carriage Block",
+  "source_cad": "Parametric build123d HIWIN MGN9C (28.9x20.0x8.0mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Miniature_Linear_Guideway_MG_Series-(E).pdf",
+  "baked_at": "2026-11-28T04:54:47Z",
+  "reference_material_id": "steel_4140",
+  "reference_youngs_modulus_pa": 205000000000.0,
+  "reference_density_kg_m3": 7850.0,
+  "is_multi_material": false,
+  "is_fdm_anisotropic": false,
+  "element_type": "Tet4",
+  "num_vertices": 2500,
+  "num_elements": 9620,
+  "num_dofs": 7500,
+  "n_boundary_dofs": 12,
+  "n_internal_modes": 8,
+  "rigid_body_max_freq_hz": 0.002691,
+  "mass_kg": 0.01609,
+  "com_mm": [
+    0.0007,
+    -0.0018,
+    2.7758
+  ],
+  "port0_mm": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "port1_mm": [
+    0.0,
+    0.0,
+    6.1
+  ],
+  "port_stiffness_n_per_mm": {
+    "kx": 713567.634,
+    "ky": 177391.649,
+    "kz": 1113424.334
+  },
+  "port_rot_stiffness_nm_per_rad": {
+    "krx": 24694.437,
+    "kry": 58011.743,
+    "krz": 58943.768
+  },
+  "fixed_interface_freqs_hz": [
+    27596.81,
+    28601.51,
+    57524.81,
+    75855.45,
+    77013.83,
+    86268.02,
+    94262.89,
+    96309.19
+  ],
+  "visual_glb": "visual.glb",
+  "visual_triangles": 2776,
+  "visual_bytes": 105068,
+  "cad_trust_pct": 96,
+  "subparts": [
+    {
+      "id": "carriage_mount_zone",
+      "name": "Carriage Mount Zone",
+      "material_id": "steel_4140",
+      "mass_g": 5.17,
+      "com_mm": [
+        -0.0,
+        0.0,
+        -0.12
+      ],
+      "num_elements": 3940
+    },
+    {
+      "id": "main_chassis",
+      "name": "Main Chassis",
+      "material_id": "steel_4140",
+      "mass_g": 6.21,
+      "com_mm": [
+        0.03,
+        0.01,
+        3.3
+      ],
+      "num_elements": 2834
+    },
+    {
+      "id": "hotend_mount_zone",
+      "name": "Hotend Mount Zone",
+      "material_id": "steel_4140",
+      "mass_g": 4.72,
+      "com_mm": [
+        -0.04,
+        -0.03,
+        5.26
+      ],
+      "num_elements": 2846
+    }
+  ],
+  "source_hash": "d7b79d1839d28f0b5a001cae4b703a849d5c3ac9bec2f171d4853eb27fcf5c0e"
+}

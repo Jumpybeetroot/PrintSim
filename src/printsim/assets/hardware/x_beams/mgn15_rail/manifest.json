@@ -1,0 +1,33 @@
+{
+  "asset_id": "mgn15_rail",
+  "category": "x_beams",
+  "name": "HIWIN MGN15R Solid Linear Rail (15x10mm)",
+  "source": "Parametric build123d 15x10.0x360mm HIWIN MG-series solid linear rail (P=40mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Miniature_Linear_Guideway_MG_Series-(E).pdf",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 360.0,
+  "width_mm": 15.0,
+  "height_mm": 10.0,
+  "visual_triangles": 6100,
+  "visual_bytes": 220680,
+  "fea_section_properties": {
+    "name": "mgn15_rail",
+    "kind": "solid",
+    "series": "MG",
+    "length_mm": 360.0,
+    "width_mm": 15.0,
+    "height_mm": 10.0,
+    "pitch_mm": 40.0,
+    "min_raceway_wall_mm": 5.85,
+    "volume_cm3": 49.085,
+    "mass_steel_g": 385.31,
+    "linear_mass_steel_g_m": 1070.32,
+    "area_m2": 0.000135031847,
+    "iy_m4": 1.25e-09,
+    "iz_m4": 2.8125e-09,
+    "j_m4": 2.93457e-09,
+    "shear_kappa_y": null,
+    "shear_kappa_z": null
+  }
+}

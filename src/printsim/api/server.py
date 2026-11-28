@@ -94,7 +94,7 @@ from printsim.thermal import FILAMENT_CATALOG
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
 _ALLOWED_HARDWARE_CATEGORIES = frozenset(
-    {"hotends", "toolheads", "gantry_brackets", "assemblies", "frame_braces", "x_beams"}
+    {"hotends", "toolheads", "gantry_brackets", "assemblies", "frame_braces", "x_beams", "carriages"}
 )
 _VALID_ASSET_ID_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 

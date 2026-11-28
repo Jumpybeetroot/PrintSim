@@ -1,0 +1,33 @@
+{
+  "asset_id": "mgn9_rail",
+  "category": "x_beams",
+  "name": "HIWIN MGN9R Solid Linear Rail (9x6.5mm)",
+  "source": "Parametric build123d 9x6.5x360mm HIWIN MG-series solid linear rail (P=20mm)",
+  "source_url": "https://www.hiwin.tw/download/tech_doc/lg/Miniature_Linear_Guideway_MG_Series-(E).pdf",
+  "visual_glb": "visual.glb",
+  "has_superelement": false,
+  "length_mm": 360.0,
+  "width_mm": 9.0,
+  "height_mm": 6.5,
+  "visual_triangles": 13332,
+  "visual_bytes": 480080,
+  "fea_section_properties": {
+    "name": "mgn9_rail",
+    "kind": "solid",
+    "series": "MG",
+    "length_mm": 360.0,
+    "width_mm": 9.0,
+    "height_mm": 6.5,
+    "pitch_mm": 20.0,
+    "min_raceway_wall_mm": 3.65,
+    "volume_cm3": 17.794,
+    "mass_steel_g": 139.68,
+    "linear_mass_steel_g_m": 388.01,
+    "area_m2": 4.8407643e-05,
+    "iy_m4": 2.0597e-10,
+    "iz_m4": 3.9488e-10,
+    "j_m4": 4.5751e-10,
+    "shear_kappa_y": null,
+    "shear_kappa_z": null
+  }
+}
