@@ -2097,6 +2097,23 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
         f"Heatbreak = {he.heatbreak_wall_mm:.2f} mm wall, Max = {he.max_temp_c:.0f} °C"
     )
 
+    # 20. Pressure Advance & Filament-Path Compliance
+    ext = spec.toolhead.extruder
+    pa_drive_label = "Bowden" if ext.type == "bowden" else "Direct Drive"
+    pa_sel = f"{pa_drive_label} · Ø{ext.filament_diameter_mm:.2f} mm"
+    if ext.type == "bowden":
+        pa_vals = (
+            f"Path = {ext.filament_path_length_mm:.0f} mm, "
+            f"Bowden = {ext.bowden_tube_length_mm:.0f} mm (Ø{ext.bowden_tube_id_mm:.1f} mm ID), "
+            f"Melt = {he.melt_zone_length_mm:.1f} mm"
+        )
+    else:
+        pa_vals = (
+            f"Path = {ext.filament_path_length_mm:.0f} mm, "
+            f"Melt = {he.melt_zone_length_mm:.1f} mm, "
+            f"Nozzle = Ø{he.nozzle_diameter_mm:.2f} mm"
+        )
+
     # 20. Heated Bed Plate Mechanics
     bed = spec.bed
     bed_mat = get_material(bed.plate_material)
@@ -2470,6 +2487,27 @@ def build_model_confidence_audit(spec: PrinterSpec) -> dict[str, Any]:
             caveat=(
                 "Real filament brand/pigment MW variance, moisture content (especially PA12-CF), and "
                 "nozzle-block contact resistance still introduce ±8–12% flow spread across spools."
+            ),
+        ),
+        _make_confidence_entry(
+            spec,
+            entry_id="pressure_advance",
+            subsystem="hotend",
+            name="Pressure Advance & Filament-Path Compliance",
+            active_selection=pa_sel,
+            active_values=pa_vals,
+            trust_pct=55,
+            override_group=None,
+            basis=(
+                "First-principles series compliance (solid filament column L/(E·A), PTFE Bowden tube stretch, "
+                "and confined melt via two-domain Tait bulk modulus from PrintDB generic-abs) coupled to the "
+                "Cross-WLF + Graetz push-force curve F(v) (dx/dt = v_in − v_out(x/C), K = C·F(v)/v); zero fitted constants."
+            ),
+            caveat=(
+                "Unmodeled compliance (filament bowing in its guide, drive-gear indentation, Bowden friction, "
+                "and heated-chamber softening) makes predicted K a lower bound; the 50 mm direct-drive path "
+                "length is an assumed default, ABS Tait PVT is used as a proxy for other polymers, and no "
+                "tuned Klipper PA benchmark dataset is calibrated yet (CAL-16)."
             ),
         ),
         _make_confidence_entry(

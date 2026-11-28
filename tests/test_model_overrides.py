@@ -634,7 +634,7 @@ CATALOG_BACKED_ENTRY_IDS = (
 
 
 def test_model_confidence_audit_contract_across_all_presets() -> None:
-    """build_model_confidence_audit returns valid 23-entry Unicode audit on every preset."""
+    """build_model_confidence_audit returns valid 24-entry Unicode audit on every preset."""
     expected_subsystems = {
         "frame": "Frame",
         "gantry": "Gantry",
@@ -686,8 +686,8 @@ def test_model_confidence_audit_contract_across_all_presets() -> None:
         assert 0 <= audit["overall_trust_pct"] <= 100
 
         entries = audit["entries"]
-        assert len(entries) == 23
-        assert audit["overall_trust_pct"] == round(sum(e["trust_pct"] for e in entries) / 23)
+        assert len(entries) == 24
+        assert audit["overall_trust_pct"] == round(sum(e["trust_pct"] for e in entries) / 24)
 
         seen_ids: set[str] = set()
         seen_override_groups: set[str] = set()
