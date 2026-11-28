@@ -1173,6 +1173,75 @@ export const DesignThermalSection: React.FC<DesignThermalSectionProps> = ({
                       <option value="stainless_304">Stainless 304 (Standard)</option>
                     </select>
                   </div>
+
+                  <div className="field-row">
+                    <label htmlFor="dp-filament-path-length-mm">Filament Path Length (mm)</label>
+                    <input
+                      id="dp-filament-path-length-mm"
+                      type="number"
+                      min={10}
+                      max={2000}
+                      step={5}
+                      value={spec.toolhead.extruder.filament_path_length_mm ?? 50}
+                      onChange={(e) =>
+                        updatePositiveNum(
+                          e.target.value,
+                          (d, v) => {
+                            d.toolhead.extruder.filament_path_length_mm = v;
+                          },
+                          (v) =>
+                            `Filament Path Length: ${spec.toolhead.extruder.filament_path_length_mm ?? 50} → ${v} mm`
+                        )
+                      }
+                    />
+                  </div>
+
+                  {spec.toolhead.extruder.type === "bowden" && (
+                    <div className="field-grid-2">
+                      <div className="field-row">
+                        <label htmlFor="dp-bowden-tube-length-mm">Bowden Tube Length (mm)</label>
+                        <input
+                          id="dp-bowden-tube-length-mm"
+                          type="number"
+                          min={50}
+                          max={2000}
+                          step={10}
+                          value={spec.toolhead.extruder.bowden_tube_length_mm ?? 500}
+                          onChange={(e) =>
+                            updatePositiveNum(
+                              e.target.value,
+                              (d, v) => {
+                                d.toolhead.extruder.bowden_tube_length_mm = v;
+                              },
+                              (v) =>
+                                `Bowden Tube Length: ${spec.toolhead.extruder.bowden_tube_length_mm ?? 500} → ${v} mm`
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="field-row">
+                        <label htmlFor="dp-bowden-tube-id-mm">Bowden Tube ID (mm)</label>
+                        <input
+                          id="dp-bowden-tube-id-mm"
+                          type="number"
+                          min={1.8}
+                          max={3.5}
+                          step={0.05}
+                          value={spec.toolhead.extruder.bowden_tube_id_mm ?? 2.0}
+                          onChange={(e) =>
+                            updatePositiveNum(
+                              e.target.value,
+                              (d, v) => {
+                                d.toolhead.extruder.bowden_tube_id_mm = v;
+                              },
+                              (v) =>
+                                `Bowden Tube ID: ${spec.toolhead.extruder.bowden_tube_id_mm ?? 2.0} → ${v} mm`
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </details>
             </div>

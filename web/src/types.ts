@@ -1181,6 +1181,9 @@ export interface PrinterSpecData {
       gear_ratio: number;
       max_push_force_n: number;
       filament_diameter_mm: number;
+      filament_path_length_mm?: number;
+      bowden_tube_length_mm?: number;
+      bowden_tube_id_mm?: number;
     };
   };
   bed: {
@@ -2507,8 +2510,44 @@ export interface SimulationResponse {
     chamber_cpap?: ChamberCpapReport;
   };
   virtual_print: VirtualPrintReport;
+  pressure_advance?: PressureAdvanceReport;
   effective_model_params?: EffectiveModelParamsData;
   model_confidence?: ModelConfidenceReport;
+}
+
+export interface PressureAdvanceCurvePoint {
+  flow_mm3_s: number;
+  filament_speed_mm_s: number;
+  advance_mm: number;
+  pressure_advance_s: number;
+}
+
+export interface PressureAdvanceReport {
+  filament_id: string;
+  extruder_type: "direct_drive" | "bowden" | string;
+  reference_flow_mm3_s: number;
+  reference_filament_speed_mm_s: number;
+  push_force_at_reference_n: number;
+  pressure_advance_s: number;
+  pressure_advance_tangent_s: number;
+  system_compliance_um_per_n: number;
+  filament_column_compliance_um_per_n: number;
+  bowden_tube_compliance_um_per_n: number;
+  melt_compliance_um_per_n: number;
+  system_stiffness_n_per_mm: number;
+  melt_bulk_modulus_mpa: number;
+  melt_bulk_modulus_source: string;
+  stored_filament_compression_mm: number;
+  ooze_volume_mm3: number;
+  depressurization_time_s: number;
+  bowden_slack_mm: number;
+  min_retraction_mm: number;
+  reference_accel_mm_s2: number;
+  pa_extruder_velocity_spike_mm_s: number;
+  column_buckling_load_n: number;
+  straight_column_valid: boolean;
+  advance_curve: PressureAdvanceCurvePoint[];
+  warnings: string[];
 }
 
 export type ViewMode =
