@@ -102,6 +102,15 @@ def evaluate(
         f"Heatup(215C): {th.heatup_time_215c_s:.1f}s | "
         f"Cold throat: {th.cold_side_temp_c:.1f}C (creep={'RISK' if th.heat_creep_risk else 'ok'})",
     )
+    pa = report.pressure_advance
+    if pa is not None:
+        table.add_row(
+            "Pressure Advance",
+            f"K: {pa.pressure_advance_s:.3f} s @ {pa.reference_flow_mm3_s:.0f} mm^3/s ({pa.extruder_type}) | "
+            f"Path stiffness: {pa.system_stiffness_n_per_mm:.0f} N/mm | "
+            f"Ooze: {pa.ooze_volume_mm3:.2f} mm^3 | Min retract: {pa.min_retraction_mm:.2f} mm"
+            + ("" if pa.straight_column_valid else " (filament buckles: unreliable)"),
+        )
     table.add_row(
         "Virtual Print",
         f"Time: {vp.total_time_s:.1f}s | Quality: {vp.print_quality_score:.1f}/100 | "

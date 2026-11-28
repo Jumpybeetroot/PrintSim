@@ -3848,6 +3848,22 @@ class ExtruderSpec(BaseModel):
     gear_ratio: float = Field(5.0, gt=0.5)
     max_push_force_n: float = Field(55.0, gt=5.0)
     filament_diameter_mm: float = Field(1.75, gt=1.0)
+    filament_path_length_mm: float = Field(
+        50.0,
+        gt=5.0,
+        le=300.0,
+        description=(
+            "Solid filament length between the drive-gear nip and the heat break inlet (mm). "
+            "For Bowden setups this is the guided length inside the hotend cold side, "
+            "added to bowden_tube_length_mm."
+        ),
+    )
+    bowden_tube_length_mm: float = Field(
+        500.0, gt=20.0, le=2500.0, description="PTFE Bowden tube length (mm); used when type is bowden"
+    )
+    bowden_tube_id_mm: float = Field(
+        2.0, gt=1.0, le=4.0, description="PTFE Bowden tube inner diameter (mm); used when type is bowden"
+    )
 
 
 TOOLHEAD_CONSTRUCTION_CATALOG: dict[str, dict] = {

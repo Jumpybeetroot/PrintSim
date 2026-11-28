@@ -96,6 +96,44 @@ $\theta_{max} = \text{clip}(42 + 18\ln(1 + 0.55\,\text{CFM}/c_d),\ 38,\ 78)$ and
 
 ---
 
+### 1.12 Pressure advance, filament-path compliance & ooze transient ([pressure_advance.py](../../src/printsim/thermal/pressure_advance.py))
+
+**Model.** The nozzle is a viscous orifice fed through a spring. The push force $F(v)$ is the coupled Cross-WLF + Graetz curve of §1.8 as a function of filament speed $v$; the filament path stores $x = C\,F$ of filament as elastic compression:
+
+$$\frac{dx}{dt} = v_{in}(t) - v_{out}\!\left(\frac{x}{C}\right),\qquad v_{out} = F^{-1}$$
+
+At steady state $x = C\,F(v) \equiv A(v)$, the exact nonlinear advance curve. Klipper's linear law $e_{cmd} = e + k_{PA}\,\dot e$ matches it at one speed with $k_{PA} = A(v)/v$ (secant); the local pressure time constant is $\tau = C\,dF/dv$ (tangent). Units: $C$ [m/N] × $F/v$ [N·s/m] = s ✅. Because $F(v)$ is shear-thinning, $k_{PA}$ falls with flow until the melt-plug term of §1.8 takes over near the flow limit.
+
+**Compliance terms (series, referred to filament travel at the drive gear).**
+
+| Term | Expression | Inputs |
+| :--- | :--- | :--- |
+| Solid filament column | $L/(E\,A_f)$ | `extruder.filament_path_length_mm` (+ `bowden_tube_length_mm` for Bowden), `FilamentSpec.youngs_modulus_pa` (PrintDB `tensile_modulus_mpa`) |
+| PTFE Bowden tube stretch | $L_t/(E_{PTFE}\,A_t)$, $A_t = \tfrac{\pi}{4}(d_o^2 - d_i^2)$ | 4 mm OD tube, `bowden_tube_id_mm`, $E_{PTFE}$ = 0.5 GPa (PrintDB `materials/ptfe-gasket-sheet`) |
+| Confined polymer above $T_g$ | $V/(K_T\,A_f^2)$ | $V$ = bore area × (melt zone + hot fraction of the heat break), $K_T$ from the two-domain Tait equation |
+
+The Tait melt bulk modulus is $K_T = (B + p)\,[1 - C_T\ln(1 + p/B)]/C_T$ with $B = b_{3m}e^{-b_{4m}(T - b_5)}$ and $C_T = 0.0894$. Only an ABS coefficient set is sourced (PrintDB `materials/generic-abs`, Kazmer et al. 2021); it is used as a proxy for the other polymers and the report says so (`melt_bulk_modulus_source`). Check: ABS at 230 °C gives $\beta_T = 4.03\times10^{-10}$ Pa⁻¹ at 0 Pa and $3.73\times10^{-10}$ at 20 MPa, the PrintDB worked example.
+
+**Derived outputs.** Stored compression $x = k_{PA}\,v$; ooze volume after a hard stop without retraction $= x\,A_f$; depressurisation time $t = C\int dF/v$ (for a linear nozzle $RC\ln(1/\epsilon)$); retraction floor $= x + \varphi\,c$ (Bowden bend-clearance dead band, swept angle × diametral clearance); peak extra filament speed demanded by the advance term $= k_{PA}\,a_{xy}\,A_{bead}/A_f$.
+
+**Transient solver.** `simulate_extrusion_transient` integrates the state equation over a nominal filament-speed profile with optional linear advance and Klipper's triangular smoothing kernel, using an exponential integrator on the locally linearised nozzle (exact for a linear nozzle with piecewise-constant input, unconditionally stable otherwise).
+
+**Predictions on `corexy_voron_style.yaml`** at 12 mm³/s (Klipper's tuning-tower condition for a 0.4 mm nozzle), 50 mm drive-to-heat-break path, 500 mm × Ø2 mm Bowden tube:
+
+| Filament | Direct drive $k_{PA}$ (s) | Bowden $k_{PA}$ (s) | Bowden retraction floor (mm) |
+| :--- | :---: | :---: | :---: |
+| PLA | 0.020 | 0.30 | 2.3 |
+| PETG | 0.033 | 0.45 | 3.0 |
+| ABS | 0.029 | 0.40 | 2.8 |
+| ASA | 0.032 | 0.44 | 3.0 |
+| PA12-CF15 | 0.058 | 0.84 | 5.0 |
+
+Klipper documents 0.050–1.000 s as typical with the high end for Bowden; the few community configs in the local KB read 0.025–0.12 s (direct drive) and 0.52 s (Bowden). The direct-drive predictions sit at the low edge of that range. This is a sanity comparison, not a calibration: no constant was fitted.
+
+**Not modelled (each adds compliance, so predictions are a lower bound).** Buckling of the filament against its guide in straight runs, drive-gear tooth indentation, stepper torque-angle compliance, capstan friction hysteresis in the Bowden tube, and softening of the filament column in a heated chamber. The 50 mm default path length is an assumed value, not a measured one. For flexible filament the reference push force exceeds the Euler load of the guided run ($\pi^2EI/(0.5L)^2$ = 0.19 N for TPU 95A over 50 mm), so the straight-column term is invalid; the report sets `straight_column_valid = false` and adds a warning instead of quoting a constant.
+
+**Tests** (`tests/test_pressure_advance.py`): first-order step response, exact cancellation of the lag by $k_{PA} = \tau$ on a ramp, ooze volume = stored compression, linear depressurisation time, closed-form compliance terms, the Tait worked example, monotonic trends (tube length, temperature, nozzle diameter), and PrintDB parity of the constants.
+
 ## 2. Audit Findings Table
 
 | # | Severity | Location | Finding | Concrete fix |
@@ -141,4 +179,4 @@ $\theta_{max} = \text{clip}(42 + 18\ln(1 + 0.55\,\text{CFM}/c_d),\ 38,\ 78)$ and
 
 ## 4. References
 
-Patankar, *Numerical Heat Transfer and Fluid Flow* (1980) §4.2 · Incropera & DeWitt, *Fundamentals of Heat and Mass Transfer*, 7th ed., §8.4 (Graetz, Nu = 3.66) · Bird, Armstrong & Hassager, *Dynamics of Polymeric Liquids* Vol. 1 (power-law, Rabinowitsch–Mooney) · Bellini et al., *J. Manuf. Sci. Eng.* 126 (2004) · Osswald, Puentes & Kattinger, *Addit. Manuf.* 21 (2018) · Go, Schiffres, Stevens & Hart, *Addit. Manuf.* 16 (2017) · Mackay, *J. Rheol.* 62 (2018) · Mahieux & Reifsnider, *J. Mater. Sci.* 37 (2002) · Roark's *Formulas for Stress and Strain* 8th ed. Table 10.7 · Bosch Rexroth strut profile catalog (40×40L: I = 9.1 cm⁴, I_t = 1.3 cm⁴) · MatWeb (metal/polymer constants) · HIWIN MGN rail catalog · Gates PowerGrip GT2 belt data · StepperOnline 17HS19-2004S1 datasheet.
+Patankar, *Numerical Heat Transfer and Fluid Flow* (1980) §4.2 · Incropera & DeWitt, *Fundamentals of Heat and Mass Transfer*, 7th ed., §8.4 (Graetz, Nu = 3.66) · Bird, Armstrong & Hassager, *Dynamics of Polymeric Liquids* Vol. 1 (power-law, Rabinowitsch–Mooney) · Bellini et al., *J. Manuf. Sci. Eng.* 126 (2004) · Osswald, Puentes & Kattinger, *Addit. Manuf.* 21 (2018) · Go, Schiffres, Stevens & Hart, *Addit. Manuf.* 16 (2017) · "Investigating pressure advance algorithms for filament-based melt extrusion additive manufacturing: theory, practice and simulations", *Rapid Prototyping Journal* (2019) 830–839, DOI 10.1108/RPJ-10-2018-0275 · Klipper `docs/Pressure_Advance.md` & `kin_extruder.c` · Kazmer, Colon, Peterson & Kim, *Addit. Manuf.* 46 (2021) 102106 (ABS Tait pvT) · Mackay, *J. Rheol.* 62 (2018) · Mahieux & Reifsnider, *J. Mater. Sci.* 37 (2002) · Roark's *Formulas for Stress and Strain* 8th ed. Table 10.7 · Bosch Rexroth strut profile catalog (40×40L: I = 9.1 cm⁴, I_t = 1.3 cm⁴) · MatWeb (metal/polymer constants) · HIWIN MGN rail catalog · Gates PowerGrip GT2 belt data · StepperOnline 17HS19-2004S1 datasheet.

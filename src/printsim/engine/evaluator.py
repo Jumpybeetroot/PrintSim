@@ -35,6 +35,7 @@ from printsim.schema import (
     resolve_gantry_bracket,
 )
 from printsim.thermal.hotend import HotendThermalReport, simulate_hotend_thermal
+from printsim.thermal.pressure_advance import PressureAdvanceReport, simulate_pressure_advance
 
 
 @dataclass
@@ -81,6 +82,7 @@ class SimulationReport:
     bom_total_mass_kg: float | None = None
     effective_model_params: dict[str, Any] = field(default_factory=dict)
     model_confidence: dict[str, Any] = field(default_factory=dict)
+    pressure_advance: PressureAdvanceReport | None = None
 
     def to_dict(self, include_toolpath_segments: bool = True) -> dict:
         vp = self.virtual_print.to_dict(max_segments=1500 if include_toolpath_segments else 0)
@@ -96,6 +98,9 @@ class SimulationReport:
             "kinematics": self.kinematics.to_dict(),
             "thermal": self.thermal.to_dict(),
             "thermal_structural": self.thermal_structural.to_dict(),
+            "pressure_advance": (
+                self.pressure_advance.to_dict() if self.pressure_advance is not None else None
+            ),
             "virtual_print": vp,
             "workspace_frf": self.workspace_frf.to_dict() if self.workspace_frf is not None else None,
             "time_domain_metrology": (
@@ -1161,6 +1166,7 @@ def evaluate_printer(
     )
     kinematics = analyze_kinematics(assembly)
     thermal = simulate_hotend_thermal(spec, filament_id=filament_id)
+    pressure_advance = simulate_pressure_advance(spec, filament_id=filament_id, thermal=thermal)
     thermal_structural = compute_thermal_structural_report(assembly)
 
     workspace_frf: WorkspaceFRFMap | None = None
@@ -1278,6 +1284,7 @@ def evaluate_printer(
         bom_total_mass_kg=bom_total_mass_kg,
         effective_model_params=effective_model_params,
         model_confidence=model_confidence,
+        pressure_advance=pressure_advance,
     )
 
 
