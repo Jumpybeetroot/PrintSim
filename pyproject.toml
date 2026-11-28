@@ -39,12 +39,16 @@ tetfea = [
 opt = [
     "pymoo>=0.6",
 ]
+sections = [
+    "sectionproperties>=3.3",
+]
 all = [
     "build123d>=0.8",
     "gmsh>=4.12",
     "scikit-fem>=10.0",
     "meshio>=5.3",
     "pymoo>=0.6",
+    "sectionproperties>=3.3",
 ]
 
 [project.urls]

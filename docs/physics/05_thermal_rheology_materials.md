@@ -89,6 +89,16 @@ $\theta_{max} = \text{clip}(42 + 18\ln(1 + 0.55\,\text{CFM}/c_d),\ 38,\ 78)$ and
 - Isotropic shear modulus: $G = E/[2(1+\nu)]$ ([materials.py:L45-49](file:///Users/jumpybeetroot/Projects/printsim/src/printsim/schema/materials.py#L45-L49)) ✅.
 - Mahieux–Reifsnider (2002) single-transition form: $E(T)/E_{25} = \dfrac{(1-e_r)\exp[-(T_K/T_{ref})^m] + e_r}{(\cdot)|_{25^\circ C}}$, with temperatures in K ✅. At $T_g$ the code gives $E/E_{25}\approx0.39$ for ABS. The $T_{ref}$ shift, $0.32\max(0, HDT - T_g - 80)$, is an uncited fit.
 
+**Cross-check against a `sectionproperties` warping FEM (2026-11-28, `tests/test_profile_sections_crosscheck.py`, optional `sections` extra).** Closed-form shapes are rebuilt from the catalog dimensions; the 2020 T-slot outline is cut from the Misumi HFSB5-2020 solid in the official Voron Trident assembly STEP by `scripts/derive_profile_sections.py` and stored in `tests/fixtures/profile_sections/extrusion_2020.json`.
+
+| Profile | $A$ | $I_y$, $I_z$ | $J$ |
+| :--- | :---: | :---: | :--- |
+| Hollow tubes (`_hollow_rect_tube`, 14 entries) | exact | exact | Bredt–Batho is 0.8 % (1 mm wall, rounded corners) to 9.1 % (3 mm wall on 20 mm, sharp corners) **below** the FEM value, growing roughly linearly with $t/b$ |
+| Round rods, flat bar (Roark) | exact | exact | within 0.2 % |
+| `extrusion_2020` | 183 vs 182.2 mm² (+0.5 %) | 0.742 vs 0.7428 cm⁴ (−0.1 %) | **0.11 vs 0.078 cm⁴ (+40 %)** |
+
+The 2020 area and bending values are confirmed. Its torsion constant, scaled from Bosch/item tables, is about 40 % above what the vendor outline gives; the test carries this as a strict `xfail` and the catalog is unchanged. Trial runs with $J = 0.078$ cm⁴ move nozzle twist angle by about +5 %, Y acceleration deflection by +3 to +6 %, and the nozzle pitch/twist mode by −1 to −2 % on the Voron 2.4 and Trident presets; the fundamental frequency moves by less than 0.1 %. No vendor outline was available locally for 1515, 2040, 3030, 4040 or 3060, so those remain unchecked.
+
 ### 1.11 Belt & stepper ([printer.py:L490-L648](file:///Users/jumpybeetroot/Projects/printsim/src/printsim/schema/printer.py#L490-L648))
 
 - Transverse string mode: $f = \dfrac{1}{2L}\sqrt{T/\mu}$. The code matches the analytic value exactly (155.42 Hz at 25 N, 150 mm) ✅. Axial span stiffness is $k = EA/L$.
